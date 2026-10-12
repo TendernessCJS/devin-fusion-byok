@@ -10,26 +10,19 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 - 两个 remote 走**不同的网络通道**（`origin` 是 SSH、`upstream` 是 HTTPS），代理要求不同——见下节。
 - 同步上游更新见「fork 同步与发布」一节。
 
-## 本机网络路径（访问 GitHub）
+## 本机网络路径
 
-本机直连 GitHub 不可用，必须经代理 `http://127.0.0.1:7897`；代理不可用时停止并报告，不要回退直连。三个目标走**不同通道**，代理的生效方式也不同：
+本机直连 GitHub 不可用，必须经代理；代理不可用时停止并报告，不要回退直连。**代理机制与本机配置的权威说明在用户级规则 `~/.devin/global_rules.md` 的「外部网站代理」**（代理地址、`~/.ssh/config` 的 `ProxyCommand`、git 的 URL 限定配置、`gh` 为何只能靠环境变量），本节只记本仓库要用的结论：
 
-| 目标 | 协议 | 直连结果 | 代理怎么生效 |
-| --- | --- | --- | --- |
-| `origin`（`git push` / `git fetch`） | SSH | — | `~/.ssh/config` 的 `Host github.com` 里 `ProxyCommand nc -X 5 -x 127.0.0.1:7897 %h %p`，**自动生效，命令里不要再套 `HTTPS_PROXY`** |
-| `upstream`（`git fetch`） | HTTPS | 挂约 75 秒后 `Failed to connect to github.com port 443` | 本机已配 URL 限定代理，**裸命令即可**；未配置的机器用前缀 `HTTPS_PROXY=http://127.0.0.1:7897` |
-| `gh`（建 Release 等） | HTTPS | 立即 `read: connection reset by peer` | **只能**用前缀 `HTTPS_PROXY=http://127.0.0.1:7897`（`gh` 没有 proxy 配置项，也不读 git 配置） |
+| 目标 | 协议 | 命令里要不要加 `HTTPS_PROXY` |
+| --- | --- | --- |
+| `origin`（`git push` / `git fetch`） | SSH | **不要**：`~/.ssh/config` 的 `ProxyCommand` 自动代理 |
+| `upstream`（`git fetch`） | HTTPS | **不要**：本机已配 URL 限定代理，裸命令即可；未配置的机器要加 |
+| `gh`（建 Release 等） | HTTPS | **要**：`gh` 没有 proxy 配置项，也不读 git 配置 |
 
-HTTPS remote 的失败是**长时间挂起**而非快速报错——卡住 10 秒以上就该怀疑漏了代理，别误判成「网络慢」。用 `git remote -v` 确认 remote 属于哪种。`origin` 那条 SSH 代理是**机器级依赖**（`~/.ssh/config` + `/usr/bin/nc`），不在仓库内：缺失时 push 会失败，且失败形态同样是 75 秒超时。
+用 `git remote -v` 确认 remote 属于哪种。HTTPS remote 漏了前缀是**长时间挂起**而非快速报错——卡住 10 秒以上先怀疑这个。
 
-这台机器已用 **URL 限定**形式配好，所以 HTTPS remote 的裸命令直接可用：
-
-```bash
-git config --global --get http.https://github.com/.proxy                   # 先确认：有输出即可裸命令
-git config --global http.https://github.com/.proxy http://127.0.0.1:7897   # 未配置的机器，由用户自行执行
-```
-
-它只作用于 `github.com`，与 `origin` 的 SSH `ProxyCommand` 同属「主机限定」模式。**不要**用无作用域的 `git config --global http.proxy`：它作用于**所有** HTTPS remote，会把 HTTPS 形态的内网仓库也送进代理；而 SSH 形态的内网 remote 不受任何 `http.proxy` 影响。**改动用户级 git 配置须由用户自行执行。**
+不要用无作用域的 `git config --global http.proxy`：它作用于**所有** HTTPS remote，会把 HTTPS 形态的内网仓库也送进代理（SSH 形态的内网 remote 不受任何 `http.proxy` 影响）。改动用户级 git 配置须由用户自行执行。
 
 ## 常用命令
 
@@ -73,7 +66,7 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 - 资产必须带 GitHub 自动计算的 `digest`（`sha256:` + 64 位十六进制）且大小 ≤ 50 MiB，否则 `installable=false`，面板只提供「打开发布页面」。
 - 插件内 `package.json` 的 `version` 必须严格小于 Release 版本才会提示更新，发布前记得 bump。
 - 一键安装仅在 macOS 且 `<appRoot>/bin/devin-desktop` 存在时可用（`createUpdateHost` 里的 `supported` 判断）；其他情况 `canInstall=false`，只能手动下载 vsix。
-- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经 `src/proxy.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。**不要改成读 `http.proxy` 设置或 `HTTPS_PROXY`/`http_proxy`/`ALL_PROXY` 环境变量**——那会全局生效，把 Gitee 等内网地址也送去代理。（此约束只针对**插件运行时代码**；开发者在终端跑 git/gh 命令时仍按「本机网络路径」一节加前缀，两者不冲突。）验收方法见 `.devin/skills/release/SKILL.md`。
+- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经 `src/proxy.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。**不要改成读 `http.proxy` 设置或 `HTTPS_PROXY`/`http_proxy`/`ALL_PROXY` 环境变量**——那会全局生效，把内网 HTTPS 地址也送去代理。**也不要依赖扩展宿主被打过补丁的 `fetch`**：Devin 启动时会把 `globalThis.fetch` 换成 `@vscode/proxy-agent` 的代理感知版本（读 VS Code 的 `http.proxy` / `http.noProxy`，`http.proxySupport` 默认 `override`），那也是全局的，同样会波及内网地址——更新路径必须走 `src/proxy.cjs` 自己的 CONNECT 隧道。（这些约束只针对**插件运行时代码**；开发者在终端跑 git/gh 命令时按「本机网络路径」一节处理，两者不冲突。）验收方法见 `.devin/skills/release/SKILL.md`。
 
 ## fork 同步与发布
 

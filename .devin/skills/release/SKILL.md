@@ -12,7 +12,9 @@ permissions:
     - Exec(npm test)
     - Exec(node --test)
     - Exec(gh release view)
+    - Exec(HTTPS_PROXY=http://127.0.0.1:7897 gh release view)
     - Exec(gh release list)
+    - Exec(HTTPS_PROXY=http://127.0.0.1:7897 gh release list)
     - Exec(git status)
     - Exec(git log)
     - Exec(git diff)
@@ -90,6 +92,8 @@ HTTPS_PROXY=http://127.0.0.1:7897 gh release create v<version> \
 
 **这一步刻意保留人工确认**：`permissions.allow` 未放行 `gh release create`，因为它是对外生效操作。同理 `git push`、`git tag` 与安装 vsix 也未放行。不要为了省一次确认而把它们加进 allow。
 
+`permissions.allow` 里的 `gh release view` / `gh release list` **各写了两条**（带与不带 `HTTPS_PROXY=` 前缀）：`Exec(前缀)` 的语义是「命令以该前缀开头」（见 Devin 文档 `reference/permissions`），而本机调用 `gh` 必须带前缀，只写不带前缀的那条可能永不匹配。若要精简成一条，保留带前缀的那条。
+
 ## 6. 验收：读回路，不只看网页
 
 网页显示正常 ≠ 插件能用。**用已安装副本的代码**跑一遍真实回路。
@@ -141,15 +145,7 @@ const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
 ## 本机网络约束（会让验收假失败）
 
 - GitHub 访问必须经代理 `http://127.0.0.1:7897`：直连 `api.github.com`、`github.com`、`objects.githubusercontent.com` 均被连接重置。
-- **git / gh 的代理要求按 remote 协议区分**（详见 `AGENTS.md`「本机网络路径」）：
-
-  | 目标 | 协议 | 命令里要不要 `HTTPS_PROXY` 前缀 |
-  | --- | --- | --- |
-  | `origin`（第 4 步 push） | SSH | **不要**，`~/.ssh/config` 的 `ProxyCommand` 自动代理 |
-  | `upstream`（同步上游） | HTTPS | **不要**（本机已配 `http.https://github.com/.proxy`，裸命令即可）；未配置的机器要加 |
-  | `gh`（第 5 步建 Release） | HTTPS | **要**——`gh` 没有 proxy 配置项，也不读 git 配置 |
-
-  判定本机是否已配：`git config --get http.https://github.com/.proxy`。HTTPS remote 漏了前缀是**挂约 75 秒**后失败，不是快速报错——卡住超过 10 秒先怀疑这个。`origin` 的 SSH 代理是机器级依赖（`~/.ssh/config` + `/usr/bin/nc`），不在仓库内。
+- **第 4 步的 `git push` 不要加前缀**（`origin` 是 SSH，`~/.ssh/config` 自动代理）；**第 5 步的 `gh` 必须加**前缀 `HTTPS_PROXY=http://127.0.0.1:7897`（HTTPS，且 `gh` 没有 proxy 配置项）。两者不对称，不要照抄。完整说明以 `AGENTS.md`「本机网络路径」为准。
 - **首选：插件自带代理**（`src/proxy.cjs`，随 0.3.43 之后版本一起分发）。`config.json` 设 `updateProxy` 后，面板「检查更新」与一键安装经 CONNECT 隧道走代理，不受 TUN 与环境变量影响；第 6 步验收片段显式传同一个代理地址，跑的是同一条路径。
 - **备选：环境变量 / TUN**。验收已安装的旧版本（没有 `src/proxy.cjs`）或排查直连路径时才需要：
   - 验收片段改用 `HTTPS_PROXY=http://127.0.0.1:7897 NODE_USE_ENV_PROXY=1 NO_PROXY=localhost,127.0.0.1` 让全局 `fetch` 读环境变量（扩展宿主的 `fetch` 默认不读，缺了它就 ECONNRESET，看起来像「发布失败」）。
