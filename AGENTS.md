@@ -123,6 +123,10 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 | `src/runtime/retry.cjs` | 本 fork 新增（upstream 无），连接层一次性重试；只被 `native-models.cjs` 与 `monitor-client.cjs` 使用 |
 | `src/runtime/app-restart.cjs` | 「重启 Devin」的存活探测由 `pgrep` 改为 `ps -Ao comm=`：macOS `pgrep` 跳过调用者自身的祖先进程，而 helper 必然在 app 进程树内，因此原本永远看不到主进程（表现为只关闭不重启） |
 | `test/app-restart.test.cjs` | 覆盖新探测方式：合成 app 复现 `pgrep` 祖先盲区、并验证 app 退出后才重新拉起 |
+| `src/runtime/monitor.cjs` | 归属查询改为**失败隔离**：`tool_call_state` 分支（走覆盖索引）为权威、失败才报 `unavailable`；查 `message_nodes` 的 `json_extract` 分支无索引、实测在 6.6 GB 库上需约 9.8 秒（越过 8000 ms 超时），降级为 1500 ms 上限的尽力补充，超时被吞掉。新增 `sessionLabels()` 取会话标题与最近活动时间（只进快照，不落盘） |
+| `src/runtime/monitor-client.cjs` | `sessionOf()` 白名单放行 `title` / `lastActivityAt`（漏登记会被静默剥离） |
+| `src/panel/monitor-view.cjs` | 用量面板会话下拉显示「标题 · 相对时间」，不再显示内部 slug 与 `输出 ID 确认` / `本次工具 ID 确认` 等噪音标签 |
+| `test/monitor.test.cjs`、`test/monitor-panel.test.cjs` | 覆盖上述：失败隔离（缺 `message_nodes` 不拖垮归属、权威失败仍 `unavailable`）、标题穿透白名单、下拉文案 |
 
 ## 待办与死角
 

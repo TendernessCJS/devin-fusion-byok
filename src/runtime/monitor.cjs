@@ -139,19 +139,62 @@ function summarize(records) {
   return result;
 }
 const quote = value => "'" + value.replace(/'/g, "''") + "'";
+const TOOL_LOOKUP_TIMEOUT_MS = 8000;
+// The message-id branch scans message_nodes without an index (json_extract in
+// WHERE), so it is the expensive half. It runs as a bounded supplement: a
+// timeout there must never discard the tool-id matches, which are indexed.
+const MESSAGE_LOOKUP_TIMEOUT_MS = 1500;
+
+function lookupRows(databasePath, sql, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = execFile('/usr/bin/sqlite3', ['-readonly', '-json', databasePath], { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => {
+        if (error) { reject(new Error('session_lookup_unavailable')); return; }
+        try { resolve(JSON.parse(stdout || '[]')); } catch { reject(new Error('session_lookup_invalid')); }
+      });
+    } catch { reject(new Error('session_lookup_unavailable')); return; }
+    child.stdin.on('error', () => {});
+    child.stdin.end(sql);
+  });
+}
 async function sessionMatches(databasePath, ids, toolIds = []) {
   if (!ids.length && !toolIds.length) return [];
   const values = ids.map(quote).join(',') || "''";
   const tools = toolIds.map(quote).join(',') || "''";
-  const sql = `.timeout 1000\nSELECT DISTINCT session_id, json_extract(chat_message, '$.message_id') AS message_id, 'message' AS kind FROM message_nodes WHERE json_extract(chat_message, '$.message_id') IN (${values}) UNION SELECT session_id, tool_call_id AS message_id, 'tool' AS kind FROM tool_call_state WHERE tool_call_id IN (${tools});\n`;
-  return new Promise((resolve, reject) => {
-    const child = execFile('/usr/bin/sqlite3', ['-readonly', '-json', databasePath], { timeout: 8000, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => {
-      if (error) { reject(new Error('session_lookup_unavailable')); return; }
-      try { resolve(JSON.parse(stdout || '[]')); } catch { reject(new Error('session_lookup_invalid')); }
-    });
+  const rows = toolIds.length
+    ? await lookupRows(databasePath, `.timeout 1000\nSELECT session_id, tool_call_id AS message_id, 'tool' AS kind FROM tool_call_state WHERE tool_call_id IN (${tools});\n`, TOOL_LOOKUP_TIMEOUT_MS)
+    : [];
+  if (ids.length) {
+    try {
+      rows.push(...await lookupRows(databasePath, `.timeout 1000\nSELECT DISTINCT session_id, json_extract(chat_message, '$.message_id') AS message_id, 'message' AS kind FROM message_nodes WHERE json_extract(chat_message, '$.message_id') IN (${values});\n`, MESSAGE_LOOKUP_TIMEOUT_MS));
+    } catch { /* supplemental branch: its failure must not discard indexed matches */ }
+  }
+  return rows;
+}
+// Labels are looked up per snapshot, never persisted: titles are user content
+// and must not leak into monitor.jsonl. Any failure degrades to no labels.
+async function sessionLabels(databasePath, ids) {
+  if (!ids.length) return new Map();
+  const values = ids.map(quote).join(',');
+  const sql = `.timeout 1000\nSELECT id, title, last_activity_at FROM sessions WHERE id IN (${values});\n`;
+  const rows = await new Promise(resolve => {
+    let child;
+    try { child = execFile('/usr/bin/sqlite3', ['-readonly', '-json', databasePath], { timeout: 8000, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => {
+      if (error) { resolve([]); return; }
+      try { resolve(JSON.parse(stdout || '[]')); } catch { resolve([]); }
+    }); } catch { resolve([]); return; }
     child.stdin.on('error', () => {});
     child.stdin.end(sql);
   });
+  const labels = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!identifier(row.id)) continue;
+    const trimmed = typeof row.title === 'string' ? row.title.trim() : '';
+    labels.set(row.id, { title: trimmed ? trimmed.slice(0, 120) : null,
+      lastActivityAt: Number.isSafeInteger(row.last_activity_at) ? row.last_activity_at : null });
+  }
+  return labels;
 }
 function associate(records, rows) {
   const mapping = new Map();
@@ -213,11 +256,21 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(r);
       }
+      let labels = new Map();
+      try { labels = await sessionLabels(databasePath, [...groups.keys()].filter(key => key !== '__unassigned__')); } catch {}
+      const sessions = [...groups.values()].map(list => {
+        const sessionId = list[0].sessionId, label = sessionId ? labels.get(sessionId) : null;
+        return { sessionId, title: label?.title ?? null, lastActivityAt: label?.lastActivityAt ?? null,
+          attribution: list.every(r => r.attribution === 'response-id') ? 'response-id' : sessionId ? 'tool-id' : 'unassigned',
+          summary: summarize(list), records: list };
+      });
+      // Mirror the official picker: most recent activity first, unlabeled and
+      // unassigned buckets last.
+      sessions.sort((a, b) => (a.sessionId === null) - (b.sessionId === null) ||
+        (a.lastActivityAt === null) - (b.lastActivityAt === null) ||
+        (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
       const value = { version: 1, status: storageError || sessionStatus !== 'ready' ? 'degraded' : 'ready', storageError, sessionStatus,
-        retentionLimit: LIMIT, records: publicRecords, summary: summarize(publicRecords),
-        sessions: [...groups.values()].map(list => ({ sessionId: list[0].sessionId,
-          attribution: list.every(r => r.attribution === 'response-id') ? 'response-id' : list[0].sessionId ? 'tool-id' : 'unassigned',
-          summary: summarize(list), records: list })) };
+        retentionLimit: LIMIT, records: publicRecords, summary: summarize(publicRecords), sessions };
       cached = { revision: currentRevision, value }; cachedAt = Date.now(); return value;
     })().finally(() => { pending = null; });
     return pending;

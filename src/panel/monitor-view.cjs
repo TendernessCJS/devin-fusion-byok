@@ -22,6 +22,14 @@ function monitorScript() {
     const attribution = value => ({ 'response-id': '输出 ID 确认', 'tool-id': '本次工具 ID 确认', ambiguous: '存在歧义', unassigned: '未归属' }[value] || '未知');
     const stateName = value => ({ success: '成功', error: '失败', cancelled: '已取消' }[value] || '未知');
     const usageName = value => ({ complete: '完整', partial: '不完整', missing: '未上报', inconsistent: '数据异常' }[value] || '—');
+    const ago = epoch => {
+      if (!Number.isSafeInteger(epoch)) return '';
+      const seconds = Math.floor(Date.now() / 1000) - epoch;
+      if (seconds < 60) return '刚刚';
+      if (seconds < 3600) return Math.floor(seconds / 60) + ' 分钟前';
+      if (seconds < 86400) return Math.floor(seconds / 3600) + ' 小时前';
+      return Math.floor(seconds / 86400) + ' 天前';
+    };
     // [key, label, shown without detail]
     const METRICS = [['firstResponseMs','平均首响应 s',true],['gatewayTps','输出 TPS（网关）',true],['inputTokens','输入 token',true],['outputTokens','输出 token',true],['cachedTokens','缓存命中 token',true],['reasoningTokens','推理 token',false],['ttftMs','平均首输出 s',false],['textTtftMs','平均正文首字 s',false],['tps','正文 TPS（不含工具）',false],['throughputTps','请求吞吐（含等待）',false]];
     const FIELDS = ['firstResponseMs','gatewayTps','inputTokens','outputTokens','cachedTokens','reasoningTokens','firstOutputMs','firstTextMs','tps','throughputTps','durationMs'];
@@ -62,7 +70,17 @@ function monitorScript() {
       status.hidden = !status.textContent;
       const previous = selector.value; selector.replaceChildren();
       const all = document.createElement('option'); all.value = 'all'; all.textContent = '全部会话'; selector.append(all);
-      for (const session of snapshot?.sessions || []) { const option = document.createElement('option'); option.value = session.sessionId || '__unassigned__'; option.textContent = session.sessionId ? session.sessionId + ' · ' + attribution(session.attribution) : '未归属／有歧义'; selector.append(option); }
+      for (const session of snapshot?.sessions || []) {
+        const option = document.createElement('option');
+        option.value = session.sessionId || '__unassigned__';
+        if (!session.sessionId) { option.textContent = '未归属／有歧义'; selector.append(option); continue; }
+        const parts = [session.title || session.sessionId];
+        const time = ago(session.lastActivityAt);
+        if (time) parts.push(time);
+        if (session.attribution === 'ambiguous') parts.push('存在歧义');
+        option.textContent = parts.join(' · ');
+        selector.append(option);
+      }
       if ([...selector.options].some(o => o.value === previous)) selector.value = previous;
       render();
     });

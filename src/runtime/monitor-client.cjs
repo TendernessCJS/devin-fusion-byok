@@ -63,6 +63,8 @@ function sessionOf(entry) {
   const summary = summaryOf(entry.summary);
   if (!summary || !Array.isArray(entry.records)) return null;
   return { sessionId: typeof entry.sessionId === 'string' ? entry.sessionId : null,
+    title: typeof entry.title === 'string' ? entry.title : null,
+    lastActivityAt: Number.isSafeInteger(entry.lastActivityAt) ? entry.lastActivityAt : null,
     attribution: typeof entry.attribution === 'string' ? entry.attribution : 'unassigned',
     summary, records: entry.records.map(recordOf).filter(Boolean) };
 }

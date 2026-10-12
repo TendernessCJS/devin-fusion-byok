@@ -42,6 +42,35 @@ test('monitor browser script compiles, uses text nodes, and preserves zero versu
   assert.match(html, /id="usage-monitor"/); assert.match(html, /connect-src 'none'/);
   new vm.Script(html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]);
 });
+test('session options show titles and relative times instead of internal slugs', () => {
+  class Element {
+    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; }
+    append(child) { this.children.push(child); }
+    replaceChildren() { this.children = []; }
+    addEventListener(name, listener) { this.listeners[name] = listener; }
+    get options() { return this.children; }
+  }
+  const elements = new Map();
+  const byId = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
+  byId('monitor-session').value = 'all';
+  let receive;
+  vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} } });
+  const now = Math.floor(Date.now() / 1000);
+  const summary = { requests: 0, success: 0, error: 0, cancelled: 0 };
+  receive({ data: { type: 'monitor-state', result: { snapshot: { summary, records: [], sessionStatus: 'ready', sessions: [
+    { sessionId: 'sprout-skull', title: '查看并讨论 VS Code 插件项目', lastActivityAt: now - 7200, attribution: 'response-id', summary, records: [] },
+    { sessionId: 'puddle-airmail', title: '审查全局规则', lastActivityAt: now - 1800, attribution: 'tool-id', summary, records: [] },
+    { sessionId: 'ghost-slug', title: null, lastActivityAt: null, attribution: 'ambiguous', summary, records: [] },
+    { sessionId: null, title: null, lastActivityAt: null, attribution: 'unassigned', summary, records: [] },
+  ] } } } });
+  const options = byId('monitor-session').children.map(o => [o.value, o.textContent]);
+  assert.deepEqual(options[0], ['all', '全部会话']);
+  assert.deepEqual(options[1], ['sprout-skull', '查看并讨论 VS Code 插件项目 · 2 小时前']);
+  assert.deepEqual(options[2], ['puddle-airmail', '审查全局规则 · 30 分钟前']);
+  assert.deepEqual(options[3], ['ghost-slug', 'ghost-slug · 存在歧义']);
+  assert.deepEqual(options[4], ['__unassigned__', '未归属／有歧义']);
+  for (const [, text] of options) assert.ok(!text.includes('ID 确认'), 'noise suffix removed: ' + text);
+});
 test('usage monitor renders once inside the usage tab', () => {
   const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
   const monitor = html.indexOf('id="usage-monitor"');
