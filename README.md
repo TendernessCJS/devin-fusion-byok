@@ -120,6 +120,20 @@
 - 不会解锁账号本来没有的官方模型或权限。
 - 更新检查只访问本仓库的 GitHub Releases，安装前校验文件大小、SHA-256 和包内身份，并需要你确认。
 
+## 受限网络（需要代理时）
+
+如果本机直连 GitHub 不通，可以在插件配置文件里加一项 `updateProxy`，让**更新检查和一键安装**走 HTTP/HTTPS 代理。
+
+配置文件在扩展的全局存储目录（macOS 通常是 `~/Library/Application Support/Devin/User/globalStorage/local.devin-fusion-byok/config.json`），加入：
+
+```json
+"updateProxy": "http://127.0.0.1:7897"
+```
+
+- 支持 `http://` / `https://` 代理地址，可带 `user:pass@` 凭证；保存后立即生效，无需重载窗口。
+- **只影响更新相关请求**：模型发现、推理请求和面板其余功能全部保持直连。不要用 VS Code 的 `http.proxy` 设置或 `HTTPS_PROXY` 环境变量替代——那是全局代理，会把企业内网（如 Gitee）也送进代理，反而连不上。
+- 代理地址无效时面板会提示 `updateProxy` 配置有误，不影响其他功能。
+
 ## 停用与卸载
 
 先在命令面板运行 **Fusion BYOK：停用并恢复连接**，再卸载扩展。这会撤回模型注入，并把插件写过的 Devin 设置恢复原样（你之后自己改过的不动）。已开始的对话沿用原来的设置，停用后请新建对话。

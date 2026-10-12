@@ -104,6 +104,33 @@ test('controller routes updates separately from model settings and only opens tr
   assert.deepEqual(actions, [['check', true], ['install'], ['ignore'], ['auto', false], ['url', state.releaseUrl]]);
   assert.equal(posts.filter(p => p.type === 'update-state').length, 6); panel.dispose();
 });
+test('requests without a proxy keep using the injected fetch implementation', async () => {
+  let calls = 0;
+  const body = await requestBytes('https://api.github.com/x', { limit: 10, fetchImpl: async () => { calls++; return new Response('ok'); } });
+  assert.equal(body.toString(), 'ok');
+  assert.equal(calls, 1);
+});
+test('a configured proxy is parsed once and handed to the request layer', async () => {
+  const seen = [];
+  const { updater } = setup({ proxy: () => 'http://user:pass@127.0.0.1:7897',
+    request: async (url, options) => { seen.push(options.proxy); return Buffer.from(JSON.stringify(release('0.3.34'))); } });
+  await updater.check();
+  assert.equal(updater.snapshot().phase, 'available');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].url.hostname, '127.0.0.1');
+  assert.equal(seen[0].url.port, '7897');
+  assert.equal(seen[0].authorization, 'Basic ' + Buffer.from('user:pass').toString('base64'));
+  updater.dispose();
+});
+test('an invalid updateProxy fails the check without any network request', async () => {
+  let calls = 0;
+  const { updater } = setup({ proxy: () => 'socks5://127.0.0.1:9', request: async () => { calls++; return Buffer.from('{}'); } });
+  await updater.check();
+  assert.equal(updater.snapshot().phase, 'error');
+  assert.match(updater.snapshot().error, /updateProxy/);
+  assert.equal(calls, 0);
+  updater.dispose();
+});
 test('update view is plain text and does not expose release payload as HTML', () => {
   const { updateMarkup, updateScript } = require('../src/panel/update-view.cjs');
   assert.match(updateMarkup(), /update-install/); assert.match(updateScript(), /textContent/); assert.doesNotMatch(updateScript(), /innerHTML/);

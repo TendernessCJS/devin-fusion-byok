@@ -450,6 +450,7 @@ async function activate(context) {
       pickerRefresh.changed();
     } });
   const updater = require('./update.cjs').createUpdateHost({ vscode, context,
+    proxy: () => config().updateProxy,
     onChange: () => management?.publishUpdates?.() });
   management = require('./panel/controller.cjs').createPanelController({ vscode, context, manager, safeError, updater,
     fastContext: require('./fast-context/config-ui.cjs').createFastContextHost({ vscode, context }),

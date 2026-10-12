@@ -49,7 +49,7 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 - 资产必须带 GitHub 自动计算的 `digest`（`sha256:` + 64 位十六进制）且大小 ≤ 50 MiB，否则 `installable=false`，面板只提供「打开发布页面」。
 - 插件内 `package.json` 的 `version` 必须严格小于 Release 版本才会提示更新，发布前记得 bump。
 - 一键安装仅在 macOS 且 `<appRoot>/bin/devin-desktop` 存在时可用（`createUpdateHost` 里的 `supported` 判断）；其他情况 `canInstall=false`，只能手动下载 vsix。
-- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（见 `allowedUrl` 白名单）。**但扩展宿主的全局 `fetch` 不读 `HTTPS_PROXY`**（undici 默认行为）：直连被重置的环境下只设该变量无效，需代理客户端开 TUN 模式、或以 `NODE_USE_ENV_PROXY=1` 配合该变量启动 Devin，否则面板显示「检查更新失败」。判定与验证方法见 `.devin/skills/release/SKILL.md`。
+- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经 `src/proxy.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。**不要改成读 `http.proxy` 设置或 `HTTPS_PROXY`/`http_proxy`/`ALL_PROXY` 环境变量**——那会全局生效，把 Gitee 等内网地址也送去代理。验收方法见 `.devin/skills/release/SKILL.md`。
 
 ## fork 同步与发布
 

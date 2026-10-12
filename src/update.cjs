@@ -9,6 +9,8 @@ const PAGE = `https://github.com/${REPOSITORY}/releases`;
 const API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
 const INTERVAL = 6 * 60 * 60 * 1000;
 const MAX = 50 * 1024 * 1024;
+const CHECK_FAILED = '检查更新失败：网络不可达。若本机需经代理才能访问 GitHub，请在插件配置中设置 updateProxy。不代表已是最新版。';
+const PROXY_INVALID = '检查更新失败：updateProxy 代理地址无效，请修正或移除后重试。不代表已是最新版。';
 function parseVersion(v) {
   if (typeof v !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v)) throw Error('version');
   const parts = v.split('.').map(Number);
@@ -34,7 +36,8 @@ function releaseInfo(value) {
   const installable = !!asset && asset.browser_download_url === url && /^sha256:[a-f0-9]{64}$/.test(asset.digest) && Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= MAX;
   return { version, name, url, page: `${PAGE}/tag/${value.tag_name}`, digest: installable ? asset.digest.slice(7) : null, size: installable ? asset.size : null, installable, notes: typeof value.body === 'string' ? value.body.slice(0, 6000) : '' };
 }
-async function requestBytes(url, { limit, signal, fetchImpl = fetch, timeout = 30000 }) {
+async function requestBytes(url, { limit, signal, fetchImpl = fetch, timeout = 30000, proxy = null }) {
+  if (proxy) return require('./proxy.cjs').proxyRequestBytes(url, { proxy, limit, signal, timeout });
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
@@ -76,13 +79,14 @@ async function verifyPackage(file, version, run = execFile) {
   const fields = Object.fromEntries(attributes.map(m => [m[1], m[2]]));
   if (new Set(attributes.map(m => m[1])).size !== attributes.length || fields.Id !== pkg.name || fields.Publisher !== pkg.publisher || fields.Version !== version) throw Error('identity');
 }
-function createUpdater({ currentVersion, globalState, storagePath, request = requestBytes, install, confirm = async () => false, notify = () => {}, onChange = () => {}, now = Date.now, verify = verifyPackage }) {
+function createUpdater({ currentVersion, globalState, storagePath, request = requestBytes, install, confirm = async () => false, notify = () => {}, onChange = () => {}, now = Date.now, verify = verifyPackage, proxy = () => '' }) {
   let saved = globalState?.get('fusionByokUpdate', {}) || {};
   let autoCheck = saved.autoCheck !== false, ignoredVersion = saved.ignoredVersion || '';
   let phase = 'idle', error = '', latest = null, disposed = false, timer, pending, installing, abort, lastCheck = 0, announced;
   let writes = Promise.resolve();
   const snapshot = () => ({ currentVersion, latestVersion: latest?.version || null, phase, error, autoCheck, ignored: latest?.version === ignoredVersion, notes: latest?.notes || '', releaseUrl: latest?.page || PAGE, canInstall: phase === 'available' && latest?.installable === true && typeof install === 'function', installable: latest?.installable === true });
   const emit = () => { if (!disposed) Promise.resolve().then(() => onChange(snapshot())).catch(() => {}); };
+  const proxyConfig = () => require('./proxy.cjs').parseProxy(proxy());
   const persist = () => {
     const value = { autoCheck, ignoredVersion };
     writes = writes.then(() => globalState?.update('fusionByokUpdate', value)).catch(() => { error = '更新偏好保存失败，请稍后重试。'; emit(); });
@@ -92,10 +96,15 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
     if (disposed || installing || phase === 'installed') return Promise.resolve(snapshot());
     if (pending) return pending;
     if (!force && (!autoCheck || latest && now() - lastCheck < INTERVAL)) return Promise.resolve(snapshot());
+    let via;
+    try { via = proxyConfig(); } catch {
+      phase = 'error'; error = PROXY_INVALID; emit();
+      return Promise.resolve(snapshot());
+    }
     phase = 'checking'; error = ''; emit(); abort = new AbortController(); const signal = abort.signal;
     pending = (async () => {
       try {
-        const bytes = await request(API, { limit: 1024 * 1024, signal });
+        const bytes = await request(API, { limit: 1024 * 1024, signal, proxy: via });
         if (disposed) return snapshot();
         latest = releaseInfo(JSON.parse(bytes.toString()));
         const order = compareVersions(latest.version, currentVersion);
@@ -103,7 +112,7 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
         if (!force && shouldNotify && autoCheck && phase === 'available' && ignoredVersion !== latest.version && announced !== latest.version) {
           announced = latest.version; Promise.resolve().then(() => { if (!disposed && autoCheck) return notify(snapshot()); }).catch(() => {});
         }
-      } catch { if (!disposed) { phase = 'error'; error = '检查更新失败，请检查网络或稍后重试；不代表已是最新版。'; } }
+      } catch { if (!disposed) { phase = 'error'; error = CHECK_FAILED; } }
       finally { pending = null; emit(); }
       return snapshot();
     })();
@@ -111,13 +120,18 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
   };
   const installUpdate = () => {
     if (disposed || installing || !snapshot().canInstall) return installing || Promise.resolve(snapshot());
+    let via;
+    try { via = proxyConfig(); } catch {
+      phase = 'available'; error = PROXY_INVALID; emit();
+      return Promise.resolve(snapshot());
+    }
     const target = latest; phase = 'installing'; error = ''; emit();
     installing = (async () => {
       let directory;
       try {
         if (!await confirm(snapshot()) || disposed) { phase = 'available'; return snapshot(); }
         abort = new AbortController();
-        const bytes = await request(target.url, { limit: MAX, signal: abort.signal });
+        const bytes = await request(target.url, { limit: MAX, signal: abort.signal, proxy: via });
         if (disposed) return snapshot();
         if (bytes.length !== target.size || crypto.createHash('sha256').update(bytes).digest('hex') !== target.digest) throw Error('digest');
         fs.mkdirSync(storagePath, { recursive: true, mode: 0o700 });
@@ -139,11 +153,11 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
     dispose() { disposed = true; clearInterval(timer); abort?.abort(); }
   };
 }
-function createUpdateHost({ vscode, context, onChange }) {
+function createUpdateHost({ vscode, context, onChange, proxy }) {
   const cli = path.join(vscode.env?.appRoot || '', 'bin', 'devin-desktop');
   const supported = process.platform === 'darwin' && path.isAbsolute(cli) && fs.existsSync(cli);
   let updater;
-  updater = createUpdater({ currentVersion: require('../package.json').version, globalState: context.globalState, storagePath: context.globalStorageUri.fsPath, onChange,
+  updater = createUpdater({ currentVersion: require('../package.json').version, globalState: context.globalState, storagePath: context.globalStorageUri.fsPath, onChange, proxy,
     confirm: async state => await vscode.window.showWarningMessage(`安装 Fusion BYOK ${state.latestVersion}？不会自动重载当前窗口。`, { modal: true }, '安装更新') === '安装更新',
     install: supported ? async ({ path: file }) => { await execFile(cli, ['--install-extension', file], { timeout: 120000, maxBuffer: 1024 * 1024 }); } : undefined,
     notify: async state => { const action = await vscode.window.showInformationMessage(`Fusion BYOK ${state.latestVersion} 已发布。`, '查看更新', '忽略此版本'); if (action === '查看更新') await vscode.commands.executeCommand('devinFusionByok.openPanel'); else if (action === '忽略此版本') await updater.ignore(); }
