@@ -112,6 +112,20 @@ test('monitor is authenticated, origin-blocked, and client validates runtime ide
   await assert.rejects(readMonitor({ root: f.root + '-wrong', port: f.backend.port }), /identity/);
 });
 
+test('readMonitor retries once on connection-level failures', async t => {
+  const f = await fixture(t);
+  const { readMonitor } = require('../src/runtime/monitor-client.cjs');
+  let calls = 0;
+  const request = (url, options) => {
+    calls += 1;
+    if (calls === 1) { const error = new TypeError('fetch failed'); error.cause = { code: 'ECONNRESET' }; return Promise.reject(error); }
+    return fetch(url, options);
+  };
+  const result = await readMonitor({ root: f.root, port: f.backend.port, request });
+  assert.equal(result.status, 'ready');
+  assert.equal(calls, 3, 'the first attempt dies on /health; the retry issues /health and /_runtime/monitor');
+});
+
 test('safe shutdown refuses active RPCs and stops only after the complete response', async t => {
   const f = await fixture(t);
   f.setHold(true);

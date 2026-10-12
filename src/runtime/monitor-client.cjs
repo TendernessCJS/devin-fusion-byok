@@ -10,7 +10,8 @@ const RECORD_FIELDS = ['schemaVersion', 'id', 'startedAt', 'model', 'providerId'
   'inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens', 'firstOutputMs', 'firstTextMs', 'firstResponseMs',
   'durationMs', 'outputSpanMs', 'tps', 'decodeMs', 'visibleTokens', 'hasTools', 'hasReasoning',
   'throughputTps', 'gatewayTps', 'usageState', 'usageComplete', 'sessionId', 'attribution', 'role'];
-async function readMonitor({ root, port = PORT, signal, request = fetch }) {
+const { withConnectionRetry } = require('./retry.cjs');
+async function readOnce({ root, port, signal, request }) {
   const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(12000)]) : AbortSignal.timeout(12000);
   const base = 'http://127.0.0.1:' + port;
   const read = async (url, headers, maximum) => {
@@ -34,6 +35,9 @@ async function readMonitor({ root, port = PORT, signal, request = fetch }) {
   if (data.instanceId !== health.instanceId) throw new Error('monitor_identity');
   if (!data.snapshot) return { status: 'unavailable', snapshot: null };
   return { status: 'ready', snapshot: publicSnapshot(data.snapshot) };
+}
+async function readMonitor({ root, port = PORT, signal, request = fetch }) {
+  return withConnectionRetry(() => readOnce({ root, port, signal, request }), { signal });
 }
 function metricOf(metric) {
   if (!metric || typeof metric !== 'object' || Array.isArray(metric)) return null;

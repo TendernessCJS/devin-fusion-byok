@@ -181,3 +181,24 @@ test('backend observations remain scoped to the live instance', async t => {
   const body = await raw.json();
   assert.ok(body.models.length > 0, 'backend records persist per instance until replaced by fresh observations');
 });
+
+test('readNativeModels retries once on connection-level failures', async t => {
+  const f = await backendFixture(t);
+  let calls = 0;
+  const request = (url, options) => {
+    calls += 1;
+    if (calls === 1) { const error = new TypeError('fetch failed'); error.cause = { code: 'ECONNRESET' }; return Promise.reject(error); }
+    return fetch(url, options);
+  };
+  const result = await readNativeModels({ root: f.root, port: f.backend.port, request });
+  assert.equal(result.status, 'empty');
+  assert.equal(calls, 3, 'the first attempt dies on /health; the retry issues /health and /_runtime/native-models');
+});
+
+test('readNativeModels never retries identity rejections', async t => {
+  const f = await backendFixture(t);
+  let calls = 0;
+  const request = (url, options) => { calls += 1; return fetch(url, options); };
+  await assert.rejects(readNativeModels({ root: f.root + '-other', port: f.backend.port, request }), /native_catalog_identity/);
+  assert.equal(calls, 1, 'identity failures are not connection failures and must not be retried');
+});

@@ -51,7 +51,7 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 npm test
 ```
 
-基线是 **623 例 / 622 通过 / 1 失败**，唯一失败为 `test/native-models-sync.test.cjs:92`（已知的 undici 连接复用问题，见 `AGENTS.md`），**不要去修它，也不要改断言**。失败数多于 1 个时先查清再继续。
+**应全绿 0 失败**。曾有的 `native-models-sync` 连接复用失败已由 `src/runtime/retry.cjs` 的 `withConnectionRetry` 修复（见 `AGENTS.md`「测试基线」）；出现任何失败先查清再继续，**不要为了通过测试而修改断言**。
 
 ## 3. 打包
 

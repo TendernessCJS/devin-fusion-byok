@@ -20,11 +20,13 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 
 改动后至少跑 `npm test`。测试用 `node:test`，无需安装依赖，也没有 lint/typecheck 步骤。
 
-## 已知测试失败（不要追这个）
+## 测试基线
 
-`test/native-models-sync.test.cjs:92`（「fails closed on foreign roots…」）在 Node v24.21.0 / macOS 上稳定失败，退出码 1，报错为 `fetch failed` / `ECONNRESET`（`errno: -54`）。全量测试当前为 623 例、622 通过。
+全量测试应全绿（0 失败）。
 
-已定位的机制：同一端口重启 backend 后，对该 origin 的首次请求复用了 undici 连接池中已被旧服务关闭的 keep-alive socket。复现条件是「重启前已向该 origin 发起 ≥2 次请求」；加重启后 100ms 延迟或请求头 `Connection: close` 即可避免。这是测试暴露的客户端连接复用问题，与 backend 实现无关，**不要为了让它通过而修改断言**。
+历史说明：`test/native-models-sync.test.cjs` 曾稳定失败——同一端口重启 backend 后，对该 origin 的首次请求复用了 undici 连接池中已被旧服务关闭的 keep-alive socket（`ECONNRESET`），第二次请求自愈。这是**客户端连接复用缺口**，已由 `src/runtime/retry.cjs` 的 `withConnectionRetry` 修复：`readNativeModels` 与 `readMonitor` 对连接层失败做一次重试。
+
+纪律保留：**不要为了通过测试而修改断言**；`withConnectionRetry` 只重试连接层失败（按 `error.cause.code` / `error.code` 判定），`native_catalog_identity` / `monitor_identity` / `native_catalog_unavailable` 这类校验错误不得被重试绕过或伪装成成功。
 
 ## 代码约定
 

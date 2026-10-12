@@ -1,7 +1,8 @@
 'use strict';
 const fs = require('node:fs');
 const { runtimeIdentity, controlFile, PORT } = require('./backend.cjs');
-async function readNativeModels({ root, port = PORT, signal, request = fetch }) {
+const { withConnectionRetry } = require('./retry.cjs');
+async function readOnce({ root, port, signal, request }) {
   const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(2000)]) : AbortSignal.timeout(2000);
   const base = 'http://127.0.0.1:' + port;
   const read = async (url, headers) => {
@@ -56,5 +57,8 @@ async function readNativeModels({ root, port = PORT, signal, request = fetch }) 
     return next;
   });
   return { status: models.length ? 'ready' : 'empty', models };
+}
+async function readNativeModels({ root, port = PORT, signal, request = fetch }) {
+  return withConnectionRetry(() => readOnce({ root, port, signal, request }), { signal });
 }
 module.exports = { readNativeModels };
