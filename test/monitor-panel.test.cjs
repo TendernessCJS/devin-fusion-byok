@@ -56,20 +56,29 @@ test('session options show titles and relative times instead of internal slugs',
   let receive;
   vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} } });
   const now = Math.floor(Date.now() / 1000);
-  const summary = { requests: 0, success: 0, error: 0, cancelled: 0 };
-  receive({ data: { type: 'monitor-state', result: { snapshot: { summary, records: [], sessionStatus: 'ready', sessions: [
+  const summary = { requests: 1, success: 1, error: 0, cancelled: 0 };
+  const record = { id: 'r1', startedAt: 't', model: 'm', effort: null, status: 'success', usageState: 'missing', attribution: 'ambiguous' };
+  receive({ data: { type: 'monitor-state', result: { snapshot: { summary, records: [record], sessionStatus: 'ready', sessions: [
     { sessionId: 'sprout-skull', title: '查看并讨论 VS Code 插件项目', lastActivityAt: now - 7200, attribution: 'response-id', summary, records: [] },
     { sessionId: 'puddle-airmail', title: '审查全局规则', lastActivityAt: now - 1800, attribution: 'tool-id', summary, records: [] },
-    { sessionId: 'ghost-slug', title: null, lastActivityAt: null, attribution: 'ambiguous', summary, records: [] },
+    { sessionId: 'ghost-slug', title: null, lastActivityAt: null, attribution: 'tool-id', summary, records: [] },
     { sessionId: null, title: null, lastActivityAt: null, attribution: 'unassigned', summary, records: [] },
   ] } } } });
   const options = byId('monitor-session').children.map(o => [o.value, o.textContent]);
   assert.deepEqual(options[0], ['all', '全部会话']);
   assert.deepEqual(options[1], ['sprout-skull', '查看并讨论 VS Code 插件项目 · 2 小时前']);
   assert.deepEqual(options[2], ['puddle-airmail', '审查全局规则 · 30 分钟前']);
-  assert.deepEqual(options[3], ['ghost-slug', 'ghost-slug · 存在歧义']);
+  assert.deepEqual(options[3], ['ghost-slug', 'ghost-slug'], 'session-level ambiguity cannot occur, so no 存在歧义 suffix here');
   assert.deepEqual(options[4], ['__unassigned__', '未归属／有歧义']);
   for (const [, text] of options) assert.ok(!text.includes('ID 确认'), 'noise suffix removed: ' + text);
+  const ambiguousCell = byId('monitor-requests').children[0].children.at(-1);
+  assert.equal(ambiguousCell.textContent, '存在歧义', 'record-level ambiguity still renders in the 会话关联 column');
+  for (const option of byId('monitor-session').children) assert.equal(option.title, option.textContent, 'every option carries its full text as tooltip');
+  byId('monitor-session').value = 'puddle-airmail';
+  byId('monitor-session').listeners.change();
+  assert.equal(byId('monitor-session').title, '审查全局规则 · 30 分钟前', 'select tooltip follows the chosen option');
+  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  assert.match(html, /\.monitor-controls select \{[^}]*text-overflow: ellipsis/, 'the session selector truncates with an ellipsis');
 });
 test('usage monitor renders once inside the usage tab', () => {
   const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });

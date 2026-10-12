@@ -148,7 +148,7 @@ function renderPanel({ nonce, cspSource }) {
     .toast[data-tone="error"] { border-color: var(--vscode-inputValidation-errorBorder, #be1100); color: var(--error); }
     .toast[data-tone="success"] { color: var(--ok); }
     .monitor-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
-    .monitor-controls select { width: auto; max-width: 320px; }
+    .monitor-controls select { width: auto; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-bottom: 16px; }
     .tile { padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
     .tile-value { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
