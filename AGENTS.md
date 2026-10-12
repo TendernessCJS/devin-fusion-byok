@@ -49,7 +49,7 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 - 资产必须带 GitHub 自动计算的 `digest`（`sha256:` + 64 位十六进制）且大小 ≤ 50 MiB，否则 `installable=false`，面板只提供「打开发布页面」。
 - 插件内 `package.json` 的 `version` 必须严格小于 Release 版本才会提示更新，发布前记得 bump。
 - 一键安装仅在 macOS 且 `<appRoot>/bin/devin-desktop` 存在时可用（`createUpdateHost` 里的 `supported` 判断）；其他情况 `canInstall=false`，只能手动下载 vsix。
-- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（见 `allowedUrl` 白名单），不需要改代理。
+- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（见 `allowedUrl` 白名单）。**但扩展宿主的全局 `fetch` 不读 `HTTPS_PROXY`**（undici 默认行为）：直连被重置的环境下只设该变量无效，需代理客户端开 TUN 模式、或以 `NODE_USE_ENV_PROXY=1` 配合该变量启动 Devin，否则面板显示「检查更新失败」。判定与验证方法见 `.devin/skills/release/SKILL.md`。
 
 ## fork 同步与发布
 
@@ -84,9 +84,9 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 
 ### 发布步骤
 
-1. `npm run package`
-2. 打 tag `v<version>`，把 `devin-fusion-byok-<version>.vsix` 传为 Release 资产
-3. Release body 就是更新说明，面板会显示（截取前 6000 字符）
+完整流程与验收方法见 `.devin/skills/release/SKILL.md`（`/release` 调用）：定版本 → `npm test` → `npm run package` → 推送 + 打 tag → 建 Release → **用已安装副本的代码跑读回路校验** → 覆盖安装。
+
+要点：`npm run package` 产出的 `devin-fusion-byok-<version>.vsix` 必须原样命名为 `v<version>` Release 的资产；必须 Publish 而非存为 draft；Release body 即面板显示的更新说明（截取前 6000 字符）。
 
 ### 本 fork 相对 upstream 的刻意差异
 
@@ -98,6 +98,8 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 | `test/update.test.cjs` | 使用导出的 `PAGE`，不再硬编码仓库 URL |
 | `README.md` | 顶部 fork 声明；Releases 链接指向本 fork；保留上游作者署名 |
 | `package.json` | 新增 `repository` 字段；`version` 由本 fork 自管，merge 时取 ours |
+| `AGENTS.md` | 本 fork 新增（upstream 无），项目约定与 fork 同步规则 |
+| `.devin/skills/release/SKILL.md` | 本 fork 新增（upstream 无），发布与自更新验收流程 |
 
 ## 待办与死角
 
