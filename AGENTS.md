@@ -96,12 +96,15 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 
 | 文件 | 差异 |
 | --- | --- |
-| `src/update.cjs` | `REPOSITORY` 改为 `TendernessCJS/devin-fusion-byok`，并导出 `PAGE` |
-| `test/update.test.cjs` | 使用导出的 `PAGE`，不再硬编码仓库 URL |
+| `src/update.cjs` | `REPOSITORY` 改为 `TendernessCJS/devin-fusion-byok`；导出 `PAGE`；`requestBytes` 增加 `proxy` 参数（走 `src/proxy.cjs`），`createUpdater` 增加 `proxy` getter |
+| `test/update.test.cjs` | 使用导出的 `PAGE`，不再硬编码仓库 URL；含代理相关用例 |
 | `README.md` | 顶部 fork 声明；Releases 链接指向本 fork；保留上游作者署名 |
 | `package.json` | 新增 `repository` 字段；`version` 由本 fork 自管，merge 时取 ours |
 | `AGENTS.md` | 本 fork 新增（upstream 无），项目约定与 fork 同步规则 |
 | `.devin/skills/release/SKILL.md` | 本 fork 新增（upstream 无），发布与自更新验收流程 |
+| `src/proxy.cjs` | 本 fork 新增（upstream 无），自更新的自带 CONNECT 代理；只被 `src/update.cjs` 的更新路径调用 |
+| `test/proxy.test.cjs` | 本 fork 新增（upstream 无），代理与隧道测试 |
+| `src/runtime/retry.cjs` | 本 fork 新增（upstream 无），连接层一次性重试；只被 `native-models.cjs` 与 `monitor-client.cjs` 使用 |
 
 ## 待办与死角
 
