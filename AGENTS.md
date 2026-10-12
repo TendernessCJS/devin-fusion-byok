@@ -57,6 +57,16 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 - 强依赖 Devin 私有接口：LS `Heartbeat` 抓端口（`src/runtime/ls-injection.cjs`）、catalog 的 protobuf 字段号与 Connect 帧（`src/protocol/wire.cjs`、`src/catalog.cjs`）、ACP `registerConnection` 与握手 `api_server_url`（`src/runtime/acp-injection.cjs`、`auto-continue.cjs`、`goal-continue.cjs`）、Fast Context 的 `GetDevstralStream`（`src/fast-context/protocol.cjs`）。这些接口不稳定，改动附近代码时按「可能失败」处理，不要在失败路径上伪装成功。
 - 修改行为时不要放宽现有安全校验（Origin 一律 403、控制令牌 `timingSafeEqual`、webview 只用 `createElement`/`textContent` 不用 `innerHTML`、CSP nonce）。
 
+## 平台支持
+
+**只以 macOS 为目标平台**（个人自用，本机即 macOS）：验证、真机验收、发布检查都只针对 macOS。其他平台按「逻辑可行」的最低标准处理，**短期不做实机验证**。
+
+- **不要声称非 macOS 已验证可用**。涉及平台差异的行为，在代码与文档里注明「仅 macOS 验证」。
+- **非 macOS 必须明确失败，不得静默出错**。既有先例（沿用这个模式）：`src/runtime/app-restart.cjs` 在非 darwin 抛 `restart_unsupported`，面板提示「当前环境不支持重启 Devin」；`src/update.cjs` 的 `supported` 判断使非 macOS 只能手动装 vsix。注意 `package.json` **未设 `os` 字段**，其他平台能装上、只是相应功能不可用。
+- **已知 macOS 硬编码**（非 macOS 上会失败或降级，暂无适配计划）：`/usr/bin/sqlite3`（用量归属，`monitor.cjs`；失败降级为 `unavailable`）、`/usr/bin/unzip`（一键安装，`update.cjs`）、`/usr/bin/open` 与 `/usr/bin/grep`（重启 Devin，`app-restart.cjs`）、`/usr/bin/zip`（打包，`scripts/package.cjs`）。Fast Context 的 ripgrep 查找是唯一带回退的：`FUSION_FAST_CONTEXT_RG` → `PATH` → `/Applications/Devin.app/...`，都找不到才抛 `ripgrep_unavailable`。
+- **测试只覆盖逻辑分支**：平台差异靠注入参数验证（如 `platform` 形参、`resolveNode(env, platform)`），不依赖真机。
+- 结论：**不要为未验证的平台做重构**；能低成本避免耦合就避免，已硬编码的保持现状。
+
 ## 自更新（发布约束）
 
 - 自更新运行时只读 `src/update.cjs` 的 `REPOSITORY` 常量，`PAGE` 与 `API` 由它派生。测试通过导出的 `PAGE` 复用，不要重写回硬编码字符串。换仓库需同时改这里与 `package.json` 的 `repository.url`（后者是纯元数据，运行时不读）。
@@ -131,7 +141,6 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 ## 待办与死角
 
 - `src/runtime/acp-injection.cjs`、`src/runtime/acp-observer.cjs` 在 `src/` 内无任何调用点（仅各自测试通过 `vm` 加载）；`src/config.cjs` 的 `updateSidekicks()` 同样未被调用。改动这两块前先确认是否已废弃。
-- macOS 专属硬编码：一键更新与「重启 Devin」（`src/update.cjs` 用 `/usr/bin/unzip`）、打包用 `/usr/bin/zip`、用量统计用 `/usr/bin/sqlite3`。跨平台改动需一并处理这些路径。
 
 ## 测试注意
 
