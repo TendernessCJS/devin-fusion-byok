@@ -105,6 +105,8 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 | `src/proxy.cjs` | 本 fork 新增（upstream 无），自更新的自带 CONNECT 代理；只被 `src/update.cjs` 的更新路径调用 |
 | `test/proxy.test.cjs` | 本 fork 新增（upstream 无），代理与隧道测试 |
 | `src/runtime/retry.cjs` | 本 fork 新增（upstream 无），连接层一次性重试；只被 `native-models.cjs` 与 `monitor-client.cjs` 使用 |
+| `src/runtime/app-restart.cjs` | 「重启 Devin」的存活探测由 `pgrep` 改为 `ps -Ao comm=`：macOS `pgrep` 跳过调用者自身的祖先进程，而 helper 必然在 app 进程树内，因此原本永远看不到主进程（表现为只关闭不重启） |
+| `test/app-restart.test.cjs` | 覆盖新探测方式：合成 app 复现 `pgrep` 祖先盲区、并验证 app 退出后才重新拉起 |
 
 ## 待办与死角
 
@@ -115,3 +117,4 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 
 - `test/support/installed-renderer.cjs` 与 5 处条件 `skip` 依赖本机已安装的 Devin 原生渲染文件；缺失时会跳过而非失败。
 - Goal 与 Fast Context 目前只有模拟连接 / 合成代码的测试，尚未在真实 Devin 窗口完成端到端验收。
+- 「重启 Devin」触发即退出 Devin，无法在会话内端到端验证；其探测与时序由 `test/app-restart.test.cjs` 的合成 app 覆盖。
