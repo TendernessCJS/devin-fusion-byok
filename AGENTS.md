@@ -17,18 +17,19 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | 目标 | 协议 | 直连结果 | 代理怎么生效 |
 | --- | --- | --- | --- |
 | `origin`（`git push` / `git fetch`） | SSH | — | `~/.ssh/config` 的 `Host github.com` 里 `ProxyCommand nc -X 5 -x 127.0.0.1:7897 %h %p`，**自动生效，命令里不要再套 `HTTPS_PROXY`** |
-| `upstream`（`git fetch`） | HTTPS | 挂约 75 秒后 `Failed to connect to github.com port 443` | 命令前缀 `HTTPS_PROXY=http://127.0.0.1:7897` |
-| `gh`（建 Release 等） | HTTPS | 立即 `read: connection reset by peer` | 命令前缀 `HTTPS_PROXY=http://127.0.0.1:7897` |
+| `upstream`（`git fetch`） | HTTPS | 挂约 75 秒后 `Failed to connect to github.com port 443` | 本机已配 URL 限定代理，**裸命令即可**；未配置的机器用前缀 `HTTPS_PROXY=http://127.0.0.1:7897` |
+| `gh`（建 Release 等） | HTTPS | 立即 `read: connection reset by peer` | **只能**用前缀 `HTTPS_PROXY=http://127.0.0.1:7897`（`gh` 没有 proxy 配置项，也不读 git 配置） |
 
 HTTPS remote 的失败是**长时间挂起**而非快速报错——卡住 10 秒以上就该怀疑漏了代理，别误判成「网络慢」。用 `git remote -v` 确认 remote 属于哪种。`origin` 那条 SSH 代理是**机器级依赖**（`~/.ssh/config` + `/usr/bin/nc`），不在仓库内：缺失时 push 会失败，且失败形态同样是 75 秒超时。
 
-**不要**写 `git config --global http.proxy`：那会连内网 Gitee 一起送进代理。确需用持久配置替代命令前缀时，只能用 URL 限定形式——它只作用于 github.com，与 `origin` 的 SSH `ProxyCommand` 同属「主机限定」模式：
+这台机器已用 **URL 限定**形式配好，所以 HTTPS remote 的裸命令直接可用：
 
 ```bash
-git config --global http.https://github.com/.proxy http://127.0.0.1:7897
+git config --global --get http.https://github.com/.proxy                   # 先确认：有输出即可裸命令
+git config --global http.https://github.com/.proxy http://127.0.0.1:7897   # 未配置的机器，由用户自行执行
 ```
 
-这是可选加强，不是必需；且**改动用户级 git 配置须由用户自行执行**。
+它只作用于 `github.com`，与 `origin` 的 SSH `ProxyCommand` 同属「主机限定」模式。**不要**用无作用域的 `git config --global http.proxy`：它作用于**所有** HTTPS remote，会把 HTTPS 形态的内网仓库也送进代理；而 SSH 形态的内网 remote 不受任何 `http.proxy` 影响。**改动用户级 git 配置须由用户自行执行。**
 
 ## 常用命令
 
@@ -81,10 +82,10 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 ### 同步 upstream
 
 ```bash
-HTTPS_PROXY=http://127.0.0.1:7897 git fetch upstream && git merge upstream/main
+git fetch upstream && git merge upstream/main
 ```
 
-- `upstream` 是 **HTTPS** remote，上面这行的 `HTTPS_PROXY` 前缀**不能省**：漏掉不是快速报错，而是挂约 75 秒后才失败（见「本机网络路径」）。`origin` 是 SSH，`git push` 反而**不要**加这个前缀。
+- `upstream` 是 **HTTPS** remote。本机已配 URL 限定代理，所以上面是裸命令；**未配置的机器**上会挂约 75 秒后才失败，此时改用 `HTTPS_PROXY=http://127.0.0.1:7897 git fetch upstream`（见「本机网络路径」）。`origin` 是 SSH，`git push` 一律**不要**加这个前缀。
 - 用 **merge**，不要用 `git pull upstream`：显式 fetch + merge 能明确来源，冲突时也便于对照下面的差异表；本仓库已设 `pull.rebase=false`，即使误用 pull 也不会走 rebase 重写历史、不需要 force push。
 - 已启用 `rerere`（`git config --local rerere.enabled true`）：README 等固定位置的重复冲突会自动复用上次解法。但 **`package.json` 的 `version` 冲突它救不了** —— upstream 每次改的版本号都不同，冲突片段内容随之变化，匹配不上。
 - 冲突处理：`package.json` 的 `version` **一律取本 fork 的值（ours）**。版本号由本 fork 自管、不跟随 upstream；上游每次发版都会只在这一行产生冲突，固定改 1 行即可。

@@ -146,10 +146,10 @@ const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
   | 目标 | 协议 | 命令里要不要 `HTTPS_PROXY` 前缀 |
   | --- | --- | --- |
   | `origin`（第 4 步 push） | SSH | **不要**，`~/.ssh/config` 的 `ProxyCommand` 自动代理 |
-  | `upstream`（同步上游） | HTTPS | **要** |
-  | `gh`（第 5 步建 Release） | HTTPS | **要** |
+  | `upstream`（同步上游） | HTTPS | **不要**（本机已配 `http.https://github.com/.proxy`，裸命令即可）；未配置的机器要加 |
+  | `gh`（第 5 步建 Release） | HTTPS | **要**——`gh` 没有 proxy 配置项，也不读 git 配置 |
 
-  HTTPS remote 漏了前缀是**挂约 75 秒**后失败，不是快速报错——卡住超过 10 秒先怀疑这个。`origin` 的 SSH 代理是机器级依赖（`~/.ssh/config` + `/usr/bin/nc`），不在仓库内。
+  判定本机是否已配：`git config --get http.https://github.com/.proxy`。HTTPS remote 漏了前缀是**挂约 75 秒**后失败，不是快速报错——卡住超过 10 秒先怀疑这个。`origin` 的 SSH 代理是机器级依赖（`~/.ssh/config` + `/usr/bin/nc`），不在仓库内。
 - **首选：插件自带代理**（`src/proxy.cjs`，随 0.3.43 之后版本一起分发）。`config.json` 设 `updateProxy` 后，面板「检查更新」与一键安装经 CONNECT 隧道走代理，不受 TUN 与环境变量影响；第 6 步验收片段显式传同一个代理地址，跑的是同一条路径。
 - **备选：环境变量 / TUN**。验收已安装的旧版本（没有 `src/proxy.cjs`）或排查直连路径时才需要：
   - 验收片段改用 `HTTPS_PROXY=http://127.0.0.1:7897 NODE_USE_ENV_PROXY=1 NO_PROXY=localhost,127.0.0.1` 让全局 `fetch` 读环境变量（扩展宿主的 `fetch` 默认不读，缺了它就 ECONNRESET，看起来像「发布失败」）。
