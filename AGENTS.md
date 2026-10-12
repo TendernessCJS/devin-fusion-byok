@@ -7,7 +7,28 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 - `origin` = 本仓库的 fork（`git@github.com:TendernessCJS/devin-fusion-byok.git`），是日常推送目标。
 - `upstream` = 上游原项目（`https://github.com/kuobibulaien/devin-fusion-byok.git`），只读，**不要向 upstream 推送**。
 - 本地 `main` 跟踪 `origin/main`。新克隆或首次拉取后需先执行 `git fetch origin`，否则 `git status` 会显示 `[origin/main: gone]`。
+- 两个 remote 走**不同的网络通道**（`origin` 是 SSH、`upstream` 是 HTTPS），代理要求不同——见下节。
 - 同步上游更新见「fork 同步与发布」一节。
+
+## 本机网络路径（访问 GitHub）
+
+本机直连 GitHub 不可用，必须经代理 `http://127.0.0.1:7897`；代理不可用时停止并报告，不要回退直连。三个目标走**不同通道**，代理的生效方式也不同：
+
+| 目标 | 协议 | 直连结果 | 代理怎么生效 |
+| --- | --- | --- | --- |
+| `origin`（`git push` / `git fetch`） | SSH | — | `~/.ssh/config` 的 `Host github.com` 里 `ProxyCommand nc -X 5 -x 127.0.0.1:7897 %h %p`，**自动生效，命令里不要再套 `HTTPS_PROXY`** |
+| `upstream`（`git fetch`） | HTTPS | 挂约 75 秒后 `Failed to connect to github.com port 443` | 命令前缀 `HTTPS_PROXY=http://127.0.0.1:7897` |
+| `gh`（建 Release 等） | HTTPS | 立即 `read: connection reset by peer` | 命令前缀 `HTTPS_PROXY=http://127.0.0.1:7897` |
+
+HTTPS remote 的失败是**长时间挂起**而非快速报错——卡住 10 秒以上就该怀疑漏了代理，别误判成「网络慢」。用 `git remote -v` 确认 remote 属于哪种。`origin` 那条 SSH 代理是**机器级依赖**（`~/.ssh/config` + `/usr/bin/nc`），不在仓库内：缺失时 push 会失败，且失败形态同样是 75 秒超时。
+
+**不要**写 `git config --global http.proxy`：那会连内网 Gitee 一起送进代理。确需用持久配置替代命令前缀时，只能用 URL 限定形式——它只作用于 github.com，与 `origin` 的 SSH `ProxyCommand` 同属「主机限定」模式：
+
+```bash
+git config --global http.https://github.com/.proxy http://127.0.0.1:7897
+```
+
+这是可选加强，不是必需；且**改动用户级 git 配置须由用户自行执行**。
 
 ## 常用命令
 
@@ -51,7 +72,7 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 - 资产必须带 GitHub 自动计算的 `digest`（`sha256:` + 64 位十六进制）且大小 ≤ 50 MiB，否则 `installable=false`，面板只提供「打开发布页面」。
 - 插件内 `package.json` 的 `version` 必须严格小于 Release 版本才会提示更新，发布前记得 bump。
 - 一键安装仅在 macOS 且 `<appRoot>/bin/devin-desktop` 存在时可用（`createUpdateHost` 里的 `supported` 判断）；其他情况 `canInstall=false`，只能手动下载 vsix。
-- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经 `src/proxy.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。**不要改成读 `http.proxy` 设置或 `HTTPS_PROXY`/`http_proxy`/`ALL_PROXY` 环境变量**——那会全局生效，把 Gitee 等内网地址也送去代理。验收方法见 `.devin/skills/release/SKILL.md`。
+- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经 `src/proxy.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。**不要改成读 `http.proxy` 设置或 `HTTPS_PROXY`/`http_proxy`/`ALL_PROXY` 环境变量**——那会全局生效，把 Gitee 等内网地址也送去代理。（此约束只针对**插件运行时代码**；开发者在终端跑 git/gh 命令时仍按「本机网络路径」一节加前缀，两者不冲突。）验收方法见 `.devin/skills/release/SKILL.md`。
 
 ## fork 同步与发布
 
@@ -60,9 +81,10 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 ### 同步 upstream
 
 ```bash
-git fetch upstream && git merge upstream/main
+HTTPS_PROXY=http://127.0.0.1:7897 git fetch upstream && git merge upstream/main
 ```
 
+- `upstream` 是 **HTTPS** remote，上面这行的 `HTTPS_PROXY` 前缀**不能省**：漏掉不是快速报错，而是挂约 75 秒后才失败（见「本机网络路径」）。`origin` 是 SSH，`git push` 反而**不要**加这个前缀。
 - 用 **merge**，不要用 `git pull upstream`：显式 fetch + merge 能明确来源，冲突时也便于对照下面的差异表；本仓库已设 `pull.rebase=false`，即使误用 pull 也不会走 rebase 重写历史、不需要 force push。
 - 已启用 `rerere`（`git config --local rerere.enabled true`）：README 等固定位置的重复冲突会自动复用上次解法。但 **`package.json` 的 `version` 冲突它救不了** —— upstream 每次改的版本号都不同，冲突片段内容随之变化，匹配不上。
 - 冲突处理：`package.json` 的 `version` **一律取本 fork 的值（ours）**。版本号由本 fork 自管、不跟随 upstream；上游每次发版都会只在这一行产生冲突，固定改 1 行即可。
