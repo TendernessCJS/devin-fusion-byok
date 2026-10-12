@@ -92,21 +92,21 @@ HTTPS_PROXY=http://127.0.0.1:7897 gh release create v<version> \
 
 网页显示正常 ≠ 插件能用。**用已安装副本的代码**跑一遍真实回路。
 
-**必须带 `NODE_USE_ENV_PROXY=1`**：插件用的全局 `fetch` 默认不读 `HTTPS_PROXY`，只设代理变量会直接 `ECONNRESET`（看起来和「发布失败」一模一样）。加上它之后整段不依赖 TUN 模式，结果可复现。
+**走插件自带的代理路径**：`requestBytes` 支持 `proxy` 参数（`src/proxy.cjs` 的 `parseProxy` 结果）。下面片段显式传 `http://127.0.0.1:7897`（与 `config.json` 的 `updateProxy` 等效），和面板「检查更新」走的是同一条代码路径，不依赖 TUN 与环境变量，结果可复现。
 
 ```bash
 EXT="$HOME/.devin/extensions/local.devin-fusion-byok-<version>" \
-HTTPS_PROXY=http://127.0.0.1:7897 NODE_USE_ENV_PROXY=1 NO_PROXY=localhost,127.0.0.1 \
 node -e "
-const m=require(process.env.EXT+'/src/update.cjs'), c=require('node:crypto'), fs=require('fs');
+const m=require(process.env.EXT+'/src/update.cjs'), p=require(process.env.EXT+'/src/proxy.cjs'), c=require('node:crypto'), fs=require('fs');
+const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
 (async()=>{
-  const raw = await m.requestBytes('https://api.github.com/repos/'+m.REPOSITORY+'/releases/latest',{limit:1024*1024});
+  const raw = await m.requestBytes('https://api.github.com/repos/'+m.REPOSITORY+'/releases/latest',{limit:1024*1024,proxy});
   const i = m.releaseInfo(JSON.parse(raw.toString()));
   const cur = require(process.env.EXT+'/package.json').version;
   console.log('installable:', i.installable, '| 远端:', i.version, '| 本地:', cur);
   console.log('资产名:', i.name, '| digest:', i.digest, '| size:', i.size);
   console.log('面板将显示:', m.compareVersions(i.version,cur)>0 ? '有新版本' : '已是最新');
-  const b = await m.requestBytes(i.url,{limit:50*1024*1024});
+  const b = await m.requestBytes(i.url,{limit:50*1024*1024,proxy});
   console.log('字节:', b.length===i.size ? '✓ '+b.length : '✗ '+b.length);
   console.log('sha256:', c.createHash('sha256').update(b).digest('hex')===i.digest ? '✓ 与 Release digest 一致' : '✗');
   const f='/tmp/verify-'+Date.now()+'.vsix'; fs.writeFileSync(f,b);
@@ -139,11 +139,12 @@ const m=require(process.env.EXT+'/src/update.cjs'), c=require('node:crypto'), fs
 ## 本机网络约束（会让验收假失败）
 
 - GitHub 访问必须经代理 `http://127.0.0.1:7897`：直连 `api.github.com`、`github.com`、`objects.githubusercontent.com` 均被连接重置。
-- **扩展宿主的 `fetch` 不读 `HTTPS_PROXY`**：插件用全局 `fetch`（undici 默认行为），只设环境变量无效。要点分两层，别混为一谈：
-  - **验收片段**（第 6 步）加上 `NODE_USE_ENV_PROXY=1` 即可走代理，不看 TUN 状态。
-  - **Devin 内部真实生效**（面板「检查更新」与一键安装）不受你的 shell 影响，需要代理客户端开 **TUN 模式**，或以 `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897 NO_PROXY=localhost,127.0.0.1` 启动 Devin 本体。
+- **首选：插件自带代理**（`src/proxy.cjs`，随 0.3.43 之后版本一起分发）。`config.json` 设 `updateProxy` 后，面板「检查更新」与一键安装经 CONNECT 隧道走代理，不受 TUN 与环境变量影响；第 6 步验收片段显式传同一个代理地址，跑的是同一条路径。
+- **备选：环境变量 / TUN**。验收已安装的旧版本（没有 `src/proxy.cjs`）或排查直连路径时才需要：
+  - 验收片段改用 `HTTPS_PROXY=http://127.0.0.1:7897 NODE_USE_ENV_PROXY=1 NO_PROXY=localhost,127.0.0.1` 让全局 `fetch` 读环境变量（扩展宿主的 `fetch` 默认不读，缺了它就 ECONNRESET，看起来像「发布失败」）。
+  - Devin 本体不读 shell 环境：TUN 模式，或以 `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897 NO_PROXY=localhost,127.0.0.1` 启动 Devin。
   - 判定 TUN 是否生效不能看开关，要看实际出口：`route get <api.github.com 的 IP>` 应为 `utun*`（开）或 `en0`（关）；开 TUN 时 DNS 会解析到 fake-IP 段 `198.18.x.x`。TUN 会被用户关掉或断开，验收前先确认。
-- 面板文案对照：「检查失败」= 网络不通；「比最新正式版还新」= 仍在读旧的上游版本；「已是最新（当前 <刚发布的版本>）」= 完全正常。
+- 面板文案对照：「检查失败」= 网络不通或 `updateProxy` 未配置/无效；「比最新正式版还新」= 仍在读旧的上游版本；「已是最新（当前 <刚发布的版本>）」= 完全正常。
 
 ## 验收时的两个坑
 
