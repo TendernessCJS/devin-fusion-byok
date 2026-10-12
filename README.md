@@ -2,13 +2,15 @@
 
 一个 Devin 用户扩展：把你自己的模型 API（BYOK）接入 Devin 原生模型列表，并把两个模型组合成 Fusion 预设（Lead + Sidekick）使用。
 
+> 本仓库是 [kuobibulaien/devin-fusion-byok](https://github.com/kuobibulaien/devin-fusion-byok) 的 fork。下载与自更新均指向本仓库的 Release。
+
 - 不修改 Devin 应用本体，不需要重新签名，也不安装证书或改系统代理。
 - 支持 OpenAI Responses、OpenAI Chat Completions、Anthropic Messages 三种接口。
 - 第三方模型可以单独用，也可以和其他第三方模型或官方模型组合成 Fusion 预设。
 
 ## 安装
 
-1. 从 [Releases](https://github.com/kuobibulaien/devin-fusion-byok/releases/latest) 下载 `devin-fusion-byok-<版本>.vsix`。
+1. 从 [Releases](https://github.com/TendernessCJS/devin-fusion-byok/releases/latest) 下载 `devin-fusion-byok-<版本>.vsix`。
 2. 在 Devin 命令面板运行 **Extensions: Install from VSIX…** 选择该文件，或在终端执行：
 
    ```bash

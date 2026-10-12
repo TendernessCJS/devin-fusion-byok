@@ -4,7 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const execFile = promisify(require('node:child_process').execFile);
-const REPOSITORY = 'kuobibulaien/devin-fusion-byok';
+const REPOSITORY = 'TendernessCJS/devin-fusion-byok';
 const PAGE = `https://github.com/${REPOSITORY}/releases`;
 const API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
 const INTERVAL = 6 * 60 * 60 * 1000;
@@ -151,4 +151,4 @@ function createUpdateHost({ vscode, context, onChange }) {
   const command = vscode.commands.registerCommand('devinFusionByok.checkUpdates', async () => { await updater.check({ force: true }); await vscode.commands.executeCommand('devinFusionByok.openPanel'); });
   context.subscriptions.push(updater, command); updater.start(); return updater;
 }
-module.exports = { compareVersions, parseVersion, releaseInfo, allowedUrl, requestBytes, verifyPackage, createUpdater, createUpdateHost };
+module.exports = { REPOSITORY, PAGE, compareVersions, parseVersion, releaseInfo, allowedUrl, requestBytes, verifyPackage, createUpdater, createUpdateHost };

@@ -5,6 +5,10 @@
   "version": "0.3.42",
   "publisher": "local",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TendernessCJS/devin-fusion-byok.git"
+  },
   "engines": {
     "vscode": "^1.100.0"
   },

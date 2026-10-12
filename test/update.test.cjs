@@ -1,8 +1,8 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { compareVersions, releaseInfo, allowedUrl, createUpdater, requestBytes, verifyPackage } = require('../src/update.cjs');
-const release = version => ({ tag_name: 'v' + version, assets: [{ name: `devin-fusion-byok-${version}.vsix`, size: 10, digest: 'sha256:' + 'a'.repeat(64), browser_download_url: `https://github.com/kuobibulaien/devin-fusion-byok/releases/download/v${version}/devin-fusion-byok-${version}.vsix` }] });
+const { compareVersions, releaseInfo, allowedUrl, createUpdater, requestBytes, verifyPackage, PAGE } = require('../src/update.cjs');
+const release = version => ({ tag_name: 'v' + version, assets: [{ name: `devin-fusion-byok-${version}.vsix`, size: 10, digest: 'sha256:' + 'a'.repeat(64), browser_download_url: `${PAGE}/download/v${version}/devin-fusion-byok-${version}.vsix` }] });
 function setup(extra = {}) {
   const data = new Map(); let calls = 0;
   const updater = createUpdater({ currentVersion: '0.3.33', globalState: { get: (k, d) => data.has(k) ? data.get(k) : d, update: async (k, v) => data.set(k, v) }, request: async () => { calls++; return Buffer.from(JSON.stringify(release('0.3.34'))); }, ...extra });
@@ -96,7 +96,7 @@ test('controller routes updates separately from model settings and only opens tr
   const posts = [], actions = []; let receive, close;
   const disposable = { dispose() {} };
   const panel = { webview: { postMessage: async m => posts.push(m), onDidReceiveMessage: fn => { receive = fn; return disposable; } }, onDidDispose: fn => { close = fn; return disposable; }, dispose: () => close() };
-  const state = { releaseUrl: 'https://github.com/kuobibulaien/devin-fusion-byok/releases' };
+  const state = { releaseUrl: PAGE };
   const updater = { snapshot: () => state, check: async o => actions.push(['check', o.force]), installUpdate: async () => actions.push(['install']), ignore: async () => actions.push(['ignore']), setAutoCheck: async enabled => actions.push(['auto', enabled]) };
   const controller = createPanelController({ vscode: { ViewColumn: { Active: 1 }, window: { createWebviewPanel: () => panel }, Uri: { parse: x => x }, env: { openExternal: async url => actions.push(['url', url]) } }, context: { subscriptions: [] }, manager: { dispatch() { throw Error('must not touch model settings'); } }, safeError: () => ({ message: 'error' }), updater });
   controller.open();
