@@ -16,6 +16,8 @@ test('the control panel has a Fast Context tab with copy buttons', () => {
   const section = html.slice(html.indexOf('id="view-fastcontext"'), html.indexOf('id="view-settings"'));
   assert.ok(section.includes('hidden>'));
   for (const id of ['fc-root', 'fc-pick', 'fc-copy-prompt', 'fc-copy-config', 'fc-preview']) assert.ok(section.includes(`id="${id}"`), id);
+  assert.match(section, /id="fc-preview" class="code-block"/, 'the preview uses the shared code block style');
+  assert.doesNotMatch(section, /update-notes setting mono/, 'stacking .mono under .update-notes never applied the monospace font');
   assert.match(html, /'fastContext\.' \+ type/);
   assert.match(html, /send\('copy', \{ kind: 'prompt'/);
 });

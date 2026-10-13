@@ -11,7 +11,7 @@ function fastContextMarkup() {
       <p id="fc-status" class="warn mt" role="status"></p>
       <p id="fc-result" class="hint" role="status" aria-live="polite"></p>
       <h3 class="mt">配置预览</h3>
-      <pre id="fc-preview" class="update-notes setting mono"></pre>
+      <pre id="fc-preview" class="code-block"></pre>
       <h3 class="mt">注意</h3>
       <ul>
         <li>使用本机 Devin 已登录的账号，会把检索问题和选中的代码片段发送到官方服务，可能消耗账号额度。</li>

@@ -49,6 +49,18 @@ const state = () => ({ enabled: true, providers: [{ id: 'cpa', name: 'CPA', base
     contextWindow: 200000, maxOutputTokens: 32768 }] }], nativeModels: [], roleLists: { lead: [], sidekick: [] },
   fusionPresets: [], autoContinueStatus: 'unavailable' });
 
+test('all controls share the --control-h height token so rows align', () => {
+  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  assert.match(html, /--control-h: 28px/);
+  assert.match(html, /button \{ min-height: var\(--control-h\)/);
+  assert.match(html, /input:not\(\[type="checkbox"\]\), select \{ min-height: var\(--control-h\)/);
+  assert.doesNotMatch(html, /min-height: 30px/, 'no control may hard-code a height off the shared token');
+  assert.match(html, /\.actions\.nowrap \{ flex-wrap: nowrap; \}/);
+  assert.match(html, /#update-proxy \{ width: 200px/);
+  assert.match(html, /ul, ol \{ padding-left: 20px; \}/, 'the ua list indentation is reset');
+  assert.doesNotMatch(html, /h1, h2, h3, p \{ margin: 0 \}/, 'the heading reset must include lists too');
+});
+
 test('the add-model dialog renders the 131072-token output default and keeps saved values', () => {
   const { byId, posts, receive } = panel();
   receive({ data: { type: 'state', state: state() } });

@@ -138,7 +138,8 @@ test('an invalid updateProxy fails the check without any network request', async
 });
 test('update view is plain text and does not expose release payload as HTML', () => {
   const { updateMarkup, updateScript } = require('../src/panel/update-view.cjs');
-  assert.match(updateMarkup(), /update-install/); assert.match(updateScript(), /textContent/); assert.doesNotMatch(updateScript(), /innerHTML/);
+  assert.match(updateMarkup(), /update-install/); assert.match(updateMarkup(), /class="actions nowrap"/);
+  assert.match(updateScript(), /textContent/); assert.doesNotMatch(updateScript(), /innerHTML/);
   assert.doesNotThrow(() => new Function('vscode', updateScript()));
 });
 

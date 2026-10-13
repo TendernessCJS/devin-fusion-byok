@@ -4,6 +4,7 @@ const { normalizeBaseUrlPath } = require('./base-url.cjs');
 const { monitorMarkup, monitorScript } = require('./monitor-view.cjs');
 const { updateMarkup, updateScript } = require('./update-view.cjs');
 const { fastContextMarkup, fastContextScript } = require('./fast-context-view.cjs');
+const { baseStyles } = require('./theme.cjs');
 
 function escapeAttribute(value) {
   return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -54,42 +55,11 @@ function renderPanel({ nonce, cspSource }) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${safeNonce}'; script-src 'nonce-${safeNonce}'; img-src ${escapeAttribute(cspSource || "'none'")}; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none';">
   <title>Fusion BYOK</title>
-  <style nonce="${safeNonce}">
-    :root { color-scheme: light dark; --border: var(--vscode-panel-border, #454545); --muted: var(--vscode-descriptionForeground, #999); --accent: var(--vscode-button-background, #0e639c); --hover: var(--vscode-list-hoverBackground, #2a2d2e); --warn: var(--vscode-editorWarning-foreground, #cca700); --error: var(--vscode-errorForeground, #f48771); --ok: var(--vscode-testing-iconPassed, #73c991); --bg: var(--vscode-editor-background, #1e1e1e); }
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 0 24px 72px; color: var(--vscode-foreground, #ddd); background: var(--bg); font: 13px/1.5 var(--vscode-font-family, system-ui, sans-serif); }
+  <style nonce="${safeNonce}">${baseStyles()}
+    :root { color-scheme: light dark; }
+    body { --page-top: 0; }
     main { max-width: 960px; margin: 0 auto; }
-    h1, h2, h3, p { margin: 0; }
-    h1 { font-size: 16px; font-weight: 600; }
-    h2 { font-size: 14px; font-weight: 600; }
-    h3 { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-    button, input, select { font: inherit; }
-    button, input, select { border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; }
-    button { min-height: 28px; padding: 3px 12px; color: var(--vscode-button-foreground, #fff); background: var(--accent); cursor: pointer; white-space: nowrap; }
-    button:hover { background: var(--vscode-button-hoverBackground, #1177bb); }
-    button.secondary { color: var(--vscode-button-secondaryForeground, #ddd); background: var(--vscode-button-secondaryBackground, #3a3d41); }
-    button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
-    button.quiet { color: var(--vscode-textLink-foreground, #80bfff); background: transparent; border-color: transparent; padding: 2px 6px; }
-    button.quiet:hover { background: var(--hover); }
-    button.danger { color: var(--error); background: transparent; border-color: var(--vscode-inputValidation-errorBorder, #be1100); }
-    button:disabled, input:disabled, select:disabled { opacity: .5; cursor: default; }
-    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
-    input:not([type="checkbox"]), select { min-height: 30px; padding: 4px 8px; color: var(--vscode-input-foreground, #ddd); background: var(--vscode-input-background, #3c3c3c); width: 100%; }
-    input::placeholder { color: var(--vscode-input-placeholderForeground, #999); }
-    input[readonly] { opacity: .7; }
-    input[type="checkbox"] { margin: 0; width: 14px; height: 14px; flex: none; accent-color: var(--accent); }
-    input.switch[type="checkbox"] { appearance: none; -webkit-appearance: none; width: 32px; height: 18px; border-radius: 9px; position: relative; cursor: pointer; background: var(--vscode-input-background, #3c3c3c); border: 1px solid var(--border); }
-    input.switch[type="checkbox"]::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--vscode-foreground, #ddd); transition: left .12s ease; }
-    input.switch[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
-    input.switch[type="checkbox"]:checked::after { left: 16px; background: var(--vscode-button-foreground, #fff); }
-    [hidden] { display: none !important; }
-    .muted, .hint { color: var(--muted); }
-    .hint { font-size: 12px; }
-    .warn { display: block; color: var(--warn); font-size: 12px; }
-    .mb { margin-bottom: 10px; }
-    .mt { margin-top: 12px; }
-    .spacer { flex: 1; }
-    .topbar { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--border); margin: 0 -24px 20px; padding: 14px 24px 0; }
+    .topbar { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--border); margin: 0 calc(-1 * var(--page-x)) 20px; padding: 14px var(--page-x) 0; }
     .topbar-row .actions { gap: 14px; }
     .topbar-row { max-width: 960px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .tabs { max-width: 960px; margin: 10px auto 0; display: flex; gap: 4px; }
@@ -97,9 +67,9 @@ function renderPanel({ nonce, cspSource }) {
     .tab:hover { background: transparent; color: var(--vscode-foreground, #ddd); }
     .tab[aria-selected="true"] { color: var(--vscode-foreground, #ddd); border-bottom-color: var(--accent); }
     .toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap; }
-    .banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; margin-bottom: 16px; border: 1px solid var(--warn); border-radius: 6px; }
+    .banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; margin-bottom: 16px; border: 1px solid var(--warn); border-radius: var(--radius-container); }
     .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; min-height: 28px; }
-    .list { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    .list { border: 1px solid var(--border); border-radius: var(--radius-container); overflow: hidden; }
     .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 48px; }
     .row.compact { min-height: 0; padding: 6px 14px; }
     label.row { cursor: pointer; }
@@ -107,10 +77,9 @@ function renderPanel({ nonce, cspSource }) {
     .row-main { flex: 1; min-width: 0; }
     .row-title { display: block; overflow-wrap: anywhere; }
     .row-sub { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-    .mono { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; }
     button.link-title { display: block; padding: 0; min-height: 0; border: 0; background: transparent; color: inherit; text-align: left; white-space: normal; overflow-wrap: anywhere; }
     button.link-title:hover { background: transparent; text-decoration: underline; }
-    .badge { font-size: 11px; padding: 1px 8px; border-radius: 9px; background: var(--accent); color: var(--vscode-button-foreground, #fff); white-space: nowrap; }
+    .badge { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-pill); background: var(--accent); color: var(--vscode-button-foreground, #fff); white-space: nowrap; }
     .badge.beta { background: transparent; color: var(--accent); border: 1px solid var(--accent); font-size: 10px; padding: 0 6px; vertical-align: 1px; }
     .goal-doc { max-width: 760px; }
     .goal-doc ul { padding-left: 20px; margin: 6px 0; }
@@ -120,15 +89,14 @@ function renderPanel({ nonce, cspSource }) {
     .plus { color: var(--muted); margin: 0 6px; }
     .empty { padding: 32px 16px; text-align: center; color: var(--muted); }
     .empty button { margin-top: 12px; }
-    .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
     .toolbar input[type="search"] { flex: 1 1 200px; width: auto; }
-    .models-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; align-items: start; }
+    .models-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; }
     .provider-nav { display: grid; gap: 2px; }
     button.provider-item { display: block; text-align: left; width: 100%; padding: 8px 10px; white-space: normal; color: inherit; background: transparent; border-color: transparent; }
     button.provider-item:hover { background: var(--hover); }
     button.provider-item.selected { background: var(--vscode-list-inactiveSelectionBackground, #37373d); }
-    .provider-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; min-height: 28px; }
+    .provider-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; min-height: 28px; }
     .scroll { max-height: 440px; overflow: auto; }
     details.fold > summary { cursor: pointer; padding: 8px 14px; color: var(--muted); list-style: none; }
     details.fold > summary::-webkit-details-marker { display: none; }
@@ -144,28 +112,24 @@ function renderPanel({ nonce, cspSource }) {
     .role-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; }
     .setting + .setting { border-top: 1px solid var(--border); }
-    .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 20; max-width: min(560px, calc(100vw - 32px)); display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--vscode-editorWidget-background, #252526); box-shadow: 0 4px 16px var(--vscode-widget-shadow, #0006); }
+    .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 20; max-width: min(560px, calc(100vw - 32px)); display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-radius: var(--radius-container); border: 1px solid var(--border); background: var(--vscode-editorWidget-background, #252526); box-shadow: 0 4px 16px var(--vscode-widget-shadow, #0006); }
     .toast[data-tone="error"] { border-color: var(--vscode-inputValidation-errorBorder, #be1100); color: var(--error); }
     .toast[data-tone="success"] { color: var(--ok); }
-    .monitor-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+    .monitor-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
     .monitor-controls select { width: auto; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-bottom: 16px; }
-    .tile { padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
-    .tile-value { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
-    .tile-label { display: block; font-size: 11px; color: var(--muted); }
-    .monitor-pager { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    .monitor-pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
     #monitor-diagnostics { white-space: pre-line; overflow-wrap: anywhere; }
     #monitor-date-controls:not([hidden]) { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 100%; }
     #monitor-date-controls label { display: inline-flex; gap: 4px; align-items: center; }
     #monitor-date-controls input { width: auto; }
-    #update-proxy { width: auto; flex: 1 1 200px; min-width: 160px; max-width: 280px; }
-    .monitor-table-wrap { overflow: auto; max-height: 480px; border: 1px solid var(--border); border-radius: 6px; }
+    #update-proxy { width: 200px; flex: 0 1 auto; min-width: 120px; max-width: 200px; }
+    .monitor-table-wrap { overflow: auto; max-height: 480px; border: 1px solid var(--border); border-radius: var(--radius-container); }
     .monitor-table { border-collapse: collapse; white-space: nowrap; width: 100%; font-variant-numeric: tabular-nums; }
     .monitor-table td, .monitor-table th { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; }
     .monitor-table th { position: sticky; top: 0; background: var(--bg); font-weight: 500; color: var(--muted); }
     #usage-monitor:not(.detailed) .extra { display: none; }
     .update-notes { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 8px 0 0; }
-    dialog { width: min(500px, calc(100vw - 28px)); max-height: calc(100vh - 40px); overflow: auto; margin: auto; padding: 20px; border: 1px solid var(--border); border-radius: 8px; color: var(--vscode-foreground, #ddd); background: var(--bg); box-shadow: 0 8px 28px var(--vscode-widget-shadow, #0006); }
+    dialog { width: min(500px, calc(100vw - 28px)); max-height: calc(100vh - 40px); overflow: auto; margin: auto; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-overlay); color: var(--vscode-foreground, #ddd); background: var(--bg); box-shadow: 0 8px 28px var(--vscode-widget-shadow, #0006); }
     dialog::backdrop { background: #0007; }
     dialog h2 { font-size: 16px; margin-bottom: 16px; }
     .field { display: block; margin-bottom: 12px; }
@@ -174,13 +138,13 @@ function renderPanel({ nonce, cspSource }) {
     .url-preview { word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); }
     .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     dialog details.fold > summary { padding: 4px 0; margin-bottom: 8px; }
-    .dialog-actions { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
+    .dialog-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
     .dialog-error { color: var(--error); overflow-wrap: anywhere; }
     .confirm-text { white-space: pre-line; overflow-wrap: anywhere; }
     .import-picker .scroll { max-height: min(320px, 40vh); }
     @media (max-width: 700px) {
-      body { padding: 0 16px 72px; }
-      .topbar { margin: 0 -16px 16px; padding: 12px 16px 0; }
+      body { --page-x: 16px; }
+      .topbar { margin: 0 calc(-1 * var(--page-x)) 16px; padding: 12px var(--page-x) 0; }
       .models-layout, .role-grid { grid-template-columns: 1fr; }
       .provider-nav { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
       .field-grid { grid-template-columns: 1fr; gap: 0; }
