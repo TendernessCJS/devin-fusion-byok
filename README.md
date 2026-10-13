@@ -31,7 +31,7 @@
 3. **预设** 页：点 **新建预设**，选择 Lead 和 Sidekick 模型及思考档位，保存。
 4. 在 Devin 原生模型列表的 **我的 Fusion** 分组里选择预设。
 
-保存后如果模型列表有变化，插件会自动新开一个对话让新列表生效（Devin 3.10 起只在新对话时刷新模型列表）。列表仍没更新时，可以点面板右上角的 **重启 Devin**。
+保存后如果模型列表有变化，插件会自动新开一个对话让新列表生效（Devin 3.10 起只在新对话时刷新模型列表）。列表仍没更新时，可以点面板右上角的 **重启 Devin**——它会关闭所有窗口并自动重新打开（通常几秒到十几秒，失败会自动重试），诊断日志在插件全局存储目录的 `restart.log`。
 
 ## 功能
 
@@ -133,15 +133,15 @@
 
 ## 受限网络（需要代理时）
 
-如果本机直连 GitHub 不通，可以在插件配置文件里加一项 `updateProxy`，让**更新检查和一键安装**走 HTTP/HTTPS 代理。
+如果本机直连 GitHub 不通，可以在面板 **设置 → 更新代理** 填写 HTTP/HTTPS 代理地址，让**更新检查和一键安装**走该代理；留空表示直连。
 
-配置文件在扩展的全局存储目录（macOS 通常是 `~/Library/Application Support/Devin/User/globalStorage/local.devin-fusion-byok/config.json`），加入：
+也可以直接编辑插件配置文件（扩展全局存储目录，macOS 通常是 `~/Library/Application Support/Devin/User/globalStorage/local.devin-fusion-byok/config.json`），加入等价的 `updateProxy` 项：
 
 ```json
 "updateProxy": "http://127.0.0.1:7897"
 ```
 
-- 支持 `http://` / `https://` 代理地址，可带 `user:pass@` 凭证；保存后立即生效，无需重载窗口。
+- 支持 `http://` / `https://` 代理地址，可带 `user:pass@` 凭证；保存后立即生效，无需重载窗口。面板中凭据只显示为掩码（如 `http://***@127.0.0.1:7897`），不会进入面板；直接保存掩码不会丢失凭据，输入完整新地址才会替换。
 - **只影响更新相关请求**：模型发现使用独立直连传输，推理仍由独立 backend 处理；未配置 `updateProxy` 的更新请求同样使用独立直连传输，不依赖宿主全局 `fetch` 或全局 Agent。不要用 VS Code 的 `http.proxy` 设置或 `HTTPS_PROXY` 环境变量替代 `updateProxy`。
 - 代理地址无效时面板会提示 `updateProxy` 配置有误，不影响其他功能。
 

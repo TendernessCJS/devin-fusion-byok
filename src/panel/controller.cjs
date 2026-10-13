@@ -65,7 +65,7 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
       try {
         if (message.type === 'app.restart') {
           if (typeof restartApp !== 'function') throw new PanelInputError('当前环境不支持重启 Devin。');
-          const choice = await vscode.window.showWarningMessage('重启 Devin 会关闭所有窗口，并中断正在进行的对话。确定现在重启吗？', { modal: true }, '重启');
+          const choice = await vscode.window.showWarningMessage('重启 Devin 会关闭所有窗口并中断正在进行的对话，之后会自动重新打开（通常几秒，失败会自动重试）。确定现在重启吗？', { modal: true }, '重启');
           if (choice === '重启') {
             try { await restartApp(); }
             catch { throw new PanelInputError('无法自动重启 Devin，请手动退出后重新打开。'); }
@@ -84,6 +84,11 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
           else if (message.type === 'update.ignore') await updater.ignore();
           else if (message.type === 'update.auto' && typeof message.payload?.enabled === 'boolean') await updater.setAutoCheck(message.payload.enabled);
           else if (message.type === 'update.release') await vscode.env.openExternal(vscode.Uri.parse(updater.snapshot().releaseUrl));
+          else if (message.type === 'update.proxy') {
+            await manager.dispatch('setUpdateProxy', { value: message.payload?.value });
+            await postState(current, manager.state(), { force: true });
+            await updater.check({ force: true });
+          }
           await publishUpdates();
           return;
         }

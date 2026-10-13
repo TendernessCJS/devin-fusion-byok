@@ -4,6 +4,7 @@ const { buildCatalog, buildRoleLists, refKey, presetUid, normalizeFusionConfig }
 const { discover: discoverModels } = require('../config.cjs');
 const { modelSupportsImages } = require('../model-capabilities.cjs');
 const { normalizeBaseUrlPath } = require('./base-url.cjs');
+const { parseProxy, maskProxy } = require('../proxy.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 class PanelInputError extends Error {}
 const fail = message => { throw new PanelInputError(message); };
@@ -85,6 +86,7 @@ function publicState(config, selectedFusionUid, nativeModels = [], autoContinueS
     autoContinueOnProviderError: config.autoContinueOnProviderError === true,
     autoContinueUntilPlanComplete: config.autoContinueUntilPlanComplete === true,
     autoContinueStatus: typeof autoContinueStatus === 'string' ? autoContinueStatus : 'unavailable',
+    updateProxy: maskProxy(config.updateProxy),
   };
 }
 function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, selectedFusion = () => '', nativeModels = () => [], refreshNativeModels = async () => {}, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable' }) {
@@ -269,6 +271,18 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       case 'setEnabled': config.enabled = boolean(payload.enabled, '启用状态'); break;
       case 'setAutoContinue': config.autoContinueOnProviderError = boolean(payload.enabled, '自动继续'); break;
       case 'setAutoContinueUntilPlanComplete': config.autoContinueUntilPlanComplete = boolean(payload.enabled, '完成待办时自动继续'); break;
+      case 'setUpdateProxy': {
+        const input = payload?.value;
+        if (typeof input !== 'string') fail('请填写 http:// 或 https:// 开头的代理地址。');
+        const value = input.trim();
+        if (value.length > 2048) fail('请填写 http:// 或 https:// 开头的代理地址。');
+        if (!value) { delete config.updateProxy; break; }
+        const stored = typeof config.updateProxy === 'string' ? config.updateProxy : '';
+        if (stored && value === maskProxy(stored)) return state();
+        try { parseProxy(value); } catch { fail('请填写 http:// 或 https:// 开头的代理地址。'); }
+        config.updateProxy = value;
+        break;
+      }
       default: fail('不支持的操作。');
     }
     cleanSidekicks(config);

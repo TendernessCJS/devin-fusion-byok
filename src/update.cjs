@@ -9,7 +9,7 @@ const PAGE = `https://github.com/${REPOSITORY}/releases`;
 const API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
 const INTERVAL = 6 * 60 * 60 * 1000;
 const MAX = 50 * 1024 * 1024;
-const CHECK_FAILED = '检查更新失败：网络不可达。若本机需经代理才能访问 GitHub，请在插件配置中设置 updateProxy。不代表已是最新版。';
+const CHECK_FAILED = '检查更新失败：网络不可达。若本机需经代理访问 GitHub，请在「设置」页填写「更新代理」。不代表已是最新版。';
 const PROXY_INVALID = '检查更新失败：updateProxy 代理地址无效，请修正或移除后重试。不代表已是最新版。';
 function parseVersion(v) {
   if (typeof v !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v)) throw Error('version');
@@ -85,7 +85,10 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
   let autoCheck = saved.autoCheck !== false, ignoredVersion = saved.ignoredVersion || '';
   let phase = 'idle', error = '', latest = null, disposed = false, timer, pending, installing, abort, lastCheck = 0, announced;
   let writes = Promise.resolve();
-  const snapshot = () => ({ currentVersion, latestVersion: latest?.version || null, phase, error, autoCheck, ignored: latest?.version === ignoredVersion, notes: latest?.notes || '', releaseUrl: latest?.page || PAGE, canInstall: phase === 'available' && latest?.installable === true && typeof install === 'function', installable: latest?.installable === true });
+  const snapshot = () => { let proxyValue = '';
+    try { proxyValue = require('./proxy.cjs').maskProxy(proxy()); } catch {}
+    return { currentVersion, latestVersion: latest?.version || null, phase, error, autoCheck, ignored: latest?.version === ignoredVersion, notes: latest?.notes || '', releaseUrl: latest?.page || PAGE, canInstall: phase === 'available' && latest?.installable === true && typeof install === 'function', installable: latest?.installable === true, proxy: proxyValue };
+  };
   const emit = () => { if (!disposed) Promise.resolve().then(() => onChange(snapshot())).catch(() => {}); };
   const proxyConfig = () => require('./proxy.cjs').parseProxy(proxy());
   const persist = () => {

@@ -98,11 +98,16 @@ test('controller routes updates separately from model settings and only opens tr
   const panel = { webview: { postMessage: async m => posts.push(m), onDidReceiveMessage: fn => { receive = fn; return disposable; } }, onDidDispose: fn => { close = fn; return disposable; }, dispose: () => close() };
   const state = { releaseUrl: PAGE };
   const updater = { snapshot: () => state, check: async o => actions.push(['check', o.force]), installUpdate: async () => actions.push(['install']), ignore: async () => actions.push(['ignore']), setAutoCheck: async enabled => actions.push(['auto', enabled]) };
-  const controller = createPanelController({ vscode: { ViewColumn: { Active: 1 }, window: { createWebviewPanel: () => panel }, Uri: { parse: x => x }, env: { openExternal: async url => actions.push(['url', url]) } }, context: { subscriptions: [] }, manager: { dispatch() { throw Error('must not touch model settings'); } }, safeError: () => ({ message: 'error' }), updater });
+  const dispatched = [];
+  const controller = createPanelController({ vscode: { ViewColumn: { Active: 1 }, window: { createWebviewPanel: () => panel }, Uri: { parse: x => x }, env: { openExternal: async url => actions.push(['url', url]) } }, context: { subscriptions: [] },
+    manager: { state: () => ({}), dispatch: async (type, payload) => { dispatched.push([type, payload]); if (type !== 'setUpdateProxy') throw Error('must not touch model settings'); return {}; } }, safeError: () => ({ message: 'error' }), updater });
   controller.open();
   for (const type of ['state','check','install','ignore','auto','release']) await receive({ id: type, type: 'update.' + type, payload: { enabled: false, url: 'https://evil.test' } });
-  assert.deepEqual(actions, [['check', true], ['install'], ['ignore'], ['auto', false], ['url', state.releaseUrl]]);
-  assert.equal(posts.filter(p => p.type === 'update-state').length, 6); panel.dispose();
+  await receive({ id: 'proxy', type: 'update.proxy', payload: { value: 'http://127.0.0.1:7897' } });
+  assert.deepEqual(actions, [['check', true], ['install'], ['ignore'], ['auto', false], ['url', state.releaseUrl], ['check', true]]);
+  assert.deepEqual(dispatched, [['setUpdateProxy', { value: 'http://127.0.0.1:7897' }]],
+    'update.proxy routes to the dedicated action, never to a same-named model setting');
+  assert.equal(posts.filter(p => p.type === 'update-state').length, 7); panel.dispose();
 });
 test('requests without a proxy keep using the injected fetch implementation', async () => {
   let calls = 0;
@@ -158,4 +163,27 @@ test('requestBytes defaults to directFetch without touching the ambient fetch', 
   assert.equal(body.toString(), 'ok');
   assert.deepEqual(calls, [{ url: 'https://api.github.com/x', redirect: 'manual' }],
     'the direct transport is the default; the sandbox has no ambient fetch at all');
+});
+
+test('snapshot echoes a masked proxy for editing without leaking credentials', async () => {
+  const secret = 'http://user:s3cret-token@127.0.0.1:7897';
+  const { updater } = setup({ proxy: () => '  ' + secret + '  ', request: async () => { throw new Error('boom'); } });
+  assert.equal(updater.snapshot().proxy, 'http://***@127.0.0.1:7897', 'credentials are masked before reaching the panel');
+  const { updater: plain } = setup({ proxy: () => ' http://127.0.0.1:8080 ' });
+  assert.equal(plain.snapshot().proxy, 'http://127.0.0.1:8080', 'credential-free proxies echo verbatim');
+  plain.dispose();
+  await updater.check();
+  const snap = updater.snapshot();
+  assert.equal(snap.phase, 'error');
+  assert.doesNotMatch(JSON.stringify(snap), /s3cret-token|user:/);
+  updater.dispose();
+});
+
+test('snapshot proxy falls back to empty on non-strings and getter failures', () => {
+  const { updater: throwing } = setup({ proxy: () => { throw new Error('config read failed'); } });
+  assert.equal(throwing.snapshot().proxy, '');
+  throwing.dispose();
+  const { updater: numeric } = setup({ proxy: () => 42 });
+  assert.equal(numeric.snapshot().proxy, '');
+  numeric.dispose();
 });

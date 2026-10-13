@@ -540,3 +540,36 @@ test('officially paired and standalone unlocked natives are offered and accepted
     assert.equal(publicState(fixture(), '', disabled).nativeModels.find(entry => entry.uid === 'swe-odd').eligible, false);
   });
 });
+
+test('setUpdateProxy writes, echoes, clears and rejects bad input', async () => {
+  const f = memory();
+  let state = await f.manager.dispatch('setUpdateProxy', { value: ' http://127.0.0.1:7897 ' });
+  assert.equal(state.updateProxy, 'http://127.0.0.1:7897');
+  assert.equal(f.read().updateProxy, 'http://127.0.0.1:7897');
+  state = await f.manager.dispatch('setUpdateProxy', { value: '' });
+  assert.equal(state.updateProxy, '');
+  assert.equal('updateProxy' in f.read(), false);
+  const writesBefore = f.writes.length;
+  for (const value of ['socks5://127.0.0.1:9', 'ftp://127.0.0.1:21', 'not a url', 42, null, undefined]) {
+    await assert.rejects(f.manager.dispatch('setUpdateProxy', { value }), PanelInputError);
+  }
+  assert.equal(f.writes.length, writesBefore, 'rejected input is never written');
+  assert.equal('updateProxy' in f.read(), false);
+});
+
+test('setUpdateProxy masks credentials and keeps them when the mask is saved back', async () => {
+  const f = memory();
+  let state = await f.manager.dispatch('setUpdateProxy', { value: 'http://user:s3cret@127.0.0.1:7897' });
+  assert.equal(state.updateProxy, 'http://***@127.0.0.1:7897', 'the panel only ever sees the mask');
+  assert.equal(f.read().updateProxy, 'http://user:s3cret@127.0.0.1:7897');
+  const writesBefore = f.writes.length;
+  state = await f.manager.dispatch('setUpdateProxy', { value: 'http://***@127.0.0.1:7897' });
+  assert.equal(f.writes.length, writesBefore, 'saving the displayed mask leaves the stored secret untouched');
+  assert.equal(f.read().updateProxy, 'http://user:s3cret@127.0.0.1:7897');
+  assert.equal(state.updateProxy, 'http://***@127.0.0.1:7897');
+  state = await f.manager.dispatch('setUpdateProxy', { value: 'http://other:pw@10.0.0.1:3128' });
+  assert.equal(f.read().updateProxy, 'http://other:pw@10.0.0.1:3128', 'a new full URL replaces the credentials');
+  assert.equal(state.updateProxy, 'http://***@10.0.0.1:3128');
+  await f.manager.dispatch('setUpdateProxy', { value: '' });
+  assert.equal('updateProxy' in f.read(), false);
+});

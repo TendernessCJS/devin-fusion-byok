@@ -226,8 +226,8 @@ test('directFetch uses a dedicated non-global agent with TLS verification kept o
   const https = require('node:https');
   const { EventEmitter } = require('node:events');
   const seen = [];
-  const original = https.request;
-  https.request = options => {
+  const original = http.ClientRequest;
+  http.ClientRequest = function (options) {
     seen.push(options);
     const req = new EventEmitter();
     req.end = () => {}; req.destroy = () => {};
@@ -237,7 +237,7 @@ test('directFetch uses a dedicated non-global agent with TLS verification kept o
   const { directFetch } = require('../src/proxy.cjs');
   try {
     await assert.rejects(directFetch('https://example.invalid/x'), /tls fixture failure/);
-  } finally { https.request = original; }
+  } finally { http.ClientRequest = original; }
   const agent = seen[0]?.agent;
   assert.ok(agent instanceof https.Agent, 'a dedicated agent is built per request');
   assert.notEqual(agent, https.globalAgent, 'the global agent is never used');
@@ -338,8 +338,8 @@ test('a cancelled compressed body reader closes the origin connection', async t 
 test('directFetch strips IPv6 brackets for the request and keeps the URL untouched', async () => {
   const { EventEmitter } = require('node:events');
   const seen = [];
-  const original = http.request;
-  http.request = options => {
+  const original = http.ClientRequest;
+  http.ClientRequest = function (options) {
     seen.push(options.hostname);
     const req = new EventEmitter();
     req.end = () => {}; req.destroy = () => {};
@@ -348,20 +348,20 @@ test('directFetch strips IPv6 brackets for the request and keeps the URL untouch
   };
   const { directFetch } = require('../src/proxy.cjs');
   try { await assert.rejects(directFetch('http://[::1]:8080/v1/models'), /stub/); }
-  finally { http.request = original; }
+  finally { http.ClientRequest = original; }
   assert.deepEqual(seen, ['::1'], 'node request options get the bare IPv6 address');
 });
 
 test('a request error after response headers propagates to the body reader', async () => {
   const { EventEmitter } = require('node:events');
   const { Readable } = require('node:stream');
-  const original = http.request;
+  const original = http.ClientRequest;
   const fakeReq = new EventEmitter();
   fakeReq.end = () => {}; fakeReq.destroy = () => {};
   const fakeRes = new Readable({ read() {} });
   fakeRes.statusCode = 200;
   fakeRes.headers = {};
-  http.request = (options, callback) => {
+  http.ClientRequest = function (options, callback) {
     process.nextTick(() => {
       callback(fakeRes);
       process.nextTick(() => fakeReq.emit('error', new Error('post-headers failure')));
@@ -375,5 +375,74 @@ test('a request error after response headers propagates to the body reader', asy
       Promise.race([response.body.getReader().read(), new Promise((_, reject) => setTimeout(() => reject(new Error('reader hung')), 800))]),
       /post-headers failure|aborted|error/i,
       'a request-level error after headers rejects the body reader');
-  } finally { http.request = original; }
+  } finally { http.ClientRequest = original; }
+});
+
+test('request paths never touch the request/get functions patched by the extension host', async t => {
+  const https = require('node:https');
+  const calls = { 'http.request': 0, 'http.get': 0, 'https.request': 0, 'https.get': 0 };
+  const originals = { 'http.request': http.request, 'http.get': http.get, 'https.request': https.request, 'https.get': https.get };
+  const stub = name => () => { calls[name]++; throw new Error('host-patched ' + name + ' must not run'); };
+  http.request = stub('http.request'); http.get = stub('http.get');
+  https.request = stub('https.request'); https.get = stub('https.get');
+  t.after(() => { http.request = originals['http.request']; http.get = originals['http.get']; https.request = originals['https.request']; https.get = originals['https.get']; });
+
+  const target = http.createServer((req, res) => res.end('ok ' + req.url));
+  const proxyServer = http.createServer((req, res) => res.writeHead(501).end());
+  proxyServer.on('connect', (req, socket) => {
+    const [host, port] = req.url.split(':');
+    const upstream = net.connect(Number(port), host, () => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      upstream.pipe(socket); socket.pipe(upstream);
+    });
+    upstream.once('error', () => socket.destroy());
+    upstream.once('close', () => socket.destroy());
+    socket.once('close', () => upstream.destroy());
+  });
+  await listen(target); await listen(proxyServer);
+  t.after(() => { target.close(); proxyServer.close(); });
+
+  const px = parseProxy('http://127.0.0.1:' + proxyServer.address().port);
+  const original = update.allowedUrl;
+  update.allowedUrl = url => new URL(url);
+  try {
+    const base = 'http://127.0.0.1:' + target.address().port;
+    assert.equal((await proxyRequestBytes(base + '/tunneled', { proxy: px, limit: 1024 })).toString(), 'ok /tunneled');
+    const { directFetch } = require('../src/proxy.cjs');
+    assert.equal(await (await directFetch(base + '/direct')).text(), 'ok /direct');
+  } finally { update.allowedUrl = original; }
+  assert.deepEqual(calls, { 'http.request': 0, 'http.get': 0, 'https.request': 0, 'https.get': 0 });
+});
+
+test('maskProxy hides credentials and echoes credential-free proxies verbatim', () => {
+  const { maskProxy } = require('../src/proxy.cjs');
+  assert.equal(maskProxy(' http://127.0.0.1:7897 '), 'http://127.0.0.1:7897');
+  assert.equal(maskProxy('https://proxy.internal'), 'https://proxy.internal');
+  assert.equal(maskProxy('http://user:s3cret@127.0.0.1:7897'), 'http://***@127.0.0.1:7897');
+  assert.equal(maskProxy('https://u:p@proxy.internal'), 'https://***@proxy.internal');
+  assert.equal(maskProxy('http://user%40corp:p%3Ass@10.0.0.1:1'), 'http://***@10.0.0.1:1');
+  for (const value of ['not a url', '', '   ', 42, null, undefined]) assert.equal(maskProxy(value), '');
+});
+
+test('requests fall back to http.request when the ClientRequest constructor fails', async t => {
+  const { EventEmitter } = require('node:events');
+  const { Readable } = require('node:stream');
+  const calls = [];
+  const originalClientRequest = http.ClientRequest;
+  const originalRequest = http.request;
+  http.ClientRequest = function () { throw Object.assign(new Error('protocol mismatch'), { code: 'ERR_INVALID_PROTOCOL' }); };
+  http.request = (options, callback) => {
+    calls.push(options.hostname);
+    const req = new EventEmitter();
+    req.end = () => {}; req.destroy = () => {};
+    const res = new Readable({ read() {} });
+    res.statusCode = 204; res.headers = {};
+    process.nextTick(() => { callback(res); res.push(null); });
+    return req;
+  };
+  t.after(() => { http.ClientRequest = originalClientRequest; http.request = originalRequest; });
+  const { directFetch } = require('../src/proxy.cjs');
+  const response = await directFetch('http://fixture.invalid/x');
+  assert.equal(response.status, 204);
+  assert.deepEqual(calls, ['fixture.invalid'], 'the request went through the http.request fallback');
 });

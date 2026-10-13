@@ -5,6 +5,26 @@ const http = require('node:http');
 const https = require('node:https');
 const { Duplex, Readable, pipeline } = require('node:stream');
 const zlib = require('node:zlib');
+// @vscode/proxy-agent patches http(s).request/get in the extension host and can
+// drop our CONNECT createConnection; ClientRequest stays public and unpatched.
+// `_defaultAgent` mirrors what http.request/https.request inject: the agent
+// protocol check compares the effective agent against it. The fallback only
+// covers a future runtime renaming or revalidating the constructor.
+const createRequest = (secure, options, callback) => {
+  try { return new http.ClientRequest({ _defaultAgent: (secure ? https : http).globalAgent, ...options }, callback); }
+  catch { return (secure ? https : http).request(options, callback); }
+};
+
+// Echo form for panel editing: credential-bearing proxies are masked so
+// secrets never reach the webview; saving the mask back is a no-op.
+function maskProxy(value) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  const trimmed = value.trim();
+  let url;
+  try { url = new URL(trimmed); } catch { return ''; }
+  if (!url.username && !url.password) return trimmed;
+  return `${url.protocol}//***@${url.host}`;
+}
 
 function parseProxy(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -98,7 +118,7 @@ function request(target, { proxy, signal, connect }) {
     }
   };
   return new Promise((resolve, reject) => {
-    const req = (secure ? https : http).request(options, resolve);
+    const req = createRequest(secure, options, resolve);
     req.once('error', reject);
     const onAbort = () => { req.destroy(); reject(Error('aborted')); };
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -167,7 +187,7 @@ function directFetch(url, { headers = {}, signal, redirect = 'error' } = {}) {
     signal?.addEventListener('abort', onAbort, { once: true });
     if (signal?.aborted) return onAbort();
     try {
-      req = (secure ? https : http).request({
+      req = createRequest(secure, {
         hostname: target.hostname.replace(/^\[|\]$/g, ''), port: target.port || (secure ? 443 : 80),
         path: target.pathname + target.search, method: 'GET', agent,
         headers: { 'Accept-Encoding': 'gzip, deflate, br', ...headers },
@@ -211,4 +231,4 @@ function directFetch(url, { headers = {}, signal, redirect = 'error' } = {}) {
   });
 }
 
-module.exports = { parseProxy, tunnel, proxyRequestBytes, directFetch };
+module.exports = { parseProxy, maskProxy, tunnel, proxyRequestBytes, directFetch };

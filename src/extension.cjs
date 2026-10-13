@@ -447,6 +447,7 @@ async function activate(context) {
     afterChange: async type => {
       if (type === 'setEnabled' && config().enabled === false) await disable();
       else if (type === 'setAutoContinue' || type === 'setAutoContinueUntilPlanComplete') resetAutoContinue?.();
+      else if (type === 'setUpdateProxy') {}
       else if (config().enabled !== false) { await ensureEnabled(); await reconcileSelection(); }
       pickerRefresh.changed();
     } });
@@ -455,7 +456,7 @@ async function activate(context) {
     onChange: () => management?.publishUpdates?.() });
   management = require('./panel/controller.cjs').createPanelController({ vscode, context, manager, safeError, updater,
     fastContext: require('./fast-context/config-ui.cjs').createFastContextHost({ vscode, context }),
-    restartApp: () => require('./runtime/app-restart.cjs').restartApp({ vscode, spawn }),
+    restartApp: () => { log('app-restart-requested'); return require('./runtime/app-restart.cjs').restartApp({ vscode, spawn, logFile: path.join(root, 'restart.log'), userData: path.resolve(root, '..', '..', '..') }); },
     readMonitor: () => require('./runtime/monitor-client.cjs').readMonitor({ root }) });
   let contextObserver;
   try {

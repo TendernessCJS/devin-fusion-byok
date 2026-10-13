@@ -81,6 +81,9 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 - 插件内 `package.json` 的 `version` 必须严格小于 Release 版本才会提示更新，发布前记得 bump。
 - 一键安装仅在 macOS 且 `<appRoot>/bin/devin-desktop` 存在时可用（`createUpdateHost` 里的 `supported` 判断）；其他情况 `canInstall=false`，只能手动下载 vsix。
 - 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经 `src/proxy.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。**不要改成读 `http.proxy` 设置或 `HTTPS_PROXY`/`http_proxy`/`ALL_PROXY` 环境变量**——那会全局生效，把内网 HTTPS 地址也送去代理。**也不要依赖扩展宿主被打过补丁的 `fetch`**：Devin 启动时会把 `globalThis.fetch` 换成 `@vscode/proxy-agent` 的代理感知版本（读 VS Code 的 `http.proxy` / `http.noProxy`，`http.proxySupport` 默认 `override`），那也是全局的，同样会波及内网地址——配置 `updateProxy` 时走 `src/proxy.cjs` 的 CONNECT 隧道；未配置代理的更新与模型发现走其 `directFetch`，使用独立 Agent，不依赖宿主全局 `fetch` 或全局 Agent。（这些约束只针对**插件运行时代码**；开发者在终端跑 git/gh 命令时按「本机网络路径」一节处理，两者不冲突。）验收方法见 `.devin/skills/release/SKILL.md`。
+- **`src/proxy.cjs` 的请求一律经 `http.ClientRequest` 构造，绝不用 `http.request`/`https.request`**：宿主补丁不只换 `fetch`，还会替换 `http.request`/`http.get`（`createHttpPatch` 注入 `PacProxyAgent`，`http.proxySupport` 默认 `override`），把我们的 `createConnection` CONNECT 隧道顶掉——实测表现为跳过代理直连 `api.github.com` 随即 `ECONNRESET`。`ClientRequest` 是公开构造器、不在补丁替换范围（`node:https` 没有同名导出，TLS 仍由传入的 `https.Agent` 处理）；`directFetch` 同样必须走这条路，否则用户一旦在 VS Code 里配置 `http.proxy`，「内网地址直连」的保证就失效。`http.ClientRequest` 缺失时才回退到 `http.request`/`https.request`。
+- `updateProxy` 可在面板 **设置 → 更新代理** 编辑（只作用于更新检查与一键安装），清空即直连。`snapshot().proxy` 与面板 `state().updateProxy` 只回显 `maskProxy()` 掩码（`http://***@host:port`），**凭据不进入 webview**，也不写入日志或错误文案；直接保存掩码视为未改、不覆盖存储值，输入完整新 URL 才会替换。面板侧校验复用 `parseProxy`，非法输入不回显、不写盘。
+- 「重启 Devin」的 detached helper：优先经 `launchctl submit` 注册给 launchd 运行（submit 失败回退 detached `/bin/sh`）——实测 helper 是 App 后代时其 `open` 请求被归因为 App 自身激活而静默吞掉；已实测从 App 进程树内 `launchctl submit` 的 job 落在用户域 `gui/501`（非 App 自身的 runningboard 域），因此不随 App 退出被拆除。等 App 退出后只小静置约 3 秒，随后最多 10 轮「先探测再启动」的自适应重试：实测旧实例退出后 ~10 秒内启动的进程会在 ~110ms 内自退（+1.1s 与 +3.3s 两次中招，+10s 起全部存活），风险窗口是时间性的；但盲等固定时长浪费——一次自退 ~113ms 即可被探测发现，故改成「小静置 + 快速失败探测 + 有限轮重试」，若窗口其实来自已修复的陈旧 IPC 句柄则第 1 轮即成功（约 5s），否则轮次自然覆盖窗口之外，最坏与固定静置持平且无固定浪费。113ms 退出的根因已确证是 Devin 自实现的单实例仲裁：主进程监听 `<userData>/<version>-main.sock`、PID 写入 `<userData>/code.lock`，`claimInstance` 遇 `EADDRINUSE` 时会把请求交接给现有 owner 并直接 exit 0（不建窗口）；因此 helper 确认 App 已退出后、以及每轮启动前，先移除陈旧的 `*-main.sock` 与 `code.lock`（此时已无活着的 owner，与应用自身遇 `ECONNREFUSED` 时删陈旧 handle 的做法一致；`userData` 由 `<globalStorage>` 上溯三级得到）。通道分配保持「`open` 在前、`exec` 兜底」：前 50% 轮 `open`、中间到 80% `open -n`、最后两轮直接 exec `<bundle>/Contents/MacOS/<AppName>`（不经 LaunchServices 注册，参照 Electron `app.relaunch()` 的确定性路径，作为兜底）；探测命中后隔 2 秒复探才算成功（瞬时启动不算），预算内放弃 `exit 1`，取消退出时先 `launchctl remove` 再退。日志写 `<globalStorage>/restart.log`（每次重启把上一轮轮转为 `restart.log.previous`），行前缀为 UTC 时间戳；`open` 与应用自身的 stdout/stderr 也追加进该日志，且 `attempt <n> channel=<c>` / `confirmed round=<n>` 记录成功轮次与通道，真实阈值可观测。非 darwin 抛 `restart_unsupported`；存活探测用 `ps -Ao comm=`（`pgrep` 会跳过祖先进程，而 helper 必在 App 进程树内时不可用）。
 
 ## fork 同步与发布
 
@@ -126,17 +129,17 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 
 | 文件 | 差异 |
 | --- | --- |
-| `src/update.cjs` | `REPOSITORY` 改为 `TendernessCJS/devin-fusion-byok`；导出 `PAGE`；`requestBytes` 支持 `proxy`，无代理时默认 `directFetch`；`createUpdater` 增加 `proxy` getter |
+| `src/update.cjs` | `REPOSITORY` 改为 `TendernessCJS/devin-fusion-byok`；导出 `PAGE`；`requestBytes` 支持 `proxy`，无代理时默认 `directFetch`；`createUpdater` 增加 `proxy` getter，快照回显 `proxy` 供设置页编辑 |
 | `test/update.test.cjs` | 使用导出的 `PAGE`，不再硬编码仓库 URL；含代理相关用例 |
 | `README.md` | 顶部 fork 声明；Releases 链接指向本 fork；保留上游作者署名 |
 | `package.json` | 新增 `repository` 字段；`version` 由本 fork 自管，merge 时取 ours |
 | `AGENTS.md` | 本 fork 新增（upstream 无），项目约定与 fork 同步规则 |
 | `.devin/skills/release/SKILL.md` | 本 fork 新增（upstream 无），发布与自更新验收流程 |
-| `src/proxy.cjs` | 本 fork 新增（upstream 无），更新的 CONNECT 代理与独立 Agent 直连 GET；CONNECT 仅用于更新，`directFetch` 用于模型发现与未配代理的更新；握手早关、压缩流、取消与 TLS 校验均有回归测试 |
-| `test/proxy.test.cjs` | 本 fork 新增（upstream 无），覆盖代理、直连、解压、取消、IPv6 与 TLS 安全边界 |
+| `src/proxy.cjs` | 本 fork 新增（upstream 无），更新的 CONNECT 代理与独立 Agent 直连 GET；全部请求经 `http.ClientRequest` 构造以绕开宿主对 `request`/`get` 的补丁；CONNECT 仅用于更新，`directFetch` 用于模型发现与未配代理的更新；握手早关、压缩流、取消与 TLS 校验均有回归测试 |
+| `test/proxy.test.cjs` | 本 fork 新增（upstream 无），覆盖代理、直连、解压、取消、IPv6、TLS 安全边界与宿主补丁旁路 |
 | `src/runtime/retry.cjs` | 本 fork 新增（upstream 无），连接层一次性重试；只被 `native-models.cjs` 与 `monitor-client.cjs` 使用 |
-| `src/runtime/app-restart.cjs` | 「重启 Devin」的存活探测由 `pgrep` 改为 `ps -Ao comm=`：macOS `pgrep` 跳过调用者自身的祖先进程，而 helper 必然在 app 进程树内，因此原本永远看不到主进程（表现为只关闭不重启） |
-| `test/app-restart.test.cjs` | 覆盖新探测方式：合成 app 复现 `pgrep` 祖先盲区、并验证 app 退出后才重新拉起 |
+| `src/runtime/app-restart.cjs` | 「重启 Devin」：存活探测用 `ps -Ao comm=`（`pgrep` 跳过祖先）；helper 优先 `launchctl submit` 注册给 launchd（落在 `gui/501`，避免 `open` 被归因为 App 自我激活且 job 不随 App 拆除），失败回退 detached `/bin/sh`；退出后先清陈旧 `*-main.sock`/`code.lock`（Devin 自实现单实例仲裁，`EADDRINUSE` 即交接退出——113ms exit 0 的根因），小静置 3s + 最多 10 轮自适应重试「先探测再启动 + 二次确认存活」（前 50% `open`、至 80% `open -n`、末两轮直接 exec 可执行文件），日志写 `restart.log` 并轮转 `.previous`（`open`/应用输出也追加进日志，成功轮次与通道可观测） |
+| `test/app-restart.test.cjs` | 覆盖探测与重试策略：合成 app 复现 `pgrep` 祖先盲区、退出后才拉起、瞬时进程不误判、预算内退出、日志行、`launchctl` 首选/回退与日志轮转 |
 | `src/runtime/monitor.cjs` | 工具归属查询与细分诊断；message-id 补充分支默认关闭，仅内部显式诊断开启并保留 1500 ms 上限；完整标题仅进快照；分段 ID/reasoning/异常用量安全口径；统计复用 monitor-stats；异步存储与失败保护原日志 |
 | `src/runtime/monitor-stats.cjs` | 本 fork 新增（upstream 无），无 I/O 的共享统计工厂与本机日历区间筛选；前后端使用同一公式 |
 | `test/monitor-stats.test.cjs` | 本 fork 新增（upstream 无），日历月/自定义/DST 边界、同范围重算与浏览器函数注入验证 |

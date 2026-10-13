@@ -158,6 +158,7 @@ function renderPanel({ nonce, cspSource }) {
     #monitor-date-controls:not([hidden]) { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 100%; }
     #monitor-date-controls label { display: inline-flex; gap: 4px; align-items: center; }
     #monitor-date-controls input { width: auto; }
+    #update-proxy { width: auto; flex: 1 1 200px; min-width: 160px; max-width: 280px; }
     .monitor-table-wrap { overflow: auto; max-height: 480px; border: 1px solid var(--border); border-radius: 6px; }
     .monitor-table { border-collapse: collapse; white-space: nowrap; width: 100%; font-variant-numeric: tabular-nums; }
     .monitor-table td, .monitor-table th { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; }
@@ -189,7 +190,7 @@ function renderPanel({ nonce, cspSource }) {
 <body>
   <main id="main" aria-busy="true">
     <header class="topbar">
-      <div class="topbar-row"><h1>Fusion BYOK</h1><div class="actions"><button id="restart-devin" class="secondary" type="button" title="插件改动或模型列表没有自动更新时使用。会关闭所有窗口并中断正在进行的对话。">重启 Devin</button><label class="toggle"><span class="muted">启用</span><input id="plugin-enabled" class="switch" type="checkbox" role="switch" aria-label="启用插件" disabled></label></div></div>
+      <div class="topbar-row"><h1>Fusion BYOK</h1><div class="actions"><button id="restart-devin" class="secondary" type="button" title="插件改动或模型列表没有自动更新时使用。会关闭所有窗口并中断正在进行的对话，之后自动重新打开（通常几秒，失败会自动重试）。">重启 Devin</button><label class="toggle"><span class="muted">启用</span><input id="plugin-enabled" class="switch" type="checkbox" role="switch" aria-label="启用插件" disabled></label></div></div>
       <nav class="tabs" role="tablist" aria-label="面板分区">${tabs}</nav>
     </header>
     <div id="disabled-banner" class="banner" hidden><span>插件已停用，导入的模型和预设不会出现在新对话里。</span><button id="enable-now" type="button">启用</button></div>
@@ -796,7 +797,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     if (busy) return;
     try {
       const result = await request('app.restart');
-      if (!result?.cancelled) notice('正在重启 Devin…', 'success');
+      if (!result?.cancelled) notice('正在关闭并重启 Devin（通常几秒后自动重开，失败会自动重试）…', 'success');
     } catch (error) { notice(error.message || '重启失败，请手动退出后重新打开 Devin。', 'error'); }
   });
   window.addEventListener('message', event => {
