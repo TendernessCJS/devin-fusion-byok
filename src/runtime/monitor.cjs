@@ -9,6 +9,9 @@ const COMPACT_AT = LIMIT + 250;
 const token = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const timing = value => Number.isFinite(value) && value >= 0 ? value : null;
 const identifier = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/.test(value) ? value : null;
+const usageIsInconsistent = record => record?.usageState === 'inconsistent' ||
+  (token(record?.cachedTokens) !== null && token(record?.inputTokens) !== null && record.cachedTokens > record.inputTokens) ||
+  (token(record?.reasoningTokens) !== null && token(record?.outputTokens) !== null && record.reasoningTokens > record.outputTokens);
 
 function usageOf(data, chat) {
   const u = chat ? data?.usage : data?.response?.usage;
@@ -24,7 +27,8 @@ function semanticOutput(event, chat) {
   const d = event.data;
   if (!d) return { output: false, text: false };
   if (chat) {
-    const delta = (d.choices || []).find(c => (c.index ?? 0) === 0)?.delta;
+    const choice = (d.choices || []).find(c => (c.index ?? 0) === 0);
+    const delta = choice?.delta || choice?.message;
     const text = typeof delta?.content === 'string' && delta.content.length > 0;
     const thinking = [delta?.reasoning_content, delta?.reasoning].some(v => typeof v === 'string' && v.length > 0);
     const tool = delta?.tool_calls?.some(v => v.function?.name || v.function?.arguments);
@@ -43,8 +47,15 @@ function createTracker({ id, request, route, provider, now = () => performance.n
   const start = now();
   let firstOutput = null, firstText = null, firstResponse = null, lastOutput = null, usage = null, complete = false;
   let hasTools = false, hasReasoning = false, terminalAt = null;
-  const toolIds = new Set();
-  const rememberTool = id => { if (identifier(id)) toolIds.add(id); };
+  const chatToolIds = new Map(), responseToolIds = new Map(), itemIndexes = new Map();
+  const rememberResponseTool = (item, index) => {
+    if (item?.type !== 'function_call') return;
+    const key = index ?? itemIndexes.get(item.id) ?? item.id;
+    if (key === undefined) return;
+    if (item.id) itemIndexes.set(item.id, key);
+    const next = item.call_id || item.id;
+    if (next) responseToolIds.set(key, identifier(next));
+  };
   return {
     event(event, chat) {
       const elapsed = now() - start;
@@ -52,12 +63,18 @@ function createTracker({ id, request, route, provider, now = () => performance.n
       if (data && event.type !== 'done') firstResponse ??= elapsed;
       const choices = chat ? data?.choices || [] : [];
       const choice = choices.find(c => (c.index ?? 0) === 0);
-      const delta = choice?.delta;
+      const delta = choice?.delta || choice?.message;
       const items = chat ? [] : data?.response?.output || (data?.item ? [data.item] : []);
       if (delta?.tool_calls?.length || items.some(item => item?.type === 'function_call') || event.type?.startsWith('response.function_call_arguments.')) hasTools = true;
-      for (const call of delta?.tool_calls || []) rememberTool(call.id);
-      for (const item of items) if (item?.type === 'function_call') rememberTool(item.call_id || item.id);
-      if (delta?.reasoning_content || delta?.reasoning || event.type?.startsWith('response.reasoning')) hasReasoning = true;
+      for (const call of delta?.tool_calls || []) {
+        const key = call.index ?? 0;
+        if (typeof call.id !== 'string' || !call.id || chatToolIds.get(key) === null) continue;
+        const joined = (chatToolIds.get(key) || '') + call.id;
+        chatToolIds.set(key, identifier(joined));
+      }
+      if (!chat && data?.response?.output) items.forEach((item, index) => rememberResponseTool(item, index));
+      else if (!chat && data?.item) rememberResponseTool(data.item, data.output_index);
+      if (delta?.reasoning_content || delta?.reasoning || items.some(item => item?.type === 'reasoning') || event.type?.startsWith('response.reasoning')) hasReasoning = true;
       if (choice?.finish_reason || ['response.completed', 'response.incomplete'].includes(event.type)) terminalAt ??= elapsed;
       const semantic = semanticOutput(event, chat);
       if (semantic.output) { firstOutput ??= elapsed; lastOutput = elapsed; }
@@ -66,12 +83,14 @@ function createTracker({ id, request, route, provider, now = () => performance.n
       const next = usageOf(event.data, chat);
       if (next) {
         usage = next;
-        complete = usage.inputTokens !== null && usage.outputTokens !== null;
+        if (usage.reasoningTokens > 0) hasReasoning = true;
+        complete = usage.inputTokens !== null && usage.outputTokens !== null && !usageIsInconsistent(usage);
       }
     },
     finish(status, httpStatus, code = null) {
       const durationMs = Math.max(0, now() - start);
-      const visibleTokens = usage?.outputTokens != null && (!hasReasoning || usage?.reasoningTokens != null)
+      const inconsistent = usageIsInconsistent(usage);
+      const visibleTokens = !inconsistent && usage?.outputTokens != null && (!hasReasoning || usage?.reasoningTokens != null)
         ? usage.outputTokens - (usage.reasoningTokens ?? 0) : null;
       const decodeMs = firstText !== null && terminalAt > firstText ? terminalAt - firstText : null;
       const tps = status === 'success' && !hasTools && visibleTokens > 0 && decodeMs > 0 ? visibleTokens * 1000 / decodeMs : null;
@@ -81,8 +100,8 @@ function createTracker({ id, request, route, provider, now = () => performance.n
         firstOutputMs: firstOutput, firstTextMs: firstText, durationMs,
         outputSpanMs: firstOutput !== null && lastOutput > firstOutput ? lastOutput - firstOutput : null,
         tps, decodeMs, visibleTokens, hasTools, hasReasoning,
-        throughputTps: status === 'success' && complete && durationMs > 0 ? usage.outputTokens * 1000 / durationMs : null,
-        toolIds: [...toolIds].slice(-32),
+        throughputTps: !inconsistent && usage?.outputTokens != null && durationMs > 0 ? usage.outputTokens * 1000 / durationMs : null,
+        toolIds: [...new Set([...chatToolIds.values(), ...responseToolIds.values()].map(identifier).filter(Boolean))].slice(-32),
         usageComplete: complete, messageIds: [...new Set((request.messages || []).map(m => identifier(m.messageId)).filter(Boolean))].slice(-8),
         sessionId: null, attribution: 'unassigned', role: 'unknown' };
     }
@@ -99,15 +118,16 @@ function normalize(record) {
   for (const key of ['firstOutputMs', 'firstTextMs', 'durationMs', 'outputSpanMs']) result[key] = timing(record[key]);
   result.schemaVersion = [2, 3].includes(record.schemaVersion) ? record.schemaVersion : 1;
   result.toolIds = result.schemaVersion >= 2 && Array.isArray(record.toolIds) ? [...new Set(record.toolIds.map(identifier).filter(Boolean))].slice(-32) : [];
-  result.hasTools = result.schemaVersion >= 2 ? record.hasTools === true : null;
-  result.hasReasoning = result.schemaVersion >= 2 ? record.hasReasoning === true : null;
+  result.hasTools = result.schemaVersion >= 2 && typeof record.hasTools === 'boolean' ? record.hasTools : null;
+  result.hasReasoning = result.schemaVersion >= 2 && typeof record.hasReasoning === 'boolean' ? record.hasReasoning : null;
+  if (result.schemaVersion >= 2 && result.reasoningTokens > 0) result.hasReasoning = true;
   result.decodeMs = result.schemaVersion >= 2 ? timing(record.decodeMs) : null;
-  result.visibleTokens = result.schemaVersion >= 2 ? token(record.visibleTokens) : null;
+  const inconsistent = usageIsInconsistent(result);
+  result.visibleTokens = !inconsistent && result.schemaVersion >= 2 && result.outputTokens !== null &&
+    (result.hasReasoning === false || result.reasoningTokens !== null) ? result.outputTokens - (result.reasoningTokens ?? 0) : null;
   result.tps = result.schemaVersion >= 2 && result.status === 'success' && result.hasTools === false && result.visibleTokens > 0 && result.decodeMs > 0 ? result.visibleTokens * 1000 / result.decodeMs : null;
-  result.throughputTps = result.outputTokens !== null && result.durationMs > 0 ? result.outputTokens * 1000 / result.durationMs : null;
+  result.throughputTps = !inconsistent && result.outputTokens !== null && result.durationMs > 0 ? result.outputTokens * 1000 / result.durationMs : null;
   result.firstResponseMs = result.schemaVersion >= 3 ? timing(record.firstResponseMs) : null;
-  const inconsistent = (result.cachedTokens !== null && result.inputTokens !== null && result.cachedTokens > result.inputTokens) ||
-    (result.reasoningTokens !== null && result.outputTokens !== null && result.reasoningTokens > result.outputTokens);
   result.usageState = inconsistent ? 'inconsistent' : result.inputTokens !== null && result.outputTokens !== null ? 'complete' :
     ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens'].some(key => result[key] !== null) ? 'partial' : 'missing';
   result.usageComplete = result.usageState === 'complete';
@@ -117,25 +137,26 @@ function normalize(record) {
   return result;
 }
 function summarize(records) {
-  const result = { requests: records.length, success: 0, error: 0, cancelled: 0 };
+  const usable = records.filter(record => !usageIsInconsistent(record));
+  const result = { requests: records.length, success: 0, error: 0, cancelled: 0, excludedUsageRecords: records.length - usable.length };
   for (const record of records) result[record.status]++;
   for (const key of ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens']) {
-    const values = records.map(r => r[key]).filter(v => v !== null);
+    const values = usable.map(r => token(r[key])).filter(v => v !== null);
     result[key] = { value: values.length ? values.reduce((a, b) => a + b, 0) : null, reported: values.length };
   }
   for (const [key, field] of [['ttftMs', 'firstOutputMs'], ['textTtftMs', 'firstTextMs']]) {
-    const values = records.filter(r => r.status === 'success' && r.schemaVersion >= 2).map(r => r[field]).filter(v => v !== null);
+    const values = records.filter(r => r.status === 'success' && r.schemaVersion >= 2).map(r => timing(r[field])).filter(v => v !== null);
     result[key] = { value: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null, samples: values.length };
   }
-  const eligible = records.filter(r => r.schemaVersion >= 2 && r.status === 'success' && timing(r.tps) !== null);
+  const eligible = usable.filter(r => r.schemaVersion >= 2 && r.status === 'success' && timing(r.tps) !== null);
   const latest = eligible.reduce((a, b) => !a || Date.parse(b.startedAt) >= Date.parse(a.startedAt) ? b : a, null);
   result.tps = { value: latest?.tps ?? null, samples: eligible.length };
-  const firstResponses = records.map(r => r.firstResponseMs).filter(v => timing(v) !== null);
+  const firstResponses = records.map(r => timing(r.firstResponseMs)).filter(v => v !== null);
   result.firstResponseMs = { value: firstResponses.length ? firstResponses.reduce((a, b) => a + b, 0) / firstResponses.length : null, samples: firstResponses.length };
-  const gateway = records.filter(r => timing(r.gatewayTps) !== null && r.durationMs > r.firstResponseMs);
+  const gateway = usable.filter(r => token(r.outputTokens) !== null && timing(r.gatewayTps) !== null && r.durationMs > r.firstResponseMs);
   const gatewayDuration = gateway.reduce((n, r) => n + r.durationMs - r.firstResponseMs, 0);
   result.gatewayTps = { value: gatewayDuration > 0 ? gateway.reduce((n, r) => n + r.outputTokens, 0) * 1000 / gatewayDuration : null, samples: gateway.length };
-  const throughput = records.filter(r => r.outputTokens !== null && r.durationMs > 0);
+  const throughput = usable.filter(r => token(r.outputTokens) !== null && timing(r.durationMs) !== null && r.durationMs > 0);
   const duration = throughput.reduce((n, r) => n + r.durationMs, 0);
   result.throughputTps = { value: duration > 0 ? throughput.reduce((n, r) => n + r.outputTokens, 0) * 1000 / duration : null, samples: throughput.length };
   return result;
@@ -160,45 +181,56 @@ function lookupRows(databasePath, sql, timeoutMs) {
     child.stdin.end(sql);
   });
 }
-async function sessionMatches(databasePath, ids, toolIds = []) {
-  if (!ids.length && !toolIds.length) return [];
-  const values = ids.map(quote).join(',') || "''";
-  const tools = toolIds.map(quote).join(',') || "''";
-  const rows = toolIds.length
-    ? await lookupRows(databasePath, `.timeout 1000\nSELECT session_id, tool_call_id AS message_id, 'tool' AS kind FROM tool_call_state WHERE tool_call_id IN (${tools});\n`, TOOL_LOOKUP_TIMEOUT_MS)
-    : [];
-  if (ids.length) {
+async function sessionMatches(databasePath, ids, toolIds = [], { messageLookup = false } = {}) {
+  const result = {
+    rows: [],
+    tools: toolIds.length ? 'ready' : 'not-needed',
+    messages: !messageLookup ? 'disabled' : ids.length ? 'ready' : 'not-needed'
+  };
+  if (toolIds.length) {
+    const tools = toolIds.map(quote).join(',') || "''";
     try {
-      rows.push(...await lookupRows(databasePath, `.timeout 1000\nSELECT DISTINCT session_id, json_extract(chat_message, '$.message_id') AS message_id, 'message' AS kind FROM message_nodes WHERE json_extract(chat_message, '$.message_id') IN (${values});\n`, MESSAGE_LOOKUP_TIMEOUT_MS));
-    } catch { /* supplemental branch: its failure must not discard indexed matches */ }
+      result.rows.push(...await lookupRows(databasePath, `.timeout 1000\nSELECT session_id, tool_call_id AS message_id, 'tool' AS kind FROM tool_call_state WHERE tool_call_id IN (${tools});\n`, TOOL_LOOKUP_TIMEOUT_MS));
+    } catch {
+      result.tools = 'unavailable';
+      result.messages = result.messages === 'ready' ? 'not-needed' : result.messages;
+      return result;
+    }
   }
-  return rows;
+  if (result.messages === 'ready') {
+    const values = ids.map(quote).join(',') || "''";
+    try {
+      result.rows.push(...await lookupRows(databasePath, `.timeout 1000\nSELECT DISTINCT session_id, json_extract(chat_message, '$.message_id') AS message_id, 'message' AS kind FROM message_nodes WHERE json_extract(chat_message, '$.message_id') IN (${values});\n`, MESSAGE_LOOKUP_TIMEOUT_MS));
+    } catch { result.messages = 'unavailable'; /* supplemental branch: its failure must not discard indexed matches */ }
+  }
+  return result;
 }
 // Labels are looked up per snapshot, never persisted: titles are user content
 // and must not leak into monitor.jsonl. Any failure degrades to no labels.
 async function sessionLabels(databasePath, ids) {
-  if (!ids.length) return new Map();
+  if (!ids.length) return { labels: new Map(), status: 'not-needed' };
   const values = ids.map(quote).join(',');
   const sql = `.timeout 1000\nSELECT id, title, last_activity_at FROM sessions WHERE id IN (${values});\n`;
   const rows = await new Promise(resolve => {
     let child;
     try { child = execFile('/usr/bin/sqlite3', ['-readonly', '-json', databasePath], { timeout: 8000, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => {
-      if (error) { resolve([]); return; }
-      try { resolve(JSON.parse(stdout || '[]')); } catch { resolve([]); }
-    }); } catch { resolve([]); return; }
+      if (error) { resolve(null); return; }
+      try { resolve(JSON.parse(stdout || '[]')); } catch { resolve(null); }
+    }); } catch { resolve(null); return; }
     child.stdin.on('error', () => {});
     child.stdin.end(sql);
   });
+  if (rows === null) return { labels: new Map(), status: 'unavailable' };
   const labels = new Map();
-  for (const row of Array.isArray(rows) ? rows : []) {
+  for (const row of rows) {
     if (!identifier(row.id)) continue;
     const trimmed = typeof row.title === 'string' ? row.title.trim() : '';
     labels.set(row.id, { title: trimmed || null,
       lastActivityAt: Number.isSafeInteger(row.last_activity_at) ? row.last_activity_at : null });
   }
-  return labels;
+  return { labels, status: 'ready' };
 }
-function associate(records, rows) {
+function associate(records, rows, { toolLookupUnavailable = false } = {}) {
   const mapping = new Map();
   for (const row of rows) {
     if (!identifier(row.message_id) || !identifier(row.session_id)) continue;
@@ -213,36 +245,57 @@ function associate(records, rows) {
       sessions = new Set((record.toolIds || []).flatMap(id => [...(mapping.get('tool:' + id) || [])]));
     }
     const { messageIds, toolIds, ...publicRecord } = record;
-    return { ...publicRecord, sessionId: sessions?.size === 1 ? [...sessions][0] : null,
-      attribution: sessions?.size === 1 ? attribution : sessions?.size > 1 ? 'ambiguous' : 'unassigned' };
+    const sessionId = sessions?.size === 1 ? [...sessions][0] : null;
+    return { ...publicRecord, sessionId,
+      attribution: sessionId ? attribution : sessions?.size > 1 ? 'ambiguous' : 'unassigned',
+      attributionReason: sessionId ? null : sessions?.size > 1 ? 'ambiguous-match'
+        : !(record.toolIds || []).length ? 'no-tool-ids'
+        : toolLookupUnavailable ? 'lookup-unavailable' : 'tool-id-unmatched' };
   });
 }
-function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/share/devin/cli/sessions.db') }) {
+function attributionStats(records) {
+  const counts = { assigned: 0, ambiguous: 0, noToolIds: 0, unmatchedToolIds: 0, lookupUnavailable: 0 };
+  for (const record of records) {
+    if (record.sessionId) counts.assigned++;
+    else if (record.attribution === 'ambiguous') counts.ambiguous++;
+    else if (record.attributionReason === 'no-tool-ids') counts.noToolIds++;
+    else if (record.attributionReason === 'tool-id-unmatched') counts.unmatchedToolIds++;
+    else if (record.attributionReason === 'lookup-unavailable') counts.lookupUnavailable++;
+  }
+  return counts;
+}
+function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/share/devin/cli/sessions.db'), messageLookup = false }) {
   const file = path.join(root, 'monitor.jsonl');
   let records = [], storageError = false, pending = null, cached = null, cachedAt = 0, revision = 0;
   let projectedCount = 0, loadFailed = false;
+  let storageCode = null, pendingWrites = 0, failedWrites = 0;
   try {
     if (fs.existsSync(file)) {
       if (fs.statSync(file).size > 32 * 1024 * 1024) throw new Error('monitor_size');
       for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
         if (!line) continue;
         projectedCount++;
-        try { const record = normalize(JSON.parse(line)); if (record) records.push(record); else storageError = true; } catch { storageError = true; }
+        try { const record = normalize(JSON.parse(line)); if (record) records.push(record); else { storageError = true; storageCode = 'load-invalid-record'; } }
+        catch { storageError = true; storageCode = 'load-invalid-record'; }
       }
       records = [...new Map(records.map(r => [r.id, r])).values()].slice(-LIMIT);
     }
-  } catch { storageError = true; loadFailed = true; }
+  } catch (error) { storageError = true; loadFailed = true; storageCode = error?.message === 'monitor_size' ? 'load-too-large' : 'load-unavailable'; }
   let queue = Promise.resolve(), closed = false, closing = null;
-  const enqueue = job => {
+  const enqueue = (job, code) => {
     if (loadFailed) return queue;
-    queue = queue.then(job).catch(() => { storageError = true; });
+    pendingWrites++;
+    queue = queue.then(job).catch(error => { storageError = true; failedWrites++; storageCode = error?.monitorOp === 'append' ? 'append-failed' : code; })
+      .finally(() => { pendingWrites--; });
     return queue;
   };
   const compact = (snapshotRecords, fallbackLine) => enqueue(async () => {
     if (storageError) {
       if (fallbackLine === undefined) return;
-      await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
-      await fs.promises.appendFile(file, fallbackLine, { mode: 0o600 });
+      try {
+        await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
+        await fs.promises.appendFile(file, fallbackLine, { mode: 0o600 });
+      } catch (error) { throw Object.assign(new Error('monitor_write_failed'), { monitorOp: 'append' }); }
       return;
     }
     await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
@@ -260,7 +313,7 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
       if (created) await fs.promises.rm(temporary, { force: true }).catch(() => {});
       throw error;
     }
-  });
+  }, 'compact-failed');
   function record(data) {
     if (closed) return;
     const value = normalize(data);
@@ -272,7 +325,7 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
       enqueue(async () => {
         await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
         await fs.promises.appendFile(file, line, { mode: 0o600 });
-      });
+      }, 'append-failed');
     } else {
       compact(records.slice(), line);
       projectedCount = LIMIT;
@@ -297,22 +350,25 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
     const current = records.slice(), currentRevision = revision;
     pending = (async () => {
       await queue;
-      let rows = [], sessionStatus = 'ready';
-      try { rows = await sessionMatches(databasePath, current.map(r => r.id), [...new Set(current.flatMap(r => r.toolIds || []))]); }
-      catch { sessionStatus = 'unavailable'; }
-      const publicRecords = associate(current, rows).reverse();
+      let lookup = { rows: [], tools: 'not-needed', messages: 'disabled' };
+      try { lookup = await sessionMatches(databasePath, current.map(r => r.id), [...new Set(current.flatMap(r => r.toolIds || []))], { messageLookup }); }
+      catch { lookup = { rows: [], tools: 'unavailable', messages: lookup.messages }; }
+      const sessionStatus = lookup.tools === 'unavailable' ? 'unavailable' : 'ready';
+      const publicRecords = associate(current, lookup.rows, { toolLookupUnavailable: lookup.tools === 'unavailable' }).reverse();
       const groups = new Map();
       for (const r of publicRecords) {
         const key = r.sessionId || '__unassigned__';
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(r);
       }
-      let labels = new Map();
-      try { labels = await sessionLabels(databasePath, [...groups.keys()].filter(key => key !== '__unassigned__')); } catch {}
+      let labels = new Map(), labelsStatus = 'ready';
+      try { const labelResult = await sessionLabels(databasePath, [...groups.keys()].filter(key => key !== '__unassigned__')); labels = labelResult.labels; labelsStatus = labelResult.status; }
+      catch { labelsStatus = 'unavailable'; }
       const sessions = [...groups.values()].map(list => {
         const sessionId = list[0].sessionId, label = sessionId ? labels.get(sessionId) : null;
         return { sessionId, title: label?.title ?? null, lastActivityAt: label?.lastActivityAt ?? null,
           attribution: list.every(r => r.attribution === 'response-id') ? 'response-id' : sessionId ? 'tool-id' : 'unassigned',
+          attributionSummary: attributionStats(list),
           summary: summarize(list), records: list };
       });
       // Mirror the official picker: most recent activity first, unlabeled and
@@ -320,7 +376,11 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
       sessions.sort((a, b) => (a.sessionId === null) - (b.sessionId === null) ||
         (a.lastActivityAt === null) - (b.lastActivityAt === null) ||
         (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
-      const value = { version: 1, status: storageError || sessionStatus !== 'ready' ? 'degraded' : 'ready', storageError, sessionStatus,
+      const value = { version: 1, status: storageError || sessionStatus !== 'ready' || labelsStatus === 'unavailable' ? 'degraded' : 'ready',
+        storageError, sessionStatus,
+        lookupStatus: { tools: lookup.tools, messages: lookup.messages, labels: labelsStatus },
+        storageDiagnostics: { code: storageCode, pendingWrites, failedWrites, persistenceBlocked: loadFailed },
+        attributionSummary: attributionStats(publicRecords),
         retentionLimit: LIMIT, records: publicRecords, summary: summarize(publicRecords), sessions };
       cached = { revision: currentRevision, value }; cachedAt = Date.now(); return value;
     })().finally(() => { pending = null; });
@@ -328,4 +388,4 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
   }
   return { record, snapshot, flush, close };
 }
-module.exports = { createMonitor, createTracker, usageOf, semanticOutput, summarize, associate };
+module.exports = { createMonitor, createTracker, usageOf, semanticOutput, summarize, associate, attributionStats };

@@ -154,6 +154,7 @@ function renderPanel({ nonce, cspSource }) {
     .tile-value { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
     .tile-label { display: block; font-size: 11px; color: var(--muted); }
     .monitor-pager { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    #monitor-diagnostics { white-space: pre-line; overflow-wrap: anywhere; }
     .monitor-table-wrap { overflow: auto; max-height: 480px; border: 1px solid var(--border); border-radius: 6px; }
     .monitor-table { border-collapse: collapse; white-space: nowrap; width: 100%; font-variant-numeric: tabular-nums; }
     .monitor-table td, .monitor-table th { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; }

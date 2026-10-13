@@ -3,13 +3,17 @@ const fs = require('node:fs');
 const { runtimeIdentity, controlFile, PORT } = require('./backend.cjs');
 const MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 const MAX_HEALTH_BYTES = 4 * 1024 * 1024;
-const COUNT_FIELDS = ['requests', 'success', 'error', 'cancelled'];
+const COUNT_FIELDS = ['requests', 'success', 'error', 'cancelled', 'excludedUsageRecords'];
 const METRIC_KEYS = ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens', 'ttftMs', 'textTtftMs', 'tps', 'throughputTps', 'firstResponseMs', 'gatewayTps'];
 const METRIC_FIELDS = ['value', 'reported', 'samples'];
 const RECORD_FIELDS = ['schemaVersion', 'id', 'startedAt', 'model', 'providerId', 'effort', 'status', 'code', 'httpStatus',
   'inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens', 'firstOutputMs', 'firstTextMs', 'firstResponseMs',
   'durationMs', 'outputSpanMs', 'tps', 'decodeMs', 'visibleTokens', 'hasTools', 'hasReasoning',
   'throughputTps', 'gatewayTps', 'usageState', 'usageComplete', 'sessionId', 'attribution', 'role'];
+const ATTRIBUTION_REASONS = ['ambiguous-match', 'no-tool-ids', 'lookup-unavailable', 'tool-id-unmatched'];
+const ATTRIBUTION_FIELDS = ['assigned', 'ambiguous', 'noToolIds', 'unmatchedToolIds', 'lookupUnavailable'];
+const LOOKUP_STATUS_VALUES = { tools: ['ready', 'unavailable', 'not-needed'], messages: ['disabled', 'ready', 'unavailable', 'not-needed'], labels: ['ready', 'unavailable', 'not-needed'] };
+const STORAGE_CODES = ['load-too-large', 'load-invalid-record', 'load-unavailable', 'append-failed', 'compact-failed'];
 const { withConnectionRetry } = require('./retry.cjs');
 async function readOnce({ root, port, signal, request }) {
   const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(12000)]) : AbortSignal.timeout(12000);
@@ -49,6 +53,7 @@ function summaryOf(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const summary = {};
   for (const field of COUNT_FIELDS) if (value[field] !== undefined) summary[field] = value[field];
+  if (value.excludedUsageRecords !== undefined) summary.excludedUsageRecords = Number.isSafeInteger(value.excludedUsageRecords) && value.excludedUsageRecords >= 0 ? value.excludedUsageRecords : null;
   for (const field of METRIC_KEYS) if (value[field] !== undefined) summary[field] = metricOf(value[field]);
   return summary;
 }
@@ -56,7 +61,30 @@ function recordOf(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
   const record = {};
   for (const field of RECORD_FIELDS) if (entry[field] !== undefined) record[field] = entry[field];
+  if (entry.attributionReason !== undefined) record.attributionReason = ATTRIBUTION_REASONS.includes(entry.attributionReason) ? entry.attributionReason : null;
   return record;
+}
+function attributionSummaryOf(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (!ATTRIBUTION_FIELDS.every(field => Number.isSafeInteger(value[field]) && value[field] >= 0)) return null;
+  const summary = {};
+  for (const field of ATTRIBUTION_FIELDS) summary[field] = value[field];
+  return summary;
+}
+function lookupStatusOf(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const status = {};
+  for (const [field, allowed] of Object.entries(LOOKUP_STATUS_VALUES)) status[field] = allowed.includes(value[field]) ? value[field] : null;
+  return status;
+}
+function storageDiagnosticsOf(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (!Number.isSafeInteger(value.pendingWrites) || value.pendingWrites < 0 ||
+      !Number.isSafeInteger(value.failedWrites) || value.failedWrites < 0 ||
+      typeof value.persistenceBlocked !== 'boolean') return null;
+  return { code: STORAGE_CODES.includes(value.code) ? value.code : null,
+    pendingWrites: value.pendingWrites, failedWrites: value.failedWrites,
+    persistenceBlocked: value.persistenceBlocked };
 }
 function sessionOf(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
@@ -66,6 +94,7 @@ function sessionOf(entry) {
     title: typeof entry.title === 'string' ? entry.title : null,
     lastActivityAt: Number.isSafeInteger(entry.lastActivityAt) ? entry.lastActivityAt : null,
     attribution: typeof entry.attribution === 'string' ? entry.attribution : 'unassigned',
+    attributionSummary: attributionSummaryOf(entry.attributionSummary),
     summary, records: entry.records.map(recordOf).filter(Boolean) };
 }
 function publicSnapshot(snapshot) {
@@ -75,6 +104,10 @@ function publicSnapshot(snapshot) {
   }
   return { version: 1, status: snapshot.status, storageError: snapshot.storageError === true,
     sessionStatus: snapshot.sessionStatus === 'ready' ? 'ready' : 'unavailable',
+    lookupStatus: lookupStatusOf(snapshot.lookupStatus),
+    storageDiagnostics: storageDiagnosticsOf(snapshot.storageDiagnostics),
+    attributionSummary: attributionSummaryOf(snapshot.attributionSummary),
+    retentionLimit: Number.isSafeInteger(snapshot.retentionLimit) && snapshot.retentionLimit > 0 ? snapshot.retentionLimit : null,
     records: snapshot.records.map(recordOf).filter(Boolean), summary,
     sessions: snapshot.sessions.map(sessionOf).filter(Boolean) };
 }

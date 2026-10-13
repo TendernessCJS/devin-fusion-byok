@@ -15,7 +15,7 @@ function contextDetails(session, monitor, catalog) {
   const latest = records.reduce((best, record) => Number.isFinite(Date.parse(record.startedAt)) && (!best || Date.parse(record.startedAt) > Date.parse(best.startedAt)) ? record : best, null);
   const state = { success: '成功', error: '失败', cancelled: '已取消' };
   const request = [{ key: 'request', label: '最近请求', value: latest ? `${latest.model || '—'} · ${state[latest.status] || latest.status || '—'}` : '—' }];
-  for (const [key, label] of [['durationMs', '请求耗时'], ['firstResponseMs', '首响应'], ['firstTextMs', '正文首字'], ['firstOutputMs', '首输出'], ['gatewayTps', '网关 TPS'], ['tps', '正文 TPS'], ['inputTokens', '输入 token'], ['outputTokens', '输出 token'], ['cachedTokens', '缓存 token'], ['reasoningTokens', '推理 token']]) request.push({ key, label, value: key.endsWith('Ms') ? seconds(latest?.[key]) : number(latest?.[key]) });
+  for (const [key, label] of [['durationMs', '请求耗时'], ['firstResponseMs', '首数据事件'], ['firstTextMs', '正文首字'], ['firstOutputMs', '首输出'], ['gatewayTps', '首数据后吞吐 TPS'], ['tps', '正文 TPS（不含工具）'], ['inputTokens', '输入 token'], ['outputTokens', '输出 token'], ['cachedTokens', '缓存 token'], ['reasoningTokens', '推理 token']]) request.push({ key, label, value: key.endsWith('Ms') ? seconds(latest?.[key]) : number(latest?.[key]) });
   const lines = [...rows, ...request].map(row => `${row.label}：${row.value}`);
   const tooltip = [rows[0], rows[1], ...request.slice(0, 7)].map(row => `${row.label}：${row.value}`).join('\n');
   return { percent: session?.lead ? Math.max(0, Math.min(100, session.lead.used / session.lead.size * 100)) : null, rows, request, lines, tooltip };

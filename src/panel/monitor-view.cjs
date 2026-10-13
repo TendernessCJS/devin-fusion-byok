@@ -1,10 +1,10 @@
 'use strict';
 // Columns marked "extra" stay in the DOM but are hidden until "显示全部指标" is checked.
-const COLUMNS = [['开始时间'], ['模型／档位'], ['状态'], ['用量', true], ['首响应 s'], ['输出 TPS'], ['输入'], ['输出'], ['缓存命中', true], ['推理', true],
+const COLUMNS = [['开始时间'], ['模型／档位'], ['状态'], ['用量', true], ['首数据事件 s'], ['首数据后 TPS'], ['输入'], ['输出'], ['缓存命中', true], ['推理', true],
   ['首输出 s', true], ['正文首字 s', true], ['正文 TPS', true], ['请求吞吐 TPS', true], ['总耗时 s'], ['会话关联', true]];
 function monitorMarkup() {
   const head = COLUMNS.map(([label, extra]) => `<th${extra ? ' class="extra"' : ''}>${label}</th>`).join('');
-  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><div id="monitor-summary" class="tiles"></div><div class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
+  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><p id="monitor-diagnostics" class="hint mb" role="status" aria-live="polite" hidden></p><div id="monitor-summary" class="tiles"></div><div class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
 }
 function monitorScript() {
   return `
@@ -14,6 +14,7 @@ function monitorScript() {
     const root = document.getElementById('usage-monitor');
     const selector = document.getElementById('monitor-session');
     const status = document.getElementById('monitor-status');
+    const diagnostics = document.getElementById('monitor-diagnostics');
     const summary = document.getElementById('monitor-summary');
     const rows = document.getElementById('monitor-requests');
     const detail = document.getElementById('monitor-detail');
@@ -24,6 +25,7 @@ function monitorScript() {
     const format = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
     const metricFormat = (key, value) => key.endsWith('Ms') && typeof value === 'number' && Number.isFinite(value) ? (value / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) : format(value);
     const attribution = value => ({ 'response-id': '输出 ID 确认', 'tool-id': '本次工具 ID 确认', ambiguous: '存在歧义', unassigned: '未归属' }[value] || '未知');
+    const attributionReason = value => ({ 'ambiguous-match': '存在歧义', 'no-tool-ids': '无可用工具 ID', 'lookup-unavailable': '归属查询不可用', 'tool-id-unmatched': '工具状态未匹配' }[value]);
     const stateName = value => ({ success: '成功', error: '失败', cancelled: '已取消' }[value] || '未知');
     const usageName = value => ({ complete: '完整', partial: '不完整', missing: '未上报', inconsistent: '数据异常' }[value] || '—');
     const ago = epoch => {
@@ -36,8 +38,20 @@ function monitorScript() {
     };
     const syncSelectorTitle = () => { const option = [...selector.options].find(o => o.value === selector.value); selector.title = option ? option.textContent : ''; };
     // [key, label, shown without detail]
-    const METRICS = [['firstResponseMs','平均首响应 s',true],['gatewayTps','输出 TPS（网关）',true],['inputTokens','输入 token',true],['outputTokens','输出 token',true],['cachedTokens','缓存命中 token',true],['reasoningTokens','推理 token',false],['ttftMs','平均首输出 s',false],['textTtftMs','平均正文首字 s',false],['tps','正文 TPS（不含工具）',false],['throughputTps','请求吞吐（含等待）',false]];
+    const METRICS = [['firstResponseMs','平均首数据事件 s',true],['gatewayTps','首数据后吞吐 TPS',true],['inputTokens','输入 token',true],['outputTokens','输出 token',true],['cachedTokens','缓存命中 token',true],['reasoningTokens','推理 token',false],['ttftMs','平均首输出 s',false],['textTtftMs','平均正文首字 s',false],['tps','最近有效正文 TPS',false],['throughputTps','请求吞吐 TPS（含等待）',false]];
     const FIELDS = ['firstResponseMs','gatewayTps','inputTokens','outputTokens','cachedTokens','reasoningTokens','firstOutputMs','firstTextMs','tps','throughputTps','durationMs'];
+    const METRIC_TITLES = {
+      firstResponseMs: '从请求开始到首个进入监控的 SSE 数据事件，不是 HTTP 响应头时间；包含成功、失败与取消请求的有效时间样本。',
+      gatewayTps: '全部有效输出 token ÷ 首数据事件到请求结束的时间；包含推理和工具，并包含失败/取消的有效已上报用量。',
+      throughputTps: '全部有效输出 token ÷ 总请求耗时，包含等待；包含失败/取消的有效已上报用量。'
+    };
+    const metricTitle = (key, metric, requests) => {
+      if (key === 'tps') return '最近一条有效成功样本的正文 TPS，不是平均值；含工具或已知 reasoning 分项不明时不计算。保留记录中有 ' + (metric?.samples ?? 0) + ' 条有效样本。';
+      if (METRIC_TITLES[key]) return METRIC_TITLES[key];
+      if (key === 'inputTokens' || key === 'outputTokens') return '基于 ' + (metric?.reported ?? 0) + '/' + requests + ' 次请求；异常用量记录已从汇总排除。';
+      if (key === 'cachedTokens' || key === 'reasoningTokens') return '基于 ' + (metric?.reported ?? 0) + '/' + requests + ' 次请求；异常用量记录已从汇总排除；数值是输入/输出 token 的子集，不重复计入总量。';
+      return '基于 ' + (metric?.reported ?? metric?.samples ?? 0) + '/' + requests + ' 次请求';
+    };
     function tile(value, label, title) {
       const node = document.createElement('div'); node.className = 'tile'; if (title) node.title = title;
       const v = document.createElement('span'); v.className = 'tile-value'; v.textContent = value;
@@ -57,7 +71,7 @@ function monitorScript() {
           for (const [key, label, basic] of METRICS) {
             if (!basic && !detail.checked) continue;
             const metric = s[key];
-            summary.append(tile(metricFormat(key, metric?.value), label, '基于 ' + (metric?.reported ?? metric?.samples ?? 0) + '/' + s.requests + ' 次请求'));
+            summary.append(tile(metricFormat(key, metric?.value), label, metricTitle(key, metric, s.requests)));
           }
         }
       }
@@ -71,8 +85,8 @@ function monitorScript() {
         rows.replaceChildren();
         for (const r of pageRecords) {
           const row = document.createElement('tr');
-          const values = [r.startedAt, r.model + (r.effort ? ' / ' + r.effort : ''), stateName(r.status), usageName(r.usageState), ...FIELDS.map(k => metricFormat(k, r[k])), attribution(r.attribution)];
-          values.forEach((value, index) => { const cell = document.createElement('td'); if (EXTRA[index]) cell.className = 'extra'; cell.textContent = value; row.append(cell); });
+          const values = [r.startedAt, r.model + (r.effort ? ' / ' + r.effort : ''), stateName(r.status), usageName(r.usageState), ...FIELDS.map(k => metricFormat(k, r[k])), attributionReason(r.attributionReason) || attribution(r.attribution)];
+          values.forEach((value, index) => { const cell = document.createElement('td'); if (EXTRA[index]) cell.className = 'extra'; const key = FIELDS[index - 4]; if (key && METRIC_TITLES[key]) cell.title = METRIC_TITLES[key]; cell.textContent = value; row.append(cell); });
           row.title = '请求 ID：' + r.id + (r.code ? ' · ' + r.code : ''); rows.append(row);
         }
         if (!pageRecords.length) { const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = EXTRA.length; cell.className = 'hint'; cell.textContent = '还没有请求记录。'; row.append(cell); rows.append(row); }
@@ -80,6 +94,20 @@ function monitorScript() {
       pageLabel.textContent = selected ? '第 ' + (page + 1) + ' / ' + totalPages + ' 页 · 共 ' + selected.records.length + ' 条' : '';
       prev.disabled = !selected || page === 0;
       next.disabled = !selected || page >= totalPages - 1;
+      const lines = [];
+      if (snapshot && selected) {
+        lines.push(Number.isSafeInteger(snapshot.retentionLimit) ? '统计窗口：最近 ' + snapshot.retentionLimit + ' 条（当前 ' + selected.records.length + ' 条）' : '当前保留 ' + selected.records.length + ' 条');
+        const counts = selected.attributionSummary;
+        if (counts && [counts.assigned, counts.ambiguous, counts.noToolIds, counts.unmatchedToolIds, counts.lookupUnavailable].every(value => Number.isSafeInteger(value) && value >= 0)) {
+          lines.push('归属：已确认 ' + counts.assigned + ' · 无可用工具 ID ' + counts.noToolIds + ' · 工具状态未匹配 ' + counts.unmatchedToolIds + ' · 歧义 ' + counts.ambiguous + ' · 查询不可用 ' + counts.lookupUnavailable);
+        }
+        if (s.excludedUsageRecords > 0) lines.push('已从用量与吞吐汇总排除 ' + s.excludedUsageRecords + ' 条异常记录（仍计入请求数和时间指标）');
+        const messages = snapshot.lookupStatus?.messages;
+        if (messages === 'disabled') lines.push('消息 UUID 补查默认关闭');
+        else if (messages === 'unavailable') lines.push('诊断消息补查失败（未影响工具归属）');
+      }
+      diagnostics.textContent = lines.join('\\n');
+      diagnostics.hidden = !lines.length;
     }
     selector.addEventListener('change', () => { page = 0; render(); });
     prev.addEventListener('click', () => { page--; render(); });
@@ -90,7 +118,26 @@ function monitorScript() {
       if (event.data?.type !== 'monitor-state') return;
       const result = event.data.result;
       snapshot = result?.snapshot || null;
-      status.textContent = !snapshot ? (result?.status === 'unsupported' ? '用量统计未启用。' : '用量统计暂不可用。') : snapshot.storageError ? '统计存储异常。' : snapshot.sessionStatus !== 'ready' ? '会话归属待确认。' : '';
+      const warnings = [];
+      if (!snapshot) warnings.push(result?.status === 'unsupported' ? '用量统计未启用。' : '用量统计暂不可用。');
+      else {
+        if (snapshot.storageError) {
+          const codes = {
+            'load-too-large': '监控日志超过读取上限，原日志保留，本轮未继续落盘。请先备份再人工处理。',
+            'load-invalid-record': '监控日志含无法解析的记录，已保留原日志并停止自动压缩。',
+            'load-unavailable': '监控日志读取失败，原日志保留，本轮未继续落盘。请检查文件访问权限。',
+            'append-failed': '监控记录追加失败，部分数据可能仅在内存中。请检查磁盘空间和权限。',
+            'compact-failed': '监控日志压缩失败，原日志保留。请检查磁盘空间和权限。'
+          };
+          warnings.push(codes[snapshot.storageDiagnostics?.code] || '统计存储异常。');
+          const diagnosticsCounts = snapshot.storageDiagnostics;
+          if (diagnosticsCounts && diagnosticsCounts.failedWrites > 0) warnings.push('写入失败 ' + diagnosticsCounts.failedWrites + ' 次');
+          if (diagnosticsCounts && diagnosticsCounts.pendingWrites > 0) warnings.push('待写 ' + diagnosticsCounts.pendingWrites + ' 次');
+        }
+        if (snapshot.sessionStatus !== 'ready') warnings.push('工具归属查询暂不可用，统计用量仍可查看。');
+        if (snapshot.lookupStatus?.labels === 'unavailable') warnings.push('会话标题读取失败，暂显示会话 ID。');
+      }
+      status.textContent = warnings.join(' ');
       status.hidden = !status.textContent;
       const previous = selector.value; selector.replaceChildren();
       const all = document.createElement('option'); all.value = 'all'; all.textContent = '全部会话'; all.title = all.textContent; selector.append(all);

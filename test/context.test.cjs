@@ -140,7 +140,7 @@ test('details use exact session match, distinguish missing from zero, and clamp 
   assert.ok(!result.lines.join('\n').includes('999')); assert.equal(result.request[0].value, '—');
   monitor.sessions[0].sessionId = 'a'; monitor.sessions[0].records[0].gatewayTps = 0;
   result = contextDetails(session, monitor);
-  assert.ok(result.lines.includes('网关 TPS：0'));
+  assert.ok(result.lines.includes('首数据后吞吐 TPS：0'));
   assert.ok(result.lines.includes('正文首字：—'));
 });
 test('context webview handles hostile strings as text and zero as real usage', () => {
@@ -206,6 +206,10 @@ test('durations use seconds while tokens and TPS retain their units', () => {
   const monitor = { sessions: [{ sessionId: 's', records: [record] }] };
   const result = contextDetails(session, monitor);
   const values = Object.fromEntries(result.request.map(row => [row.key, row.value]));
+  const labels = Object.fromEntries(result.request.map(row => [row.key, row.label]));
+  assert.equal(labels.firstResponseMs, '首数据事件');
+  assert.equal(labels.gatewayTps, '首数据后吞吐 TPS');
+  assert.equal(labels.tps, '正文 TPS（不含工具）');
   assert.equal(result.rows[2].value, '1.234 s');
   assert.equal(values.durationMs, '1.234 s'); assert.equal(values.firstResponseMs, '0 s');
   assert.equal(values.firstTextMs, '—'); assert.equal(values.firstOutputMs, '0.025 s');

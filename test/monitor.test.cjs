@@ -55,7 +55,7 @@ test('DeepSeek cache alias, tool-bearing output, done-only text and failed sampl
   assert.equal(usageOf({ usage: { prompt_cache_hit_tokens: 80 } }, true).cachedTokens, 80);
   const t = tracker();
   t.at(100); t.value.event({ type: 'response.output_text.delta', data: { delta: 'hello' } }, false);
-  t.at(200); t.value.event({ type: 'response.output_item.added', data: { item: { type: 'function_call', call_id: 'tool-1', name: 'exec' } } }, false);
+  t.at(200); t.value.event({ type: 'response.output_item.added', data: { item: { type: 'function_call', call_id: 'tool-1', name: 'exec' }, output_index: 0 } }, false);
   t.at(1000); t.value.event({ type: 'response.completed', data: { response: { usage: { input_tokens: 20, output_tokens: 30 } } } }, false);
   const record = t.value.finish('success', 200);
   assert.equal(record.tps, null); assert.deepEqual(record.toolIds, ['tool-1']); assert.equal(record.throughputTps, 30);
@@ -103,7 +103,7 @@ test('persists private-safe records, resolves real SQLite IDs read-only and surv
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const db = path.join(root, 'sessions.db');
   execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); CREATE TABLE message_nodes(session_id TEXT,chat_message TEXT); INSERT INTO sessions VALUES('session-a','会话标题甲',1791793602); INSERT INTO message_nodes VALUES('session-a','{\"message_id\":\"response-1\"}');"]);
-  const monitor = createMonitor({ root, databasePath: db });
+  const monitor = createMonitor({ root, databasePath: db, messageLookup: true });
   const record = tracker().value.finish('success', 200);
   monitor.record({ ...record, secret: 'SECRET' }); monitor.record(record);
   const snapshot = await monitor.snapshot();
@@ -114,9 +114,9 @@ test('persists private-safe records, resolves real SQLite IDs read-only and surv
   assert.ok(!JSON.stringify(snapshot).includes('messageIds'));
   const file = path.join(root, 'monitor.jsonl');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600); assert.ok(!fs.readFileSync(file, 'utf8').includes('SECRET'));
-  assert.equal((await createMonitor({ root, databasePath: db }).snapshot()).records.length, 1);
+  assert.equal((await createMonitor({ root, databasePath: db, messageLookup: true }).snapshot()).records.length, 1);
   const missing = await createMonitor({ root, databasePath: path.join(root, 'missing.db') }).snapshot();
-  assert.equal(missing.sessionStatus, 'ready', 'without tool ids only the supplemental branch runs, and its failure is isolated');
+  assert.equal(missing.sessionStatus, 'ready', 'default snapshots with no tool ids require no database lookup');
   assert.equal(missing.records[0].sessionId, null);
 });
 
@@ -149,7 +149,7 @@ test('message-id attribution still resolves sessions when no tool ids are presen
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const db = path.join(root, 'sessions.db');
   execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE message_nodes(session_id TEXT,chat_message TEXT); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO sessions VALUES('session-m','消息会话',400); INSERT INTO message_nodes VALUES('session-m','{\"message_id\":\"r-m\"}');"]);
-  const monitor = createMonitor({ root, databasePath: db });
+  const monitor = createMonitor({ root, databasePath: db, messageLookup: true });
   monitor.record({ id: 'r-m', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
   const snapshot = await monitor.snapshot();
   assert.equal(snapshot.sessionStatus, 'ready');
@@ -162,7 +162,7 @@ test('session labels order newest first, tolerate missing rows and survive looku
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const db = path.join(root, 'sessions.db');
   execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE message_nodes(session_id TEXT,chat_message TEXT); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO sessions VALUES('session-old','旧会话',100),('session-new','新会话',200); INSERT INTO message_nodes VALUES('session-old','{\"message_id\":\"r-old\"}'),('session-new','{\"message_id\":\"r-new\"}'),('session-ghost','{\"message_id\":\"r-ghost\"}');"]);
-  const monitor = createMonitor({ root, databasePath: db });
+  const monitor = createMonitor({ root, databasePath: db, messageLookup: true });
   for (const id of ['r-old', 'r-new', 'r-ghost', 'r-lone']) monitor.record({ id, startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
   const snapshot = await monitor.snapshot();
   assert.equal(snapshot.sessionStatus, 'ready');
@@ -174,7 +174,7 @@ test('session labels order newest first, tolerate missing rows and survive looku
   t.after(() => fs.rmSync(bare, { recursive: true, force: true }));
   const db2 = path.join(bare, 'sessions.db');
   execFileSync('/usr/bin/sqlite3', [db2, "CREATE TABLE message_nodes(session_id TEXT,chat_message TEXT); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO message_nodes VALUES('session-x','{\"message_id\":\"r-x\"}');"]);
-  const degraded = createMonitor({ root: bare, databasePath: db2 });
+  const degraded = createMonitor({ root: bare, databasePath: db2, messageLookup: true });
   degraded.record({ id: 'r-x', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
   const fallback = await degraded.snapshot();
   assert.equal(fallback.sessionStatus, 'ready', 'a missing sessions table must not fail attribution');
@@ -189,7 +189,7 @@ test('long session titles pass through snapshot and publicSnapshot untruncated',
   const db = path.join(root, 'sessions.db');
   const longTitle = '长'.repeat(150) + '末尾标记';
   execFileSync('/usr/bin/sqlite3', [db, `CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE message_nodes(session_id TEXT,chat_message TEXT); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO sessions VALUES('session-long','${longTitle}',300); INSERT INTO message_nodes VALUES('session-long','{"message_id":"r-long"}');`]);
-  const monitor = createMonitor({ root, databasePath: db });
+  const monitor = createMonitor({ root, databasePath: db, messageLookup: true });
   monitor.record({ id: 'r-long', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
   const snapshot = await monitor.snapshot();
   assert.equal(snapshot.sessions[0].title, longTitle);
@@ -441,4 +441,450 @@ test('a threshold record under a sticky storageError is still appended, never co
   assert.equal((await monitor.snapshot()).storageError, true);
   await monitor.close();
   assert.ok(fs.readFileSync(file, 'utf8').startsWith(before), 'close keeps the degraded log untouched');
+});
+
+test('the default snapshot never queries message_nodes even when it holds an exact response id', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-default-off-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const db = path.join(root, 'sessions.db');
+  execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); CREATE TABLE message_nodes(session_id TEXT,chat_message TEXT); INSERT INTO sessions VALUES('session-x','会话',300); INSERT INTO message_nodes VALUES('session-x','{\"message_id\":\"r-x\"}');"]);
+  const monitor = createMonitor({ root, databasePath: db });
+  monitor.record({ id: 'r-x', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.records[0].sessionId, null, 'message_nodes is never consulted by default');
+  assert.equal(snapshot.records[0].attributionReason, 'no-tool-ids');
+  assert.equal(snapshot.lookupStatus.messages, 'disabled');
+  assert.equal(snapshot.lookupStatus.tools, 'not-needed');
+  assert.equal(snapshot.sessionStatus, 'ready');
+});
+
+test('messageLookup opt-in keeps message-id attribution with a ready diagnostic', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-optin-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const db = path.join(root, 'sessions.db');
+  execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); CREATE TABLE message_nodes(session_id TEXT,chat_message TEXT); INSERT INTO sessions VALUES('session-x','会话',300); INSERT INTO message_nodes VALUES('session-x','{\"message_id\":\"r-x\"}');"]);
+  const monitor = createMonitor({ root, databasePath: db, messageLookup: true });
+  monitor.record({ id: 'r-x', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.records[0].sessionId, 'session-x');
+  assert.equal(snapshot.records[0].attribution, 'response-id');
+  assert.equal(snapshot.records[0].attributionReason, null);
+  assert.equal(snapshot.lookupStatus.messages, 'ready');
+});
+
+test('a broken message_nodes branch stays isolated: invisible by default, unavailable when opted in', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-msgbroken-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const db = path.join(root, 'sessions.db');
+  execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO sessions VALUES('session-t','工具会话',300); INSERT INTO tool_call_state VALUES('session-t','call-a');"]);
+  const plain = createMonitor({ root, databasePath: db });
+  plain.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  const plainSnapshot = await plain.snapshot();
+  assert.equal(plainSnapshot.lookupStatus.messages, 'disabled', 'the default path never runs the message query');
+  assert.equal(plainSnapshot.records[0].sessionId, 'session-t');
+
+  const opted = createMonitor({ root, databasePath: db, messageLookup: true });
+  const optSnapshot = await opted.snapshot();
+  assert.equal(optSnapshot.lookupStatus.messages, 'unavailable', 'opt-in exposes the broken branch honestly');
+  assert.equal(optSnapshot.records[0].sessionId, 'session-t', 'the isolated failure does not sink tool attribution');
+  assert.equal(optSnapshot.sessionStatus, 'ready');
+  assert.equal(optSnapshot.status, 'ready', 'a message-branch failure must not degrade the whole snapshot');
+});
+
+test('records without tool ids report not-needed and no-tool-ids without any database work', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-notools-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'missing.db') });
+  monitor.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.lookupStatus.tools, 'not-needed', 'no tool ids means the database is never queried');
+  assert.equal(snapshot.records[0].attributionReason, 'no-tool-ids');
+  assert.equal(snapshot.sessionStatus, 'ready');
+});
+
+test('a tool lookup failure distinguishes lookup-unavailable from no-tool-ids', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-toolfail-reason-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'missing.db') });
+  monitor.record({ id: 'r-tool', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  monitor.record({ id: 'r-bare', startedAt: '2026-01-01T00:00:01Z', status: 'success', model: 'm', providerId: 'p' });
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.sessionStatus, 'unavailable');
+  assert.equal(snapshot.status, 'degraded');
+  const toolRecord = snapshot.records.find(r => r.id === 'r-tool');
+  const bareRecord = snapshot.records.find(r => r.id === 'r-bare');
+  assert.equal(toolRecord.attributionReason, 'lookup-unavailable');
+  assert.equal(bareRecord.attributionReason, 'no-tool-ids');
+  assert.equal(snapshot.attributionSummary.lookupUnavailable, 1);
+  assert.equal(snapshot.attributionSummary.noToolIds, 1);
+});
+
+test('ambiguous matches are categorized and attribution counts cover every record', () => {
+  const { attributionStats } = require('../src/runtime/monitor.cjs');
+  const rows = [
+    { message_id: 'call-x', session_id: 'a', kind: 'tool' },
+    { message_id: 'call-x', session_id: 'b', kind: 'tool' },
+    { message_id: 'call-y', session_id: 'c', kind: 'tool' },
+    { message_id: 'resp-1', session_id: 'd', kind: 'message' },
+  ];
+  const records = [
+    { id: 'r-amb', status: 'success', toolIds: ['call-x'] },
+    { id: 'r-none', status: 'success', toolIds: [] },
+    { id: 'r-miss', status: 'success', toolIds: ['call-z'] },
+  ];
+  const out = associate(records, rows);
+  assert.equal(out[0].attribution, 'ambiguous');
+  assert.equal(out[0].attributionReason, 'ambiguous-match');
+  assert.equal(out[1].attributionReason, 'no-tool-ids');
+  assert.equal(out[2].attributionReason, 'tool-id-unmatched');
+  const assigned = associate([{ id: 'resp-1', status: 'success', toolIds: [] }], rows)[0];
+  assert.equal(assigned.sessionId, 'd');
+  assert.equal(assigned.attribution, 'response-id');
+  assert.equal(assigned.attributionReason, null);
+  const stats = attributionStats(out.concat([assigned]));
+  assert.deepEqual(stats, { assigned: 1, ambiguous: 1, noToolIds: 1, unmatchedToolIds: 1, lookupUnavailable: 0 });
+  assert.equal(Object.values(stats).reduce((a, b) => a + b, 0), 4, 'every record lands in exactly one bucket');
+});
+
+test('a missing label row differs from a failed label query, and titles never persist', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-labelstatus-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const db = path.join(root, 'sessions.db');
+  execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO tool_call_state VALUES('session-t','call-a');"]);
+  const monitor = createMonitor({ root, databasePath: db });
+  monitor.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.sessions[0].sessionId, 'session-t');
+  assert.equal(snapshot.sessions[0].title, null);
+  assert.equal(snapshot.lookupStatus.labels, 'ready', 'a query that ran with no matching row is ready, not unavailable');
+  assert.equal(snapshot.status, 'ready');
+  assert.ok(!fs.readFileSync(path.join(root, 'monitor.jsonl'), 'utf8').includes('session-t'), 'session ids never persist into the log');
+
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-labelfail-'));
+  t.after(() => fs.rmSync(bare, { recursive: true, force: true }));
+  const db2 = path.join(bare, 'sessions.db');
+  execFileSync('/usr/bin/sqlite3', [db2, "CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO tool_call_state VALUES('session-t','call-a');"]);
+  const degraded = createMonitor({ root: bare, databasePath: db2 });
+  degraded.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  const fallback = await degraded.snapshot();
+  assert.equal(fallback.sessions[0].sessionId, 'session-t');
+  assert.equal(fallback.lookupStatus.labels, 'unavailable', 'a sessions-table failure is reported separately');
+  assert.equal(fallback.status, 'degraded');
+});
+
+test('storageDiagnostics reports safe fixed codes and counters for every failure class', async t => {
+  const unreadable = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-diag-load-'));
+  t.after(() => fs.rmSync(unreadable, { recursive: true, force: true }));
+  const badFile = path.join(unreadable, 'monitor.jsonl');
+  fs.writeFileSync(badFile, '{"id":"x"}\n', { mode: 0o600 });
+  fs.chmodSync(badFile, 0o000);
+  const failed = createMonitor({ root: unreadable, databasePath: path.join(unreadable, 'none.db') });
+  const failedSnapshot = await failed.snapshot();
+  assert.equal(failedSnapshot.storageError, true);
+  assert.deepEqual(failedSnapshot.storageDiagnostics, { code: 'load-unavailable', pendingWrites: 0, failedWrites: 0, persistenceBlocked: true });
+  fs.chmodSync(badFile, 0o600);
+
+  const oversized = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-diag-size-'));
+  t.after(() => fs.rmSync(oversized, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(oversized, 'monitor.jsonl'), 'x'.repeat(33 * 1024 * 1024), { mode: 0o600 });
+  const big = createMonitor({ root: oversized, databasePath: path.join(oversized, 'none.db') });
+  assert.equal((await big.snapshot()).storageDiagnostics.code, 'load-too-large');
+
+  const readonly = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-diag-append-'));
+  const db = path.join(readonly, 'none.db');
+  const healthy = createMonitor({ root: readonly, databasePath: db });
+  fs.chmodSync(readonly, 0o500);
+  t.after(() => { try { fs.chmodSync(readonly, 0o700); } catch {} fs.rmSync(readonly, { recursive: true, force: true }); });
+  healthy.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await healthy.flush();
+  const snapshot = await healthy.snapshot();
+  assert.equal(snapshot.storageDiagnostics.code, 'append-failed');
+  assert.equal(snapshot.storageDiagnostics.failedWrites, 1);
+  assert.equal(snapshot.storageDiagnostics.persistenceBlocked, false);
+  fs.chmodSync(readonly, 0o700);
+});
+
+test('publicSnapshot exposes diagnostics through the whitelist and strips secrets', () => {
+  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  const record = { schemaVersion: 3, id: 'r1', startedAt: '2026-01-01T00:00:00Z', model: 'm', providerId: 'p', status: 'error',
+    attributionReason: 'lookup-unavailable', leak: 'SECRET', toolIds: ['internal'], messageIds: ['internal'] };
+  const snapshot = {
+    version: 1, status: 'degraded', storageError: true, sessionStatus: 'unavailable',
+    lookupStatus: { tools: 'unavailable', messages: 'unavailable', labels: 'ready', leak: 'SECRET' },
+    storageDiagnostics: { code: 'append-failed', pendingWrites: 0, failedWrites: 2, persistenceBlocked: false, raw: 'ENOENT /secret/path SECRET' },
+    summary: { requests: 2, success: 0, error: 0, cancelled: 0, excludedUsageRecords: 0, leak: 'SECRET' },
+    attributionSummary: { assigned: 1, ambiguous: 0, noToolIds: 0, unmatchedToolIds: 1, lookupUnavailable: 0, leak: 'SECRET' },
+    records: [record],
+    sessions: [{ sessionId: 's', title: 't', lastActivityAt: 1, attribution: 'tool-id',
+      attributionSummary: { assigned: 0, ambiguous: 0, noToolIds: 0, unmatchedToolIds: 1, lookupUnavailable: 0, leak: 'SECRET' },
+      summary: { requests: 1, success: 0, error: 1, cancelled: 0, excludedUsageRecords: 1 }, records: [record] }],
+  };
+  const pub = publicSnapshot(snapshot);
+  assert.deepEqual(pub.lookupStatus, { tools: 'unavailable', messages: 'unavailable', labels: 'ready' });
+  assert.deepEqual(pub.storageDiagnostics, { code: 'append-failed', pendingWrites: 0, failedWrites: 2, persistenceBlocked: false });
+  assert.equal(pub.summary.excludedUsageRecords, 0, 'a real zero survives the whitelist');
+  assert.deepEqual(pub.attributionSummary, { assigned: 1, ambiguous: 0, noToolIds: 0, unmatchedToolIds: 1, lookupUnavailable: 0 });
+  assert.equal(pub.sessions[0].attributionSummary.unmatchedToolIds, 1);
+  assert.equal(pub.records[0].attributionReason, 'lookup-unavailable');
+  assert.equal(pub.records[0].toolIds, undefined);
+  assert.ok(!JSON.stringify(pub).includes('SECRET'), 'no raw error text, paths or unknown fields leak');
+});
+
+test('publicSnapshot accepts legacy snapshots without diagnostics', () => {
+  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  const legacy = { version: 1, status: 'ready', storageError: false, sessionStatus: 'ready',
+    summary: { requests: 0, success: 0, error: 0, cancelled: 0 }, records: [], sessions: [] };
+  const pub = publicSnapshot(legacy);
+  assert.equal(pub.status, 'ready');
+  assert.equal(pub.lookupStatus == null || pub.lookupStatus.tools == null, true, 'missing diagnostics stay absent');
+  assert.equal(pub.storageDiagnostics == null || pub.storageDiagnostics.code == null, true);
+});
+
+test('an invalid attributionReason is normalized to null through the client whitelist', () => {
+  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  const record = { schemaVersion: 3, id: 'r1', startedAt: '2026-01-01T00:00:00Z', model: 'm', providerId: 'p', status: 'success', attributionReason: 'injected-SECRET' };
+  const pub = publicSnapshot({ version: 1, status: 'ready', storageError: false, sessionStatus: 'ready',
+    summary: { requests: 1 }, records: [record], sessions: [] });
+  assert.equal(pub.records[0].attributionReason, null);
+  assert.ok(!JSON.stringify(pub).includes('SECRET'));
+});
+
+test('reasoning items in completed output mark hasReasoning and keep tps honest without detail', () => {
+  const t = tracker();
+  t.at(1000); t.value.event({ type: 'response.output_text.delta', data: { delta: 'visible' } }, false);
+  t.at(2000); t.value.event({ type: 'response.completed', data: { response: {
+    output: [{ type: 'reasoning', summary: [] }, { type: 'message', content: [{ type: 'output_text', text: 'visible' }] }],
+    usage: { input_tokens: 100, output_tokens: 40 } } } }, false);
+  const record = t.value.finish('success', 200);
+  assert.equal(record.hasReasoning, true);
+  assert.equal(record.visibleTokens, null);
+  assert.equal(record.tps, null);
+
+  const withTokens = tracker();
+  withTokens.at(1000); withTokens.value.event({ type: 'response.output_text.delta', data: { delta: 'v' } }, false);
+  withTokens.at(1500); withTokens.value.event({ type: 'response.output_item.done', data: { item: { type: 'reasoning', summary: [] } } }, false);
+  withTokens.at(2000); withTokens.value.event({ type: 'response.completed', data: { response: {
+    usage: { input_tokens: 100, output_tokens: 40, output_tokens_details: { reasoning_tokens: 10 } } } } }, false);
+  const detailed = withTokens.value.finish('success', 200);
+  assert.equal(detailed.hasReasoning, true);
+  assert.equal(detailed.visibleTokens, 30);
+  assert.equal(detailed.tps, 30);
+
+  const chat = tracker();
+  chat.at(1000); chat.value.event({ data: { choices: [{ delta: { content: 'x' } }] } }, true);
+  chat.at(2000); chat.value.event({ data: { choices: [{ message: { reasoning: 'thinking' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5 } } }, true);
+  const chatRecord = chat.value.finish('success', 200);
+  assert.equal(chatRecord.hasReasoning, true, 'chat message.reasoning follows the same detection path');
+});
+
+test('inconsistent usage is excluded from aggregates but kept in the detail', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-inconsistent-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  monitor.record({ id: 'inconsistent', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p',
+    schemaVersion: 3, inputTokens: 100, outputTokens: 30, cachedTokens: 200, durationMs: 1000, firstResponseMs: 100 });
+  monitor.record({ id: 'partial', startedAt: '2026-01-01T00:00:01Z', status: 'success', model: 'm', providerId: 'p',
+    schemaVersion: 3, outputTokens: 30, durationMs: 500 });
+  const snapshot = await monitor.snapshot();
+  const detail = snapshot.records.find(r => r.id === 'inconsistent');
+  assert.equal(detail.usageState, 'inconsistent');
+  assert.equal(detail.cachedTokens, 200, 'the raw reported counters stay in the detail row');
+  assert.equal(detail.tps, null);
+  assert.equal(detail.gatewayTps, null);
+  assert.equal(detail.throughputTps, null);
+  assert.equal(snapshot.summary.excludedUsageRecords, 1);
+  assert.equal(snapshot.summary.inputTokens.value, null, 'an excluded record never contributes to reported counters');
+  assert.equal(snapshot.summary.inputTokens.reported, 0);
+  assert.equal(snapshot.summary.cachedTokens.reported, 0);
+  assert.equal(snapshot.summary.outputTokens.reported, 1, 'a partial record with a legal counter still reports it');
+  assert.equal(snapshot.summary.outputTokens.value, 30);
+
+  const direct = summarize([{ id: 'x', status: 'success', inputTokens: 10, cachedTokens: 20, outputTokens: 5 }]);
+  assert.equal(direct.excludedUsageRecords, 1, 'summarize detects inconsistency even without a usageState field');
+  assert.equal(direct.inputTokens.value, null);
+});
+
+test('chat tool-call id fragments merge across chunks and responses keep only the real call id', () => {
+  const fragmented = tracker();
+  fragmented.value.event({ data: { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_', function: { name: 'exec' } }] } }] } }, true);
+  fragmented.value.event({ data: { choices: [{ delta: { tool_calls: [{ index: 0, id: '123', function: { arguments: '{}' } }] } }] } }, true);
+  assert.deepEqual(fragmented.value.finish('success', 200).toolIds, ['call_123'],
+    'same-index fragments merge into the final call id');
+
+  const multi = tracker();
+  multi.value.event({ data: { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_a' }] } }] } }, true);
+  multi.value.event({ data: { choices: [{ delta: { tool_calls: [{ index: 1, id: 'call_b' }] } }] } }, true);
+  assert.deepEqual(multi.value.finish('success', 200).toolIds, ['call_a', 'call_b'],
+    'different indexes never merge');
+
+  const responses = tracker();
+  responses.value.event({ type: 'response.output_item.added', data: { output_index: 0, item: { type: 'function_call', id: 'item-temp' } } }, false);
+  responses.value.event({ type: 'response.output_item.done', data: { output_index: 0, item: { type: 'function_call', call_id: 'call-real', name: 'exec', arguments: '{}' } } }, false);
+  assert.deepEqual(responses.value.finish('success', 200).toolIds, ['call-real'],
+    'the item-scoped id is replaced by the real call_id at done');
+});
+
+test('latest text TPS wins over averages and cancelled usage still counts into throughput', () => {
+  const base = tracker().value.finish('success', 200);
+  const summary = summarize([
+    { ...base, id: 'old', outputTokens: 10, durationMs: 1000, tps: 10, startedAt: '2026-01-01T00:00:00Z' },
+    { ...base, id: 'new', outputTokens: 90, durationMs: 3000, tps: 30, startedAt: '2026-01-02T00:00:00Z' },
+    { ...base, id: 'cancelled', status: 'cancelled', outputTokens: 20, durationMs: 1000, tps: null },
+  ]);
+  assert.equal(summary.tps.value, 30, 'the newest successful text TPS is reported, not an average');
+  assert.equal(summary.tps.samples, 2, 'cancelled records never enter the text TPS pool');
+  assert.equal(summary.throughputTps.samples, 3, 'a cancelled record with legal usage still counts into throughput');
+  assert.equal(summary.outputTokens.reported, 3, 'cancelled usage keeps contributing to cost counters');
+});
+
+test('invalid diagnostics collapse to null instead of echoing fake zeros', () => {
+  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  const pub = publicSnapshot({
+    version: 1, status: 'ready', storageError: false, sessionStatus: 'ready',
+    lookupStatus: { tools: 'bogus', messages: 'bogus', labels: 'ready' },
+    storageDiagnostics: { code: 'unknown-code', pendingWrites: 'many', failedWrites: -1, persistenceBlocked: 'yes' },
+    attributionSummary: { assigned: 'x', ambiguous: 0, noToolIds: 0, unmatchedToolIds: 0, lookupUnavailable: 0 },
+    retentionLimit: '5000',
+    summary: { requests: 0, success: 0, error: 0, cancelled: 0, excludedUsageRecords: 'SECRET' },
+    records: [], sessions: [{ sessionId: 's', summary: { requests: 0 }, records: [] }],
+  });
+  assert.equal(pub.storageDiagnostics, null, 'invalid counters collapse the whole diagnostics object');
+  assert.equal(pub.attributionSummary, null, 'any invalid count discards the whole summary');
+  assert.equal(pub.sessions[0].attributionSummary, null, 'a missing session summary stays null');
+  assert.equal(pub.lookupStatus.tools, null, 'unknown enum values never echo');
+  assert.equal(pub.lookupStatus.messages, null);
+  assert.equal(pub.lookupStatus.labels, 'ready');
+  assert.equal(pub.retentionLimit, null, 'a string limit is stripped to null');
+  assert.equal(pub.summary.excludedUsageRecords, null, 'invalid exclusion counts never echo');
+  assert.ok(!JSON.stringify(pub).includes('SECRET'));
+
+  const ok = publicSnapshot({ version: 1, status: 'ready', storageError: false, sessionStatus: 'ready',
+    retentionLimit: 5000,
+    storageDiagnostics: { code: 'made-up', pendingWrites: 0, failedWrites: 0, persistenceBlocked: true },
+    summary: { requests: 0 }, records: [], sessions: [] });
+  assert.equal(ok.retentionLimit, 5000);
+  assert.equal(ok.storageDiagnostics.code, null, 'an unknown code strips to null but keeps the object');
+  assert.equal(ok.storageDiagnostics.persistenceBlocked, true);
+});
+
+test('a failing fallback append under a sticky storageError reports append-failed', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-fallback-fail-'));
+  const file = path.join(root, 'monitor.jsonl');
+  const lines = [];
+  for (let i = 0; i < 5249; i++) lines.push(JSON.stringify({ id: 'r' + i, startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' }));
+  lines.push('not-json');
+  fs.writeFileSync(file, lines.join('\n') + '\n', { mode: 0o600 });
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  fs.chmodSync(file, 0o400);
+  t.after(() => { try { fs.chmodSync(file, 0o600); } catch {} fs.rmSync(root, { recursive: true, force: true }); });
+  monitor.record({ id: 'fresh', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await monitor.flush();
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.storageDiagnostics.code, 'append-failed', 'the fallback append reports its own code, not compact-failed');
+  assert.equal(snapshot.storageDiagnostics.failedWrites, 1);
+  fs.chmodSync(file, 0o600);
+});
+
+test('a frozen error from a fallback append still reports the fixed append-failed code', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-frozen-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  const lines = [];
+  for (let i = 0; i < 5249; i++) lines.push(JSON.stringify({ id: 'r' + i, startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' }));
+  lines.push('not-json');
+  fs.writeFileSync(file, lines.join('\n') + '\n', { mode: 0o600 });
+  const originalBytes = fs.readFileSync(file, 'utf8');
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  t.mock.method(fs.promises, 'appendFile', () => Promise.reject(Object.freeze(new Error('SECRET frozen failure'))));
+  monitor.record({ id: 'fresh', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await monitor.flush();
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.storageDiagnostics.code, 'append-failed');
+  assert.equal(snapshot.storageDiagnostics.failedWrites, 1);
+  assert.ok(!JSON.stringify(snapshot).includes('SECRET'), 'the frozen error text never surfaces');
+  assert.equal(fs.readFileSync(file, 'utf8'), originalBytes, 'the original log is untouched');
+});
+
+test('the default path never emits a message_nodes query and the opt-in emits it once', async t => {
+  const vm = require('node:vm');
+  const filename = path.resolve('src/runtime/monitor.cjs');
+  const source = fs.readFileSync(filename, 'utf8');
+  const queries = [];
+  const realExecFile = require('node:child_process').execFile;
+  const module = { exports: {} };
+  vm.runInNewContext(source, { module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout, console, performance,
+    require(name) {
+      if (name === 'node:child_process') return { execFile: (file, args, options, callback) => {
+        const child = realExecFile(file, args, options, callback);
+        const original = child.stdin.end.bind(child.stdin);
+        child.stdin.end = input => { queries.push(String(input)); return original(input); };
+        return child;
+      } };
+      return require(name);
+    } }, { filename });
+  const { createMonitor } = module.exports;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-sqlcap-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const db = path.join(root, 'sessions.db');
+  execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); CREATE TABLE message_nodes(session_id TEXT,chat_message TEXT); INSERT INTO sessions VALUES('session-t','会话',300); INSERT INTO tool_call_state VALUES('session-t','call-a'); INSERT INTO message_nodes VALUES('session-t','{\"message_id\":\"r-x\"}');"]);
+  const plain = createMonitor({ root, databasePath: db });
+  plain.record({ id: 'r-x', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  const snapshot = await plain.snapshot();
+  assert.equal(snapshot.records[0].sessionId, 'session-t', 'the indexed tool branch still attributes');
+  assert.ok(queries.length > 0);
+  assert.ok(queries.every(sql => !sql.includes('message_nodes')), 'no message_nodes statement is ever emitted by default');
+  assert.ok(queries.some(sql => sql.includes('tool_call_state')));
+  assert.ok(queries.some(sql => sql.includes('FROM sessions')));
+
+  const seen = queries.length;
+  const bareRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-sqlnone-'));
+  t.after(() => fs.rmSync(bareRoot, { recursive: true, force: true }));
+  const bare = createMonitor({ root: bareRoot, databasePath: path.join(bareRoot, 'missing.db') });
+  bare.record({ id: 'r-no-tools', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await bare.snapshot();
+  assert.equal(queries.length, seen, 'a record without tool ids never issues SQL by default');
+
+  const opted = createMonitor({ root, databasePath: db, messageLookup: true });
+  opted.record({ id: 'r-y', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  await opted.snapshot();
+  assert.ok(queries.slice(seen).some(sql => sql.includes('message_nodes')), 'the opt-in diagnostic emits the message branch exactly once');
+});
+
+test('authored numeric edge cases stay exact through normalize and summarize', async t => {
+  const zeroRecord = { id: 'zero', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', schemaVersion: 3,
+    inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, durationMs: 1000, hasTools: false, hasReasoning: false };
+  const zero = summarize([zeroRecord]);
+  assert.equal(zero.inputTokens.value, 0); assert.equal(zero.inputTokens.reported, 1);
+  assert.equal(zero.outputTokens.value, 0); assert.equal(zero.outputTokens.reported, 1);
+  assert.equal(zero.cachedTokens.value, 0); assert.equal(zero.cachedTokens.reported, 1);
+  assert.equal(zero.reasoningTokens.value, 0); assert.equal(zero.reasoningTokens.reported, 1);
+  assert.equal(zero.excludedUsageRecords, 0);
+  assert.equal(zero.throughputTps.value, 0);
+
+  const bad = summarize([
+    { ...zeroRecord, id: 'a', inputTokens: 10, outputTokens: 5, cachedTokens: 20 },
+    { ...zeroRecord, id: 'b', inputTokens: 10, outputTokens: 5, reasoningTokens: 6 },
+  ]);
+  assert.equal(bad.excludedUsageRecords, 2);
+  for (const key of ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens']) {
+    assert.equal(bad[key].value, null, key + ' stays null, never a fake zero');
+    assert.equal(bad[key].reported, 0);
+  }
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-numeric-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  monitor.record({ id: 'legacy', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', schemaVersion: 2,
+    outputTokens: 40, hasTools: false, hasReasoning: true, reasoningTokens: null, visibleTokens: 40, decodeMs: 1000 });
+  monitor.record({ id: 'flags', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', schemaVersion: 2,
+    outputTokens: 40, visibleTokens: 40, decodeMs: 1000 });
+  const snapshot = await monitor.snapshot();
+  const legacy = snapshot.records.find(r => r.id === 'legacy');
+  assert.equal(legacy.visibleTokens, null, 'a persisted visibleTokens value cannot fabricate a body TPS when reasoning detail is missing');
+  assert.equal(legacy.tps, null);
+  const flags = snapshot.records.find(r => r.id === 'flags');
+  assert.equal(flags.hasTools, null, 'a missing flag is unknown, never defaulted false');
+  assert.equal(flags.hasReasoning, null);
+  assert.equal(flags.tps, null);
 });
