@@ -6,12 +6,8 @@ const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const LIMIT = 5000;
 const COMPACT_AT = LIMIT + 250;
-const token = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
-const timing = value => Number.isFinite(value) && value >= 0 ? value : null;
+const { token, timing, usageIsInconsistent, summarize, attributionStats } = require('./monitor-stats.cjs');
 const identifier = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/.test(value) ? value : null;
-const usageIsInconsistent = record => record?.usageState === 'inconsistent' ||
-  (token(record?.cachedTokens) !== null && token(record?.inputTokens) !== null && record.cachedTokens > record.inputTokens) ||
-  (token(record?.reasoningTokens) !== null && token(record?.outputTokens) !== null && record.reasoningTokens > record.outputTokens);
 
 function usageOf(data, chat) {
   const u = chat ? data?.usage : data?.response?.usage;
@@ -136,31 +132,6 @@ function normalize(record) {
   if (inconsistent) result.tps = null;
   return result;
 }
-function summarize(records) {
-  const usable = records.filter(record => !usageIsInconsistent(record));
-  const result = { requests: records.length, success: 0, error: 0, cancelled: 0, excludedUsageRecords: records.length - usable.length };
-  for (const record of records) result[record.status]++;
-  for (const key of ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens']) {
-    const values = usable.map(r => token(r[key])).filter(v => v !== null);
-    result[key] = { value: values.length ? values.reduce((a, b) => a + b, 0) : null, reported: values.length };
-  }
-  for (const [key, field] of [['ttftMs', 'firstOutputMs'], ['textTtftMs', 'firstTextMs']]) {
-    const values = records.filter(r => r.status === 'success' && r.schemaVersion >= 2).map(r => timing(r[field])).filter(v => v !== null);
-    result[key] = { value: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null, samples: values.length };
-  }
-  const eligible = usable.filter(r => r.schemaVersion >= 2 && r.status === 'success' && timing(r.tps) !== null);
-  const latest = eligible.reduce((a, b) => !a || Date.parse(b.startedAt) >= Date.parse(a.startedAt) ? b : a, null);
-  result.tps = { value: latest?.tps ?? null, samples: eligible.length };
-  const firstResponses = records.map(r => timing(r.firstResponseMs)).filter(v => v !== null);
-  result.firstResponseMs = { value: firstResponses.length ? firstResponses.reduce((a, b) => a + b, 0) / firstResponses.length : null, samples: firstResponses.length };
-  const gateway = usable.filter(r => token(r.outputTokens) !== null && timing(r.gatewayTps) !== null && r.durationMs > r.firstResponseMs);
-  const gatewayDuration = gateway.reduce((n, r) => n + r.durationMs - r.firstResponseMs, 0);
-  result.gatewayTps = { value: gatewayDuration > 0 ? gateway.reduce((n, r) => n + r.outputTokens, 0) * 1000 / gatewayDuration : null, samples: gateway.length };
-  const throughput = usable.filter(r => token(r.outputTokens) !== null && timing(r.durationMs) !== null && r.durationMs > 0);
-  const duration = throughput.reduce((n, r) => n + r.durationMs, 0);
-  result.throughputTps = { value: duration > 0 ? throughput.reduce((n, r) => n + r.outputTokens, 0) * 1000 / duration : null, samples: throughput.length };
-  return result;
-}
 const quote = value => "'" + value.replace(/'/g, "''") + "'";
 const TOOL_LOOKUP_TIMEOUT_MS = 8000;
 // The message-id branch scans message_nodes without an index (json_extract in
@@ -252,17 +223,6 @@ function associate(records, rows, { toolLookupUnavailable = false } = {}) {
         : !(record.toolIds || []).length ? 'no-tool-ids'
         : toolLookupUnavailable ? 'lookup-unavailable' : 'tool-id-unmatched' };
   });
-}
-function attributionStats(records) {
-  const counts = { assigned: 0, ambiguous: 0, noToolIds: 0, unmatchedToolIds: 0, lookupUnavailable: 0 };
-  for (const record of records) {
-    if (record.sessionId) counts.assigned++;
-    else if (record.attribution === 'ambiguous') counts.ambiguous++;
-    else if (record.attributionReason === 'no-tool-ids') counts.noToolIds++;
-    else if (record.attributionReason === 'tool-id-unmatched') counts.unmatchedToolIds++;
-    else if (record.attributionReason === 'lookup-unavailable') counts.lookupUnavailable++;
-  }
-  return counts;
 }
 function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/share/devin/cli/sessions.db'), messageLookup = false }) {
   const file = path.join(root, 'monitor.jsonl');

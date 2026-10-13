@@ -155,6 +155,9 @@ function renderPanel({ nonce, cspSource }) {
     .tile-label { display: block; font-size: 11px; color: var(--muted); }
     .monitor-pager { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
     #monitor-diagnostics { white-space: pre-line; overflow-wrap: anywhere; }
+    #monitor-date-controls:not([hidden]) { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 100%; }
+    #monitor-date-controls label { display: inline-flex; gap: 4px; align-items: center; }
+    #monitor-date-controls input { width: auto; }
     .monitor-table-wrap { overflow: auto; max-height: 480px; border: 1px solid var(--border); border-radius: 6px; }
     .monitor-table { border-collapse: collapse; white-space: nowrap; width: 100%; font-variant-numeric: tabular-nums; }
     .monitor-table td, .monitor-table th { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; }

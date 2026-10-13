@@ -1,20 +1,44 @@
 'use strict';
+const { createMonitorStats } = require('../runtime/monitor-stats.cjs');
 // Columns marked "extra" stay in the DOM but are hidden until "显示全部指标" is checked.
-const COLUMNS = [['开始时间'], ['模型／档位'], ['状态'], ['用量', true], ['首数据事件 s'], ['首数据后 TPS'], ['输入'], ['输出'], ['缓存命中', true], ['推理', true],
+const COLUMNS = [['开始时间（本机）'], ['模型／档位'], ['状态'], ['用量', true], ['首数据事件 s'], ['首数据后 TPS'], ['输入'], ['输出'], ['缓存命中', true], ['推理', true],
   ['首输出 s', true], ['正文首字 s', true], ['正文 TPS', true], ['请求吞吐 TPS', true], ['总耗时 s'], ['会话关联', true]];
 function monitorMarkup() {
   const head = COLUMNS.map(([label, extra]) => `<th${extra ? ' class="extra"' : ''}>${label}</th>`).join('');
-  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><p id="monitor-diagnostics" class="hint mb" role="status" aria-live="polite" hidden></p><div id="monitor-summary" class="tiles"></div><div class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
+  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><select id="monitor-time-range" aria-label="时间区间"><option value="this-month">当月</option><option value="last-month">上月</option><option value="last-7-days">最近 7 天</option><option value="all">全部保留记录</option><option value="custom">自定义</option></select><span id="monitor-date-controls" hidden><label for="monitor-date-start">开始日期 <input id="monitor-date-start" type="date" min="0001-01-01" max="9999-12-31"></label><label for="monitor-date-end">结束日期 <input id="monitor-date-end" type="date" min="0001-01-01" max="9999-12-31"></label></span><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><p id="monitor-diagnostics" class="hint mb" role="status" aria-live="polite" hidden></p><p id="monitor-range-error" class="warn mb" role="alert" hidden></p><p id="monitor-range-info" class="hint mb" role="status" hidden></p><div id="monitor-summary" class="tiles"></div><div class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
 }
 function monitorScript() {
   return `
   (() => {
+    const { monitorDateRange, filteredMonitorView } = (${createMonitorStats.toString()})();
     const PAGE_SIZE = 100;
-    let snapshot = null, page = 0, rowsSignature = '', summarySignature = '';
+    let snapshot = null, page = 0, rowsSignature = '', summarySignature = '', rangeKey = '';
     const root = document.getElementById('usage-monitor');
     const selector = document.getElementById('monitor-session');
     const status = document.getElementById('monitor-status');
     const diagnostics = document.getElementById('monitor-diagnostics');
+    const timeRange = document.getElementById('monitor-time-range');
+    const dateControls = document.getElementById('monitor-date-controls');
+    const dateStart = document.getElementById('monitor-date-start');
+    const dateEnd = document.getElementById('monitor-date-end');
+    const rangeInfo = document.getElementById('monitor-range-info');
+    const rangeError = document.getElementById('monitor-range-error');
+    timeRange.value = 'this-month';
+    const initialCustom = monitorDateRange('this-month');
+    dateStart.value = initialCustom.startDate;
+    dateEnd.value = initialCustom.endDate;
+    const localZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return '本机时区'; } };
+    let startedFormatter = null, formatterZone = null;
+    const startTimeFormatter = zone => {
+      if (formatterZone !== zone) { formatterZone = zone; startedFormatter = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }); }
+      return startedFormatter;
+    };
+    const currentRange = () => {
+      const range = monitorDateRange(timeRange.value, { start: dateStart.value, end: dateEnd.value });
+      const key = JSON.stringify([timeRange.value, range.from, range.to, range.error]);
+      if (key !== rangeKey) { rangeKey = key; page = 0; }
+      return range;
+    };
     const summary = document.getElementById('monitor-summary');
     const rows = document.getElementById('monitor-requests');
     const detail = document.getElementById('monitor-detail');
@@ -60,7 +84,10 @@ function monitorScript() {
     }
     function render() {
       syncSelectorTitle();
-      const selected = snapshot ? (selector.value === 'all' ? snapshot : snapshot.sessions.find(s => (s.sessionId || '__unassigned__') === selector.value)) : null;
+      const zone = localZone();
+      const formatStarted = startTimeFormatter(zone);
+      const range = currentRange();
+      const selected = snapshot ? filteredMonitorView(snapshot, selector.value, range) : null;
       const s = selected?.summary;
       const summaryKey = s ? detail.checked + '|' + JSON.stringify(s) : '';
       if (summaryKey !== summarySignature) {
@@ -79,17 +106,20 @@ function monitorScript() {
       if (page >= totalPages) page = totalPages - 1;
       if (page < 0) page = 0;
       const pageRecords = selected ? selected.records.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE) : [];
-      const rowsKey = page + '|' + JSON.stringify(pageRecords);
+      let rowsKey = zone + '|' + page + '|' + JSON.stringify(pageRecords);
+      if (!pageRecords.length) rowsKey += '|' + (range.error ? 'invalid' : range.from === null ? 'all' : 'range');
       if (rowsKey !== rowsSignature) {
         rowsSignature = rowsKey;
         rows.replaceChildren();
         for (const r of pageRecords) {
           const row = document.createElement('tr');
-          const values = [r.startedAt, r.model + (r.effort ? ' / ' + r.effort : ''), stateName(r.status), usageName(r.usageState), ...FIELDS.map(k => metricFormat(k, r[k])), attributionReason(r.attributionReason) || attribution(r.attribution)];
-          values.forEach((value, index) => { const cell = document.createElement('td'); if (EXTRA[index]) cell.className = 'extra'; const key = FIELDS[index - 4]; if (key && METRIC_TITLES[key]) cell.title = METRIC_TITLES[key]; cell.textContent = value; row.append(cell); });
+          const startedAt = typeof r.startedAt === 'string' ? r.startedAt : String(r.startedAt ?? '');
+          const parsed = Date.parse(startedAt);
+          const values = [Number.isFinite(parsed) ? formatStarted.format(parsed) : (startedAt || '—'), r.model + (r.effort ? ' / ' + r.effort : ''), stateName(r.status), usageName(r.usageState), ...FIELDS.map(k => metricFormat(k, r[k])), attributionReason(r.attributionReason) || attribution(r.attribution)];
+          values.forEach((value, index) => { const cell = document.createElement('td'); if (EXTRA[index]) cell.className = 'extra'; if (index === 0) cell.title = '原始时间：' + startedAt; else { const key = FIELDS[index - 4]; if (key && METRIC_TITLES[key]) cell.title = METRIC_TITLES[key]; } cell.textContent = value; row.append(cell); });
           row.title = '请求 ID：' + r.id + (r.code ? ' · ' + r.code : ''); rows.append(row);
         }
-        if (!pageRecords.length) { const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = EXTRA.length; cell.className = 'hint'; cell.textContent = '还没有请求记录。'; row.append(cell); rows.append(row); }
+        if (!pageRecords.length) { const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = EXTRA.length; cell.className = 'hint'; cell.textContent = range.error ? '请修正时间区间后查看用量。' : range.from === null ? '还没有请求记录。' : '所选时间区间内暂无保留记录。'; row.append(cell); rows.append(row); }
       }
       pageLabel.textContent = selected ? '第 ' + (page + 1) + ' / ' + totalPages + ' 页 · 共 ' + selected.records.length + ' 条' : '';
       prev.disabled = !selected || page === 0;
@@ -106,10 +136,22 @@ function monitorScript() {
         if (messages === 'disabled') lines.push('消息 UUID 补查默认关闭');
         else if (messages === 'unavailable') lines.push('诊断消息补查失败（未影响工具归属）');
       }
-      diagnostics.textContent = lines.join('\\n');
+      const diagnosticsText = lines.join('\\n');
+      if (diagnostics.textContent !== diagnosticsText) diagnostics.textContent = diagnosticsText;
       diagnostics.hidden = !lines.length;
+      const errorText = range.error ? range.error : '';
+      if (rangeError.textContent !== errorText) rangeError.textContent = errorText;
+      rangeError.hidden = !errorText;
+      const infoText = !snapshot ? '' : (range.error ? '' :
+        (range.from === null ? '全部保留记录' : '选定日期范围 ' + range.startDate + ' 至 ' + range.endDate) +
+        '；按请求开始时间统计；本机时区（' + zone + '）。仅基于本地保留记录，可能不完整，非供应商账单。');
+      if (rangeInfo.textContent !== infoText) rangeInfo.textContent = infoText;
+      rangeInfo.hidden = !infoText;
     }
     selector.addEventListener('change', () => { page = 0; render(); });
+    timeRange.addEventListener('change', () => { dateControls.hidden = timeRange.value !== 'custom'; render(); });
+    dateStart.addEventListener('change', render);
+    dateEnd.addEventListener('change', render);
     prev.addEventListener('click', () => { page--; render(); });
     next.addEventListener('click', () => { page++; render(); });
     detail.addEventListener('change', () => { root.classList.toggle('detailed', detail.checked); render(); });

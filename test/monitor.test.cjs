@@ -815,6 +815,7 @@ test('the default path never emits a message_nodes query and the opt-in emits it
   vm.runInNewContext(source, { module, exports: module.exports, __dirname: path.dirname(filename),
     process, Buffer, URL, AbortController, setTimeout, clearTimeout, console, performance,
     require(name) {
+      if (name.startsWith('.')) return require(path.resolve(path.dirname(filename), name));
       if (name === 'node:child_process') return { execFile: (file, args, options, callback) => {
         const child = realExecFile(file, args, options, callback);
         const original = child.stdin.end.bind(child.stdin);

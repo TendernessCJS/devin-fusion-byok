@@ -455,3 +455,25 @@ test('close waits for both the client response and the serveChat handler so late
   assert.deepEqual(events, ['record', 'monitor-close'], 'the cancelled request still records metrics before the monitor closes');
   await backend.stopped;
 });
+
+test('same-version monitor-stats changes invalidate the runtime source identity', () => {
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  let statsChanged = false;
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename), process,
+    require(name) {
+      if (name === 'node:fs') return { ...fs, readFileSync(file, ...options) {
+        const original = fs.readFileSync(file, ...options);
+        return statsChanged && path.resolve(file) === path.resolve(__dirname, '../src/runtime/monitor-stats.cjs')
+          ? Buffer.concat([Buffer.from(original), Buffer.from('\n// synthetic stats change\n')]) : original;
+      } };
+      return realRequire(name);
+    },
+  }, { filename });
+  const loaded = module.exports.runtimeIdentity('/synthetic-runtime-root');
+  statsChanged = true;
+  assert.notEqual(module.exports.runtimeIdentity('/synthetic-runtime-root', true).sourceId, loaded.sourceId);
+  assert.equal(module.exports.runtimeIdentity('/synthetic-runtime-root').sourceId, loaded.sourceId);
+});

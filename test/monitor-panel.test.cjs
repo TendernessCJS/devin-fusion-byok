@@ -18,7 +18,8 @@ test('monitor browser script compiles, uses text nodes, and preserves zero versu
   byId('monitor-session').value = 'all';
   let receive;
   vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} } });
-  const record = { id: 'id', startedAt: 'now', model: '<img onerror=alert(1)>', status: 'success', inputTokens: 0, outputTokens: null, usageComplete: false, attribution: 'unassigned' };
+  byId('monitor-time-range').value = 'all';
+  const record = { id: 'id', startedAt: 'now', model: '<img onerror=alert(1)>', status: 'success', schemaVersion: 3, inputTokens: 0, outputTokens: null, usageComplete: false, attribution: 'unassigned' };
   receive({ data: { type: 'monitor-state', result: { snapshot: { summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, records: [record], sessions: [], sessionStatus: 'ready' } } } });
   const cells = byId('monitor-requests').children[0].children;
   assert.equal(cells[1].textContent, '<img onerror=alert(1)>');
@@ -55,6 +56,7 @@ test('session options show titles and relative times instead of internal slugs',
   byId('monitor-session').value = 'all';
   let receive;
   vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} } });
+  byId('monitor-time-range').value = 'all';
   const now = Math.floor(Date.now() / 1000);
   const summary = { requests: 1, success: 1, error: 0, cancelled: 0 };
   const record = { id: 'r1', startedAt: 't', model: 'm', effort: null, status: 'success', usageState: 'missing', attribution: 'ambiguous' };
@@ -93,6 +95,7 @@ test('long titles reach the option and select tooltips intact, empty titles stil
   byId('monitor-session').value = 'all';
   let receive;
   vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} } });
+  byId('monitor-time-range').value = 'all';
   const longTitle = '标'.repeat(150) + '末尾标记';
   const summary = { requests: 1, success: 1, error: 0, cancelled: 0 };
   receive({ data: { type: 'monitor-state', result: { snapshot: { summary, records: [], sessionStatus: 'ready', sessions: [
@@ -244,6 +247,7 @@ function panelDom() {
   byId('monitor-session').value = 'all';
   let receive;
   vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} } });
+  byId('monitor-time-range').value = 'all';
   byId('usage-monitor').classList = { toggle() {} };
   return { byId, receive };
 }
@@ -338,9 +342,11 @@ test('identical snapshots keep table and summary node identities, changes replac
   assert.equal(byId('monitor-requests').children[0], thirdRow, 'a repeated changed snapshot is deduplicated again');
 });
 
-function monitorFixture() {
+function monitorFixture({ now } = {}) {
+  let fakeNow = now ?? Date.now();
+  class FakeDate extends Date { static now() { return fakeNow; } }
   class Element {
-    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; this.disabled = false; }
+    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; this.disabled = false; this.hidden = false; }
     append(...children) { this.children.push(...children); }
     replaceChildren() { this.children = []; }
     addEventListener(name, listener) { this.listeners[name] = listener; }
@@ -350,12 +356,19 @@ function monitorFixture() {
   const byId = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
   byId('monitor-session').value = 'all';
   let receive;
-  vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} } });
-  return { byId, receive };
+  vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} }, Date: FakeDate, Intl });
+  return { byId, receive, setNow: value => { fakeNow = value; },
+    selectTime: value => { byId('monitor-time-range').value = value; byId('monitor-time-range').listeners.change(); },
+    setDates: (start, end) => { byId('monitor-date-start').value = start; byId('monitor-date-start').listeners.change(); if (end !== undefined) { byId('monitor-date-end').value = end; byId('monitor-date-end').listeners.change(); } },
+    selectSession: value => { byId('monitor-session').value = value; byId('monitor-session').listeners.change(); } };
 }
+const dayMs = 24 * 3600 * 1000;
+const isoLocal = ms => new Date(ms).toISOString();
+const validRecord = (id, extra = {}) => ({ schemaVersion: 3, id, startedAt: new Date(Date.now()).toISOString(), model: 'm', status: 'success', attribution: 'unassigned', attributionReason: 'no-tool-ids', ...extra });
 
 test('rows show attribution reasons in Chinese and keep the legacy fallback', () => {
   const f = monitorFixture();
+  f.selectTime('all');
   const base = { startedAt: 't', model: 'm', status: 'success' };
   const records = [
     { ...base, id: 'a', attribution: 'unassigned', attributionReason: 'ambiguous-match' },
@@ -377,12 +390,12 @@ test('rows show attribution reasons in Chinese and keep the legacy fallback', ()
 
 test('the diagnostics line summarizes the window, attribution, exclusions and the message branch', () => {
   const f = monitorFixture();
-  const record = id => ({ id, startedAt: 't', model: 'm', status: 'success', attribution: 'unassigned' });
+  f.selectTime('all');
+  const record = (id, extra = {}) => ({ id, startedAt: 't', model: 'm', status: 'success', attribution: 'unassigned', ...extra });
   f.receive({ data: { type: 'monitor-state', result: { snapshot: {
-    summary: { requests: 3, success: 3, error: 0, cancelled: 0, excludedUsageRecords: 1 }, retentionLimit: 5000,
+    summary: { requests: 3, success: 3, error: 0, cancelled: 0 }, retentionLimit: 5000,
     lookupStatus: { tools: 'ready', messages: 'disabled', labels: 'ready' },
-    attributionSummary: { assigned: 1, ambiguous: 0, noToolIds: 1, unmatchedToolIds: 1, lookupUnavailable: 0 },
-    records: [record('a'), record('b'), record('c')], sessions: [], sessionStatus: 'ready' } } } });
+    records: [record('a', { sessionId: 's-1' }), record('b', { attributionReason: 'no-tool-ids', usageState: 'inconsistent' }), record('c', { attributionReason: 'tool-id-unmatched' })], sessions: [], sessionStatus: 'ready' } } } });
   const diag = f.byId('monitor-diagnostics').textContent;
   assert.match(diag, /统计窗口：最近 5000 条（当前 3 条）/);
   assert.match(diag, /已确认 1 · 无可用工具 ID 1 · 工具状态未匹配 1 · 歧义 0 · 查询不可用 0/);
@@ -405,6 +418,7 @@ test('the diagnostics line summarizes the window, attribution, exclusions and th
 
 test('status combines storage tool and label warnings without leaking internals', () => {
   const f = monitorFixture();
+  f.selectTime('all');
   f.receive({ data: { type: 'monitor-state', result: { snapshot: {
     summary: { requests: 1, success: 0, error: 1, cancelled: 0 },
     storageError: true,
@@ -424,16 +438,15 @@ test('status combines storage tool and label warnings without leaking internals'
 
 test('diagnostics update without rebuilding unchanged rows or tiles', () => {
   const f = monitorFixture();
+  f.selectTime('all');
   const record = { id: 'r1', startedAt: 't', model: 'm', status: 'success', attribution: 'unassigned', attributionReason: 'no-tool-ids' };
   const base = { summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, retentionLimit: 5000,
     records: [record], sessions: [], sessionStatus: 'ready' };
-  f.receive({ data: { type: 'monitor-state', result: { snapshot: { ...base, lookupStatus: { tools: 'ready', messages: 'disabled', labels: 'ready' },
-    attributionSummary: { assigned: 0, ambiguous: 0, noToolIds: 1, unmatchedToolIds: 0, lookupUnavailable: 0 } } } } });
+  f.receive({ data: { type: 'monitor-state', result: { snapshot: { ...base, lookupStatus: { tools: 'ready', messages: 'disabled', labels: 'ready' } } } } });
   const row = f.byId('monitor-requests').children[0];
   const tile = f.byId('monitor-summary').children[0];
   const firstDiag = f.byId('monitor-diagnostics').textContent;
-  f.receive({ data: { type: 'monitor-state', result: { snapshot: { ...base, lookupStatus: { tools: 'ready', messages: 'unavailable', labels: 'ready' },
-    attributionSummary: { assigned: 0, ambiguous: 0, noToolIds: 0, unmatchedToolIds: 1, lookupUnavailable: 0 } } } } });
+  f.receive({ data: { type: 'monitor-state', result: { snapshot: { ...base, lookupStatus: { tools: 'ready', messages: 'unavailable', labels: 'ready' } } } } });
   assert.equal(f.byId('monitor-requests').children[0], row, 'identical rows keep their node identity');
   assert.equal(f.byId('monitor-summary').children[0], tile, 'identical tiles keep their node identity');
   const secondDiag = f.byId('monitor-diagnostics').textContent;
@@ -443,14 +456,12 @@ test('diagnostics update without rebuilding unchanged rows or tiles', () => {
 
 test('metric labels tooltips and cell titles carry the authored semantics', () => {
   const f = monitorFixture();
+  f.selectTime('all');
   f.byId('monitor-detail').checked = true; f.byId('usage-monitor').classList = { toggle() {} };
+  const record = (id, tps) => validRecord(id, { startedAt: 't', tps, inputTokens: 50, outputTokens: 40, cachedTokens: 10, reasoningTokens: 5, firstResponseMs: 100, gatewayTps: 50, throughputTps: 40, durationMs: 800 });
   f.receive({ data: { type: 'monitor-state', result: { snapshot: {
-    summary: { requests: 2, success: 2, error: 0, cancelled: 0,
-      firstResponseMs: { value: 100, samples: 2 }, gatewayTps: { value: 50, samples: 2 },
-      tps: { value: 30, samples: 2 }, throughputTps: { value: 40, samples: 2 },
-      inputTokens: { value: 100, reported: 2 }, outputTokens: { value: 80, reported: 2 },
-      cachedTokens: { value: 20, reported: 1 }, reasoningTokens: { value: 10, reported: 1 } },
-    records: [{ id: 'r', startedAt: 't', model: 'm', status: 'success', attribution: 'unassigned', firstResponseMs: 100, gatewayTps: 50, throughputTps: 40 }],
+    summary: { requests: 2 },
+    records: [record('r1', 10), record('r2', 30)],
     sessions: [], sessionStatus: 'ready' } } } });
   f.byId('monitor-detail').listeners.change();
   const tiles = new Map(f.byId('monitor-summary').children.map(tile => [tile.children[1].textContent, tile]));
@@ -475,25 +486,215 @@ test('metric labels tooltips and cell titles carry the authored semantics', () =
 
 test('a selected session shows its own attribution bucket and exclusion count', () => {
   const f = monitorFixture();
-  const record = (id, sessionId, attribution, reason) => ({ id, startedAt: 't', model: 'm', status: 'success', attribution, sessionId, attributionReason: reason });
+  f.selectTime('all');
+  const record = (id, sessionId, attribution, reason, extra = {}) => ({ id, startedAt: 't', model: 'm', status: 'success', attribution, sessionId, attributionReason: reason, ...extra });
+  const a1 = record('a1', 's-a', 'tool-id', null);
+  const a2 = record('a2', 's-a', 'tool-id', null, { usageState: 'inconsistent' });
+  const u1 = record('u1', null, 'ambiguous', 'ambiguous-match', { usageState: 'inconsistent' });
   f.receive({ data: { type: 'monitor-state', result: { snapshot: {
-    summary: { requests: 3, success: 3, error: 0, cancelled: 0, excludedUsageRecords: 2 }, retentionLimit: 5000,
+    summary: { requests: 3 }, retentionLimit: 5000,
     lookupStatus: { tools: 'ready', messages: 'disabled', labels: 'ready' },
-    attributionSummary: { assigned: 2, ambiguous: 1, noToolIds: 0, unmatchedToolIds: 0, lookupUnavailable: 0 },
-    records: [record('a1', 's-a', 'tool-id', null), record('a2', 's-a', 'tool-id', null), record('u1', null, 'ambiguous', 'ambiguous-match')],
+    records: [a1, a2, u1],
     sessions: [
-      { sessionId: 's-a', title: '甲', lastActivityAt: 1, attribution: 'tool-id',
-        attributionSummary: { assigned: 2, ambiguous: 0, noToolIds: 0, unmatchedToolIds: 0, lookupUnavailable: 0 },
-        summary: { requests: 2, success: 2, error: 0, cancelled: 0, excludedUsageRecords: 1 },
-        records: [record('a1', 's-a', 'tool-id', null), record('a2', 's-a', 'tool-id', null)] },
-      { sessionId: null, title: null, lastActivityAt: null, attribution: 'unassigned',
-        attributionSummary: { assigned: 0, ambiguous: 1, noToolIds: 0, unmatchedToolIds: 0, lookupUnavailable: 0 },
-        summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, records: [record('u1', null, 'ambiguous', 'ambiguous-match')] },
+      { sessionId: 's-a', title: '甲', lastActivityAt: 1, attribution: 'tool-id', records: [a1, a2], summary: { requests: 2 } },
+      { sessionId: null, title: null, lastActivityAt: null, attribution: 'unassigned', records: [u1], summary: { requests: 1 } },
     ], sessionStatus: 'ready' } } } });
-  f.byId('monitor-session').value = 's-a';
-  f.byId('monitor-session').listeners.change();
+  f.selectSession('s-a');
   const diag = f.byId('monitor-diagnostics').textContent;
   assert.match(diag, /归属：已确认 2 · 无可用工具 ID 0 · 工具状态未匹配 0 · 歧义 0 · 查询不可用 0/, 'the bucket counts its own rows, not the global totals');
   assert.match(diag, /已从用量与吞吐汇总排除 1 条异常记录/, 'the bucket exclusion count wins over the global one');
   assert.match(diag, /统计窗口：最近 5000 条（当前 2 条）/, 'the window still uses the global retention limit with bucket size');
+});
+
+test('the time filter defaults to this month and recomputes every tile and row', () => {
+  const f = monitorFixture({ now: new Date(2026, 9, 13, 12).getTime() });
+  assert.equal(f.byId('monitor-time-range').value, 'this-month', 'every fresh open defaults to the current month');
+  const inside = validRecord('in', { startedAt: new Date(2026, 9, 10, 12).toISOString(), outputTokens: 10, durationMs: 1000 });
+  const outside = validRecord('out', { startedAt: new Date(2020, 0, 1).toISOString(), outputTokens: 999 });
+  f.receive({ data: { type: 'monitor-state', result: { snapshot: {
+    summary: { requests: 2, success: 2, error: 0, cancelled: 0, outputTokens: { value: 9999, reported: 2 } },
+    records: [inside, outside], sessions: [], sessionStatus: 'ready', retentionLimit: 5000 } } } });
+  assert.equal(f.byId('monitor-requests').children.length, 1, 'out-of-range rows are excluded');
+  assert.equal(f.byId('monitor-requests').children[0].children[7].textContent, '10');
+  const tiles = new Map(f.byId('monitor-summary').children.map(tile => [tile.children[1].textContent, tile.children[0].textContent]));
+  assert.equal(tiles.get('请求'), '1');
+  assert.equal(tiles.get('输出 token'), '10', 'the recomputed summary ignores the stale backend aggregate');
+  const info = f.byId('monitor-range-info').textContent;
+  assert.match(info, /按请求开始时间统计/);
+  assert.match(info, /本机时区/);
+  assert.match(info, /仅基于本地保留记录，可能不完整，非供应商账单/);
+});
+
+test('date and session filters stack, sessions outside the range still list, empties stay honest', () => {
+  const f = monitorFixture({ now: new Date(2026, 9, 13, 12).getTime() });
+  const fresh = validRecord('fresh', { startedAt: new Date(2026, 9, 10, 12).toISOString(), sessionId: 's-b', attribution: 'tool-id', outputTokens: 5 });
+  const stale = validRecord('stale', { startedAt: new Date(2020, 0, 1).toISOString(), sessionId: 's-a', attribution: 'tool-id', outputTokens: 5 });
+  const sessions = [
+    { sessionId: 's-a', title: '旧会话', lastActivityAt: 1, attribution: 'tool-id', records: [stale], summary: { requests: 1 } },
+    { sessionId: 's-b', title: '新会话', lastActivityAt: 2, attribution: 'tool-id', records: [fresh], summary: { requests: 1 } },
+  ];
+  f.receive({ data: { type: 'monitor-state', result: { snapshot: { records: [fresh, stale], sessions, sessionStatus: 'ready', summary: { requests: 2 }, retentionLimit: 5000 } } } });
+  assert.equal(f.byId('monitor-requests').children.length, 1);
+  f.selectSession('s-a');
+  const rows = f.byId('monitor-requests').children;
+  assert.equal(rows.length, 1, 'a bounded range with no records shows one empty row');
+  assert.equal(rows[0].children[0].textContent, '所选时间区间内暂无保留记录。');
+  const options = f.byId('monitor-session').children.map(option => option.value);
+  assert.ok(options.includes('s-a') && options.includes('s-b'), 'sessions with no in-range records stay selectable');
+});
+
+test('invalid custom ranges fail closed with an alert and stay editable', () => {
+  const f = monitorFixture();
+  f.receive({ data: { type: 'monitor-state', result: { snapshot: { records: [validRecord('a')], sessions: [], sessionStatus: 'ready', summary: { requests: 1 } } } } });
+  f.selectTime('custom');
+  assert.equal(f.byId('monitor-date-controls').hidden, false, 'custom shows the date inputs');
+  f.setDates('2025-02-29', '2025-02-28');
+  const rows = f.byId('monitor-requests').children;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].children[0].textContent, '请修正时间区间后查看用量。', 'an invalid range never falls back to unfiltered data');
+  assert.equal(f.byId('monitor-summary').children.length, 0, 'the summary is cleared while the range is invalid');
+  assert.equal(f.byId('monitor-range-error').hidden, false);
+  assert.match(f.byId('monitor-range-error').textContent, /日期/);
+  assert.equal(f.byId('monitor-time-range').disabled, false, 'the controls stay editable');
+  f.setDates('2025-02-28', '2025-02-28');
+  assert.equal(f.byId('monitor-range-error').hidden, true);
+});
+
+test('refresh messages never reset the time range, custom inputs or session', () => {
+  const f = monitorFixture({ now: new Date(2026, 9, 13, 12).getTime() });
+  const sessions = [{ sessionId: 's-a', title: '甲', lastActivityAt: 1, attribution: 'tool-id',
+    records: [validRecord('a', { sessionId: 's-a' })], summary: { requests: 1 } }];
+  f.receive({ data: { type: 'monitor-state', result: { snapshot: { records: [validRecord('a', { sessionId: 's-a' })], sessions, sessionStatus: 'ready', summary: { requests: 1 } } } } });
+  f.selectTime('custom');
+  f.setDates('2020-01-01', '2020-12-31');
+  f.selectSession('s-a');
+  f.receive({ data: { type: 'monitor-state', result: { snapshot: { records: [validRecord('a', { sessionId: 's-a' })], sessions, sessionStatus: 'ready', summary: { requests: 1 } } } } });
+  assert.equal(f.byId('monitor-time-range').value, 'custom');
+  assert.equal(f.byId('monitor-date-start').value, '2020-01-01');
+  assert.equal(f.byId('monitor-date-end').value, '2020-12-31');
+  assert.equal(f.byId('monitor-session').value, 's-a');
+});
+
+test('page resets when the preset boundary rolls to a new day or month', () => {
+  const f = monitorFixture({ now: new Date(2026, 9, 13, 12).getTime() });
+  const records = [];
+  for (let i = 0; i < 120; i++) records.push(validRecord('r' + i, { startedAt: new Date(2026, 9, 10, 12).toISOString(), outputTokens: 1 }));
+  const snapshot = () => ({ data: { type: 'monitor-state', result: { snapshot: { records, sessions: [], sessionStatus: 'ready', summary: { requests: 120 } } } } });
+  f.receive(snapshot());
+  f.byId('monitor-next').listeners.click();
+  assert.match(f.byId('monitor-page').textContent, /第 2/);
+  f.setNow(new Date(2026, 9, 14, 12).getTime());
+  f.selectTime('last-7-days');
+  assert.match(f.byId('monitor-page').textContent, /第 1/, 'a preset change resets the page');
+  f.byId('monitor-next').listeners.click();
+  f.setNow(new Date(2026, 10, 1, 12).getTime());
+  f.selectTime('this-month');
+  assert.match(f.byId('monitor-page').textContent, /第 1/, 'a range boundary move resets the page');
+});
+
+test('switching back from all to this month refilters and recomputes', () => {
+  const f = monitorFixture({ now: new Date(2026, 9, 13, 12).getTime() });
+  const inside = validRecord('in', { startedAt: new Date(2026, 9, 10, 12).toISOString(), outputTokens: 10 });
+  const outside = validRecord('out', { startedAt: new Date(2020, 0, 1).toISOString(), outputTokens: 999 });
+  const message = { data: { type: 'monitor-state', result: { snapshot: { records: [inside, outside], sessions: [], sessionStatus: 'ready', summary: { requests: 2 } } } } };
+  f.receive(message);
+  assert.equal(f.byId('monitor-requests').children.length, 1);
+  f.selectTime('all');
+  assert.equal(f.byId('monitor-requests').children.length, 2, 'all keeps every retained record');
+  assert.match(f.byId('monitor-range-info').textContent, /全部保留记录/);
+  f.selectTime('this-month');
+  assert.equal(f.byId('monitor-requests').children.length, 1, 'returning to this month refilters');
+});
+
+test('empty-state text refreshes across invalid, bounded and all scopes', () => {
+  const f = monitorFixture({ now: new Date(2026, 9, 13, 12).getTime() });
+  const inside = validRecord('a', { startedAt: new Date(2026, 9, 10).toISOString() });
+  const send = records => f.receive({ data: { type: 'monitor-state', result: { snapshot: { records, sessions: [], sessionStatus: 'ready', summary: { requests: records.length } } } } });
+  const cell = () => f.byId('monitor-requests').children[0].children[0].textContent;
+  f.selectTime('all'); send([inside]);
+  f.selectTime('custom'); f.setDates('2021-01-01', '2020-12-31');
+  send([inside]);
+  assert.equal(cell(), '请修正时间区间后查看用量。', 'an invalid scope never keeps showing old rows');
+  f.setDates('2021-01-01', '2021-12-31');
+  assert.equal(f.byId('monitor-range-error').hidden, true);
+  assert.equal(cell(), '所选时间区间内暂无保留记录。', 'a now-valid empty range replaces the alert copy');
+  send([]); f.selectTime('all');
+  assert.equal(cell(), '还没有请求记录。', 'all-empty keeps the legacy copy');
+  f.selectTime('last-7-days'); send([]);
+  assert.equal(cell(), '所选时间区间内暂无保留记录。', 'bounded-empty is not stuck on the all-empty text');
+});
+
+test('row start times render in the local zone and keep the original timestamp on hover', () => {
+  const saved = process.env.TZ;
+  try {
+    process.env.TZ = 'Asia/Shanghai';
+    const f = monitorFixture({ now: new Date(2026, 9, 13, 12).getTime() });
+    f.selectTime('all');
+    f.receive({ data: { type: 'monitor-state', result: { snapshot: {
+      records: [validRecord('a', { startedAt: '2019-12-31T16:00:00.000Z' }), validRecord('b', { startedAt: 'not-a-date' })],
+      sessions: [], sessionStatus: 'ready', summary: { requests: 2 } } } } });
+    const first = f.byId('monitor-requests').children[0].children[0];
+    const second = f.byId('monitor-requests').children[1].children[0];
+    assert.match(first.textContent, /^2020\/01\/01 00:00/, 'the UTC instant renders as the local calendar moment');
+    assert.equal(first.title, '原始时间：2019-12-31T16:00:00.000Z');
+    assert.equal(second.textContent, 'not-a-date', 'unparseable timestamps pass through untouched');
+    assert.equal(second.title, '原始时间：not-a-date');
+    assert.equal(f.byId('monitor-requests').children[0].children[1].textContent, 'm', 'numeric columns keep their positions');
+  } finally { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; }
+});
+
+test('a timezone-only change re-keys the absolute range and resets the page', () => {
+  const saved = process.env.TZ;
+  try {
+    process.env.TZ = 'Asia/Shanghai';
+    const f = monitorFixture({ now: new Date(2026, 9, 13, 12).getTime() });
+    const records = [];
+    for (let i = 0; i < 120; i++) records.push(validRecord('r' + i, { startedAt: new Date(2026, 9, 10).toISOString(), outputTokens: 1 }));
+    const send = () => f.receive({ data: { type: 'monitor-state', result: { snapshot: { records, sessions: [], sessionStatus: 'ready', summary: { requests: 120 } } } } });
+    f.selectTime('this-month'); send();
+    f.byId('monitor-next').listeners.click();
+    assert.match(f.byId('monitor-page').textContent, /第 2/, 'page two is valid before the move');
+    process.env.TZ = 'America/Los_Angeles';
+    send();
+    assert.match(f.byId('monitor-page').textContent, /第 1/, 'same date label but different absolute bounds resets the page');
+  } finally { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; }
+});
+
+test('a preset rollover resets the page while the window stays populated', () => {
+  const f = monitorFixture({ now: new Date(2026, 9, 13, 12).getTime() });
+  const last7 = [];
+  for (let i = 0; i < 120; i++) last7.push(validRecord('w' + i, { startedAt: new Date(2026, 9, 10, 12).toISOString(), outputTokens: 1 }));
+  const send7 = () => f.receive({ data: { type: 'monitor-state', result: { snapshot: { records: last7, sessions: [], sessionStatus: 'ready', summary: { requests: 120 } } } } });
+  f.selectTime('last-7-days'); send7();
+  f.byId('monitor-next').listeners.click();
+  assert.match(f.byId('monitor-page').textContent, /第 2/);
+  f.setNow(new Date(2026, 9, 14, 12).getTime()); send7();
+  assert.match(f.byId('monitor-page').textContent, /第 1/, 'a new day resets the page without changing the preset');
+  assert.equal(f.byId('monitor-requests').children.length, 100, 'the window still holds records, so the reset is not a clamp');
+
+  const months = [];
+  for (let i = 0; i < 120; i++) months.push(validRecord('o' + i, { startedAt: new Date(2026, 9, 31, 12).toISOString(), outputTokens: 1 }));
+  for (let i = 0; i < 120; i++) months.push(validRecord('n' + i, { startedAt: new Date(2026, 10, 1, 12).toISOString(), outputTokens: 1 }));
+  const sendM = () => f.receive({ data: { type: 'monitor-state', result: { snapshot: { records: months, sessions: [], sessionStatus: 'ready', summary: { requests: 240 } } } } });
+  f.setNow(new Date(2026, 9, 31, 23).getTime());
+  f.selectTime('this-month'); sendM();
+  f.byId('monitor-next').listeners.click();
+  assert.match(f.byId('monitor-page').textContent, /第 2/, 'October month fills page two');
+  f.setNow(new Date(2026, 10, 1, 1).getTime()); sendM();
+  assert.match(f.byId('monitor-page').textContent, /第 1/, 'the month rollover resets the page');
+  assert.equal(f.byId('monitor-requests').children.length, 100, 'November still fills page one');
+});
+
+test('bounded scopes drop an incomplete attribution breakdown while all keeps a complete one', () => {
+  const f = monitorFixture({ now: new Date(2026, 9, 13, 12).getTime() });
+  const records = [validRecord('a', { startedAt: new Date(2026, 9, 10).toISOString(), sessionId: 's-1', attribution: 'tool-id', attributionReason: null }),
+    validRecord('b', { startedAt: new Date(2026, 9, 10).toISOString(), attribution: 'unassigned', attributionReason: null })];
+  const snapshot = { records, sessions: [], sessionStatus: 'ready', summary: { requests: 2 }, retentionLimit: 5000,
+    lookupStatus: { tools: 'ready', messages: 'disabled', labels: 'ready' },
+    attributionSummary: { assigned: 1, ambiguous: 0, noToolIds: 1, unmatchedToolIds: 0, lookupUnavailable: 0 } };
+  const send = () => f.receive({ data: { type: 'monitor-state', result: { snapshot } } });
+  f.selectTime('all'); send();
+  assert.match(f.byId('monitor-diagnostics').textContent, /归属：已确认 1 · 无可用工具 ID 1/, 'all keeps the complete same-scope original counts');
+  f.selectTime('custom'); f.setDates('2026-10-01', '2026-10-31'); send();
+  assert.doesNotMatch(f.byId('monitor-diagnostics').textContent, /归属：已确认/, 'an incomplete computed breakdown stays hidden instead of fabricating zeros');
 });
