@@ -1,5 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
+const { baseStyles } = require('./theme.cjs');
 
 const STATUS_LABELS = {
   active: '进行中', paused: '已暂停', waiting: '等待输入', blocked: '受阻', limited: '已达运行上限',
@@ -42,6 +43,9 @@ el('corrupt').textContent=state.corruptGoals?('发现 '+state.corruptGoals+' 条
 el('error').textContent=errorText;el('notice').textContent=notice;
 sessions=state.sessions||[];
 const list=el('goals');list.replaceChildren();
+if(!(state.goals||[]).length){const empty=document.createElement('p');empty.className='hint mt';
+empty.textContent=!state.enabled?'插件已停用，Goal 暂不可用。请在控制面板启用。':!state.trusted?'工作区未受信任，Goal 暂不可用。':'还没有目标。在 Devin 聊天框输入「/goal 要达成的目标」即可开始，进度会显示在这里。';
+list.append(empty);}
 for(const goal of state.goals||[]){const item=document.createElement('div');item.className='goal';
 const head=document.createElement('div');head.className='goalhead';head.textContent=statusText(goal)+' · '+sessionLabel(goal.sessionId);item.append(head);
 const meta=document.createElement('div');meta.className='meta';meta.textContent='运行额度已使用 '+goal.runsStarted+' / '+goal.maxRuns+'（含派发准备，非模型回复数）· 修订 '+goal.revision+(goal.archived?' · 已归档':'');item.append(meta);
@@ -52,6 +56,7 @@ for(const entry of goal.evidence){const line=document.createElement('pre');line.
 item.append(evidence);
 const actions=document.createElement('div');actions.className='actions';
 const act=(type,label,extra,needsConfirm)=>{const b=document.createElement('button');b.textContent=label;
+b.className=/清除|删除|放弃|归档/.test(label)?'danger':(label==='验收完成'?'':'secondary');
 b.disabled=!!goal.locked;b.onclick=()=>send(type,Object.assign({id:goal.id},extra||{}),needsConfirm);actions.append(b);};
 if(!goal.locked){if(goal.status==='active')act('goal.pause','暂停');
 else if(!goal.archived&&goal.status!=='completed')act('goal.resume','恢复',{},false);
@@ -59,6 +64,7 @@ if(goal.status==='review')act('goal.accept','验收完成',{},true);
 if(!goal.archived)act('goal.archive','归档',{},goal.status==='active');}
 item.append(actions);list.append(item);}
 const history=el('history');history.replaceChildren();
+el('historyTitle').hidden=!(state.history||[]).length;
 for(const goal of state.history||[]){const line=document.createElement('pre');line.textContent='['+goal.status+'] '+sessionLabel(goal.sessionId)+' · 修订 '+goal.revision+'\\n'+goal.objective;history.append(line);}}
 function send(type,payload,needsConfirm){const id=String(Math.random());errorText='';notice='';el('error').textContent='';el('notice').textContent='';
 vscode.postMessage({type,id,payload,confirm:needsConfirm===true});}
@@ -70,7 +76,7 @@ vscode.postMessage({type:'goal.ready',id:String(Math.random()),payload:{}});`;
 }
 
 function goalHtml(nonce) {
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';"><style nonce="${nonce}">body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background);padding:20px;line-height:1.7}label{display:block;margin-top:12px}input,textarea,select{width:100%;box-sizing:border-box;padding:6px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,transparent)}textarea{min-height:70px}.goal{border:1px solid var(--vscode-panel-border,#555);padding:12px;margin-top:12px}.goalhead{font-weight:600}.meta{opacity:.8}.actions{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap}button{padding:5px 10px;cursor:pointer}.error{color:var(--vscode-errorForeground)}.notice{color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;margin:6px 0}.hint{opacity:.7}.evidence{border-left:2px solid var(--vscode-panel-border,#555);padding-left:8px;margin-top:6px}</style></head><body><h2>Fusion BYOK Goal</h2><p class="hint">在 Devin 聊天框输入 <b>/goal 要达成的目标</b> 即可在当前对话启动，模型会一轮轮自动推进，直到它提交带证据的完成报告。<br>/goal 查看进度 · /goal pause 暂停 · /goal resume 继续 · /goal clear 清除。这里只用于查看和管理。</p><p>插件：<span id="enabled">未知</span> · <span id="trusted">未知</span></p><p id="storeError" class="error" role="status"></p><p id="corrupt" class="error" role="status"></p><div class="actions"><button id="refresh">刷新</button></div><p id="error" class="error" role="status"></p><p id="notice" class="notice" role="status"></p><div id="goals"></div><h3>历史（已归档）</h3><div id="history"></div><script nonce="${nonce}">${goalScript()}</script></body></html>`;
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';"><style nonce="${nonce}">${baseStyles()}label{display:block;margin-top:12px}.goal{border:1px solid var(--border);border-radius:var(--radius-container);padding:12px 14px;margin-top:12px}.goalhead{font-weight:600}.meta{opacity:.8}.evidence{border-left:2px solid var(--border);padding-left:8px;margin-top:6px}.actions{margin-top:12px}.notice{color:var(--muted)}</style></head><body><h2>Fusion BYOK Goal</h2><p class="hint">在 Devin 聊天框输入 <b>/goal 要达成的目标</b> 即可在当前对话启动，模型会一轮轮自动推进，直到它提交带证据的完成报告。<br>/goal 查看进度 · /goal pause 暂停 · /goal resume 继续 · /goal clear 清除。这里只用于查看和管理。</p><p>插件：<span id="enabled">未知</span> · <span id="trusted">未知</span></p><p id="storeError" class="error mt" role="status"></p><p id="corrupt" class="error mt" role="status"></p><div class="actions"><button id="refresh" class="secondary">刷新</button></div><p id="error" class="error mt" role="status"></p><p id="notice" class="notice mt" role="status"></p><div id="goals"></div><h3 id="historyTitle" class="mt">历史（已归档）</h3><div id="history"></div><script nonce="${nonce}">${goalScript()}</script></body></html>`;
 }
 
 function createGoalUi({ vscode, context, controller, isEnabled = () => true, isTrusted = () => true, safeError = () => ({ message: '操作失败。' }) }) {

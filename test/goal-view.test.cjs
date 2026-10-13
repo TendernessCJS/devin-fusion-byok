@@ -111,12 +111,27 @@ test('the goal webview shows untrusted and disabled states from the host snapsho
   assert.match(byId('corrupt').textContent, /2 条/);
 });
 
+test('the goal panel renders an empty state and hides the empty history heading', () => {
+  const script = goalScript();
+  for (const text of ['插件已停用，Goal 暂不可用。', '工作区未受信任，Goal 暂不可用。', '还没有目标。在 Devin 聊天框输入']) assert.ok(script.includes(text), text);
+  assert.ok(script.includes("el('historyTitle').hidden=!(state.history||[]).length"), 'the history heading is hidden when there are no archived goals');
+  // Status lines and the empty state must carry the shared 12px block spacing,
+  // exactly like a goal card, instead of sitting flush against the toolbar.
+  assert.ok(script.includes("empty.className='hint mt'"), 'the empty state keeps the standard block spacing');
+  const html = goalHtml('n');
+  assert.match(html, /id="historyTitle" class="mt"/);
+  for (const id of ['storeError', 'corrupt', 'error', 'notice']) {
+    assert.match(html, new RegExp(`id="${id}" class="[^"]*\\bmt\\b`), `${id} keeps the standard block spacing`);
+  }
+});
+
 test('the goal html declares a strict CSP nonce and parses as a script', () => {
   const html = goalHtml('abc123');
   assert.match(html, /default-src 'none'/);
   assert.match(html, /script-src 'nonce-abc123'/);
   new vm.Script(html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]);
   assert.equal(html.includes('innerHTML'), false);
+  assert.equal(goalScript().includes('innerHTML'), false);
 });
 
 test('the goal UI registers its command, posts state on ready, and dispatches controller calls', async () => {

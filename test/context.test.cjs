@@ -167,6 +167,31 @@ test('context webview handles hostile strings as text and zero as real usage', (
   assert.match(contextHtml('abc'), /default-src 'none'/);
   new vm.Script(contextHtml('abc').match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]);
 });
+test('the context webview hides metric sections and explains the empty state', () => {
+  class Element {
+    constructor() { this.children = []; this.value = ''; this.attributes = {}; this.listeners = {}; }
+    append(...children) { this.children.push(...children); if (!this.value) this.value = children[0].value; }
+    replaceChildren() { this.children = []; this.value = ''; }
+    getAttribute(key) { return this.attributes[key]; }
+    setAttribute(key, value) { this.attributes[key] = value; }
+    addEventListener(key, fn) { this.listeners[key] = fn; }
+  }
+  const elements = new Map(); const get = key => { if (!elements.has(key)) elements.set(key, new Element()); return elements.get(key); };
+  let receive;
+  vm.runInNewContext(contextScript(), { acquireVsCodeApi: () => ({ postMessage() {} }), document: { getElementById: get, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } } });
+  receive({ data: { type: 'context', items: [{ sessionId: '', rows: [], request: [] }], enabled: true } });
+  assert.equal(get('empty').hidden, false);
+  assert.equal(get('context').hidden, true);
+  assert.equal(get('request').hidden, true);
+  assert.equal(get('sessions').hidden, true);
+  assert.match(get('empty').textContent, /还没有可观察的会话/);
+  receive({ data: { type: 'context', items: [{ sessionId: '', rows: [], request: [] }], enabled: false } });
+  assert.match(get('empty').textContent, /插件已停用/);
+  const html = contextHtml('n');
+  for (const needle of ['id="contextTitle"', 'id="requestTitle"', 'class="tiles"', 'id="empty"']) assert.ok(html.includes(needle), needle);
+  for (const gone of ['class="grid"', 'class="metric"']) assert.ok(!html.includes(gone), gone);
+});
+
 test('context selection stays stable across updates and drives both panel and statusbar', () => {
   let open, receive, enabled = true, shows = 0, hides = 0;
   let sessions = ['a', 'b'].map((sessionId, index) => ({ sessionId, modelUid: 'm', subagents: [], lead: { used: index * 50, size: 100, timestampMs: 1 } }));
