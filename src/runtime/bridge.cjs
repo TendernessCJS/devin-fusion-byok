@@ -24,9 +24,31 @@ async function collect(stream, limit = 64 * 1024 * 1024) {
   for await (const chunk of stream) { length += chunk.length; if (length > limit) throw new Error('Message too large'); chunks.push(chunk); }
   return Buffer.concat(chunks, length);
 }
-function forward(request, response, target, { body, getCatalog, log = () => {}, onFusionStatus, onNativeModels } = {}) {
+function forward(request, response, target, { body, getCatalog, log = () => {}, onFusionStatus, onNativeModels, timeouts = {} } = {}) {
+  const limits = { connect: 10000, headers: 120000, body: 120000 };
+  for (const [key, name] of [[timeouts.connectMs, 'connect'], [timeouts.firstResponseMs, 'headers'], [timeouts.idleMs, 'body']]) {
+    if (Number.isInteger(key) && key > 0 && key <= 2147483647) limits[name] = key;
+  }
+  const secure = target.protocol === 'https:';
+  let connectTimer, headersTimer, bodyTimer, connectSocket, connectListener, stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    clearTimeout(connectTimer); clearTimeout(headersTimer); clearTimeout(bodyTimer);
+    if (connectSocket && connectListener) {
+      connectSocket.removeListener('connect', connectListener);
+      connectSocket.removeListener('secureConnect', connectListener);
+    }
+  };
+  const armBody = () => {
+    if (stopped) return;
+    clearTimeout(bodyTimer);
+    bodyTimer = setTimeout(() => timedOut('body'), limits.body);
+  };
+  const timedOut = phase => { try { log('forward-timeout', { phase }); } catch {} fail(); };
   let incoming;
   const fail = () => {
+    stop();
     incoming?.destroy();
     outbound.destroy();
     if (response.destroyed || response.writableEnded) return;
@@ -39,11 +61,18 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
     headers['content-length'] = String(body.length);
     delete headers['transfer-encoding'];
   }
-  const outbound = (target.protocol === 'https:' ? https : http).request(target, { method: request.method, headers }, async upstream => {
+  const outbound = (secure ? https : http).request(target, { method: request.method, headers }, async upstream => {
+    if (stopped) { upstream.destroy(); return; }
     incoming = upstream;
+    clearTimeout(connectTimer); clearTimeout(headersTimer);
+    armBody();
+    upstream.on('data', armBody);
+    upstream.on('pause', () => { if (response.writableNeedDrain) clearTimeout(bodyTimer); });
+    upstream.on('resume', armBody);
+    upstream.on('end', () => clearTimeout(bodyTimer));
     upstream.on('error', fail);
     upstream.on('aborted', fail);
-    upstream.on('close', () => { if (!upstream.complete) fail(); });
+    upstream.on('close', () => { stop(); if (!upstream.complete) fail(); });
     if (!CATALOG.test(target.pathname) || upstream.statusCode !== 200 || !getCatalog) {
       response.writeHead(upstream.statusCode, { ...upstream.headers, ...cors(request) }); upstream.pipe(response); return;
     }
@@ -64,11 +93,21 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
       response.writeHead(upstream.statusCode, outgoingHeaders); response.end(outgoing);
     } catch { fail(); }
   });
+  outbound.on('socket', socket => {
+    if (stopped) { socket.destroy?.(); return; }
+    connectSocket = socket;
+    connectListener = () => { connectListener = null; clearTimeout(connectTimer); };
+    const established = socket.connecting === false && (secure ? socket.authorized === true || outbound.reusedSocket === true : true);
+    if (established) connectListener();
+    else socket.once(secure ? 'secureConnect' : 'connect', connectListener);
+  });
   outbound.on('error', fail);
   request.on('error', fail);
   request.on('aborted', fail);
   response.on('error', fail);
-  response.on('close', () => { if (!response.writableFinished) { incoming?.destroy(); outbound.destroy(); } });
+  response.on('close', () => { stop(); if (!response.writableFinished) { incoming?.destroy(); outbound.destroy(); } });
+  connectTimer = setTimeout(() => timedOut('connect'), limits.connect);
+  headersTimer = setTimeout(() => timedOut('headers'), limits.headers);
   if (body !== undefined) outbound.end(body); else request.pipe(outbound);
 }
 async function createLsBridge(originalPort, options) {

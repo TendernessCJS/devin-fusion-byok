@@ -36,8 +36,9 @@ function releaseInfo(value) {
   const installable = !!asset && asset.browser_download_url === url && /^sha256:[a-f0-9]{64}$/.test(asset.digest) && Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= MAX;
   return { version, name, url, page: `${PAGE}/tag/${value.tag_name}`, digest: installable ? asset.digest.slice(7) : null, size: installable ? asset.size : null, installable, notes: typeof value.body === 'string' ? value.body.slice(0, 6000) : '' };
 }
-async function requestBytes(url, { limit, signal, fetchImpl = fetch, timeout = 30000, proxy = null }) {
+async function requestBytes(url, { limit, signal, fetchImpl, timeout = 30000, proxy = null }) {
   if (proxy) return require('./proxy.cjs').proxyRequestBytes(url, { proxy, limit, signal, timeout });
+  fetchImpl ??= require('./proxy.cjs').directFetch;
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });

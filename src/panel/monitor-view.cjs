@@ -4,18 +4,22 @@ const COLUMNS = [['开始时间'], ['模型／档位'], ['状态'], ['用量', t
   ['首输出 s', true], ['正文首字 s', true], ['正文 TPS', true], ['请求吞吐 TPS', true], ['总耗时 s'], ['会话关联', true]];
 function monitorMarkup() {
   const head = COLUMNS.map(([label, extra]) => `<th${extra ? ' class="extra"' : ''}>${label}</th>`).join('');
-  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><div id="monitor-summary" class="tiles"></div><div class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div></div>`;
+  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><div id="monitor-summary" class="tiles"></div><div class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
 }
 function monitorScript() {
   return `
   (() => {
-    let snapshot = null;
+    const PAGE_SIZE = 100;
+    let snapshot = null, page = 0, rowsSignature = '', summarySignature = '';
     const root = document.getElementById('usage-monitor');
     const selector = document.getElementById('monitor-session');
     const status = document.getElementById('monitor-status');
     const summary = document.getElementById('monitor-summary');
     const rows = document.getElementById('monitor-requests');
     const detail = document.getElementById('monitor-detail');
+    const prev = document.getElementById('monitor-prev');
+    const next = document.getElementById('monitor-next');
+    const pageLabel = document.getElementById('monitor-page');
     const EXTRA = ${JSON.stringify(COLUMNS.map(([, extra]) => !!extra))};
     const format = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
     const metricFormat = (key, value) => key.endsWith('Ms') && typeof value === 'number' && Number.isFinite(value) ? (value / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) : format(value);
@@ -42,26 +46,44 @@ function monitorScript() {
     }
     function render() {
       syncSelectorTitle();
-      summary.replaceChildren(); rows.replaceChildren();
-      if (!snapshot) return;
-      const selected = selector.value === 'all' ? snapshot : snapshot.sessions.find(s => (s.sessionId || '__unassigned__') === selector.value);
-      if (!selected) return;
-      const s = selected.summary;
-      summary.append(tile(format(s.requests), '请求' + (s.error ? ' · 失败 ' + s.error : '') + (s.cancelled ? ' · 取消 ' + s.cancelled : ''), '成功 ' + s.success + ' · 失败 ' + s.error + ' · 取消 ' + s.cancelled));
-      for (const [key, label, basic] of METRICS) {
-        if (!basic && !detail.checked) continue;
-        const metric = s[key];
-        summary.append(tile(metricFormat(key, metric?.value), label, '基于 ' + (metric?.reported ?? metric?.samples ?? 0) + '/' + s.requests + ' 次请求'));
+      const selected = snapshot ? (selector.value === 'all' ? snapshot : snapshot.sessions.find(s => (s.sessionId || '__unassigned__') === selector.value)) : null;
+      const s = selected?.summary;
+      const summaryKey = s ? detail.checked + '|' + JSON.stringify(s) : '';
+      if (summaryKey !== summarySignature) {
+        summarySignature = summaryKey;
+        summary.replaceChildren();
+        if (s) {
+          summary.append(tile(format(s.requests), '请求' + (s.error ? ' · 失败 ' + s.error : '') + (s.cancelled ? ' · 取消 ' + s.cancelled : ''), '成功 ' + s.success + ' · 失败 ' + s.error + ' · 取消 ' + s.cancelled));
+          for (const [key, label, basic] of METRICS) {
+            if (!basic && !detail.checked) continue;
+            const metric = s[key];
+            summary.append(tile(metricFormat(key, metric?.value), label, '基于 ' + (metric?.reported ?? metric?.samples ?? 0) + '/' + s.requests + ' 次请求'));
+          }
+        }
       }
-      for (const r of selected.records) {
-        const row = document.createElement('tr');
-        const values = [r.startedAt, r.model + (r.effort ? ' / ' + r.effort : ''), stateName(r.status), usageName(r.usageState), ...FIELDS.map(k => metricFormat(k, r[k])), attribution(r.attribution)];
-        values.forEach((value, index) => { const cell = document.createElement('td'); if (EXTRA[index]) cell.className = 'extra'; cell.textContent = value; row.append(cell); });
-        row.title = '请求 ID：' + r.id + (r.code ? ' · ' + r.code : ''); rows.append(row);
+      const totalPages = selected ? Math.max(1, Math.ceil(selected.records.length / PAGE_SIZE)) : 1;
+      if (page >= totalPages) page = totalPages - 1;
+      if (page < 0) page = 0;
+      const pageRecords = selected ? selected.records.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE) : [];
+      const rowsKey = page + '|' + JSON.stringify(pageRecords);
+      if (rowsKey !== rowsSignature) {
+        rowsSignature = rowsKey;
+        rows.replaceChildren();
+        for (const r of pageRecords) {
+          const row = document.createElement('tr');
+          const values = [r.startedAt, r.model + (r.effort ? ' / ' + r.effort : ''), stateName(r.status), usageName(r.usageState), ...FIELDS.map(k => metricFormat(k, r[k])), attribution(r.attribution)];
+          values.forEach((value, index) => { const cell = document.createElement('td'); if (EXTRA[index]) cell.className = 'extra'; cell.textContent = value; row.append(cell); });
+          row.title = '请求 ID：' + r.id + (r.code ? ' · ' + r.code : ''); rows.append(row);
+        }
+        if (!pageRecords.length) { const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = EXTRA.length; cell.className = 'hint'; cell.textContent = '还没有请求记录。'; row.append(cell); rows.append(row); }
       }
-      if (!selected.records.length) { const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = EXTRA.length; cell.className = 'hint'; cell.textContent = '还没有请求记录。'; row.append(cell); rows.append(row); }
+      pageLabel.textContent = selected ? '第 ' + (page + 1) + ' / ' + totalPages + ' 页 · 共 ' + selected.records.length + ' 条' : '';
+      prev.disabled = !selected || page === 0;
+      next.disabled = !selected || page >= totalPages - 1;
     }
-    selector.addEventListener('change', render);
+    selector.addEventListener('change', () => { page = 0; render(); });
+    prev.addEventListener('click', () => { page--; render(); });
+    next.addEventListener('click', () => { page++; render(); });
     detail.addEventListener('change', () => { root.classList.toggle('detailed', detail.checked); render(); });
     document.getElementById('monitor-refresh').addEventListener('click', () => vscode.postMessage({ id: 'monitor-refresh', type: 'monitor.refresh' }));
     window.addEventListener('message', event => {

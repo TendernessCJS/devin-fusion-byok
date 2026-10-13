@@ -50,6 +50,8 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 - 用户可见文案（面板、错误消息、README、命令标题）用中文；代码注释用英文。
 - 面向供应商的发现与推理请求必须带 `redirect: 'error'`，避免密钥和对话被重定向到其他地址。
 - 写用户设置（`devin.acp.agentEnv` / `devin.acp.agentPreferences`）必须走 `src/lifecycle/owned-settings.cjs` 的 receipt 流程，且 key 需在 `permitted()` 白名单内，保证可回滚。不要直接写 `settings.json`。
+- 服务商错误自动继续的连续预算是 **5 次自动重试 / 10 分钟窗口**；触顶必须停止、结算等待中的请求并提示用户。待办无进展停止规则与 Goal 的预算独立，不能互相绕过。
+- 监控 `record()` 仅同步更新内存，落盘走串行异步队列；测试依赖持久化时等待 `flush()` / `snapshot()` / `close()`。内存保留 5000 条，正常磁盘日志到 5250 条时压缩；读取或写入异常时不得用部分内存覆盖原日志。backend 排水必须等待响应与处理器结束、刷完日志，再释放端口。
 
 ## 架构边界
 
@@ -76,7 +78,7 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 - 资产必须带 GitHub 自动计算的 `digest`（`sha256:` + 64 位十六进制）且大小 ≤ 50 MiB，否则 `installable=false`，面板只提供「打开发布页面」。
 - 插件内 `package.json` 的 `version` 必须严格小于 Release 版本才会提示更新，发布前记得 bump。
 - 一键安装仅在 macOS 且 `<appRoot>/bin/devin-desktop` 存在时可用（`createUpdateHost` 里的 `supported` 判断）；其他情况 `canInstall=false`，只能手动下载 vsix。
-- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经 `src/proxy.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。**不要改成读 `http.proxy` 设置或 `HTTPS_PROXY`/`http_proxy`/`ALL_PROXY` 环境变量**——那会全局生效，把内网 HTTPS 地址也送去代理。**也不要依赖扩展宿主被打过补丁的 `fetch`**：Devin 启动时会把 `globalThis.fetch` 换成 `@vscode/proxy-agent` 的代理感知版本（读 VS Code 的 `http.proxy` / `http.noProxy`，`http.proxySupport` 默认 `override`），那也是全局的，同样会波及内网地址——更新路径必须走 `src/proxy.cjs` 自己的 CONNECT 隧道。（这些约束只针对**插件运行时代码**；开发者在终端跑 git/gh 命令时按「本机网络路径」一节处理，两者不冲突。）验收方法见 `.devin/skills/release/SKILL.md`。
+- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经 `src/proxy.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。**不要改成读 `http.proxy` 设置或 `HTTPS_PROXY`/`http_proxy`/`ALL_PROXY` 环境变量**——那会全局生效，把内网 HTTPS 地址也送去代理。**也不要依赖扩展宿主被打过补丁的 `fetch`**：Devin 启动时会把 `globalThis.fetch` 换成 `@vscode/proxy-agent` 的代理感知版本（读 VS Code 的 `http.proxy` / `http.noProxy`，`http.proxySupport` 默认 `override`），那也是全局的，同样会波及内网地址——配置 `updateProxy` 时走 `src/proxy.cjs` 的 CONNECT 隧道；未配置代理的更新与模型发现走其 `directFetch`，使用独立 Agent，不依赖宿主全局 `fetch` 或全局 Agent。（这些约束只针对**插件运行时代码**；开发者在终端跑 git/gh 命令时按「本机网络路径」一节处理，两者不冲突。）验收方法见 `.devin/skills/release/SKILL.md`。
 
 ## fork 同步与发布
 
@@ -122,21 +124,28 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 
 | 文件 | 差异 |
 | --- | --- |
-| `src/update.cjs` | `REPOSITORY` 改为 `TendernessCJS/devin-fusion-byok`；导出 `PAGE`；`requestBytes` 增加 `proxy` 参数（走 `src/proxy.cjs`），`createUpdater` 增加 `proxy` getter |
+| `src/update.cjs` | `REPOSITORY` 改为 `TendernessCJS/devin-fusion-byok`；导出 `PAGE`；`requestBytes` 支持 `proxy`，无代理时默认 `directFetch`；`createUpdater` 增加 `proxy` getter |
 | `test/update.test.cjs` | 使用导出的 `PAGE`，不再硬编码仓库 URL；含代理相关用例 |
 | `README.md` | 顶部 fork 声明；Releases 链接指向本 fork；保留上游作者署名 |
 | `package.json` | 新增 `repository` 字段；`version` 由本 fork 自管，merge 时取 ours |
 | `AGENTS.md` | 本 fork 新增（upstream 无），项目约定与 fork 同步规则 |
 | `.devin/skills/release/SKILL.md` | 本 fork 新增（upstream 无），发布与自更新验收流程 |
-| `src/proxy.cjs` | 本 fork 新增（upstream 无），自更新的自带 CONNECT 代理；只被 `src/update.cjs` 的更新路径调用 |
-| `test/proxy.test.cjs` | 本 fork 新增（upstream 无），代理与隧道测试 |
+| `src/proxy.cjs` | 本 fork 新增（upstream 无），更新的 CONNECT 代理与独立 Agent 直连 GET；CONNECT 仅用于更新，`directFetch` 用于模型发现与未配代理的更新；握手早关、压缩流、取消与 TLS 校验均有回归测试 |
+| `test/proxy.test.cjs` | 本 fork 新增（upstream 无），覆盖代理、直连、解压、取消、IPv6 与 TLS 安全边界 |
 | `src/runtime/retry.cjs` | 本 fork 新增（upstream 无），连接层一次性重试；只被 `native-models.cjs` 与 `monitor-client.cjs` 使用 |
 | `src/runtime/app-restart.cjs` | 「重启 Devin」的存活探测由 `pgrep` 改为 `ps -Ao comm=`：macOS `pgrep` 跳过调用者自身的祖先进程，而 helper 必然在 app 进程树内，因此原本永远看不到主进程（表现为只关闭不重启） |
 | `test/app-restart.test.cjs` | 覆盖新探测方式：合成 app 复现 `pgrep` 祖先盲区、并验证 app 退出后才重新拉起 |
-| `src/runtime/monitor.cjs` | 归属查询改为**失败隔离**：`tool_call_state` 分支（走覆盖索引）为权威、失败才报 `unavailable`；查 `message_nodes` 的 `json_extract` 分支无索引、实测在 6.6 GB 库上需约 9.8 秒（越过 8000 ms 超时），降级为 1500 ms 上限的尽力补充，超时被吞掉。新增 `sessionLabels()` 取会话标题与最近活动时间（只进快照，不落盘） |
+| `src/runtime/monitor.cjs` | 归属查询保留失败隔离：索引 tool-id 为权威，message-id 补充分支保留 1500 ms 上限；完整标题与活动时间只进快照；异步追加、每额外 250 条压缩、失败保护原日志、`flush()` / `close()` 等待落盘 |
 | `src/runtime/monitor-client.cjs` | `sessionOf()` 白名单放行 `title` / `lastActivityAt`（漏登记会被静默剥离） |
-| `src/panel/monitor-view.cjs` | 用量面板会话下拉显示「标题 · 相对时间」，不再显示内部 slug 与 `输出 ID 确认` / `本次工具 ID 确认` 等噪音标签 |
-| `test/monitor.test.cjs`、`test/monitor-panel.test.cjs` | 覆盖上述：失败隔离（缺 `message_nodes` 不拖垮归属、权威失败仍 `unavailable`）、标题穿透白名单、下拉文案 |
+| `src/panel/monitor-view.cjs` | 会话下拉显示标题与相对时间、完整 tooltip；请求表每页 100 条，汇总仍覆盖全部保留记录；不变快照不重建表格和指标节点 |
+| `test/monitor.test.cjs`、`test/monitor-panel.test.cjs` | 覆盖归属失败隔离、完整标题与白名单、异步存储/关闭/错误保护、分页与节点复用，以及控制器 state 投递失败重传 |
+| `src/config.cjs`、`test/config.test.cjs` | 模型发现使用独立 Agent 的 `directFetch`；显式 request 注入测试；不依赖宿主 fetch 或全局 Agent |
+| `src/extension.cjs`、`test/extension-lifecycle.test.cjs` | 错误自动继续达到预算后显示中文警告，安全处理提示 Promise |
+| `src/runtime/auto-continue.cjs`、`test/auto-continue.test.cjs` | 连续错误最多自动重试 5 次、窗口 10 分钟；停止时结算并清理，回调不能影响新回合 |
+| `src/runtime/backend.cjs`、`test/backend.test.cjs` | 关闭前同时等待响应与处理器结束，再刷监控队列、最后释放端口；源码身份包含 `proxy.cjs` |
+| `src/runtime/bridge.cjs`、`test/bridge.test.cjs` | 转发增加连接 10 秒、响应头 120 秒、流空闲 120 秒超时；无流总时长限制，取消/错误清理计时 |
+| `src/panel/controller.cjs` | state 成功投递后才去重；发送串行化，ready 强制同步，旧面板不得污染新缓存 |
+| `src/panel/view.cjs` | 会话选择器单行省略与监控分页布局 |
 
 ## 待办与死角
 

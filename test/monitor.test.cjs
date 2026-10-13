@@ -183,6 +183,20 @@ test('session labels order newest first, tolerate missing rows and survive looku
   assert.equal(fallback.sessions[0].lastActivityAt, null);
 });
 
+test('long session titles pass through snapshot and publicSnapshot untruncated', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-longtitle-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const db = path.join(root, 'sessions.db');
+  const longTitle = '长'.repeat(150) + '末尾标记';
+  execFileSync('/usr/bin/sqlite3', [db, `CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE message_nodes(session_id TEXT,chat_message TEXT); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO sessions VALUES('session-long','${longTitle}',300); INSERT INTO message_nodes VALUES('session-long','{"message_id":"r-long"}');`]);
+  const monitor = createMonitor({ root, databasePath: db });
+  monitor.record({ id: 'r-long', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.sessions[0].title, longTitle);
+  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  assert.equal(publicSnapshot(snapshot).sessions[0].title, longTitle);
+});
+
 test('publicSnapshot carries session titles through the whitelist and still strips unknown fields', () => {
   const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
   const snapshot = publicSnapshot({ version: 1, status: 'ready', summary: { requests: 1 }, records: [],
@@ -190,4 +204,241 @@ test('publicSnapshot carries session titles through the whitelist and still stri
   assert.equal(snapshot.sessions[0].title, '标题');
   assert.equal(snapshot.sessions[0].lastActivityAt, 42);
   assert.equal(snapshot.sessions[0].secret, undefined);
+});
+
+function seedRecords(file, count, prefix = 'seed') {
+  const lines = [];
+  for (let i = 0; i < count; i++) lines.push(JSON.stringify({ id: `${prefix}-${i}`, startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' }));
+  fs.writeFileSync(file, lines.join('\n') + '\n', { mode: 0o600 });
+}
+
+test('record persists asynchronously through a serialized queue without synchronous writes', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-async-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  seedRecords(file, 5000);
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  const syncWrites = [];
+  const originalWrite = fs.writeFileSync, originalAppend = fs.appendFileSync;
+  fs.writeFileSync = (...args) => { syncWrites.push(args[0]); return originalWrite(...args); };
+  fs.appendFileSync = (...args) => { syncWrites.push(args[0]); return originalAppend(...args); };
+  try {
+    monitor.record({ id: 'new-1', startedAt: '2026-01-02T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+    monitor.record({ id: 'new-2', startedAt: '2026-01-03T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+    assert.equal(syncWrites.length, 0, 'record() must not use synchronous fs writes');
+    await monitor.flush();
+  } finally { fs.writeFileSync = originalWrite; fs.appendFileSync = originalAppend; }
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 5002, 'the two records were appended, not rewritten');
+  assert.equal(JSON.parse(lines.at(-1)).id, 'new-2');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(syncWrites.length, 0);
+  await monitor.close();
+});
+
+test('the on-disk log compacts once per 250 records beyond the limit', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-compact-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  seedRecords(file, 5249);
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  monitor.record({ id: 'over', startedAt: '2026-01-02T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await monitor.flush();
+  let lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 5000, 'crossing 5250 projected lines compacts back to the limit');
+  assert.equal(JSON.parse(lines.at(-1)).id, 'over');
+  assert.equal(JSON.parse(lines[0]).id, 'seed-250', 'the newest 5000 entries are kept');
+  monitor.record({ id: 'after-1', startedAt: '2026-01-03T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  monitor.record({ id: 'after-2', startedAt: '2026-01-04T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await monitor.flush();
+  lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 5002, 'plain appends resume after a compaction');
+  assert.equal(JSON.parse(lines.at(-1)).id, 'after-2');
+  assert.equal(JSON.parse(lines[0]).id, 'seed-250');
+  await monitor.close();
+});
+
+test('close writes exactly the in-memory tail, is idempotent and ignores later records', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-close-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  seedRecords(file, 5100);
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  monitor.record({ id: 'tail-1', startedAt: '2026-01-02T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  monitor.record({ id: 'tail-2', startedAt: '2026-01-03T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  const first = monitor.close();
+  assert.equal(monitor.close(), first, 'repeated close returns the same promise');
+  await first;
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 5000, 'close compacts to exactly the retained tail');
+  assert.equal(JSON.parse(lines.at(-1)).id, 'tail-2');
+  monitor.record({ id: 'too-late', startedAt: '2026-01-04T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await monitor.flush();
+  assert.equal(fs.readFileSync(file, 'utf8').trim().split('\n').length, 5000, 'records after close are ignored');
+  assert.equal((await monitor.snapshot()).summary.requests, 5000);
+  const reloaded = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  const snapshot = await reloaded.snapshot();
+  assert.equal(snapshot.summary.requests, 5000);
+  const ids = new Set(snapshot.records.map(r => r.id));
+  assert.equal(ids.has('tail-1'), true);
+  assert.equal(ids.has('tail-2'), true);
+  assert.equal(ids.size, snapshot.records.length, 'no duplicates after restart');
+  await reloaded.close();
+});
+
+test('async persistence failures mark storageError without losing the file or in-memory records', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-fail-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  seedRecords(file, 3);
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  const originalAppend = fs.promises.appendFile;
+  fs.promises.appendFile = () => Promise.reject(new Error('disk full'));
+  try {
+    monitor.record({ id: 'unwritten', startedAt: '2026-01-02T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+    await monitor.flush();
+  } finally { fs.promises.appendFile = originalAppend; }
+  assert.equal(fs.readFileSync(file, 'utf8').trim().split('\n').length, 3, 'the existing log stays intact');
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.storageError, true, 'the async failure is not hidden');
+  assert.equal(snapshot.status, 'degraded');
+  assert.equal(snapshot.summary.requests, 4, 'the record survives in memory even though the write failed');
+  assert.equal(snapshot.records.some(r => r.id === 'unwritten'), true);
+  await monitor.close();
+});
+
+test('a failed compaction cleans its temp file and keeps the original log', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-compactfail-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  seedRecords(file, 5249);
+  const before = fs.readFileSync(file, 'utf8');
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  const originalRename = fs.promises.rename;
+  fs.promises.rename = () => Promise.reject(new Error('cross-device'));
+  try {
+    monitor.record({ id: 'triggers-compact', startedAt: '2026-01-02T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+    await monitor.flush();
+  } finally { fs.promises.rename = originalRename; }
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'the original log is untouched when rename fails');
+  assert.deepEqual(fs.readdirSync(root).filter(name => name.endsWith('.tmp')), [], 'the temp file is cleaned up');
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.storageError, true);
+  assert.equal(snapshot.status, 'degraded');
+  await monitor.close();
+});
+
+test('a failed load preserves the existing log and blocks all later persistence', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-loadfail-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  seedRecords(file, 3);
+  const before = fs.readFileSync(file, 'utf8');
+  const original = fs.readFileSync;
+  fs.readFileSync = (...args) => { if (String(args[0]).endsWith('monitor.jsonl')) throw new Error('io'); return original(...args); };
+  let monitor;
+  try { monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') }); }
+  finally { fs.readFileSync = original; }
+  monitor.record({ id: 'post-fail', startedAt: '2026-01-02T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await monitor.flush();
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'no append may run after a failed load');
+  await monitor.close();
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'close must not overwrite an unreadable log');
+  assert.equal((await monitor.snapshot()).storageError, true);
+});
+
+test('a malformed line inside an otherwise readable log disables compaction but keeps appending', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-malformed-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  seedRecords(file, 2);
+  fs.writeFileSync(file, 'BROKEN-LINE\n' + fs.readFileSync(file, 'utf8'), { mode: 0o600 });
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  monitor.record({ id: 'appended', startedAt: '2026-01-02T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await monitor.flush();
+  const grown = fs.readFileSync(file, 'utf8');
+  assert.equal(grown.trim().split('\n').length, 4, 'ordinary appends still work with a sticky storageError');
+  assert.ok(grown.startsWith('BROKEN-LINE\n'));
+  await monitor.close();
+  assert.equal(fs.readFileSync(file, 'utf8'), grown, 'close must not rewrite a log it cannot fully trust');
+  assert.equal((await monitor.snapshot()).storageError, true);
+});
+
+test('a compaction queued behind a failed append never replaces the original log', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-gate-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  seedRecords(file, 5248);
+  const before = fs.readFileSync(file, 'utf8');
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  const original = fs.promises.appendFile;
+  fs.promises.appendFile = () => Promise.reject(new Error('disk full'));
+  try {
+    monitor.record({ id: 'fails', startedAt: '2026-01-02T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+    monitor.record({ id: 'would-compact', startedAt: '2026-01-03T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+    await monitor.flush();
+  } finally { fs.promises.appendFile = original; }
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'the queued compaction must not write over a degraded log');
+  await monitor.close();
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'close also refuses compaction under a sticky storageError');
+  assert.equal((await monitor.snapshot()).storageError, true);
+});
+
+test('a foreign file at the generated tmp name is never removed, and a healthy close within the limit performs no rewrite', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-tmpname-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  seedRecords(file, 5249);
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  let captured;
+  const original = fs.promises.open;
+  fs.promises.open = async target => {
+    captured = String(target);
+    fs.writeFileSync(captured, 'foreign-content');
+    throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+  };
+  try {
+    monitor.record({ id: 'triggers-compact', startedAt: '2026-01-02T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+    await monitor.flush();
+  } finally { fs.promises.open = original; }
+  assert.ok(captured, 'compaction attempted through fs.promises.open');
+  assert.equal(fs.readFileSync(captured, 'utf8'), 'foreign-content', 'a path the job did not create must survive');
+  assert.equal((await monitor.snapshot()).storageError, true);
+
+  const healthy = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-idle-'));
+  t.after(() => fs.rmSync(healthy, { recursive: true, force: true }));
+  const healthyFile = path.join(healthy, 'monitor.jsonl');
+  seedRecords(healthyFile, 100);
+  const healthyMonitor = createMonitor({ root: healthy, databasePath: path.join(healthy, 'none.db') });
+  await healthyMonitor.flush();
+  let renames = 0;
+  const originalRename = fs.promises.rename;
+  fs.promises.rename = (...args) => { renames++; return originalRename(...args); };
+  const beforeIdle = fs.readFileSync(healthyFile, 'utf8');
+  try { await healthyMonitor.close(); } finally { fs.promises.rename = originalRename; }
+  assert.equal(renames, 0, 'nothing to compact when the log already equals the in-memory tail');
+  assert.equal(fs.readFileSync(healthyFile, 'utf8'), beforeIdle);
+});
+
+test('a threshold record under a sticky storageError is still appended, never compacted over', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-fallback-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  seedRecords(file, 5249);
+  fs.writeFileSync(file, 'BROKEN-LINE\n' + fs.readFileSync(file, 'utf8'), { mode: 0o600 });
+  const before = fs.readFileSync(file, 'utf8');
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
+  monitor.record({ id: 'across', startedAt: '2026-01-02T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await monitor.flush();
+  const grown = fs.readFileSync(file, 'utf8');
+  assert.ok(grown.startsWith(before), 'the degraded log is never rewritten');
+  const lines = grown.trim().split('\n');
+  assert.equal(lines.length, 5251, 'the threshold-crossing record is appended instead of dropped');
+  assert.equal(JSON.parse(lines.at(-1)).id, 'across');
+  monitor.record({ id: 'still-appending', startedAt: '2026-01-03T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await monitor.flush();
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8').trim().split('\n').at(-1)).id, 'still-appending');
+  assert.equal((await monitor.snapshot()).storageError, true);
+  await monitor.close();
+  assert.ok(fs.readFileSync(file, 'utf8').startsWith(before), 'close keeps the degraded log untouched');
 });

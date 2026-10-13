@@ -17,12 +17,18 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
   };
   let disposed = false;
   let lastState;
-  const postState = async (target, state) => {
-    if (target !== panel) return false;
-    const encoded = JSON.stringify(state);
-    if (encoded === lastState) return true;
-    lastState = encoded;
-    return target.webview.postMessage({ type: 'state', state });
+  let stateQueue = Promise.resolve();
+  const postState = (target, state, { force = false } = {}) => {
+    const job = stateQueue.then(async () => {
+      if (disposed || target !== panel) return false;
+      const encoded = JSON.stringify(state);
+      if (!force && encoded === lastState) return true;
+      const delivered = await target.webview.postMessage({ type: 'state', state });
+      if (delivered && !disposed && target === panel) lastState = encoded;
+      return delivered;
+    });
+    stateQueue = job.then(() => {}, () => {});
+    return job;
   };
   const publishUpdates = () => panel && updater ? panel.webview.postMessage({ type: 'update-state', state: updater.snapshot() }) : undefined;
   const publish = () => panel ? postState(panel, manager.state()) : undefined;
@@ -82,7 +88,7 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
           return;
         }
         const state = await manager.dispatch(message.type, message.payload);
-        await postState(current, state);
+        await postState(current, state, { force: message.type === 'ready' });
         await current.webview.postMessage({ type: 'result', id: message.id, ok: true });
       } catch (error) {
         const text = error instanceof PanelInputError ? error.message : safeError(error).message;

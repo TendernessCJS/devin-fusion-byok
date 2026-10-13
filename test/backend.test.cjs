@@ -305,3 +305,153 @@ test('officially paired and standalone native Sidekicks assign declared harnesse
   const disabled = observed.map(item => item.uid === 'swe-odd' ? { ...item, disabled: true } : item);
   assert.equal(Object.values(buildCatalog(f.config, disabled).fusions).some(fusion => fusion.sidekickUid === 'swe-odd'), false);
 });
+
+test('backend close waits for the monitor write queue to drain', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-monitor-close-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  let releaseClose, monitorClosed = false;
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout,
+    require(name) {
+      if (name === './monitor.cjs') return { createMonitor: () => ({
+        record() {},
+        async snapshot() { return {}; },
+        close() { monitorClosed = true; return new Promise(resolve => { releaseClose = resolve; }); },
+      }) };
+      return realRequire(name);
+    },
+  }, { filename });
+  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  t.after(async () => { releaseClose?.(); await backend.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  let resolved = false;
+  const closing = backend.close().then(() => { resolved = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(monitorClosed, true);
+  assert.equal(resolved, false, 'close must not resolve before the monitor queue drains');
+  releaseClose();
+  await closing;
+  assert.equal(resolved, true);
+  await backend.stopped;
+});
+
+test('close drains in-flight RPCs, keeps health during the monitor flush, then releases the port', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-drain-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  const held = [];
+  let releaseMonitor, monitorCloseStarted = false;
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout,
+    require(name) {
+      if (name === './monitor.cjs') return { createMonitor: () => ({
+        record() {},
+        async snapshot() { return {}; },
+        close() { monitorCloseStarted = true; return new Promise(resolve => { releaseMonitor = resolve; }); },
+      }) };
+      if (name === './bridge.cjs') return { collect, async forward(req, res) { held.push(res); } };
+      return realRequire(name);
+    },
+  }, { filename });
+  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  const base = 'http://127.0.0.1:' + backend.port;
+  const health = () => fetch(base + '/health').then(r => r.json());
+  t.after(async () => {
+    for (const res of held) res.end();
+    for (let i = 0; i < 200 && !releaseMonitor; i++) await new Promise(resolve => setImmediate(resolve));
+    releaseMonitor?.();
+    await Promise.race([backend.close(), new Promise(resolve => setTimeout(resolve, 1000))]);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const inflight = fetch(base + API + 'GetChatMessage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelUid: 'unknown-model', messages: [] }) });
+  for (let i = 0; i < 100 && !held.length; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(held.length, 1, 'the forwarded RPC is held in flight');
+  assert.equal((await health()).activeRequests, 1);
+
+  let resolved = false;
+  const closing = backend.close().then(() => { resolved = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(monitorCloseStarted, false, 'the monitor flush must wait for in-flight RPCs to finish');
+  assert.equal(resolved, false);
+
+  const duringDrain = await health();
+  assert.equal(duringDrain.draining, true, 'health stays available and reports draining');
+  assert.equal((await fetch(base + API + 'GetChatMessage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelUid: 'unknown-model', messages: [] }) })).status, 503, 'new RPCs are refused while draining');
+
+  held[0].end('done');
+  await inflight;
+  for (let i = 0; i < 200 && !monitorCloseStarted; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(monitorCloseStarted, true, 'monitor flush starts once requests drain');
+  assert.equal(resolved, false, 'close still waits for the monitor queue');
+  const duringFlush = await health();
+  assert.equal(duringFlush.draining, true, 'health stays reachable while the monitor flushes');
+
+  releaseMonitor();
+  const outcome = await Promise.race([closing.then(() => 'closed'), new Promise(resolve => setTimeout(() => resolve('hung'), 2000))]);
+  assert.equal(outcome, 'closed');
+  assert.equal(resolved, true);
+  await backend.stopped;
+  await assert.rejects(fetch(base + '/health'), 'the port is released after the flush completes');
+  assert.equal(fs.existsSync(actualBackend.controlFile(root)), false);
+});
+
+test('close waits for both the client response and the serveChat handler so late metrics land', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-dual-drain-'));
+  const config = { providers: [{ id: 'test', name: 'Test', models: [{ id: 'model', label: 'Model' }] }], sidekicks: [] };
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
+  const own = Object.keys(buildCatalog(config).routes)[0];
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  const events = [];
+  let entered = false, releaseHandler;
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout,
+    require(name) {
+      if (name === './monitor.cjs') return { createMonitor: () => ({
+        record(data) { events.push('record'); assert.equal(events.includes('monitor-close'), false, 'late metrics must arrive before the monitor closes'); },
+        async snapshot() { return {}; },
+        close() { events.push('monitor-close'); return Promise.resolve(); },
+      }) };
+      if (name === '../protocol/responses.cjs') return { serveChat: async ({ res, onMetrics }) => {
+        entered = true;
+        await new Promise(resolve => { releaseHandler = resolve; });
+        onMetrics({ id: 'late-1', startedAt: '2026-01-01T00:00:00Z', status: 'cancelled', model: 'm', providerId: 'p' });
+        res.end('done');
+      } };
+      return realRequire(name);
+    },
+  }, { filename });
+  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  const base = 'http://127.0.0.1:' + backend.port;
+  t.after(async () => { releaseHandler?.(); await Promise.race([backend.close(), new Promise(r => setTimeout(r, 1000))]); fs.rmSync(root, { recursive: true, force: true }); });
+  const abort = new AbortController();
+  const inflight = fetch(base + API + 'GetChatMessage', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ modelUid: own, messages: [{ role: 'user', content: 'hi' }] }), signal: abort.signal });
+  inflight.catch(() => {});
+  for (let i = 0; i < 200 && !entered; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(entered, true, 'serveChat entered and holds its gate');
+  abort.abort();
+  for (let i = 0; i < 50; i++) await new Promise(resolve => setImmediate(resolve));
+  const closing = backend.close();
+  let closed = false;
+  closing.then(() => { closed = true; });
+  for (let i = 0; i < 50; i++) await new Promise(resolve => setImmediate(resolve));
+  const health = await fetch(base + '/health').then(r => r.json());
+  assert.equal(health.activeRequests, 1, 'a finished response alone must not drain the request while the handler still runs');
+  assert.equal(events.includes('monitor-close'), false, 'monitor flush must not start while a handler is unfinished');
+  assert.equal(closed, false);
+  releaseHandler();
+  const outcome = await Promise.race([closing.then(() => 'closed'), new Promise(r => setTimeout(() => r('hung'), 2000))]);
+  assert.equal(outcome, 'closed');
+  assert.deepEqual(events, ['record', 'monitor-close'], 'the cancelled request still records metrics before the monitor closes');
+  await backend.stopped;
+});

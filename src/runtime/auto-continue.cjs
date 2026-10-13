@@ -23,6 +23,9 @@ function matchesTerminalBlocker(text) {
   return TERMINAL_BLOCKER_RE.test(trimmed);
 }
 
+const ERROR_ATTEMPT_LIMIT = 5;
+const ERROR_WINDOW_MS = 10 * 60 * 1000;
+
 const RESET_METHODS = new Set([
   'session/cancel',
   'session/load',
@@ -39,7 +42,7 @@ function restore(target, key, wrapper, descriptor) {
   else delete target[key];
 }
 
-function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptions = () => ({ onProviderError: true, untilPlanComplete: false }), log = () => {}, scheduler, isSessionSuppressed } = {}) {
+function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptions = () => ({ onProviderError: true, untilPlanComplete: false }), log = () => {}, scheduler, isSessionSuppressed, now = Date.now, onStopped = () => {} } = {}) {
   if (typeof nativeMainPath !== 'string' || !nativeMainPath) {
     throw new TypeError('nativeMainPath is required');
   }
@@ -129,6 +132,21 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
       }
     }
 
+    function stopErrorRetry(sessionId, turn, reason) {
+      cancelSessionTimer(sessionId);
+      if (entry.sessions.get(sessionId) !== turn) return;
+      turn.retryDisallowed = true;
+      const data = { reason, attempts: turn.errorAttempts };
+      if (turn.deferred && !turn.deferred.settled && turn.lastResult) {
+        turn.deferred.settled = true;
+        if (turn.lastResult.isReject) turn.deferred.reject(turn.lastResult.value);
+        else turn.deferred.resolve(turn.lastResult.value);
+      }
+      entry.sessions.delete(sessionId);
+      report('auto-continue-stopped', data);
+      try { Promise.resolve(onStopped(data)).catch(() => {}); } catch {}
+    }
+
     function checkHasPendingPlan(turn) {
       if (!turn?.plans || turn.plans.size === 0) return false;
       for (const plan of turn.plans.values()) {
@@ -152,6 +170,14 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
     function scheduleAuto(sessionId, turn, reason = 'error') {
       cancelSessionTimer(sessionId);
       turn.scheduledReason = reason;
+      if (reason === 'error') {
+        turn.errorStartedAt ??= now();
+        if (turn.errorAttempts >= ERROR_ATTEMPT_LIMIT) { stopErrorRetry(sessionId, turn, 'error-attempt-limit'); return; }
+        if (now() >= turn.errorStartedAt + ERROR_WINDOW_MS) { stopErrorRetry(sessionId, turn, 'error-time-limit'); return; }
+      } else {
+        turn.errorAttempts = 0;
+        turn.errorStartedAt = null;
+      }
       const attempts = turn.attempts || 0;
       const safePow = Math.min(attempts, 10);
       const delay = Math.min(2000 * Math.pow(2, safePow), 30000);
@@ -163,6 +189,10 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
         if (disposed || !entry.active || !isEnabled() || sessionSuppressed(sessionId)) return;
         const currentTurn = entry.sessions.get(sessionId);
         if (!currentTurn || currentTurn.generation !== generation || currentTurn.retryDisallowed) return;
+        if (reason === 'error') {
+          if (currentTurn.errorAttempts >= ERROR_ATTEMPT_LIMIT) { stopErrorRetry(sessionId, currentTurn, 'error-attempt-limit'); return; }
+          if (now() >= currentTurn.errorStartedAt + ERROR_WINDOW_MS) { stopErrorRetry(sessionId, currentTurn, 'error-time-limit'); return; }
+        }
         executeAuto(sessionId, attempts, currentTurn);
       }, delay);
 
@@ -170,6 +200,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
     }
 
     function executeAuto(sessionId, attempts, activeTurn) {
+      const reason = activeTurn.scheduledReason;
       const clientMessageId = randomUUID();
       const timestamp = new Date().toISOString();
       const isV2 = (connector.protocolVersion >= 2) || !!activeTurn.isV2;
@@ -229,6 +260,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
 
       try {
         Promise.resolve(entry.sendRequestWrapper.call(connector, promptRequest, token)).catch(() => report('auto-continue-send-error'));
+        if (reason === 'error') activeTurn.errorAttempts++;
       } catch (err) {
         report('auto-continue-send-error');
         if (activeTurn.deferred && !activeTurn.deferred.settled) {
@@ -590,6 +622,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             manualTurn = {
               generation: ++entry.turnGeneration,
               attempts: 0,
+              errorAttempts: 0,
+              errorStartedAt: null,
               tail: '',
               messageId: null,
               isV2,

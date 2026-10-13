@@ -3,7 +3,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFile } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const LIMIT = 5000;
+const COMPACT_AT = LIMIT + 250;
 const token = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const timing = value => Number.isFinite(value) && value >= 0 ? value : null;
 const identifier = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/.test(value) ? value : null;
@@ -191,7 +193,7 @@ async function sessionLabels(databasePath, ids) {
   for (const row of Array.isArray(rows) ? rows : []) {
     if (!identifier(row.id)) continue;
     const trimmed = typeof row.title === 'string' ? row.title.trim() : '';
-    labels.set(row.id, { title: trimmed ? trimmed.slice(0, 120) : null,
+    labels.set(row.id, { title: trimmed || null,
       lastActivityAt: Number.isSafeInteger(row.last_activity_at) ? row.last_activity_at : null });
   }
   return labels;
@@ -218,34 +220,83 @@ function associate(records, rows) {
 function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/share/devin/cli/sessions.db') }) {
   const file = path.join(root, 'monitor.jsonl');
   let records = [], storageError = false, pending = null, cached = null, cachedAt = 0, revision = 0;
+  let projectedCount = 0, loadFailed = false;
   try {
     if (fs.existsSync(file)) {
       if (fs.statSync(file).size > 32 * 1024 * 1024) throw new Error('monitor_size');
       for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
         if (!line) continue;
+        projectedCount++;
         try { const record = normalize(JSON.parse(line)); if (record) records.push(record); else storageError = true; } catch { storageError = true; }
       }
       records = [...new Map(records.map(r => [r.id, r])).values()].slice(-LIMIT);
     }
-  } catch { storageError = true; }
+  } catch { storageError = true; loadFailed = true; }
+  let queue = Promise.resolve(), closed = false, closing = null;
+  const enqueue = job => {
+    if (loadFailed) return queue;
+    queue = queue.then(job).catch(() => { storageError = true; });
+    return queue;
+  };
+  const compact = (snapshotRecords, fallbackLine) => enqueue(async () => {
+    if (storageError) {
+      if (fallbackLine === undefined) return;
+      await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
+      await fs.promises.appendFile(file, fallbackLine, { mode: 0o600 });
+      return;
+    }
+    await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
+    const temporary = file + '.' + randomUUID() + '.tmp';
+    let handle, created = false;
+    try {
+      handle = await fs.promises.open(temporary, 'wx', 0o600);
+      created = true;
+      await handle.writeFile(snapshotRecords.map(r => JSON.stringify(r)).join('\n') + '\n');
+      await handle.close();
+      handle = null;
+      await fs.promises.rename(temporary, file);
+    } catch (error) {
+      if (handle) await handle.close().catch(() => {});
+      if (created) await fs.promises.rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    }
+  });
   function record(data) {
+    if (closed) return;
     const value = normalize(data);
     if (!value || records.some(r => r.id === value.id)) return;
     records.push(value); records = records.slice(-LIMIT); revision++;
-    try {
-      fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-      if (records.length === LIMIT) {
-        const temporary = file + '.tmp';
-        fs.writeFileSync(temporary, records.map(r => JSON.stringify(r)).join('\n') + '\n', { mode: 0o600 });
-        fs.renameSync(temporary, file);
-      } else fs.appendFileSync(file, JSON.stringify(value) + '\n', { mode: 0o600 });
-    } catch { storageError = true; }
+    const line = JSON.stringify(value) + '\n';
+    projectedCount++;
+    if (projectedCount < COMPACT_AT) {
+      enqueue(async () => {
+        await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
+        await fs.promises.appendFile(file, line, { mode: 0o600 });
+      });
+    } else {
+      compact(records.slice(), line);
+      projectedCount = LIMIT;
+    }
+  }
+  function flush() { return queue; }
+  function close() {
+    if (closing) return closing;
+    closed = true;
+    closing = (async () => {
+      await queue;
+      if (!storageError && projectedCount > records.length) {
+        await compact(records.slice());
+        projectedCount = records.length;
+      }
+    })();
+    return closing;
   }
   async function snapshot() {
     if (pending) return pending;
-    if (cached && Date.now() - cachedAt < 15000 && cached.revision === revision) return cached.value;
+    if (cached && Date.now() - cachedAt < 15000 && cached.revision === revision && cached.value.storageError === storageError) return cached.value;
     const current = records.slice(), currentRevision = revision;
     pending = (async () => {
+      await queue;
       let rows = [], sessionStatus = 'ready';
       try { rows = await sessionMatches(databasePath, current.map(r => r.id), [...new Set(current.flatMap(r => r.toolIds || []))]); }
       catch { sessionStatus = 'unavailable'; }
@@ -275,6 +326,6 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
     })().finally(() => { pending = null; });
     return pending;
   }
-  return { record, snapshot, close() {} };
+  return { record, snapshot, flush, close };
 }
 module.exports = { createMonitor, createTracker, usageOf, semanticOutput, summarize, associate };

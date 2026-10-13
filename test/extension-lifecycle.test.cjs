@@ -22,7 +22,7 @@ function fixture(t, initial = {}) {
   const globals = { agentEnv: { 'devin-cli': { KEEP: 'user-value' } }, agentPreferences: { 'devin-cli': { model: 'native-max', effort: 'high' } }, ...initial.globals };
   const state = new Map(Object.entries(initial.state || {})), commands = new Map(), logs = [], notices = [], watchers = [], preferenceListeners = [];
   const updates = [], bridges = [];
-  let disposed = 0, installed = 0, managerOptions;
+  let disposed = 0, installed = 0, managerOptions, autoContinueOptions, warningResult;
   const settings = {
     inspect: key => ({ globalValue: globals[key] }),
     get: () => { throw new Error('Merged workspace settings must not be copied into global settings'); },
@@ -37,6 +37,7 @@ function fixture(t, initial = {}) {
     window: {
       createOutputChannel: () => ({ appendLine: value => logs.push(value), show() {}, dispose() {} }),
       showInformationMessage: text => notices.push(text), showErrorMessage: text => notices.push(text),
+      showWarningMessage: text => { notices.push(text); return warningResult; },
       showQuickPick: async choices => choices[0],
     },
   };
@@ -61,6 +62,9 @@ function fixture(t, initial = {}) {
     './catalog.cjs': { normalizeFusionConfig: config => config, buildCatalog: config => ({ models: config.providers?.length ? ['own'] : [],
       fusions: config.providers?.length ? { 'fusion-dfbyok-selected': { label: 'CPA Fusion' }, 'fusion-dfbyok-another': { label: 'CPA Fusion Alt' } } : {} }) },
     './runtime/native-models.cjs': { readNativeModels: options => nativeRead(options) },
+    './runtime/goal-continue.cjs': { installGoalContinue: () => null },
+    './runtime/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
+      return { status: () => ({}), reset() {}, cancelSession: () => false, dispose() {} }; } },
     './runtime/backend.cjs': { runtimeIdentity: () => identity, controlFile: actualBackend.controlFile, PORT: 39842, MANAGEMENT_PROTOCOL: 1 },
     './runtime/bridge.cjs': { createLsBridge: async (_port, options) => { bridges.push(options); return { port: 4567, close() {} }; } },
     './runtime/ls-injection.cjs': { installLsInjection: async options => {
@@ -83,10 +87,11 @@ function fixture(t, initial = {}) {
     globalState: { get: (key, fallback) => state.has(key) ? state.get(key) : fallback, update: async (key, value) => value === undefined ? state.delete(key) : state.set(key, value) } };
   t.after(async () => { await module.exports.deactivate(); context.subscriptions.forEach(value => value.dispose()); });
   return { ...module.exports, context, root, configFile, globals, state, commands, logs, notices, watchers, updates, bridges,
-    preferenceListeners, managerOptions: () => managerOptions, spawns,
+    preferenceListeners, managerOptions: () => managerOptions, spawns, autoContinueOptions: () => autoContinueOptions,
     setFetch: impl => { fetchImpl = impl; },
     setNativeRead: impl => { nativeRead = impl; },
     gateInjection: () => { let release; injectionGate = new Promise(resolve => { release = resolve; }); return release; },
+    setWarningResult: value => { warningResult = value; },
     firePreference: (key = 'devin.acp.agentPreferences') => Promise.all(preferenceListeners.map(fn => fn({ affectsConfiguration: name => name === key }))),
     settle: async (ticks = 20) => { for (let index = 0; index < ticks; index++) await next(); },
     counts: () => ({ installed, disposed }) };
@@ -414,4 +419,25 @@ test('late backend sync cannot publish after unload', async t => {
   release({ status: 'ready', models: [{ uid: 'late', label: 'Late', disabled: false, isModelRouter: false, harnessUids: [] }] });
   await f.settle();
   assert.equal(f.managerOptions().nativeModels().length, 0);
+});
+test('auto-continue exhaustion surfaces a Chinese warning without sensitive data', async t => {
+  const f = fixture(t); await f.activate(f.context);
+  const options = f.autoContinueOptions();
+  assert.equal(typeof options?.onStopped, 'function', 'the extension wires a stop callback');
+  options.onStopped({ reason: 'error-attempt-limit', attempts: 5 });
+  await f.settle();
+  const notice = f.notices.at(-1);
+  assert.match(notice, /自动继续/);
+  assert.match(notice, /手动继续/);
+  assert.doesNotMatch(notice, /s-cap|apiKey|token|标题/i);
+});
+test('the stop callback returns the warning promise so rejections stay contained by the caller', async t => {
+  const f = fixture(t);
+  f.setWarningResult(Promise.reject(new Error('toast failed')));
+  await f.activate(f.context);
+  const options = f.autoContinueOptions();
+  const result = options.onStopped({ reason: 'error-attempt-limit', attempts: 5 });
+  assert.ok(result instanceof Promise, 'the callback returns the warning promise rather than swallowing it');
+  await assert.rejects(result, /toast failed/);
+  assert.match(f.notices.at(-1), /自动继续/);
 });

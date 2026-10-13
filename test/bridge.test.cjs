@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const https = require('node:https');
 const zlib = require('node:zlib');
 const { createLsBridge, forward, collect } = require('../src/runtime/bridge.cjs');
 const { buildCatalog } = require('../src/catalog.cjs');
@@ -225,4 +226,296 @@ test('the first catalog response binds official Sidekick dimensions and unlocks 
   assert.deepEqual(emitted.modelFamilyMetadata.entries, []);
   assert.equal(emitted.label, 'gpt-5-6-luna-high');
   assert.match(emitted.modelInfo.modelFamilyUid, /^dfbyok-preset-family-/);
+});
+
+const settleWithin = (promise, ms = 2000) => {
+  let timer;
+  return Promise.race([
+    promise.then(value => { clearTimeout(timer); return { value }; }, error => { clearTimeout(timer); return { error }; }),
+    new Promise(resolve => { timer = setTimeout(() => resolve({ timeout: true }), ms); }),
+  ]);
+};
+
+test('forward abandons a connection that never completes the handshake', async t => {
+  const events = [];
+  const { EventEmitter } = require('node:events');
+  const fake = new EventEmitter();
+  fake.end = () => {}; fake.write = () => true; fake.destroy = () => fake.emit('close');
+  const original = http.request;
+  http.request = (target, options, callback) => target instanceof URL ? fake : original(target, options, callback);
+  try {
+    const bridge = await createLsBridge(9, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+      timeouts: { connectMs: 30, firstResponseMs: 5000, idleMs: 5000 } });
+    t.after(() => bridge.close());
+    const outcome = await settleWithin(request(bridge.port, LS + 'Heartbeat'));
+    assert.ok(!outcome.timeout, 'the request must not hang waiting for a stalled connection');
+    assert.equal(outcome.value.status, 502);
+    assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['connect']);
+  } finally { http.request = original; }
+});
+
+test('forward returns 502 when the upstream accepts but never sends headers', async t => {
+  const events = [];
+  const native = await listen((req, res) => { req.socket.on('close', () => res.destroy()); });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+    timeouts: { connectMs: 5000, firstResponseMs: 40, idleMs: 5000 } });
+  t.after(() => bridge.close());
+  const outcome = await settleWithin(request(bridge.port, LS + 'Heartbeat'));
+  assert.ok(!outcome.timeout, 'the request must not hang waiting for response headers');
+  assert.equal(outcome.value.status, 502);
+  assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['headers']);
+});
+
+test('forward destroys a stalled body stream after the idle budget without a total deadline', async t => {
+  const events = [];
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write('first-chunk');
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+    timeouts: { connectMs: 5000, firstResponseMs: 5000, idleMs: 40 } });
+  t.after(() => bridge.close());
+  const outcome = await settleWithin(request(bridge.port, LS + 'Heartbeat'));
+  assert.ok(!outcome.timeout, 'a stalled body must not hang the request');
+  assert.ok(outcome.error, 'the downstream connection is destroyed after the idle budget');
+  assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['body']);
+});
+
+test('forward lets a slow but steady stream exceed every total-duration budget', async t => {
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    let count = 0;
+    const timer = setInterval(() => {
+      res.write('chunk-' + count++);
+      if (count === 8) { clearInterval(timer); res.end('-end'); }
+    }, 40);
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: () => {},
+    timeouts: { connectMs: 5000, firstResponseMs: 5000, idleMs: 120 } });
+  t.after(() => bridge.close());
+  const response = await request(bridge.port, LS + 'Heartbeat');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.toString(), 'chunk-0chunk-1chunk-2chunk-3chunk-4chunk-5chunk-6chunk-7-end');
+});
+
+test('forward clears all timers and destroys upstream when the client cancels mid-body', async t => {
+  const events = [];
+  let upstreamSawClose = false;
+  const native = await listen((req, res) => {
+    res.socket.on('close', () => { upstreamSawClose = true; });
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write('start');
+    const interval = setInterval(() => res.write('more'), 20);
+    res.on('close', () => clearInterval(interval));
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+    timeouts: { connectMs: 5000, firstResponseMs: 5000, idleMs: 60 } });
+  t.after(() => bridge.close());
+  const client = http.request({ hostname: '127.0.0.1', port: bridge.port, method: 'POST', path: LS + 'Heartbeat' }, response => {
+    response.on('data', () => {});
+    response.once('data', () => client.destroy());
+  });
+  client.end();
+  for (let i = 0; i < 200 && !upstreamSawClose; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(upstreamSawClose, true, 'the upstream connection is destroyed when the client cancels');
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.deepEqual(events.filter(([event]) => event === 'forward-timeout'), [], 'no timer fires after cancellation');
+});
+
+test('forward only clears the TLS connect budget on secureConnect, not the TCP connect', async t => {
+  const events = [];
+  const { EventEmitter } = require('node:events');
+  const fakeSocket = new EventEmitter();
+  fakeSocket.connecting = true;
+  const fakeReq = new EventEmitter();
+  fakeReq.end = () => {}; fakeReq.write = () => true; fakeReq.destroy = () => {};
+  const original = https.request;
+  https.request = (target, options, callback) => {
+    process.nextTick(() => { fakeReq.emit('socket', fakeSocket); fakeSocket.emit('connect'); });
+    return fakeReq;
+  };
+  try {
+    const downstream = await listen((req, res) => forward(req, res, new URL('https://127.0.0.1:9/x'), {
+      getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+      timeouts: { connectMs: 40, firstResponseMs: 5000, idleMs: 5000 } }));
+    t.after(() => downstream.close());
+    const outcome = await settleWithin(request(downstream.port, '/x'));
+    assert.ok(!outcome.timeout);
+    assert.equal(outcome.value.status, 502);
+    assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['connect'],
+      'a bare TCP connect on a TLS socket must not consume the connect budget');
+  } finally { https.request = original; }
+});
+
+test('the headers budget starts at request creation, not at socket connect', async t => {
+  const events = [];
+  const { EventEmitter } = require('node:events');
+  const fakeSocket = new EventEmitter();
+  fakeSocket.connecting = true;
+  const fakeReq = new EventEmitter();
+  fakeReq.end = () => {}; fakeReq.write = () => true; fakeReq.destroy = () => {};
+  const original = http.request;
+  http.request = (target, options, callback) => {
+    if (!(target instanceof URL)) return original(target, options, callback);
+    process.nextTick(() => fakeReq.emit('socket', fakeSocket));
+    setTimeout(() => fakeSocket.emit('connect'), 40);
+    return fakeReq;
+  };
+  try {
+    const downstream = await listen((req, res) => forward(req, res, new URL('http://127.0.0.1:9/x'), {
+      getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+      timeouts: { connectMs: 5000, firstResponseMs: 70, idleMs: 5000 } }));
+    t.after(() => downstream.close());
+    const started = Date.now();
+    const outcome = await settleWithin(request(downstream.port, '/x'));
+    assert.ok(!outcome.timeout);
+    assert.equal(outcome.value.status, 502);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 105, `headers budget is counted from request start (elapsed ${elapsed}ms), not connect + 70ms`);
+    assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['headers']);
+  } finally { http.request = original; }
+});
+
+test('a socket connect arriving after cancellation cannot resurrect timers', async t => {
+  const events = [];
+  const { EventEmitter } = require('node:events');
+  const fakeSocket = new EventEmitter();
+  fakeSocket.connecting = true;
+  const fakeReq = new EventEmitter();
+  fakeReq.end = () => {}; fakeReq.write = () => true; fakeReq.destroy = () => {};
+  const original = http.request;
+  http.request = (target, options, callback) => {
+    if (!(target instanceof URL)) return original(target, options, callback);
+    process.nextTick(() => fakeReq.emit('socket', fakeSocket));
+    setTimeout(() => fakeSocket.emit('connect'), 120);
+    return fakeReq;
+  };
+  try {
+    const downstream = await listen((req, res) => forward(req, res, new URL('http://127.0.0.1:9/x'), {
+      getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+      timeouts: { connectMs: 5000, firstResponseMs: 60, idleMs: 60 } }));
+    t.after(() => downstream.close());
+    const client = http.request({ hostname: '127.0.0.1', port: downstream.port, method: 'POST', path: '/x' });
+    client.on('error', () => {});
+    client.end();
+    setTimeout(() => client.destroy(), 40);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.deepEqual(events.filter(([event]) => event === 'forward-timeout'), [],
+      'a late socket connect after the downstream cancel must not arm any timer');
+  } finally { http.request = original; }
+});
+
+test('a stalled buffered catalog response also hits the body idle budget', async t => {
+  const events = [];
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.write('{"partial":');
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+    timeouts: { connectMs: 5000, firstResponseMs: 5000, idleMs: 40 } });
+  t.after(() => bridge.close());
+  const outcome = await settleWithin(request(bridge.port, LS + 'GetCliModelConfigs'));
+  assert.ok(!outcome.timeout);
+  assert.equal(outcome.value.status, 502, 'the buffered branch replies 502 because headers were never sent');
+  assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['body']);
+});
+
+test('an established but unsecured TLS socket keeps waiting for secureConnect', async t => {
+  const events = [];
+  const { EventEmitter } = require('node:events');
+  const fakeSocket = new EventEmitter();
+  fakeSocket.connecting = false;
+  fakeSocket.authorized = false;
+  fakeSocket.encrypted = true;
+  const fakeReq = new EventEmitter();
+  fakeReq.end = () => {}; fakeReq.write = () => true; fakeReq.destroy = () => {};
+  const original = https.request;
+  https.request = (target, options, callback) => {
+    process.nextTick(() => fakeReq.emit('socket', fakeSocket));
+    return fakeReq;
+  };
+  try {
+    const downstream = await listen((req, res) => forward(req, res, new URL('https://127.0.0.1:9/x'), {
+      getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+      timeouts: { connectMs: 40, firstResponseMs: 5000, idleMs: 5000 } }));
+    t.after(() => downstream.close());
+    const outcome = await settleWithin(request(downstream.port, '/x'));
+    assert.ok(!outcome.timeout);
+    assert.equal(outcome.value.status, 502);
+    assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['connect'],
+      'connecting===false alone must not prove a TLS channel is secured');
+  } finally { https.request = original; }
+});
+
+test('late socket response and data events after cancellation resurrect nothing', async t => {
+  const events = [];
+  const { EventEmitter } = require('node:events');
+  let responseCb;
+  const fakeSocket = new EventEmitter();
+  fakeSocket.connecting = false;
+  const fakeReq = new EventEmitter();
+  fakeReq.end = () => {}; fakeReq.write = () => true; fakeReq.destroy = () => {};
+  const fakeRes = new EventEmitter();
+  let resDestroyed = 0;
+  fakeRes.destroy = () => { resDestroyed++; };
+  const original = http.request;
+  http.request = (target, options, callback) => {
+    if (!(target instanceof URL)) return original(target, options, callback);
+    responseCb = callback;
+    process.nextTick(() => fakeReq.emit('socket', fakeSocket));
+    return fakeReq;
+  };
+  try {
+    const downstream = await listen((req, res) => forward(req, res, new URL('http://127.0.0.1:9/x'), {
+      getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+      timeouts: { connectMs: 5000, firstResponseMs: 60, idleMs: 60 } }));
+    t.after(() => downstream.close());
+    const client = http.request({ hostname: '127.0.0.1', port: downstream.port, method: 'POST', path: '/x' });
+    client.on('error', () => {});
+    client.end();
+    setTimeout(() => client.destroy(), 40);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    const lateSocket = new EventEmitter();
+    lateSocket.connecting = true;
+    fakeReq.emit('socket', lateSocket);
+    assert.equal(lateSocket.listenerCount('connect'), 0, 'a socket arriving after stop is never armed');
+    responseCb(fakeRes);
+    assert.equal(resDestroyed, 1, 'an upstream response arriving after cancellation is destroyed');
+    fakeRes.emit('data', Buffer.from('late'));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.deepEqual(events.filter(([event]) => event === 'forward-timeout'), [],
+      'late events after the downstream cancel cannot arm any timer');
+  } finally { http.request = original; }
+});
+
+test('a genuinely reused socket still clears the connect budget immediately', async t => {
+  const events = [];
+  const { EventEmitter } = require('node:events');
+  const fakeSocket = new EventEmitter();
+  fakeSocket.connecting = false;
+  fakeSocket.authorized = true;
+  const fakeReq = new EventEmitter();
+  fakeReq.end = () => {}; fakeReq.write = () => true; fakeReq.destroy = () => {};
+  fakeReq.reusedSocket = true;
+  const original = https.request;
+  https.request = (target, options, callback) => {
+    process.nextTick(() => fakeReq.emit('socket', fakeSocket));
+    return fakeReq;
+  };
+  try {
+    const downstream = await listen((req, res) => forward(req, res, new URL('https://127.0.0.1:9/x'), {
+      getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+      timeouts: { connectMs: 40, firstResponseMs: 60, idleMs: 5000 } }));
+    t.after(() => downstream.close());
+    const outcome = await settleWithin(request(downstream.port, '/x'));
+    assert.ok(!outcome.timeout);
+    assert.equal(outcome.value.status, 502);
+    assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['headers'],
+      'an authorized reused TLS socket skips the connect budget and times out on headers instead');
+  } finally { https.request = original; }
 });

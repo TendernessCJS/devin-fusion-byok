@@ -136,3 +136,26 @@ test('update view is plain text and does not expose release payload as HTML', ()
   assert.match(updateMarkup(), /update-install/); assert.match(updateScript(), /textContent/); assert.doesNotMatch(updateScript(), /innerHTML/);
   assert.doesNotThrow(() => new Function('vscode', updateScript()));
 });
+
+test('requestBytes defaults to directFetch without touching the ambient fetch', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const { createRequire } = require('node:module');
+  const filename = path.resolve(__dirname, '../src/update.cjs');
+  const realRequire = createRequire(filename);
+  const calls = [];
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, AbortSignal, setTimeout, clearTimeout, Response, Headers,
+    require(name) {
+      if (name === './proxy.cjs') return { directFetch: async (url, options) => { calls.push({ url, redirect: options?.redirect }); return new Response('ok'); } };
+      return realRequire(name);
+    },
+  }, { filename });
+  const body = await module.exports.requestBytes('https://api.github.com/x', { limit: 10 });
+  assert.equal(body.toString(), 'ok');
+  assert.deepEqual(calls, [{ url: 'https://api.github.com/x', redirect: 'manual' }],
+    'the direct transport is the default; the sandbox has no ambient fetch at all');
+});

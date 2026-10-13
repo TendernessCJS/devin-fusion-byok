@@ -14,7 +14,7 @@ const VERSION = require('../../package.json').version;
 const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
 const SERVICE = 'devin-fusion-byok';
 const MANAGEMENT_PROTOCOL = 1;
-const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', 'monitor.cjs', '../config.cjs', '../catalog.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/chat.cjs', '../protocol/responses.cjs', '../protocol/anthropic.cjs'];
+const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', 'monitor.cjs', '../config.cjs', '../proxy.cjs', '../catalog.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/chat.cjs', '../protocol/responses.cjs', '../protocol/anthropic.cjs'];
 function sourceId() {
   const hash = crypto.createHash('sha256');
   for (const name of SOURCE_FILES) hash.update(name).update('\0').update(fs.readFileSync(path.resolve(__dirname, name))).update('\0');
@@ -43,6 +43,7 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
   let activeRequests = 0;
   let draining = false;
   let closing;
+  const drainedWaiters = [];
   let resolveStopped;
   const stopped = new Promise(resolve => { resolveStopped = resolve; });
   const configFile = path.join(root, 'config.json');
@@ -183,14 +184,19 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
       response.writeHead(404); response.end(); return;
     }
     activeRequests++;
-    let settled = false;
-    const settle = () => { if (!settled) { settled = true; activeRequests--; } };
-    response.once('finish', settle); response.once('close', settle);
+    let responseSettled = false, handlerSettled = false, settled = false;
+    const release = () => {
+      if (settled || !responseSettled || !handlerSettled) return;
+      settled = true; activeRequests--;
+      if (!activeRequests) while (drainedWaiters.length) drainedWaiters.shift()();
+    };
+    response.once('finish', () => { responseSettled = true; release(); });
+    response.once('close', () => { responseSettled = true; release(); });
     handle(request, response).catch(() => {
       log('request-error', { code: 'request_failed' });
       if (!response.headersSent) response.writeHead(502);
       response.end();
-    });
+    }).finally(() => { handlerSettled = true; release(); });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -202,16 +208,20 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
   function close() {
     if (closing) return closing;
     draining = true;
-    closing = new Promise(resolve => {
-      server.close(() => {
-        try {
-          if (JSON.parse(fs.readFileSync(stateFile, 'utf8')).instanceId === instanceId) fs.unlinkSync(stateFile);
-        } catch { /* Another runtime may already own the control file. */ }
-        monitor?.close();
-        resolveStopped(); resolve();
+    closing = (async () => {
+      if (activeRequests > 0) await new Promise(resolve => drainedWaiters.push(resolve));
+      try { await monitor?.close(); } catch {}
+      await new Promise(resolve => {
+        server.close(() => {
+          try {
+            if (JSON.parse(fs.readFileSync(stateFile, 'utf8')).instanceId === instanceId) fs.unlinkSync(stateFile);
+          } catch { /* Another runtime may already own the control file. */ }
+          resolve();
+        });
+        server.closeIdleConnections?.();
       });
-      server.closeIdleConnections?.();
-    });
+      resolveStopped();
+    })();
     return closing;
   }
   log('ready', { port: server.address().port, version: VERSION });

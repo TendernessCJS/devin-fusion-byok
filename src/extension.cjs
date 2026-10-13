@@ -165,6 +165,7 @@ async function activate(context) {
           untilPlanComplete: config().autoContinueUntilPlanComplete === true
         }),
         isSessionSuppressed: sessionId => goalController ? goalController.ownsSession(sessionId) : false,
+        onStopped: () => vscode.window.showWarningMessage('服务商持续返回错误，已停止自动继续（上限为 5 次或 10 分钟）。请检查服务商状态后手动继续对话。'),
         log
       });
     } else {
