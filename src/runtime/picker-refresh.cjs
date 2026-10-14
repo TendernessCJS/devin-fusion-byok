@@ -71,13 +71,16 @@ function createPickerRefresh({ executeCommand, readModels, log = () => {}, now =
       timer = schedule(() => { run().catch(() => {}); }, delay);
       return true;
     },
-    // External invalidation (e.g. a stale CLI cache was renamed aside) can fix
-    // the picker without changing the observed catalog signature, so a forced
-    // run bypasses the signature comparison of changed().
+    // External invalidation (e.g. a stale CLI cache was rewritten in place) can
+    // fix the picker without changing the observed catalog signature, so a
+    // forced run bypasses the signature comparison of changed(). It still
+    // shares the CLI-cache spacing: a burst of cache refreshes must not turn
+    // into a burst of ACP reloads.
     force() {
       if (disposed) return false;
       if (timer !== undefined) cancel(timer);
-      timer = schedule(() => { run().catch(() => {}); }, debounceMs);
+      const delay = Math.max(debounceMs, lastRun + cliCacheMs - now());
+      timer = schedule(() => { run().catch(() => {}); }, delay);
       return true;
     },
     dispose() { disposed = true; if (timer !== undefined) cancel(timer); timer = undefined; },

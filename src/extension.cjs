@@ -469,7 +469,14 @@ async function activate(context) {
       if (!expectedUids.length) return;
       const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids,
         augment: (payload, rpc) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current }) });
-      if (result.refreshed.length) { log('cli-cache-refreshed', { files: result.refreshed.length }); pickerRefresh.force(); }
+      if (result.refreshed.length) {
+        log('cli-cache-refreshed', { files: result.refreshed });
+        // Only the model_configs rewrite warrants an ACP reload: the CLI never
+        // re-fetches it on its own, while team_settings/user_status are
+        // re-issued by the CLI's own cadence and reach the picker without a
+        // disconnect.
+        if (result.refreshed.some(name => name.startsWith('model_configs'))) pickerRefresh.force();
+      }
       for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });
       for (const error of result.errors || []) log('cli-cache-write-error', { name: error.name, code: error.code });
     } catch { /* cache refresh is best-effort */ }
