@@ -3,7 +3,7 @@ const vscode = require('vscode');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { importLegacy, readConfig, writeConfig } = require('./config.cjs');
+const { defaultConfig, pruneRetiredKeys, readConfig, writeConfig } = require('./config.cjs');
 const { buildCatalog, migrateFusionConfig, augmentCatalog, staleFusionUids } = require('./catalog.cjs');
 const { createManager } = require('./panel/model.cjs');
 const { installLsInjection } = require('./runtime/ls-injection.cjs');
@@ -144,7 +144,7 @@ async function activate(context) {
   const log = (event, data) => output.appendLine(JSON.stringify({ time: new Date().toISOString(), event, ...(data || {}) }));
   const root = context.globalStorageUri.fsPath, configFile = path.join(root, 'config.json');
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  if (!fs.existsSync(configFile)) writeConfig(configFile, importLegacy());
+  if (!fs.existsSync(configFile)) writeConfig(configFile, defaultConfig());
   const config = () => readConfig(configFile);
   let autoContinue, goalContinue;
   const nativeMain = (() => {
@@ -228,6 +228,13 @@ async function activate(context) {
     } catch { log('config-migration-failed'); return false; }
   };
   migrateConfig();
+  const pruneConfig = () => {
+    try {
+      const current = config();
+      if (pruneRetiredKeys(current)) { writeConfig(configFile, current); log('config-pruned'); }
+    } catch { log('config-prune-failed'); }
+  };
+  pruneConfig();
   let nativeCatalogStatus = 'loading', syncPending, syncAbort, syncTimer;
   let acpObservationSeq = 0, acpOwnModels = 0;
   // Push the merged view to the backend so it serves (and whitelists) the same
@@ -405,10 +412,9 @@ async function activate(context) {
   } };
   const refresh = async () => {
     management.open();
-    vscode.window.showInformationMessage('请选择供应商，点击“选择模型导入”，勾选后确认导入。');
+    vscode.window.showInformationMessage('请选择供应商，点击「导入模型」，勾选要导入的模型后确认。');
   };
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.refreshModels', run(refresh)));
-  context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.configure', run(async () => management.open())));
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.openPanel', run(async () => management.open())));
   require('./fast-context/config-ui.cjs').registerFastContext({ vscode, context });
   const saveFusionChoice = async uid => {

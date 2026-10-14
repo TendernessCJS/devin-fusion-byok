@@ -44,10 +44,6 @@
         "title": "Fusion BYOK：控制面板"
       },
       {
-        "command": "devinFusionByok.configure",
-        "title": "Fusion BYOK：配置第三方 API"
-      },
-      {
         "command": "devinFusionByok.refreshModels",
         "title": "Fusion BYOK：选择模型导入"
       },

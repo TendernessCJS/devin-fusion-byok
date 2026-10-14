@@ -4,30 +4,26 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { importLegacy, discover } = require('../src/config.cjs');
+const { defaultConfig, pruneRetiredKeys, discover } = require('../src/config.cjs');
 
-const legacyModel = () => ({ id: 'legacy-model', name: 'Legacy Model', effortLevels: ['high'] });
-
-test('importLegacy assigns the 131072-token output default without reading the real home directory', t => {
-  const home = path.join(os.tmpdir(), 'fusion-byok-import-legacy-fixture');
-  const reads = [];
-  t.mock.method(os, 'homedir', () => home);
-  t.mock.method(fs, 'readFileSync', file => {
-    reads.push(file);
-    return JSON.stringify({ providers: [{ id: 'legacy', name: 'Legacy', baseUrl: 'https://legacy.invalid/v1/', apiKey: 'fixture-secret',
-      type: 'openai', models: [legacyModel()] }] });
-  });
-  const imported = importLegacy();
-  assert.deepEqual(reads, [path.join(home, '.cwindsurf/providers.json')]);
-  assert.equal(imported.providers[0].models[0].maxOutputTokens, 131072);
-  assert.equal(imported.providers[0].models[0].contextWindow, 272000);
-  assert.ok(!JSON.stringify(imported.providers[0].models[0]).includes('fixture-secret'));
+test('defaultConfig is a minimal enabled config without retired keys', () => {
+  assert.deepEqual(defaultConfig(), { enabled: true, providers: [] });
+  assert.ok(!Object.hasOwn(defaultConfig(), 'roleExclusions'));
+  assert.ok(!Object.hasOwn(defaultConfig(), 'sidekicks'));
 });
 
-test('importLegacy falls back to an empty provider list when the legacy file is unreadable', t => {
-  t.mock.method(os, 'homedir', () => path.join(os.tmpdir(), 'fusion-byok-missing-home'));
-  t.mock.method(fs, 'readFileSync', () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); });
-  assert.deepEqual(importLegacy().providers, []);
+test('pruneRetiredKeys removes retired keys but keeps presets and live role lists', () => {
+  const config = { enabled: true, providers: [], sidekicks: [{ providerId: 'cpa', model: 'x' }],
+    roleExclusions: { lead: [], sidekick: [] }, roleInclusions: { lead: [{ providerId: 'cpa', model: 'x' }] },
+    fusionPresets: [{ id: 'p1' }], defaultFusionUid: 'fusion-dfbyok-x', fusionMatrix: true };
+  assert.equal(pruneRetiredKeys(config), true);
+  assert.ok(!Object.hasOwn(config, 'sidekicks'));
+  assert.ok(!Object.hasOwn(config, 'roleExclusions'), 'empty role maps are pruned');
+  assert.ok(Object.hasOwn(config, 'roleInclusions'), 'non-empty role lists survive');
+  assert.ok(Object.hasOwn(config, 'fusionPresets') && Object.hasOwn(config, 'defaultFusionUid')
+    && Object.hasOwn(config, 'fusionMatrix'), 'preset keys belong to migrateFusionConfig');
+  assert.equal(pruneRetiredKeys({ enabled: true, providers: [] }), false, 'a clean config is untouched');
+  assert.equal(pruneRetiredKeys({ roleInclusions: 'garbage' }), true, 'non-map role values are pruned too');
 });
 
 test('discover defaults freshly seen models to 131072 output tokens and keeps saved values', async t => {

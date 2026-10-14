@@ -1156,11 +1156,12 @@ test('staleFusionUids reports only unemitted f32-less fusion uids in both payloa
   const official = cat(s(1, 'F3'), s(22, 'fusion-official-a-sidekick-b'), m(32, v(1, 1)));
   const plain = cat(s(1, 'P'), s(22, 'swe-2-max'));
   const flat = cat(m(1, ours), m(1, staleEntry), m(1, official), m(1, plain));
-  assert.deepEqual(staleFusionUids(flat, emitted), ['fusion-claude-x-sidekick-claude-y']);
+  assert.deepEqual(staleFusionUids(flat, { emitted, known: emitted }), ['fusion-claude-x-sidekick-claude-y']);
   const nested = cat(m(1, cat(s(1, 'status'), m(33, cat(m(1, staleEntry), m(1, official))))));
-  assert.deepEqual(staleFusionUids(nested, emitted), ['fusion-claude-x-sidekick-claude-y']);
-  assert.deepEqual(staleFusionUids(flat, new Set(['fusion-a-sidekick-b', 'fusion-claude-x-sidekick-claude-y'])), []);
-  assert.deepEqual(staleFusionUids(Buffer.from('garbage'), emitted), []);
+  assert.deepEqual(staleFusionUids(nested, { emitted, known: emitted }), ['fusion-claude-x-sidekick-claude-y']);
+  const both = new Set(['fusion-a-sidekick-b', 'fusion-claude-x-sidekick-claude-y']);
+  assert.deepEqual(staleFusionUids(flat, { emitted: both, known: both }), []);
+  assert.deepEqual(staleFusionUids(Buffer.from('garbage'), { emitted, known: emitted }), []);
 });
 
 test('informational dimensions omit order so the picker merges them with the official values', () => {
@@ -1204,7 +1205,31 @@ test('staleFusionUids keeps entries whose members are merely unselected', () => 
   assert.deepEqual(sorted(staleFusionUids(flat, { emitted, known, excluded: { lead: new Set(['lead']), sidekick: new Set() } })),
     sorted(['fusion-gone-sidekick-also-gone', 'fusion-dfbyok-old-digest-sidekick-swe-2-max', 'fusion-lead-sidekick-swe-2-high', 'fusion-lead-sidekick-swe-2-medium', 'fusion-sidekick-claude-haiku-5-5-medium']),
     'a lead exclusion only retires entries that use it as a lead');
-  // The legacy positional form keeps its historical "not emitted means stale".
-  assert.deepEqual(sorted(staleFusionUids(flat, emitted)), sorted(['fusion-dfbyok-old-digest-sidekick-swe-2-max', 'fusion-gone-sidekick-also-gone',
-    'fusion-lead-sidekick-swe-2-high', 'fusion-lead-sidekick-swe-2-medium', 'fusion-sidekick-claude-haiku-5-5-medium']));
+});
+
+test('staleFusionUids rejects non-object arguments loudly instead of deleting everything', () => {
+  const { staleFusionUids } = require('../src/catalog.cjs');
+  const flat = cat(m(1, cat(s(1, 'F'), s(22, 'fusion-a-sidekick-b'))));
+  for (const bad of [new Set(['fusion-a-sidekick-b']), ['fusion-a-sidekick-b'], null]) {
+    assert.throws(() => staleFusionUids(flat, bad), TypeError);
+  }
+  assert.throws(() => staleFusionUids(flat), TypeError, 'a missing options argument must not mean an empty catalog');
+});
+
+test('a throwing staleProbe is a safe no-op for refreshStaleCliCaches', () => {
+  const os = require('node:os'), nodePath = require('node:path');
+  const { refreshStaleCliCaches } = require('../src/runtime/cli-cache.cjs');
+  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'cli-cache-staleprobe-'));
+  const name = 'model_configs_v5.bbbbbbbbbbbbbbbb.bin';
+  const payload = Buffer.from('dfbyok-new-uid', 'utf8').toString('base64');
+  const file = nodePath.join(dir, name);
+  fs.writeFileSync(file, JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload }));
+  const before = fs.readFileSync(file);
+  const result = refreshStaleCliCaches({ dir, expectedUids: ['dfbyok-new-uid'],
+    staleProbe: () => { throw new TypeError('staleFusionUids requires { emitted, known, excluded }'); },
+    augment: p => p });
+  assert.equal(result.errors.length, 0, 'a failing probe never surfaces as a write error');
+  assert.deepEqual(result.refreshed, []);
+  assert.deepEqual(result.skipped, [], 'a throwing probe yields an empty stale list, so the file is never a candidate');
+  assert.deepEqual(fs.readFileSync(file), before, 'a wrongly-typed call can never wipe the cache');
 });

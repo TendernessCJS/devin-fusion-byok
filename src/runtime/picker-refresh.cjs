@@ -3,18 +3,19 @@
 // The model picker is fed by two answers the extension can only rewrite, not
 // push: the renderer catalog (GetUserStatus) and the CLI session options
 // (GetCliModelConfigs). To refresh them the extension must trigger Devin's own
-// re-fetch. The lightweight devin.reloadAcpConnections command (the native
-// extension uses it after auth changes) reloads the ACP registry — but it
-// drops every ACP connection (users see "ACP connection closed" plus a
-// conversation-area reload, and a window reload follows within ~30s), so the
-// production wiring passes lightCommands: [] and keeps correctness entirely on
-// the in-place CLI cache rewrite; new sessions read the fresh payload. The
-// command list stays injectable for tests and future lighter commands.
+// re-fetch — but it does NOT do so by default: the lightweight
+// devin.reloadAcpConnections command (the native extension uses it after auth
+// changes) drops every ACP connection (users see "ACP connection closed" plus
+// a conversation-area reload, and a window reload follows within ~30s), which
+// measured out at a dozen-plus disruptions per hour. Correctness rests
+// entirely on the in-place CLI cache rewrite — new sessions read the fresh
+// payload — so `lightCommands` defaults to [] and any caller that wants a
+// command driven refresh must opt in explicitly; it must never become a
+// default again.
 // Heavier paths that spawn a new conversation were removed: they fired on
 // every reload whenever no ACP session happened to appear inside the verify
 // window. A second refresh inside the CLI cache window would still see the
 // stale list, so the delay is kept.
-const LIGHT_COMMANDS = ['devin.reloadAcpConnections'];
 const DEBOUNCE_MS = 1500;
 const CLI_CACHE_MS = 65 * 1000;
 const VERIFY_TIMEOUT_MS = 8000;
@@ -27,7 +28,7 @@ function signatureOf(models) {
 
 function createPickerRefresh({ executeCommand, readModels, log = () => {}, now = Date.now,
   schedule = setTimeout, cancel = clearTimeout, debounceMs = DEBOUNCE_MS, cliCacheMs = CLI_CACHE_MS,
-  lightCommands = LIGHT_COMMANDS, observe, applied, verifyTimeoutMs = VERIFY_TIMEOUT_MS,
+  lightCommands = [], observe, applied, verifyTimeoutMs = VERIFY_TIMEOUT_MS,
   pollMs = VERIFY_POLL_MS, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   if (typeof executeCommand !== 'function' || typeof readModels !== 'function') throw new TypeError('executeCommand and readModels are required');
   let last, timer, lastRun = -Infinity, disposed = false;

@@ -7,6 +7,7 @@ function harness({ models = [{ uid: 'a', label: 'A' }], fail = [] } = {}) {
   let clock = 1000, current = models;
   const timers = [], commands = [], logs = [];
   const refresh = createPickerRefresh({
+    lightCommands: ['devin.reloadAcpConnections'],
     readModels: () => current,
     executeCommand: async command => { commands.push(command); if (fail.includes(command)) throw new Error('missing'); },
     log: (event, data) => logs.push({ event, ...data }),
@@ -91,6 +92,7 @@ function lightHarness({ models = [{ uid: 'a', label: 'A' }], fail = [], appliedR
   let clock = 1000, current = models, seq = observationSeq;
   const timers = [], commands = [], logs = [];
   const refresh = createPickerRefresh({
+    lightCommands: ['devin.reloadAcpConnections'],
     readModels: () => current,
     executeCommand: async command => {
       commands.push(command);
@@ -146,6 +148,7 @@ test('an unverified light command still terminates when the injected clock never
   let clock = 0, current = [{ uid: 'a' }];
   const commands = [], logs = [], timers = [];
   const refresh = createPickerRefresh({
+    lightCommands: ['devin.reloadAcpConnections'],
     readModels: () => current,
     executeCommand: async command => { commands.push(command); },
     log: (event, data) => logs.push({ event, ...data }),
@@ -184,6 +187,7 @@ test('disposing during verification stops further commands', async () => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   const refresh = createPickerRefresh({
+    lightCommands: ['devin.reloadAcpConnections'],
     readModels: () => current,
     executeCommand: async command => { commands.push(command); },
     log: () => {},
@@ -206,4 +210,24 @@ test('disposing during verification stops further commands', async () => {
   release();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(commands, ['devin.reloadAcpConnections'], 'no fallback command runs after dispose');
+});
+
+test('omitting lightCommands never fires a command even when the signature changes', async () => {
+  let clock = 1000, current = [{ uid: 'a' }];
+  const timers = [], commands = [], logs = [];
+  const refresh = createPickerRefresh({
+    readModels: () => current,
+    executeCommand: async command => { commands.push(command); },
+    log: (event, data) => logs.push({ event, ...data }),
+    now: () => clock,
+    schedule: (fn, ms) => { const timer = { fn, at: clock + ms, cancelled: false }; timers.push(timer); return timer; },
+    cancel: timer => { timer.cancelled = true; },
+  });
+  refresh.prime();
+  current = [{ uid: 'b' }];
+  refresh.changed();
+  for (const timer of timers.splice(0)) if (!timer.cancelled) { clock = Math.max(clock, timer.at); timer.fn(); }
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(commands.length, 0, 'no command fires without an explicit opt-in list');
+  assert.ok(!logs.some(entry => entry.event === 'picker-refresh'), 'no refresh attempt is logged');
 });

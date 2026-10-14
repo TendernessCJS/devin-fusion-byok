@@ -1222,14 +1222,17 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
 //     the BYOK uid digest changed with the configuration)
 //   - one of its sides was explicitly turned off for that role, because then it
 //     must stop feeding dimension values into the picker
-// Callers that pass a plain set keep the historical "not emitted means stale"
-// behaviour; callers with catalog knowledge should pass the object form.
+// Callers must pass the object form `{ emitted, known, excluded }`; the
+// historical positional set implied "not emitted means stale", which deleted
+// perfectly servable combinations. A wrong argument type throws TypeError
+// instead of degrading into "everything is stale".
 function staleFusionUids(data, options) {
-  const legacy = options instanceof Set || Array.isArray(options);
-  const emitted = legacy ? (options instanceof Set ? options : new Set(options || []))
-    : (options?.emitted instanceof Set ? options.emitted : new Set(options?.emitted || []));
-  const known = legacy ? emitted : (options?.known instanceof Set ? options.known : new Set(options?.known || []));
-  const excluded = legacy ? {} : (options?.excluded || {});
+  if (!options || typeof options !== 'object' || Array.isArray(options) || options instanceof Set) {
+    throw new TypeError('staleFusionUids requires { emitted, known, excluded }');
+  }
+  const emitted = options.emitted instanceof Set ? options.emitted : new Set(options.emitted || []);
+  const known = options.known instanceof Set ? options.known : new Set(options.known || []);
+  const excluded = options.excluded || {};
   const stale = [];
   const scan = buffer => {
     const uid = protoUid(buffer);

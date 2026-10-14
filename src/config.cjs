@@ -1,7 +1,6 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 const crypto = require('node:crypto');
 const { directFetch } = require('./proxy.cjs');
 
@@ -12,16 +11,22 @@ function writeConfig(file, config) {
   fs.writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600, flag: 'wx' });
   fs.renameSync(tmp, file);
 }
-function importLegacy() {
-  try {
-    const data = readConfig(path.join(os.homedir(), '.cwindsurf/providers.json'));
-    const providers = (Array.isArray(data) ? data : data.providers).filter(p => p.enabled !== false).map(p => ({
-      id: p.id, name: p.name, baseUrl: p.baseUrl.replace(/\/$/, ''), apiKey: p.apiKey,
-      apiFormat: p.type === 'openai-responses' ? 'openai-responses' : 'openai',
-      models: (p.models || []).map(m => ({ id: m.id, label: m.name || m.id, efforts: m.effortLevels || [], contextWindow: 272000, maxOutputTokens: 131072 }))
-    }));
-    return { enabled: true, providers, roleExclusions: { lead: [], sidekick: [] } };
-  } catch { return { enabled: true, providers: [], roleExclusions: { lead: [], sidekick: [] } }; }
+function defaultConfig() { return { enabled: true, providers: [] }; }
+// Drops keys retired by the Fusion preset migration. `sidekicks` and empty
+// role override maps are dead weight; `fusionPresets`/`defaultFusionUid`/
+// `fusionMatrix` are NOT pruned here — `migrateFusionConfig` still lifts saved
+// presets into roleInclusions, so deleting them early would lose user data.
+function pruneRetiredKeys(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return false;
+  let changed = false;
+  if (Object.hasOwn(config, 'sidekicks')) { delete config.sidekicks; changed = true; }
+  for (const key of ['roleExclusions', 'roleInclusions']) {
+    if (!Object.hasOwn(config, key)) continue;
+    const value = config[key];
+    const roles = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    if (!roles || Object.values(roles).every(list => !Array.isArray(list) || list.length === 0)) { delete config[key]; changed = true; }
+  }
+  return changed;
 }
 async function discover(provider, { request = directFetch } = {}) {
   const anthropic = provider.apiFormat === 'anthropic';
@@ -53,4 +58,4 @@ async function discover(provider, { request = directFetch } = {}) {
   });
   return provider.models.length;
 }
-module.exports = { readConfig, writeConfig, importLegacy, discover };
+module.exports = { readConfig, writeConfig, defaultConfig, pruneRetiredKeys, discover };

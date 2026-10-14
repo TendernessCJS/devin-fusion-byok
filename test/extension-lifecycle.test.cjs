@@ -61,7 +61,8 @@ function fixture(t, initial = {}) {
     './config.cjs': {
       readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
       writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)),
-      importLegacy: () => ({}), discover: async () => 2,
+      defaultConfig: realRequire('./config.cjs').defaultConfig,
+      pruneRetiredKeys: realRequire('./config.cjs').pruneRetiredKeys, discover: async () => 2,
     },
     './catalog.cjs': { migrateFusionConfig: () => false, staleFusionUids: () => [],
       buildCatalog: config => ({ models: config.providers?.length
@@ -222,6 +223,15 @@ test('a stale or absent remembered combination never replaces an official or mis
     await f.settle();
     assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-official');
   }
+});
+test('activation prunes retired config keys without touching preset keys', async t => {
+  const f = fixture(t, { config: { sidekicks: [], roleExclusions: { lead: [], sidekick: [] },
+    fusionPresets: [{ id: 'p1', name: 'P1' }] } });
+  await f.activate(f.context);
+  const written = JSON.parse(fs.readFileSync(f.configFile, 'utf8'));
+  assert.ok(!Object.hasOwn(written, 'sidekicks'), 'retired sidekicks key is pruned');
+  assert.ok(!Object.hasOwn(written, 'roleExclusions'), 'empty role maps are pruned');
+  assert.ok(Object.hasOwn(written, 'fusionPresets'), 'preset data is never pruned');
 });
 test('cli cache checks are confined to the stubbed directory and see every own uid', async t => {
   const f = fixture(t);
