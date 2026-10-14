@@ -51,22 +51,22 @@ function assertValidGraph(config, natives = []) {
   return catalog;
 }
 
-test('public state counts only named presets as Fusion choices, not matrix mirrors', async () => {
+test('public state emits no preset cards while the matrix mirrors them', async () => {
   const input = fixture();
   input.fusionMatrix = true;
   input.fusionPresets = [{ id: 'p1', name: 'P1', lead: { providerId: 'cpa', model: 'lead' }, sidekick: { providerId: 'cpa', model: 'executor' } }];
   const catalog = buildCatalog(input, OBSERVED_SWE);
   assert.ok(catalog.matrixUids.size > 0 && Object.keys(catalog.fusions).length > 1, 'matrix mirrors inflate the fusions table');
+  // The named preset stays resolvable for stored selections but emits no picker entry.
+  const presetUid = Object.keys(catalog.fusions).find(uid => uid.startsWith('fusion-dfbyok-preset-'));
+  assert.ok(presetUid, 'preset uid stays in the fusions table');
+  assert.equal(catalog.models.filter(model => model.uid === presetUid).length, 0, 'preset emits no model entry');
   const state = publicState(input, '', OBSERVED_SWE, 'unavailable', 'ready');
-  assert.equal(state.fusionCount, 1);
-  assert.equal(state.fusionChoices.length, 1);
-  assert.equal(state.fusionChoices[0].label, 'P1');
-  const matrixLabels = new Set(catalog.models.filter(model => model.kind === 'matrix').map(model => model.label));
-  assert.ok(matrixLabels.size > 0);
-  assert.ok(!state.fusionChoices.some(choice => matrixLabels.has(choice.label)), 'matrix labels never reach the picker');
+  assert.equal(state.fusionCount, 0);
+  assert.equal(state.fusionChoices.length, 0);
   const off = publicState({ ...input, fusionMatrix: false }, '', OBSERVED_SWE, 'unavailable', 'ready');
   assert.equal(off.fusionCount, 1);
-  assert.deepEqual(off.fusionChoices, state.fusionChoices);
+  assert.equal(off.fusionChoices[0].label, 'P1');
 });
 
 test('public panel state exposes multiple providers and combinations without API credentials', async () => {

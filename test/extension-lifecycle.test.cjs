@@ -23,6 +23,7 @@ function fixture(t, initial = {}) {
   const state = new Map(Object.entries(initial.state || {})), commands = new Map(), logs = [], notices = [], watchers = [], preferenceListeners = [];
   const updates = [], bridges = [];
   let disposed = 0, installed = 0, managerOptions, autoContinueOptions, warningResult;
+  const cacheChecks = [];
   const settings = {
     inspect: key => ({ globalValue: globals[key] }),
     get: () => { throw new Error('Merged workspace settings must not be copied into global settings'); },
@@ -82,6 +83,9 @@ function fixture(t, initial = {}) {
       managerOptions = options;
       return realRequire('./panel/model.cjs').createManager(options);
     } },
+    './runtime/cli-cache.cjs': { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
+      inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
+      refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } },
   };
   const module = { exports: {} };
   const sandbox = { module, exports: module.exports, process,
@@ -105,6 +109,7 @@ function fixture(t, initial = {}) {
     gateInjection: () => { let release; injectionGate = new Promise(resolve => { release = resolve; }); return release; },
     setWarningResult: value => { warningResult = value; },
     firePreference: (key = 'devin.acp.agentPreferences') => Promise.all(preferenceListeners.map(fn => fn({ affectsConfiguration: name => name === key }))),
+    cacheChecks: () => cacheChecks,
     settle: async (ticks = 20) => { for (let index = 0; index < ticks; index++) await next(); },
     counts: () => ({ installed, disposed }) };
 }
@@ -206,6 +211,15 @@ test('a stale or absent remembered combination never replaces an official or mis
     await f.settle();
     assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-official');
   }
+});
+test('cli cache checks are confined to the stubbed directory and see every own uid', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  const calls = f.cacheChecks();
+  assert.ok(calls.length >= 1, 'activation checks CLI caches at least once');
+  for (const call of calls) assert.equal(call.dir, '/nonexistent-test-cli-cache');
+  assert.deepEqual(calls[0].expectedUids, ['dfbyok-own', 'fusion-dfbyok-selected', 'fusion-dfbyok-another'],
+    'expectedUids is the full model list, unfiltered');
 });
 test('a stale matrix fusion selection rolls back while a live one is kept', async t => {
   const f = fixture(t);

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { importLegacy, readConfig, writeConfig } = require('./config.cjs');
-const { buildCatalog, normalizeFusionConfig } = require('./catalog.cjs');
+const { buildCatalog, normalizeFusionConfig, augmentCatalog } = require('./catalog.cjs');
 const { createManager } = require('./panel/model.cjs');
 const { installLsInjection } = require('./runtime/ls-injection.cjs');
 const { createLsBridge } = require('./runtime/bridge.cjs');
@@ -14,7 +14,7 @@ const { readNativeModels } = require('./runtime/native-models.cjs');
 const { installAutoContinue } = require('./runtime/auto-continue.cjs');
 const { installGoalContinue } = require('./runtime/goal-continue.cjs');
 const { installAcpObserver } = require('./runtime/acp-observer.cjs');
-const { invalidateStaleCliCaches } = require('./runtime/cli-cache.cjs');
+const { defaultDir: cliCacheDir, refreshStaleCliCaches } = require('./runtime/cli-cache.cjs');
 const { createPickerRefresh } = require('./runtime/picker-refresh.cjs');
 const { createGoalController } = require('./runtime/goal-state.cjs');
 let stopNativeSync;
@@ -382,6 +382,10 @@ async function activate(context) {
         }
         return;
       }
+      // Official card combos and native-lead matrix mirrors are legitimate
+      // selections once the matrix is on — never rewrite them to the
+      // remembered preset.
+      if (typeof current === 'string' && current.startsWith('fusion-') && config().fusionMatrix === true) return;
       if (typeof current === 'string' && current && !current.startsWith('fusion-')) return;
       const remembered = rememberedFusion();
       if (remembered) await saveFusionChoice(remembered);
@@ -454,23 +458,21 @@ async function activate(context) {
   context.subscriptions.push(pickerRefresh);
   // The CLI intersects its picker with per-identity caches under
   // ~/.cache/devin/cli; a cache written before a config change keeps the old
-  // uid digests and drops the affected entries. Detect and invalidate those
-  // files so the next CLI read re-fetches a current catalog.
+  // uid digests and drops the affected entries. This CLI never re-fetches a
+  // missing file, so stale caches are refreshed in place by rewriting the
+  // payload through the same augmentation the backend applies.
   const checkCliCaches = () => {
     try {
       if (config().enabled === false) return;
-      // Matrix mirror entries are additive dimension decorations — they can
-      // never be the user's persisted selection before they exist, so a cache
-      // missing them must not be invalidated (renaming the cache leaves the
-      // picker empty until the CLI lazily re-fetches).
-      const matrixUids = catalog().matrixUids;
-      const ownUids = catalog().models.map(model => model.uid)
-        .filter(uid => /^dfbyok-|^fusion-dfbyok-/.test(uid) && !(matrixUids instanceof Set && matrixUids.has(uid)));
-      if (!ownUids.length) return;
-      const result = invalidateStaleCliCaches({ expectedUids: ownUids });
-      if (result.invalidated.length) { log('cli-cache-invalidated', { files: result.invalidated.length }); pickerRefresh.force(); }
-      for (const error of result.errors || []) log('cli-cache-invalidate-error', { name: error.name, code: error.code });
-    } catch { /* cache inspection is best-effort */ }
+      const current = catalog();
+      const expectedUids = current.models.map(model => model.uid);
+      if (!expectedUids.length) return;
+      const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids,
+        augment: (payload, rpc) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current }) });
+      if (result.refreshed.length) { log('cli-cache-refreshed', { files: result.refreshed.length }); pickerRefresh.force(); }
+      for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });
+      for (const error of result.errors || []) log('cli-cache-write-error', { name: error.name, code: error.code });
+    } catch { /* cache refresh is best-effort */ }
   };
   checkCliCaches();
   manager = createManager({ read: config, write: current => writeConfig(configFile, current),

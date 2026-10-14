@@ -632,23 +632,33 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
     let label = preset.name.trim();
     if (labels.has(label)) label += ` · Fusion ${digest(preset.id).slice(0, 8)}`;
     labels.add(label);
-    const family = { modelFamilyLabel: label, entries: [] };
-    presetModels.push(configFor({ ...lead, uid, label, family, familyUid: `dfbyok-preset-family-${digest(preset.id).slice(0, 24)}`, fusion: true }));
     const members = { leadUid: lead.uid, sidekickUid: sidekick.uid,
       leadNative: lead.native, sidekickNative: sidekick.native,
       ...(lead.native ? { leadHarnessUids: lead.leadHarnessUids } : {}),
       ...(sidekick.native ? { sidekickHarnessUids: sidekick.harnessUids } : {}) };
     fusions[uid] = { uid, label, presetId: preset.id, ...members };
+    // With the matrix on, the official Fusion card covers named presets: keep
+    // the uid resolvable for stored selections but emit no picker entry.
+    if (config.fusionMatrix === true) continue;
+    const family = { modelFamilyLabel: label, entries: [] };
+    presetModels.push(configFor({ ...lead, uid, label, family, familyUid: `dfbyok-preset-family-${digest(preset.id).slice(0, 24)}`, fusion: true }));
   }
   // Mirror our members into the official Fusion family card: official-shaped
   // `fusion-<lead>-sidekick-<side>` uids with self-declared dimension values
   // make BYOK models selectable in the native Lead/Effort/Sidekick dropdowns.
   // The picker derives each dimension's choices from entries sharing the Lead
   // value, so every lead needs the full cross product of sidekicks (and its own
-  // effort variants) or the dropdown locks to a single value. Pure-native
-  // pairs are skipped — the official catalog already covers them and a uid
-  // collision would shadow the official entry.
+  // effort variants) or the dropdown locks to a single value. Native members
+  // reuse the official dimension identity (name+order) when observed, so our
+  // values merge into the official options instead of duplicating them.
+  // Entries colliding with an official fusion uid are skipped — the official
+  // catalog already covers them and a duplicate would shadow the official entry.
   if (config.fusionMatrix === true) {
+    const officialFusionUids = new Set();
+    for (const entry of Array.isArray(nativeModels) ? nativeModels : []) {
+      const observedUid = typeof entry?.uid === 'string' ? entry.uid : '';
+      if (observedUid.startsWith('fusion-') && !observedUid.includes('dfbyok')) officialFusionUids.add(observedUid);
+    }
     const sidekickPools = new Map();
     for (const item of candidates.sidekick) {
       const key = item.native ? `native${item.uid}` : item.key;
@@ -657,26 +667,31 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
     }
     const sidekickReps = [...sidekickPools.values()].map(variants =>
       variants.find(item => !item.effort) || variants.find(item => item.effort === 'high') || variants[0]);
-    const pairs = [], leadNames = new Set(), sideNames = new Set();
+    const pairs = [], customLeadNames = new Set(), customSideNames = new Set();
     for (const lead of candidates.lead) {
       for (const sidekick of sidekickReps) {
-        if (lead.native && sidekick.native) continue;
-        const leadDim = lead.native ? lead.label : lead.familyLabel;
-        const sideDim = sidekick.native ? sidekick.label : sidekick.familyLabel;
         const uid = `fusion-${lead.uid}-sidekick-${sidekick.uid}`;
-        if (matrixUids.has(uid)) continue;
-        leadNames.add(leadDim); sideNames.add(sideDim);
+        if (matrixUids.has(uid) || officialFusionUids.has(uid)) continue;
+        const leadDim = lead.native && lead.leadDimension ? lead.leadDimension.name
+          : lead.native ? lead.label : lead.familyLabel;
+        const sideDim = sidekick.native && sidekick.dimension ? sidekick.dimension.name
+          : sidekick.native ? sidekick.label : sidekick.familyLabel;
+        if (!(lead.native && lead.leadDimension)) customLeadNames.add(leadDim);
+        if (!(sidekick.native && sidekick.dimension)) customSideNames.add(sideDim);
         pairs.push({ lead, sidekick, leadDim, sideDim, uid });
       }
     }
-    const leadOrders = new Map([...leadNames].sort().map((name, index) => [name, 20 + index]));
-    const sideOrders = new Map([...sideNames].sort().map((name, index) => [name, 20 + index]));
+    const leadOrders = new Map([...customLeadNames].sort().map((name, index) => [name, 20 + index]));
+    const sideOrders = new Map([...customSideNames].sort().map((name, index) => [name, 20 + index]));
     for (const { lead, sidekick, leadDim, sideDim, uid } of pairs) {
       matrixUids.add(uid);
       const leadLabel = lead.native ? lead.label
         : lead.familyLabel + (lead.effort ? ` ${effortMetadata(lead.effort).name}` : '');
       const label = `Fusion (${leadLabel} + ${sideDim})`;
-      const effort = lead.effort ? effortMetadata(lead.effort) : null;
+      const leadOrder = lead.native && lead.leadDimension ? lead.leadDimension.order : leadOrders.get(leadDim);
+      const effort = lead.native ? lead.effortDimension || null
+        : lead.effort ? effortMetadata(lead.effort) : null;
+      const sideOrder = sidekick.native && sidekick.dimension ? sidekick.dimension.order : sideOrders.get(sideDim);
       fusions[uid] = { uid, label, leadUid: lead.uid, sidekickUid: sidekick.uid,
         leadNative: lead.native, sidekickNative: sidekick.native,
         ...(lead.native ? { leadHarnessUids: lead.leadHarnessUids } : {}),
@@ -684,9 +699,9 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
       presetModels.push(configFor({ ...lead, uid, label,
         inferenceServerUrl: 'https://server.codeium.com',
         family: { modelFamilyLabel: 'Fusion', entries: [
-          { key: 'Lead', value: { order: leadOrders.get(leadDim), name: leadDim, controlType: 3 } },
+          { key: 'Lead', value: { order: leadOrder, name: leadDim, controlType: 3 } },
           ...(effort ? [{ key: 'Effort', value: { order: effort.order, name: effort.name, controlType: 1 } }] : []),
-          { key: 'Sidekick', value: { order: sideOrders.get(sideDim), name: sideDim, controlType: 3 } },
+          { key: 'Sidekick', value: { order: sideOrder, name: sideDim, controlType: 3 } },
           { key: 'Fast Mode', value: { order: 0, name: '', controlType: 2 } },
           { key: 'Recommended Sidekick', value: { order: 0, name: sideDim, controlType: 0 } },
         ] }, familyUid: 'fusion', fusion: true, kind: 'matrix' }));
@@ -810,10 +825,12 @@ function protoFusionMetadata(entry) {
       const orders = dims.filter(part => part.number === 1);
       const names = dims.filter(part => part.number === 2);
       const controls = dims.filter(part => part.number === 3);
-      if (orders.length !== 1 || orders[0].wire !== 0) return null;
+      // Official entries omit order on informational dims (e.g. Recommended
+      // Sidekick): treat a missing order as 0 instead of rejecting the entry.
+      if (orders.length > 1 || (orders.length === 1 && orders[0].wire !== 0)) return null;
       if (names.length > 1 || names.some(part => part.wire !== 2)) return null;
       if (controls.length > 1 || controls.some(part => part.wire !== 0)) return null;
-      const order = Number(orders[0].value);
+      const order = orders.length ? Number(orders[0].value) : 0;
       const name = names.length ? names[0].value.toString('utf8') : '';
       const controlType = controls.length ? Number(controls[0].value) : 0;
       if (!Number.isSafeInteger(order) || order < 0 || order > 0x7fffffff) return null;
@@ -886,12 +903,12 @@ function jsonFusionMetadata(entry) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const control = jsonAliasValue(value, 'controlType', 'control_type');
     if (control.conflict || (control.present && (!Number.isSafeInteger(control.value) || control.value < 0 || control.value > 0x7fffffff))) return null;
-    if (!Number.isSafeInteger(value.order) || value.order < 0 || value.order > 0x7fffffff) return null;
+    if (value.order !== undefined && (!Number.isSafeInteger(value.order) || value.order < 0 || value.order > 0x7fffffff)) return null;
     if (value.name !== undefined && typeof value.name !== 'string') return null;
     const name = typeof value.name === 'string' ? value.name : '';
     const controlType = control.present ? control.value : 0;
     if (key !== 'Fast Mode' && !name) return null;
-    entries.push({ key, order: value.order, name, controlType });
+    entries.push({ key, order: value.order ?? 0, name, controlType });
   }
   return entries.length ? entries : null;
 }

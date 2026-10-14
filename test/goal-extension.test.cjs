@@ -41,7 +41,7 @@ function fixture(t) {
   fs.writeFileSync(configFile, JSON.stringify({ enabled: true, providers: [{ id: 'cpa', name: 'CPA', models: [] }] }));
   const globals = { agentEnv: { 'devin-cli': {} }, agentPreferences: { 'devin-cli': { model: 'native-max' } } };
   const state = new Map(), commands = new Map(), logs = [], notices = [], watchers = [], preferenceListeners = [], subscriptions = [];
-  const panels = [], posts = [];
+  const panels = [], posts = [], cacheChecks = [];
   const api = { registerConnection() { return { dispose() {} }; } };
   const connector = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
@@ -98,6 +98,9 @@ function fixture(t) {
     './runtime/backend.cjs': { runtimeIdentity: () => identity, controlFile: actualBackend.controlFile, PORT: 39842, MANAGEMENT_PROTOCOL: 1 },
     './runtime/bridge.cjs': { createLsBridge: async () => ({ port: 4567, close() {} }) },
     './runtime/ls-injection.cjs': { installLsInjection: async options => { await options.createBridge(1234); return { status: {}, dispose: async () => {} }; } },
+    './runtime/cli-cache.cjs': { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
+      inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
+      refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } },
     './runtime/goal-continue.cjs': loadWithStubbedVscode(goalSource, 'goal-continue.cjs', api),
     './runtime/auto-continue.cjs': loadWithStubbedVscode(autoSource, 'auto-continue.cjs', api),
     './panel/model.cjs': { ...realRequire('./panel/model.cjs'), createManager: options => realRequire('./panel/model.cjs').createManager(options) }
@@ -115,6 +118,7 @@ function fixture(t) {
   t.after(async () => { await module.exports.deactivate(); subscriptions.forEach(value => value.dispose?.()); });
   return {
     ...module.exports, context, root, configFile, globals, state, commands, logs, notices, watchers, panels, posts, api, connector,
+    cacheChecks: () => cacheChecks,
     subscriptions, vscode,
     setTrusted: value => { vscode.workspace.isTrusted = value; },
     settle: async (ticks = 30) => { for (let index = 0; index < ticks; index++) await next(); },

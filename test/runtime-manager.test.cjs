@@ -11,10 +11,14 @@ const { runtimeIdentity, controlFile } = require('../src/runtime/backend.cjs');
 const filename = path.resolve(__dirname, '../src/extension.cjs');
 const realRequire = createRequire(filename);
 const moduleUnderTest = { exports: {} };
+const cacheChecks = [];
+const cliCacheStub = { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
+  inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
+  refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } };
 vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
   module: moduleUnderTest, exports: moduleUnderTest.exports, process,
   AbortController, AbortSignal, setTimeout, clearTimeout,
-  require: name => name === 'vscode' ? {} : realRequire(name),
+  require: name => name === 'vscode' ? {} : name === './runtime/cli-cache.cjs' ? cliCacheStub : realRequire(name),
 }, { filename });
 const { ensureBackend, safeError } = moduleUnderTest.exports;
 
@@ -25,7 +29,7 @@ function fixture(t) {
   const old = { ...expected, version: '0.0.1', sourceId: 'a'.repeat(64), instanceId: 'old-instance' };
   const token = 'b'.repeat(64), logs = [], spawns = [], waits = [];
   fs.writeFileSync(controlFile(root), JSON.stringify({ ...old, token }), { mode: 0o600 });
-  return { root, expected, old, token, logs, spawns, waits,
+  return { root, expected, old, token, logs, spawns, waits, cacheChecks,
     options: { root, extensionPath: path.resolve(__dirname, '..'), log: (...args) => logs.push(args) },
     spawn(...args) { spawns.push(args); const child = new EventEmitter(); child.unref = () => {}; return child; },
     sleep: async ms => { waits.push(ms); },

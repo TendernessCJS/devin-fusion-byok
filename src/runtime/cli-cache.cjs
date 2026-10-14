@@ -6,20 +6,35 @@
 // catalogs with the fresh allowed-uid whitelist, so a cache written before a
 // config change keeps the old dfbyok uids and silently drops every entry whose
 // uid digest drifted (fusion presets survive because their uid derives only
-// from the preset id). Cache entries are regenerable; renaming a stale file
-// aside forces the CLI to re-fetch through the backend on its next read.
+// from the preset id). Renaming a stale file aside is NOT viable on this CLI
+// version: it never re-fetches a missing model_configs file, so the picker
+// stays empty until the file is restored by hand. Instead the payload is
+// rewritten in place through the same catalog augmentation the backend
+// applies, after verifying the new payload loses no expected uid and gains at
+// least one.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const CACHE_NAME = /^(user_status|model_configs_v5|team_settings)\.[0-9a-f]{16}\.bin$/;
 const OWN_MARKER = 'dfbyok-';
+const CACHE_RPC = {
+  user_status: '/exa.language_server_pb.LanguageServerService/GetUserStatus',
+  model_configs_v5: '/exa.language_server_pb.LanguageServerService/GetCliModelConfigs',
+  team_settings: '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings',
+};
 
 function defaultDir() { return path.join(os.homedir(), '.cache', 'devin', 'cli'); }
 
+function requireDir(dir) {
+  if (typeof dir !== 'string' || !dir) throw new TypeError('dir is required');
+}
+
 // Lists cache files owned by a backend-routed identity (payload carries at
 // least one dfbyok uid) and reports which expected uids each one is missing.
-function inspectCliCaches({ dir = defaultDir(), expectedUids = [] } = {}) {
+// `dir` is required so no caller can silently aim at the real user cache.
+function inspectCliCaches({ dir, expectedUids = [] } = {}) {
+  requireDir(dir);
   const expected = [...new Set(expectedUids)].filter(uid => typeof uid === 'string' && uid.includes(OWN_MARKER));
   const entries = [];
   let names;
@@ -40,22 +55,60 @@ function inspectCliCaches({ dir = defaultDir(), expectedUids = [] } = {}) {
   return { expected, entries, checked: entries.length };
 }
 
-// Renames every backend-owned cache file that is missing at least one expected
-// uid to `<name>.stale`, overwriting a previous aside copy. Files that contain
-// no dfbyok marker belong to other identities and are left untouched.
-function invalidateStaleCliCaches({ dir = defaultDir(), expectedUids = [] } = {}) {
-  const { entries, checked } = inspectCliCaches({ dir, expectedUids });
-  const invalidated = [], errors = [];
-  for (const entry of entries) {
-    if (!entry.missing.length) continue;
-    try {
-      fs.renameSync(entry.file, entry.file + '.stale');
-      invalidated.push(entry.name);
-    } catch (error) {
-      errors.push({ name: entry.name, code: error?.code || 'rename-failed' });
-    }
+let tmpSequence = 0;
+function atomicWrite(file, data) {
+  const tmp = `${file}.tmp-${process.pid}-${++tmpSequence}`;
+  try {
+    fs.writeFileSync(tmp, data, { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    throw error;
   }
-  return { checked, invalidated, errors };
 }
 
-module.exports = { CACHE_NAME, inspectCliCaches, invalidateStaleCliCaches };
+const presentUids = (payload, expected) => {
+  const text = payload.toString('latin1');
+  return new Set(expected.filter(uid => text.includes(uid)));
+};
+
+// Rewrites stale backend-owned cache files in place: the augmented payload
+// must keep every expected uid already present and add at least one, the
+// original bytes are kept at `<file>.bak`, and the envelope metadata is
+// preserved verbatim. Files without the dfbyok marker belong to other
+// identities and are never touched; the primary file is never renamed or
+// deleted.
+function refreshStaleCliCaches({ dir, expectedUids = [], augment } = {}) {
+  requireDir(dir);
+  const { expected, entries, checked } = inspectCliCaches({ dir, expectedUids });
+  const refreshed = [], skipped = [], errors = [];
+  const canAugment = typeof augment === 'function';
+  for (const entry of entries) {
+    if (!entry.missing.length) continue;
+    const rpc = CACHE_RPC[entry.name.slice(0, entry.name.indexOf('.'))];
+    if (!rpc || !canAugment) { skipped.push({ name: entry.name, reason: 'unsupported' }); continue; }
+    let envelope, payload;
+    try {
+      envelope = JSON.parse(fs.readFileSync(entry.file, 'utf8'));
+      payload = Buffer.from(envelope.payload, 'base64');
+    } catch (error) { skipped.push({ name: entry.name, reason: 'read-failed' }); continue; }
+    let next;
+    try { next = augment(payload, rpc); } catch { next = null; }
+    if (!Buffer.isBuffer(next) || !next.length) { skipped.push({ name: entry.name, reason: 'augment-failed' }); continue; }
+    const before = presentUids(payload, expected), after = presentUids(next, expected);
+    if (after.size <= before.size || ![...before].every(uid => after.has(uid))) {
+      skipped.push({ name: entry.name, reason: 'no-improvement' });
+      continue;
+    }
+    try {
+      atomicWrite(entry.file + '.bak', fs.readFileSync(entry.file));
+      atomicWrite(entry.file, JSON.stringify({ ...envelope, payload: next.toString('base64') }));
+      refreshed.push(entry.name);
+    } catch (error) {
+      errors.push({ name: entry.name, code: error?.code || 'write-failed' });
+    }
+  }
+  return { checked, refreshed, skipped, errors };
+}
+
+module.exports = { CACHE_NAME, OWN_MARKER, CACHE_RPC, defaultDir, inspectCliCaches, refreshStaleCliCaches };

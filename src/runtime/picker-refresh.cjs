@@ -5,7 +5,7 @@
 // (GetCliModelConfigs). To refresh them the extension must trigger Devin's own
 // re-fetch. The lightweight devin.reloadAcpConnections command (the native
 // extension uses it after auth changes) reloads the ACP registry; executing it
-// counts as success because sessions spawn lazily and cli-cache invalidation
+// counts as success because sessions spawn lazily and cli-cache refresh
 // already guarantees the data the next session reads. The ACP observer only
 // records whether a fresh session arrived in time. Heavier paths that spawn a
 // new conversation were removed: they fired on every reload whenever no ACP

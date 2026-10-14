@@ -268,8 +268,9 @@ test('the catalog log reports named presets separately from matrix mirrors', asy
   assert.equal(response.status, 200);
   const entry = events.find(([event]) => event === 'catalog');
   assert.ok(entry, 'a catalog RPC emits the catalog log event');
-  assert.equal(entry[1].presets, 1, 'presets counts named presets only');
+  assert.equal(entry[1].presets, 0, 'matrix mode emits no named-preset cards');
   assert.equal(entry[1].matrix, 1, 'matrix mirrors are counted separately');
+  assert.ok(Object.keys(matrixCatalog.fusions).some(uid => uid.startsWith('fusion-dfbyok-preset-')), 'named preset stays resolvable');
 });
 
 test('forward returns 502 when the upstream accepts but never sends headers', async t => {

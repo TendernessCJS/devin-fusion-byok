@@ -4,13 +4,17 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { CACHE_NAME, inspectCliCaches, invalidateStaleCliCaches } = require('../src/runtime/cli-cache.cjs');
+const { CACHE_NAME, inspectCliCaches, refreshStaleCliCaches } = require('../src/runtime/cli-cache.cjs');
 
 const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cli-cache-'));
 const OWN = ['dfbyok-provider-aaaa-model-x-1111', 'dfbyok-provider-aaaa-model-y-2222', 'fusion-dfbyok-preset-3333'];
 const writeCache = (dir, name, markers) => {
   const payload = Buffer.from(markers.join('\x00'), 'utf8').toString('base64');
   fs.writeFileSync(path.join(dir, name), JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload }));
+};
+const readCache = (dir, name) => {
+  const raw = fs.readFileSync(path.join(dir, name));
+  return { raw, envelope: JSON.parse(raw.toString('utf8')) };
 };
 
 test('CACHE_NAME matches only digested envelope files', () => {
@@ -36,31 +40,94 @@ test('inspectCliCaches reports missing uids only for backend-owned files', () =>
   assert.deepEqual(byName['model_configs_v5.bbbbbbbbbbbbbbbb.bin'], [OWN[0], OWN[1]]);
 });
 
-test('invalidateStaleCliCaches renames stale files aside and keeps fresh ones', () => {
-  const dir = tmpdir();
-  writeCache(dir, 'user_status.aaaaaaaaaaaaaaaa.bin', OWN);
-  writeCache(dir, 'user_status.bbbbbbbbbbbbbbbb.bin', ['dfbyok-old-uid', 'other']);
-  writeCache(dir, 'model_configs_v5.cccccccccccccccc.bin', ['native-only']);
-  const result = invalidateStaleCliCaches({ dir, expectedUids: OWN });
-  assert.deepEqual(result.invalidated, ['user_status.bbbbbbbbbbbbbbbb.bin']);
-  assert.ok(fs.existsSync(path.join(dir, 'user_status.bbbbbbbbbbbbbbbb.bin.stale')), 'aside copy keeps the content');
-  assert.ok(!fs.existsSync(path.join(dir, 'user_status.bbbbbbbbbbbbbbbb.bin')));
-  assert.ok(fs.existsSync(path.join(dir, 'user_status.aaaaaaaaaaaaaaaa.bin')), 'fresh cache survives');
-  assert.ok(fs.existsSync(path.join(dir, 'model_configs_v5.cccccccccccccccc.bin')), 'foreign identity survives');
-});
-
-test('invalidateStaleCliCaches tolerates a missing directory and foreign uids in expected set', () => {
+test('inspectCliCaches and refreshStaleCliCaches require an explicit dir', () => {
+  assert.throws(() => inspectCliCaches({ expectedUids: OWN }), TypeError);
+  assert.throws(() => inspectCliCaches({ dir: '', expectedUids: OWN }), TypeError);
+  assert.throws(() => refreshStaleCliCaches({ expectedUids: OWN }), TypeError);
   const dir = path.join(os.tmpdir(), 'cli-cache-absent-' + process.pid);
-  assert.deepEqual(invalidateStaleCliCaches({ dir, expectedUids: OWN }).invalidated, []);
-  const real = tmpdir();
-  writeCache(real, 'user_status.aaaaaaaaaaaaaaaa.bin', OWN);
-  const result = invalidateStaleCliCaches({ dir: real, expectedUids: [...OWN, 'native-uid-not-ours'] });
-  assert.deepEqual(result.invalidated, [], 'native uids are filtered out of the expected set');
+  assert.deepEqual(refreshStaleCliCaches({ dir, expectedUids: OWN }).refreshed, [], 'missing directory is tolerated');
 });
 
-test('invalidation is idempotent across repeated runs', () => {
+test('fresh caches stay untouched and stale payloads are rewritten in place', () => {
   const dir = tmpdir();
-  writeCache(dir, 'user_status.aaaaaaaaaaaaaaaa.bin', ['dfbyok-old-uid']);
-  assert.equal(invalidateStaleCliCaches({ dir, expectedUids: OWN }).invalidated.length, 1);
-  assert.equal(invalidateStaleCliCaches({ dir, expectedUids: OWN }).invalidated.length, 0, 'aside file is not re-scanned');
+  const fresh = 'user_status.aaaaaaaaaaaaaaaa.bin', stale = 'model_configs_v5.bbbbbbbbbbbbbbbb.bin';
+  writeCache(dir, fresh, OWN);
+  writeCache(dir, stale, ['dfbyok-old-uid', 'other']);
+  const before = readCache(dir, stale);
+  const result = refreshStaleCliCaches({ dir, expectedUids: OWN,
+    augment: payload => Buffer.concat([payload, Buffer.from('\x00' + OWN.join('\x00'), 'utf8')]) });
+  assert.deepEqual(result.refreshed, [stale]);
+  assert.ok(fs.existsSync(path.join(dir, stale)), 'the primary file is never renamed away');
+  assert.ok(!fs.existsSync(path.join(dir, stale + '.stale')), 'no .stale files are ever produced');
+  const after = readCache(dir, stale);
+  const text = Buffer.from(after.envelope.payload, 'base64').toString('latin1');
+  for (const uid of OWN) assert.ok(text.includes(uid), uid + ' present after refresh');
+  assert.equal(after.envelope.identity_digest, before.envelope.identity_digest);
+  assert.equal(after.envelope.version, before.envelope.version);
+  assert.equal(after.envelope.fetched_at_secs, before.envelope.fetched_at_secs);
+  assert.deepEqual(readCache(dir, stale + '.bak').raw, before.raw, '.bak keeps the pre-rewrite bytes');
+  assert.equal(fs.statSync(path.join(dir, stale)).mode & 0o777, 0o600, 'rewritten cache stays private');
+  assert.ok(fs.existsSync(path.join(dir, fresh)), 'fresh cache survives');
+});
+
+test('each cache kind reaches augment with its exact RPC path', () => {
+  const dir = tmpdir();
+  const names = ['user_status.aaaaaaaaaaaaaaaa.bin', 'model_configs_v5.bbbbbbbbbbbbbbbb.bin', 'team_settings.cccccccccccccccc.bin'];
+  const rpcs = [];
+  for (const name of names) writeCache(dir, name, ['dfbyok-old-uid']);
+  refreshStaleCliCaches({ dir, expectedUids: OWN,
+    augment: (payload, rpc) => { rpcs.push(rpc); return Buffer.concat([payload, Buffer.from('\x00' + OWN[0])]); } });
+  assert.deepEqual(rpcs.sort(), [
+    '/exa.language_server_pb.LanguageServerService/GetCliModelConfigs',
+    '/exa.language_server_pb.LanguageServerService/GetUserStatus',
+    '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings'].sort());
+});
+
+test('an augment failure or empty result leaves the file byte-identical', () => {
+  const dir = tmpdir();
+  const name = 'model_configs_v5.bbbbbbbbbbbbbbbb.bin';
+  writeCache(dir, name, ['dfbyok-old-uid']);
+  const before = readCache(dir, name);
+  for (const augment of [() => { throw new Error('boom'); }, () => Buffer.alloc(0), () => 'not-a-buffer']) {
+    const result = refreshStaleCliCaches({ dir, expectedUids: OWN, augment });
+    assert.equal(result.refreshed.length, 0);
+    assert.deepEqual(result.skipped, [{ name, reason: 'augment-failed' }]);
+    assert.deepEqual(readCache(dir, name).raw, before.raw, 'file bytes are preserved');
+    assert.ok(!fs.existsSync(path.join(dir, name + '.bak')), 'no backup is written on failure');
+  }
+});
+
+test('a payload without net uid gain is skipped as no-improvement', () => {
+  const dir = tmpdir();
+  const name = 'user_status.aaaaaaaaaaaaaaaa.bin';
+  writeCache(dir, name, [OWN[0], 'native-1']);
+  const before = readCache(dir, name);
+  const result = refreshStaleCliCaches({ dir, expectedUids: OWN, augment: payload => payload });
+  assert.deepEqual(result.skipped, [{ name, reason: 'no-improvement' }]);
+  assert.deepEqual(readCache(dir, name).raw, before.raw);
+});
+
+test('a payload that would drop an expected uid is refused as a regression guard', () => {
+  const dir = tmpdir();
+  const name = 'user_status.aaaaaaaaaaaaaaaa.bin';
+  writeCache(dir, name, [OWN[0], 'native-1']);
+  const before = readCache(dir, name);
+  const result = refreshStaleCliCaches({ dir, expectedUids: OWN,
+    augment: () => Buffer.from('dfbyok-new-uid-only', 'utf8') });
+  assert.equal(result.refreshed.length, 0);
+  assert.equal(result.skipped[0].reason, 'no-improvement');
+  assert.deepEqual(readCache(dir, name).raw, before.raw, 'the file is never regressed');
+});
+
+test('files without the dfbyok marker and a missing augment are never rewritten', () => {
+  const dir = tmpdir();
+  const foreign = 'model_configs_v5.cccccccccccccccc.bin', own = 'team_settings.dddddddddddddddd.bin';
+  writeCache(dir, foreign, ['native-only']);
+  writeCache(dir, own, ['dfbyok-old-uid']);
+  const foreignBefore = readCache(dir, foreign), ownBefore = readCache(dir, own);
+  const result = refreshStaleCliCaches({ dir, expectedUids: OWN });
+  assert.deepEqual(result.refreshed, []);
+  assert.deepEqual(result.skipped, [{ name: own, reason: 'unsupported' }]);
+  assert.deepEqual(readCache(dir, foreign).raw, foreignBefore.raw);
+  assert.deepEqual(readCache(dir, own).raw, ownBefore.raw);
 });
