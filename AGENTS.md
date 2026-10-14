@@ -166,7 +166,7 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 
 ## 待办与死角
 
-- `src/config.cjs` 的 `updateSidekicks()` 未被调用（仅在测试 mock 中出现）。改动前先确认是否已废弃。
+- 旧 `config.sidekicks` 输入管线已拆除（v0.3.18 起角色选择由 `fusionPresets` + `roleExclusions`/`roleInclusions` 接管）：字段只剩被忽略的惰性配置残留，旧配置里留着的 `sidekicks` 键无害。注意 `catalog.sidekicks` **输出**与 `state.sidekicks` 仍是活的——它们是角色选择解析后的候选池，legacy `fusion-dfbyok-native-` 默认 uid 迁移和面板状态都在用，不要当成死代码删掉。角色选择走 `setRoleModel`，预设走 `saveFusionPreset`。
 - ACP 通道的实际机制是 env 注入（`devin.acp.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL`，进程 spawn 时生效、覆盖 CLI 全部网络路径），**不是**握手 `_meta.api_server_url` 改写——后者的模块已在审查后删除（`acp-injection.cjs` 自 fork 初始提交起从未接线，env 通道作用域严格覆盖它）。排障 ACP 流量先看 settings.json 的 agentEnv 与 backend 日志，不要去复活握手改写。
 
 ## 测试注意

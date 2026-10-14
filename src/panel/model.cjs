@@ -42,14 +42,6 @@ function modelPatch(input, previous) {
   if (model.maxOutputTokens > model.contextWindow) fail('最大输出长度不能超过上下文长度。');
   return model;
 }
-function cleanSidekicks(config) {
-  const valid = (config.sidekicks || []).filter(sidekick =>
-    (typeof sidekick?.nativeUid === 'string' && sidekick.nativeUid.length > 0 && sidekick.nativeUid.length <= 256 &&
-      !/^(?:fusion-)?dfbyok-/.test(sidekick.nativeUid) && !sidekick.nativeUid.startsWith('fusion-')) ||
-    config.providers.some(provider => provider.id === sidekick?.providerId && provider.enabled !== false &&
-      provider.models.some(model => model.id === sidekick?.model && model.enabled !== false)));
-  config.sidekicks = valid;
-}
 function publicState(config, selectedFusionUid, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready') {
   const catalog = buildCatalog({ ...config, enabled: true }, nativeModels,
     { nativeCatalogPending: NATIVE_PENDING_STATUSES.has(nativeCatalogStatus) });
@@ -171,7 +163,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         config = read(); const current = providerAt(config, payload.providerId);
         if (signature(current) !== signature(original)) fail('供应商配置刚刚发生变化，请重新刷新模型。');
         // Validate a private candidate catalog, without changing saved models.
-        buildCatalog({ ...config, providers: [{ ...current, enabled: true, models: fetched.models }], sidekicks: [] });
+        buildCatalog({ ...config, providers: [{ ...current, enabled: true, models: fetched.models }] });
         pendingImport = { providerId: current.id, signature: signature(current), token: randomUUID(), models: fetched.models };
         return state();
       }
@@ -206,21 +198,6 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         const id = text(input?.id, '模型 ID');
         if (provider.models.some(m => m.id === id)) fail('该模型已经在列表中。');
         provider.models.push(modelPatch(input, { id, label: id, enabled: true, efforts: [], contextWindow: 272000, maxOutputTokens: 131072, source: 'manual' }));
-        break;
-      }
-      case 'setSidekicks': {
-        if (!Array.isArray(payload.sidekicks)) fail('Sidekick 列表无效。');
-        const eligibleNatives = new Map(buildRoleLists(config, nativeModels()).sidekick.filter(item => item.native && item.available).map(item => [item.ref.nativeUid, item]));
-        config.sidekicks = payload.sidekicks.map(sidekick => {
-          if (sidekick && typeof sidekick.nativeUid === 'string') {
-            const native = eligibleNatives.get(sidekick.nativeUid);
-            if (!native) fail('该官方模型当前不可用作 Sidekick，请刷新目录后重试。');
-            return { nativeUid: native.ref.nativeUid, label: native.label };
-          }
-          const provider = providerAt(config, sidekick?.providerId);
-          if (provider.enabled === false || !provider.models.some(m => m.id === sidekick.model && m.enabled !== false)) fail('Sidekick 必须是已启用的模型。');
-          return { providerId: provider.id, model: sidekick.model };
-        });
         break;
       }
       case 'setNativeModelHidden': {
@@ -290,7 +267,6 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       }
       default: fail('不支持的操作。');
     }
-    cleanSidekicks(config);
     buildCatalog(config, nativeModels()); // Validate the complete model graph before committing.
     write(config);
     if (type === 'importModels') pendingImport = undefined;
@@ -302,4 +278,4 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
     queue = operation.catch(() => {}); return operation;
   } };
 }
-module.exports = { createManager, publicState, cleanSidekicks, PanelInputError };
+module.exports = { createManager, publicState, PanelInputError };

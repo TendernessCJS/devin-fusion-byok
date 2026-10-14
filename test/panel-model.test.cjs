@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createManager, publicState, cleanSidekicks, PanelInputError } = require('../src/panel/model.cjs');
+const { createManager, publicState, PanelInputError } = require('../src/panel/model.cjs');
 const { buildCatalog } = require('../src/catalog.cjs');
 
 const nativeSidekick = { nativeUid: 'swe-2-max', label: 'SWE-2 Max' };
@@ -173,15 +173,14 @@ test('model metadata edits preserve stable routing IDs and do not change another
   assert.equal(f.read().providers[0].models.find(m => m.id === 'executor').supportsImages, true);
 });
 
-for (const action of ['disable-model', 'remove-model', 'disable-provider', 'delete-provider']) test(`${action} removes unavailable Sidekicks and leaves a valid Fusion graph`, async () => {
-  const input = fixture(); input.sidekicks = [{ providerId: 'cpa', model: 'executor' }];
+for (const action of ['disable-model', 'remove-model', 'disable-provider', 'delete-provider']) test(`${action} leaves a valid Fusion graph`, async () => {
+  const input = fixture();
   const f = memory({ config: input });
   if (action === 'disable-model') await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'executor', enabled: false }] });
   if (action === 'remove-model') await f.manager.dispatch('updateModels', { providerId: 'cpa', removeIds: ['executor'] });
   if (action === 'disable-provider') await f.manager.dispatch('setProviderEnabled', { id: 'cpa', enabled: false });
   if (action === 'delete-provider') await f.manager.dispatch('deleteProvider', { id: 'cpa' });
   const next = f.read();
-  assert.deepEqual(next.sidekicks, [], 'no native fallback is injected after cleanup');
   const catalog = assertValidGraph(next);
   assert.ok(Object.values(catalog.routes).every(route => route.model !== 'executor'));
   assert.ok(Object.values(catalog.routes).some(route => route.providerId === 'other'));
@@ -199,33 +198,29 @@ test('disabling then re-enabling a provider preserves its keys and configured mo
 
 test('any enabled third-party model may be a Sidekick together with an eligible observed native', async () => {
   const f = memory({ nativeModels: () => OBSERVED_SWE });
-  await f.manager.dispatch('setSidekicks', { sidekicks: [{ providerId: 'other', model: 'other-lead' }, { nativeUid: 'swe-2-max', label: 'Ignored caller label' }] });
-  const next = f.read();
-  assert.deepEqual(next.sidekicks, [{ providerId: 'other', model: 'other-lead' }, nativeSidekick]);
-  const catalog = assertValidGraph(next, OBSERVED_SWE);
+  const catalog = assertValidGraph(f.read(), OBSERVED_SWE);
   assert.equal(Object.keys(catalog.fusions).length, 0);
   assert.deepEqual(new Set(catalog.presetCandidates.sidekick.filter(item => !item.ref.nativeUid).map(item => item.ref.model)),
     new Set(['lead', 'executor', 'other-lead']));
 });
 
-test('Sidekick selection rejects missing, disabled, and unobserved native models without changing config', async () => {
+test('Sidekick role selection rejects missing, disabled, and unobserved native models without changing config', async () => {
   const input = fixture(); input.providers[1].models[0].enabled = false;
   const f = memory({ config: input }), before = f.read();
-  for (const sidekicks of [[{ providerId: 'other', model: 'other-lead' }], [{ providerId: 'missing', model: 'x' }],
-    [{ providerId: 'cpa', model: 'missing' }], [{ nativeUid: 'swe-2-medium' }], [{ nativeUid: 'swe-2-max' }], [null], 'x']) {
-    await assert.rejects(f.manager.dispatch('setSidekicks', { sidekicks }), PanelInputError);
+  for (const model of [{ providerId: 'missing', model: 'x' }, { providerId: 'cpa', model: 'missing' },
+    { providerId: 'other', model: 'other-lead' }, { nativeUid: 'swe-2-medium' }, { nativeUid: 'swe-2-max' }, null, 'x', {}]) {
+    await assert.rejects(f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: true, model }), PanelInputError);
     assert.deepEqual(f.read(), before);
   }
   assert.equal(f.writes.length, 0);
-  const allowed = await f.manager.dispatch('setSidekicks', { sidekicks: [] });
-  assert.deepEqual(allowed.sidekicks.filter(item => item.providerId).length > 0, true, 'empty explicit lists keep automatic provider candidates');
+  const state = await f.manager.dispatch('ready');
+  assert.ok(state.sidekicks.filter(item => item.providerId).length > 0, 'provider models stay automatic Sidekick candidates');
 });
 
 test('fetching candidates never imports or removes models; confirmation adds only selected models', async () => {
   const input = fixture();
   input.providers[0].models = [model('lead', { enabled: false, label: 'Keep this label', efforts: ['high'] }),
     model('gone-import'), model('manual-only', { source: 'manual', label: 'Private deployment' })];
-  input.sidekicks = [nativeSidekick];
   const f = memory({ config: input, discover: async provider => {
     assert.equal(provider.apiKey, 'fixture-secret-cpa');
     provider.models = [model('lead', { label: 'Provider label' }), model('new-import'), model('not-selected')];
@@ -486,7 +481,7 @@ test('hiding a native model never touches provider data', async () => {
   assert.deepEqual(next.sidekicks, before.sidekicks);
 });
 
-test('observed native Sidekick eligibility drives state flags, combinations and setSidekicks', async () => {
+test('observed native Sidekick eligibility drives state flags, combinations and role selection', async () => {
   const observed = [
     ...OBSERVED_SWE,
     { uid: 'swe-2-medium', label: 'Medium', disabled: false, isModelRouter: false, harnessUids: ['swe-1p5'] },
@@ -504,13 +499,11 @@ test('observed native Sidekick eligibility drives state flags, combinations and 
   assert.equal(Object.keys(catalog.fusions).length, 0);
   const created = await f.manager.dispatch('saveFusionPreset', { name: 'Medium', lead: { providerId: 'cpa', model: 'lead' }, sidekick: { nativeUid: 'swe-2-medium' } });
   assert.equal(created.fusionCount, 1);
-  await f.manager.dispatch('setSidekicks', { sidekicks: [{ nativeUid: 'swe-2-medium' }] });
-  assert.deepEqual(f.read().sidekicks, [{ nativeUid: 'swe-2-medium', label: 'SWE-2 Medium' }]);
-  await f.manager.dispatch('setSidekicks', { sidekicks: [{ nativeUid: 'swe-other-harness' }] });
-  assert.deepEqual(f.read().sidekicks, [{ nativeUid: 'swe-other-harness', label: 'Other' }]);
   for (const uid of ['swe-disabled', 'swe-router', 'swe-naked', 'swe-never-seen']) {
-    await assert.rejects(f.manager.dispatch('setSidekicks', { sidekicks: [{ nativeUid: uid }] }), PanelInputError, uid);
+    await assert.rejects(f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: true, model: { nativeUid: uid } }), PanelInputError, uid);
   }
+  const included = await f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: true, model: { nativeUid: 'swe-other-harness' } });
+  assert.ok(included.roleLists.sidekick.some(item => item.ref.nativeUid === 'swe-other-harness' && item.selected));
 });
 
 test('a hidden observed native is excluded from Sidekick eligibility and selection', async () => {
@@ -521,21 +514,12 @@ test('a hidden observed native is excluded from Sidekick eligibility and selecti
   assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-2-max').eligible, false);
   const catalog = buildCatalog(f.read(), OBSERVED_SWE);
   assert.equal(Object.values(catalog.fusions).filter(fusion => fusion.sidekickNative).length, 0);
-  await assert.rejects(f.manager.dispatch('setSidekicks', { sidekicks: [{ nativeUid: 'swe-2-max' }] }), PanelInputError);
   await f.manager.dispatch('setNativeModelHidden', { uid: 'swe-2-max', hidden: false });
   const restored = await f.manager.dispatch('ready');
   assert.equal(restored.nativeModels.find(entry => entry.uid === 'swe-2-max').eligible, true);
 });
 
-test('cleanSidekicks drops malformed entries without throwing', () => {
-  const input = fixture();
-  input.sidekicks.push(null, 'swe-2-max', { providerId: 'ghost', model: 'gone' });
-  cleanSidekicks(input);
-  assert.ok(input.sidekicks.every(sidekick => sidekick && typeof sidekick === 'object'));
-  assert.ok(!input.sidekicks.some(sidekick => sidekick.providerId === 'ghost'));
-});
-
-test('officially paired and standalone unlocked natives are offered and accepted', () => {
+test('officially paired and standalone unlocked natives are offered as Sidekick candidates', async () => {
   const observed = [
     { uid: 'gpt-5-6-luna-high', label: 'GPT-5.6 Luna High Thinking', disabled: false, isModelRouter: false, harnessUids: ['gpt-5p6'] },
     { uid: 'swe-odd', label: 'Odd', disabled: false, isModelRouter: false, harnessUids: ['odd-harness'] },
@@ -548,12 +532,10 @@ test('officially paired and standalone unlocked natives are offered and accepted
   assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-odd').eligible, true,
     'an unlocked standalone native is eligible for named presets');
   assert.ok(state.sidekicks.some(item => item.nativeUid === 'gpt-5-6-luna-high'));
-  return f.manager.dispatch('setSidekicks', { sidekicks: [{ nativeUid: 'gpt-5-6-luna-high' }] }).then(async next => {
-    assert.ok(next.sidekicks.some(item => item.nativeUid === 'gpt-5-6-luna-high'));
-    await f.manager.dispatch('setSidekicks', { sidekicks: [{ nativeUid: 'swe-odd' }] });
-    const disabled = observed.map(item => item.uid === 'swe-odd' ? { ...item, disabled: true } : item);
-    assert.equal(publicState(fixture(), '', disabled).nativeModels.find(entry => entry.uid === 'swe-odd').eligible, false);
-  });
+  const disabled = observed.map(item => item.uid === 'swe-odd' ? { ...item, disabled: true } : item);
+  assert.equal(publicState(fixture(), '', disabled).nativeModels.find(entry => entry.uid === 'swe-odd').eligible, false);
+  const saved = await f.manager.dispatch('saveFusionPreset', { name: 'Luna', lead: { providerId: 'cpa', model: 'lead' }, sidekick: { nativeUid: 'gpt-5-6-luna-high' } });
+  assert.equal(saved.fusionCount, 1);
 });
 
 test('setUpdateProxy writes, echoes, clears and rejects bad input', async () => {

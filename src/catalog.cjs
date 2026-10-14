@@ -526,21 +526,6 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
   const selectedLeadKeys = new Set(roleSelection.lead.filter(item => item.selected).map(item => refKey(item.ref)));
   const selectedSidekickKeys = new Set(roleSelection.sidekick.filter(item => item.selected).map(item => refKey(item.ref)));
 
-  if (Array.isArray(config.sidekicks)) {
-    for (const item of config.sidekicks) {
-      if (item?.nativeUid) {
-        if (typeof item.nativeUid !== 'string' || !item.nativeUid || item.nativeUid.length > 256 || ownUid(item.nativeUid)) {
-          throw new Error('Invalid native Sidekick uid');
-        }
-      } else if (item?.providerId || item?.model) {
-        if (typeof item.providerId !== 'string' || typeof item.model !== 'string' ||
-            !leads.some(l => l.providerId === item.providerId && l.model === item.model)) {
-          throw new Error('Sidekick references an unavailable configured model');
-        }
-      }
-    }
-  }
-
   const selectedImportedLeads = leads.filter(lead => selectedLeadKeys.has(refKey({ providerId: lead.providerId, model: lead.model })));
   const selectedPresetNativeLeads = [...presetNativeLeads.values()].filter(native => selectedLeadKeys.has(refKey({ nativeUid: native.uid })));
   const presetNativeSidekickCandidates = [...presetNativeSidekicks.values()].filter(native => selectedSidekickKeys.has(refKey({ nativeUid: native.uid })));

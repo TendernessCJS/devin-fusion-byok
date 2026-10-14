@@ -57,7 +57,6 @@ test('stable model identities and independent Lead/Sidekick orders survive reord
   const reordered = config();
   reordered.providers.reverse();
   reordered.providers.forEach(provider => provider.models.reverse());
-  reordered.sidekicks.reverse();
   const next = buildCatalog(reordered, OBSERVED_SWE);
   assert.deepEqual(new Set(next.models.map(model => model.uid)), new Set(catalog.models.map(model => model.uid)));
   for (const model of catalog.models.filter(model => model.kind === 'fusion')) {
@@ -95,16 +94,12 @@ test('own protobuf metadata matches JSON and advertises required execution harne
   }
 });
 
-test('duplicate labels are disambiguated and invalid provider/Sidekick identities fail before publishing', () => {
+test('duplicate labels are disambiguated and invalid provider identities fail before publishing', () => {
   const input = { providers: [{ id: 'a', name: 'Same', models: [{ id: 'x', label: 'X' }] },
-    { id: 'b', name: 'Same', models: [{ id: 'x', label: 'X' }] }], sidekicks: [{ nativeUid: 'swe-2-max' }] };
+    { id: 'b', name: 'Same', models: [{ id: 'x', label: 'X' }] }] };
   const result = buildCatalog(input);
   assert.equal(new Set(result.models.filter(model => model.kind === 'model').map(model => model.label)).size, 2);
   assert.throws(() => buildCatalog({ providers: [{ id: 'a', models: [{ id: 'x' }, { id: 'x' }] }] }), /Duplicate/);
-  assert.throws(() => buildCatalog({ sidekicks: [{ nativeUid: 42 }] }), /Invalid native/);
-  assert.throws(() => buildCatalog({ sidekicks: [{ nativeUid: 'dfbyok-x' }] }), /Invalid native/);
-  assert.deepEqual(buildCatalog({ sidekicks: [{ nativeUid: 'swe-2-medium' }] }).sidekicks, [], 'unobserved native preferences are skipped, not granted');
-  assert.throws(() => buildCatalog({ sidekicks: [{ providerId: 'missing', model: 'x' }] }), /unavailable/);
   assert.throws(() => buildCatalog({ providers: [{ id: 'a', models: [{ id: 'x', efforts: ['HIGH'] }] }] }), /effort/);
 });
 
@@ -631,7 +626,6 @@ test('collectNativeModels fails closed on ambiguous or mistyped capability field
 
 test('eligible observed native Sidekicks combine with every imported Lead using their exact harness intersection', () => {
   const input = config();
-  input.sidekicks.push({ nativeUid: 'swe-ghost' });
   const natives = [
     { uid: 'swe-2-max', label: 'SWE-2 Max', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6', 'swe-1p5', 'other-harness'] },
     { uid: 'swe-2-medium', label: 'SWE-2 Medium', disabled: false, isModelRouter: false, harnessUids: ['swe-1p5', 'unrelated'] },

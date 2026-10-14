@@ -20,8 +20,8 @@ function importLegacy() {
       apiFormat: p.type === 'openai-responses' ? 'openai-responses' : 'openai',
       models: (p.models || []).map(m => ({ id: m.id, label: m.name || m.id, efforts: m.effortLevels || [], contextWindow: 272000, maxOutputTokens: 131072 }))
     }));
-    return { enabled: true, providers, sidekicks: [], roleExclusions: { lead: [], sidekick: [] } };
-  } catch { return { enabled: true, providers: [], sidekicks: [], roleExclusions: { lead: [], sidekick: [] } }; }
+    return { enabled: true, providers, roleExclusions: { lead: [], sidekick: [] } };
+  } catch { return { enabled: true, providers: [], roleExclusions: { lead: [], sidekick: [] } }; }
 }
 async function discover(provider, { request = directFetch } = {}) {
   const anthropic = provider.apiFormat === 'anthropic';
