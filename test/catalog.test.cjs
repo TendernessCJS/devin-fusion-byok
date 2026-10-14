@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels } = require('../src/catalog.cjs');
+const { buildCatalog, buildRoleLists, augmentCatalog, resolveAssignment, collectNativeModels } = require('../src/catalog.cjs');
 const { fields, str, num, s, v, m } = require('../src/protocol/wire.cjs');
 
 const cat = (...parts) => Buffer.concat(parts.flat());
@@ -1246,4 +1246,155 @@ test('a throwing staleProbe is a safe no-op for refreshStaleCliCaches', () => {
   assert.deepEqual(result.refreshed, []);
   assert.deepEqual(result.skipped, [], 'a throwing probe yields an empty stale list, so the file is never a candidate');
   assert.deepEqual(fs.readFileSync(file), before, 'a wrongly-typed call can never wipe the cache');
+});
+
+// Lead role families: every native uid groups by its effort-series base. Fast
+// Mode is an orthogonal switch, so official Fast siblings join the official
+// family; any other same-base uid stays a single-member row.
+const OFFICIAL_EFFORT_ORDERS = { low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
+const OFFICIAL_EFFORT_NAMES = Object.fromEntries(Object.entries(OFFICIAL_EFFORT_ORDERS).map(([tier, order]) => [order,
+  { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }[tier]]));
+const nativeLead = (uid, label, fusionMetadata = []) =>
+  ({ uid, label, disabled: false, isModelRouter: false, harnessUids: ['h-' + uid], fusionMetadata });
+const OFFICIAL_SIDEKICK = nativeLead('swe-2-max', 'SWE-2 Max');
+const officialCombo = (leadUid, leadOrder, leadName, effortOrder) =>
+  ({ uid: `fusion-${leadUid}-sidekick-swe-2-max`, label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'],
+    fusionMetadata: [
+      { key: 'Lead', order: leadOrder, name: leadName, controlType: 3 },
+      { key: 'Effort', order: effortOrder, name: OFFICIAL_EFFORT_NAMES[effortOrder], controlType: 1 },
+      { key: 'Sidekick', order: 3, name: 'SWE-2 Max', controlType: 3 }] });
+const officialSeries = (base, leadOrder, leadName) => Object.entries(OFFICIAL_EFFORT_ORDERS).flatMap(([tier, effortOrder]) => {
+  const uid = `${base}-${tier}`;
+  return [nativeLead(uid, `${leadName} ${OFFICIAL_EFFORT_NAMES[effortOrder]}`), officialCombo(uid, leadOrder, leadName, effortOrder)];
+});
+const fastSiblings = (base, leadName, tiers) => tiers.map(tier => {
+  const name = OFFICIAL_EFFORT_NAMES[OFFICIAL_EFFORT_ORDERS[tier]];
+  return nativeLead(`${base}-${tier}-fast`, `${leadName} ${name} Fast`,
+    [{ key: 'Effort', order: 0, name, controlType: 1 }, { key: 'Fast Mode', order: 1 }]);
+});
+
+test('lead families without an observed Effort dimension still aggregate by uid tier', () => {
+  const roles = buildRoleLists(config(), [
+    nativeLead('deepseek-v4-flash-high', 'DeepSeek V4 Flash High'),
+    nativeLead('deepseek-v4-flash-max', 'DeepSeek V4 Flash Max'),
+    nativeLead('deepseek-v4-pro-high', 'DeepSeek V4 Pro High'),
+    nativeLead('deepseek-v4-pro-max', 'DeepSeek V4 Pro Max')]);
+  const families = roles.lead.filter(item => item.native);
+  const flash = families.filter(item => item.label === 'DeepSeek V4 Flash');
+  assert.equal(flash.length, 1, 'the two tiers are one row, not two same-named rows');
+  assert.deepEqual(flash[0].memberUids.sort(), ['deepseek-v4-flash-high', 'deepseek-v4-flash-max']);
+  const pro = families.filter(item => item.label === 'DeepSeek V4 Pro');
+  assert.equal(pro.length, 1);
+  assert.deepEqual(pro[0].memberUids.sort(), ['deepseek-v4-pro-high', 'deepseek-v4-pro-max']);
+});
+
+test('official Fast Mode siblings join the official family and inherit its dimensions', () => {
+  const natives = [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
+    ...fastSiblings('claude-x', 'Claude X', ['low', 'medium', 'high', 'xhigh', 'max'])];
+  const roles = buildRoleLists(config(), natives);
+  const rows = roles.lead.filter(item => item.native && item.label === 'Claude X');
+  assert.equal(rows.length, 1, 'fast variants merge into the official row instead of a second same-named row');
+  assert.equal(rows[0].memberUids.length, 10, 'five tiers plus their five Fast Mode siblings');
+  assert.ok(rows[0].memberUids.includes('claude-x-high-fast'));
+
+  const catalog = buildCatalog(config(), natives);
+  const emitted = catalog.models.filter(model => model.kind === 'matrix' && /-fast-sidekick-dfbyok-/.test(model.uid));
+  assert.equal(emitted.length, 0,
+    'aggregated fast leads stay in the role list but are never emitted — a matrix entry cannot carry the Fast Mode order they would need');
+  const nonFast = catalog.models.filter(model => model.kind === 'matrix' && model.uid.startsWith('fusion-claude-x-high-sidekick-'));
+  assert.ok(nonFast.length > 0, 'the non-fast twins still pair with BYOK sidekicks');
+  for (const model of nonFast) {
+    const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+    assert.deepEqual(dims.Lead, { order: 7, name: 'Claude X', controlType: 3 },
+      'a non-fast official lead reuses the official Lead value: ' + model.uid);
+    assert.deepEqual(dims.Effort, { order: 3, name: 'High', controlType: 1 }, model.uid);
+  }
+});
+
+test('a non-fast non-official uid sharing an official base stays a single-member row', () => {
+  const natives = [OFFICIAL_SIDEKICK, ...officialSeries('gpt-sol', 4, 'GPT Sol'),
+    nativeLead('gpt-sol-none', 'GPT Sol No Thinking',
+      [{ key: 'Effort', order: 0, name: 'No Thinking', controlType: 1 }, { key: 'Fast Mode', order: 0 }])];
+  const roles = buildRoleLists(config(), natives);
+  const official = roles.lead.filter(item => item.native && item.label === 'GPT Sol');
+  assert.equal(official.length, 1);
+  assert.equal(official[0].memberUids.length, 5, 'the unrelated none variant must not join the official family');
+  const orphan = roles.lead.find(item => item.native && (item.memberUids || []).includes('gpt-sol-none'));
+  assert.deepEqual(orphan.memberUids, ['gpt-sol-none'], 'it stays selectable on its own row');
+  const catalog = buildCatalog(config(), natives);
+  const leadEfforts = new Map();
+  for (const model of catalog.models.filter(model => model.kind === 'matrix' && model.fusions === undefined)) {
+    const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+    if (dims.Lead?.name === 'GPT Sol' && dims.Effort) {
+      if (!leadEfforts.has(dims.Effort.name)) leadEfforts.set(dims.Effort.name, new Set());
+      leadEfforts.get(dims.Effort.name).add(dims.Effort.order);
+    }
+  }
+  for (const name of leadEfforts.keys()) {
+    assert.ok(Object.values(OFFICIAL_EFFORT_NAMES).includes(name),
+      'no invented Effort value appears under the official Lead: ' + name);
+  }
+  assert.equal(leadEfforts.has('No Thinking'), false, 'the none variant never invents an official tier');
+});
+
+test('emitted entries never give one dimension name two different orders', () => {
+  const catalog = buildCatalog(config(), [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
+    ...fastSiblings('claude-x', 'Claude X', ['low', 'medium', 'high', 'xhigh', 'max'])]);
+  for (const key of ['Lead', 'Effort', 'Sidekick']) {
+    const ordersByName = new Map();
+    for (const model of catalog.models) {
+      const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+      const value = dims[key];
+      if (!value || typeof value.name !== 'string' || value.order === undefined) continue;
+      if (!ordersByName.has(value.name)) ordersByName.set(value.name, new Set());
+      ordersByName.get(value.name).add(value.order);
+    }
+    for (const [name, orders] of ordersByName) {
+      assert.equal(orders.size, 1, `${key} "${name}" must keep a single order, got ${[...orders]}`);
+    }
+  }
+});
+
+test('no emitted matrix entry carries a fast lead uid', () => {
+  const catalog = buildCatalog(config(), [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
+    ...fastSiblings('claude-x', 'Claude X', ['low', 'medium', 'high', 'xhigh', 'max'])]);
+  for (const uid of catalog.matrixUids) {
+    const marker = uid.lastIndexOf('-sidekick-');
+    const leadUid = uid.slice('fusion-'.length, marker);
+    assert.ok(!leadUid.endsWith('-fast'), uid + ' must not be emitted — it duplicates its non-fast twin dimension for dimension');
+  }
+});
+
+test('no two emitted matrix entries share the exact same dimension tuple', () => {
+  const catalog = buildCatalog(config(), [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
+    ...fastSiblings('claude-x', 'Claude X', ['low', 'medium', 'high', 'xhigh', 'max'])]);
+  const seen = new Set();
+  for (const model of catalog.models.filter(model => model.kind === 'matrix')) {
+    const tuple = model.json.modelFamilyMetadata.entries
+      .map(entry => entry.key + ':' + (entry.value.order ?? '') + ':' + (entry.value.name ?? '')).join('|');
+    assert.ok(!seen.has(tuple), 'duplicate dimension tuple (the Fast twins are indistinguishable without the Fast Mode order): ' + model.uid);
+    seen.add(tuple);
+  }
+});
+
+test('a sidekick uid ending in -fast still pairs and emits', () => {
+  const natives = [OFFICIAL_SIDEKICK, nativeLead('swe-fast', 'SWE Fast')];
+  const cfg = { ...config(), roleInclusions: { sidekick: [{ nativeUid: 'swe-fast' }] } };
+  const catalog = buildCatalog(cfg, natives);
+  const marker = uid => uid.slice(uid.lastIndexOf('-sidekick-') + '-sidekick-'.length);
+  const emitted = [...catalog.matrixUids].filter(uid => marker(uid) === 'swe-fast');
+  assert.ok(emitted.length > 0, 'the -fast filter is lead-side only: a fast sidekick is a legitimate value of its own');
+  for (const uid of emitted) assert.equal(uid.slice('fusion-'.length, uid.lastIndexOf('-sidekick-')).endsWith('-fast'), false, uid);
+});
+
+test('lead row labels are globally unique after family aggregation', () => {
+  const roles = buildRoleLists(config(), [
+    OFFICIAL_SIDEKICK, ...officialSeries('gpt-sol', 4, 'GPT Sol'),
+    nativeLead('gpt-sol-none', 'GPT Sol No Thinking',
+      [{ key: 'Effort', order: 0, name: 'No Thinking', controlType: 1 }, { key: 'Fast Mode', order: 0 }]),
+    nativeLead('x-high', 'X High'), nativeLead('x-max', 'X Max'),
+    nativeLead('x-none', 'X')]);
+  const labels = roles.lead.map(item => item.label);
+  assert.equal(new Set(labels).size, labels.length,
+    'two rows sharing a label would collapse into one picker row: ' + JSON.stringify(labels.sort()));
 });

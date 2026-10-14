@@ -132,6 +132,28 @@ function stableOrders(keys, reserved) {
   return result;
 }
 
+// A native uid ends with its effort tier slug, optionally followed by -fast;
+// everything before that is the family base. Bare uids whose label carries a
+// tier (`swe-1-7` is "SWE-1.7 Max") keep themselves as the base — the label,
+// not the uid, decides the tier for them.
+const NATIVE_EFFORT_SUFFIX = /-(none|minimal|low|medium|high|xhigh|max|ultra)(?:-fast)?$/;
+function leadFamilyBase(uid) {
+  return uid.replace(NATIVE_EFFORT_SUFFIX, '') || uid;
+}
+
+// Display names a uid tier token maps to. `none` is "No Thinking" on native
+// models (glm-5-2-none, gpt-6-sol-none), distinct from the BYOK "None".
+const NATIVE_EFFORT_NAMES = { none: 'No Thinking', minimal: 'Minimal', low: 'Low', medium: 'Medium',
+  high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra' };
+
+// A family label is the member label with trailing effort/Fast/Thinking
+// markers stripped; members of one family share that base.
+const NATIVE_LABEL_SUFFIX = /(?:\s+(?:No Thinking|None|Minimal|Low|Medium|High|XHigh|Max|Ultra|Fast|Thinking))+$/;
+function leadFamilyLabel(label) {
+  const stripped = (typeof label === 'string' ? label : '').replace(NATIVE_LABEL_SUFFIX, '').trim();
+  return stripped || label || '';
+}
+
 function effortMetadata(effort) {
   const names = { none: 'None', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra' };
   const orders = { none: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 6, minimal: 7 };
@@ -436,12 +458,26 @@ function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles) {
   }
   for (const uid of conflicts) records.delete(uid);
   const leads = new Map(), sidekicks = new Map();
+  // Official families admit exactly two kinds of members: the officially
+  // declared uids and their Fast Mode siblings (Fast Mode is an orthogonal
+  // switch — same Lead, same Effort, Fast Mode != 0). Any other uid sharing
+  // the family base (e.g. gpt-6-sol-none under gpt-6-sol) must not join: it
+  // would invent an Effort value the official card does not offer.
+  const officialLeadBases = new Map(), officialEffortOrders = new Map();
+  for (const native of officialRoles.eligibleNativeLeads.values()) {
+    const base = leadFamilyBase(native.uid);
+    if (!officialLeadBases.has(base)) officialLeadBases.set(base, native.leadDimension);
+    const eff = native.effortDimension;
+    if (eff && Number.isSafeInteger(eff.order) && eff.name && !officialEffortOrders.has(eff.name)) {
+      officialEffortOrders.set(eff.name, eff.order);
+    }
+  }
   for (const native of records.values()) {
     if (!native.eligible) continue;
     const officialLead = officialRoles.eligibleNativeLeads.get(native.uid);
     const officialSidekick = officialRoles.eligibleNativeSidekicks.get(native.uid);
     if (officialLead) {
-      leads.set(native.uid, officialLead);
+      leads.set(native.uid, { ...officialLead, familyKey: `base:${leadFamilyBase(native.uid)}` });
     } else {
       // Non-official leads still come in effort series: derive the family base
       // from the observed Effort dimension (uid ends with its slug, optionally
@@ -458,6 +494,31 @@ function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles) {
         const labelSuffix = ` ${eff.name}${suffix.endsWith('-fast') ? ' Fast' : ''}`;
         record.leadBaseLabel = native.label.endsWith(labelSuffix) ? native.label.slice(0, -labelSuffix.length) : native.label;
       }
+      const baseUid = leadFamilyBase(native.uid);
+      const officialDim = officialLeadBases.get(baseUid);
+      const fastMode = (Array.isArray(native.fusionMetadata) ? native.fusionMetadata : [])
+        .some(dim => dim?.key === 'Fast Mode' && dim.order !== 0);
+      if (officialDim && fastMode) {
+        // A fast sibling joins the official family and inherits the official
+        // Lead identity (consumed by the family aggregation, so the family
+        // still reads as official even if the declared members were dropped as
+        // record conflicts), and its tier token maps onto the official Effort
+        // value. Fast leads are never emitted — a matrix entry cannot carry the
+        // Fast Mode order they would need — so what keeps an emitted entry off
+        // a hash-ordered duplicate is that refusal, not this identity; re-enable
+        // emission only together with this inheritance.
+        record.leadDimension = officialDim;
+        const token = (native.uid.match(NATIVE_EFFORT_SUFFIX) || [])[1];
+        const effortName = token ? NATIVE_EFFORT_NAMES[token] : '';
+        const effortOrder = effortName ? officialEffortOrders.get(effortName) : undefined;
+        if (Number.isSafeInteger(effortOrder)) {
+          record.effortDimension = { order: effortOrder, name: effortName, controlType: 1 };
+        }
+        record.familyKey = `base:${baseUid}`;
+      } else {
+        record.familyKey = officialDim ? `uid:${native.uid}` : `base:${baseUid}`;
+      }
+      record.familyLabelBase = leadFamilyLabel(native.label);
       leads.set(native.uid, record);
     }
     sidekicks.set(native.uid, officialSidekick || { ...native, dimension: undefined });
@@ -521,28 +582,40 @@ function buildRoleLists(config = {}, nativeModels = []) {
     }
   }
 
-  // Leads are effort series: official members group by the official lead
-  // dimension, other native models group by the family base derived from their
-  // own Effort dimension. A family is excluded when any member uid is excluded
-  // and selected when official or any member uid was included/saved.
+  // Leads are effort series: every native member groups by its uid's family
+  // base — official families additionally admit their Fast Mode siblings and
+  // keep the official dimension name. A family is excluded when any member
+  // uid is excluded and selected when official or any member uid was
+  // included/saved.
   const leadFamilies = new Map();
   for (const nativeLead of eligibleNativeLeads.values()) {
-    const dim = nativeLead.leadDimension;
-    const official = dim && Number.isSafeInteger(dim.order);
-    const key = official ? `dim:${dim.order}:${dim.name}` : `uid:${nativeLead.leadBaseUid || nativeLead.uid}`;
+    const key = nativeLead.familyKey || `uid:${nativeLead.uid}`;
     let family = leadFamilies.get(key);
-    if (!family) {
-      leadFamilies.set(key, family = {
-        official, order: official ? dim.order : Infinity, uids: [],
-        label: official ? (dim.name || nativeLead.uid) : (nativeLead.leadBaseLabel || nativeLead.label || nativeLead.uid),
-      });
+    if (!family) leadFamilies.set(key, family = { official: false, order: Infinity, members: [], label: '' });
+    family.members.push(nativeLead);
+    const dim = nativeLead.leadDimension;
+    if (dim && Number.isSafeInteger(dim.order)) {
+      family.official = true;
+      family.order = dim.order;
+      family.label = dim.name || nativeLead.uid;
     }
-    family.uids.push(nativeLead.uid);
   }
-  const orderedFamilies = [...leadFamilies.values()].map(family => (family.uids.sort(), family))
-    .sort((a, b) => a.order - b.order || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
+  const orderedFamilies = [...leadFamilies.values()].map(family => {
+    family.members.sort((a, b) => a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0);
+    family.uids = family.members.map(member => member.uid);
+    if (!family.label) family.label = family.members[0].familyLabelBase || family.members[0].label || family.members[0].uid;
+    return family;
+  }).sort((a, b) => a.order - b.order || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
 
+  // Two different families must never share a label — a stripped label that
+  // collides falls back to the member's own label, then to a uid suffix.
+  const usedLeadLabels = new Set(leadList.map(item => item.label));
   for (const family of orderedFamilies) {
+    if (usedLeadLabels.has(family.label)) {
+      const ownLabel = family.members.length === 1 ? (family.members[0].label || '') : '';
+      family.label = ownLabel && !usedLeadLabels.has(ownLabel) ? ownLabel : `${family.label} (${family.uids[0]})`;
+    }
+    usedLeadLabels.add(family.label);
     const repUid = family.uids[0];
     const ref = { nativeUid: repUid };
     const key = refKey(ref);
@@ -691,11 +764,23 @@ function buildCatalog(config = {}, nativeModels = []) {
   const selectedImportedLeads = leads.filter(lead => selectedLeadKeys.has(refKey({ providerId: lead.providerId, model: lead.model })));
   // Lead role items group official uids into effort families; expand every
   // selected family's member uids so the whole series emits combinations.
+  // Native fast-tier leads are aggregated and displayed in the role list but
+  // never emitted: our matrix entries cannot express the Fast Mode order the
+  // official Fast variants carry (declaring one would add a third Fast Mode
+  // option), so an emitted fast lead would duplicate its non-fast twin
+  // dimension for dimension. `staleFusionUids`/`resolveAssignment` also treat
+  // a `-fast` lead uid as illegitimate — not emitting keeps all three in step.
+  // Sidekicks are untouched: the official Sidekick dimension has no sub-tiers,
+  // so a fast sidekick uid is a legitimate value of its own.
+  const NATIVE_FAST_LEAD = /-fast$/;
   const selectedNativeLeadUids = new Set(), selectedNativeSidekickUids = new Set();
-  for (const [items, set] of [[roleSelection.lead, selectedNativeLeadUids], [roleSelection.sidekick, selectedNativeSidekickUids]]) {
+  for (const [role, items, set] of [['lead', roleSelection.lead, selectedNativeLeadUids], ['sidekick', roleSelection.sidekick, selectedNativeSidekickUids]]) {
     for (const item of items) {
       if (!item.selected || !item.native) continue;
-      for (const uid of item.memberUids || [item.ref.nativeUid]) set.add(uid);
+      for (const uid of item.memberUids || [item.ref.nativeUid]) {
+        if (role === 'lead' && NATIVE_FAST_LEAD.test(uid)) continue;
+        set.add(uid);
+      }
     }
   }
   const selectedAdditionalNativeLeads = [...additionalNativeLeads.values()].filter(native => selectedNativeLeadUids.has(native.uid));
