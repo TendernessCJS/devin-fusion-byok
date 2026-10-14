@@ -545,3 +545,90 @@ test('a push is refused when identity, capability or the payload do not line up'
   assert.deepEqual(await pushNativeModels({ root: legacy.root, port: legacy.backend.port, models, request: legacyFetch }),
     { pushed: 0, reason: 'unsupported' });
 });
+
+// A half-read SSE stream can leave a response that is neither finished nor
+// closed, so release() never runs and an unbounded drain never completes. That
+// made close() hang, which in turn made SIGTERM a no-op (its handler awaits
+// close()) and left an orphan backend only SIGKILL could remove.
+async function stuckFixture(t, drainTimeoutMs = 60) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-stuck-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  const held = [], logs = [];
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout,
+    require(name) {
+      // The RPC is accepted and then never answered: exactly the shape a dropped
+      // stream leaves behind.
+      if (name === './bridge.cjs') return { collect, async forward(req, res) { held.push(res); } };
+      return realRequire(name);
+    },
+  }, { filename });
+  const backend = await module.exports.startBackend({ root, port: 0, log: (...event) => logs.push(event), drainTimeoutMs });
+  t.after(async () => {
+    for (const res of held) res.destroy?.();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  return { root, backend, base: 'http://127.0.0.1:' + backend.port, held, logs, controlFile: actualBackend.controlFile(root) };
+}
+
+test('a request that never settles cannot block shutdown forever', async t => {
+  const f = await stuckFixture(t);
+  const inflight = fetch(f.base + API + 'GetChatMessage', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ modelUid: 'unknown-model', messages: [] }) }).catch(() => {});
+  for (let i = 0; i < 100 && !f.held.length; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.held.length, 1, 'the forwarded RPC is held in flight');
+
+  const outcome = await Promise.race([
+    f.backend.close().then(() => 'closed'),
+    new Promise(resolve => setTimeout(() => resolve('hung'), 1500)),
+  ]);
+  assert.equal(outcome, 'closed', 'close must resolve even with an unsettled request');
+  assert.ok(f.logs.some(([event]) => event === 'drain-timeout'), 'the abandoned drain is reported');
+  await f.backend.stopped;
+  assert.equal(fs.existsSync(f.controlFile), false, 'the control file is released so the next start is clean');
+  // The listening socket is released too: a fresh connect is refused, so a
+  // replacement backend can bind immediately instead of losing the race.
+  await assert.rejects(fetch(f.base + '/health'), 'the port is no longer served');
+  f.held[0].destroy?.();
+  await inflight;
+});
+
+test('close resolves promptly when nothing is in flight', async t => {
+  const f = await stuckFixture(t);
+  const started = Date.now();
+  await f.backend.close();
+  assert.ok(Date.now() - started < 1000, 'an idle close does not wait for the timeout');
+  assert.ok(!f.logs.some(([event]) => event === 'drain-timeout'), 'no drain was abandoned');
+  await f.backend.stopped;
+});
+
+test('a stuck monitor flush cannot block shutdown either', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-monitor-stuck-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  const logs = [];
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout,
+    require(name) {
+      // A queue that never drains: close() must not inherit its hang.
+      if (name === './monitor.cjs') return { createMonitor: () => ({ record() {}, async snapshot() { return {}; }, close: () => new Promise(() => {}) }) };
+      return realRequire(name);
+    },
+  }, { filename });
+  const backend = await module.exports.startBackend({ root, port: 0, log: (...event) => logs.push(event), drainTimeoutMs: 60 });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const outcome = await Promise.race([
+    backend.close().then(() => 'closed'),
+    new Promise(resolve => setTimeout(() => resolve('hung'), 1500)),
+  ]);
+  assert.equal(outcome, 'closed');
+  assert.ok(logs.some(([event]) => event === 'monitor-close-timeout'), 'the abandoned flush is reported');
+  await backend.stopped;
+});

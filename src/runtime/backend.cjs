@@ -20,6 +20,10 @@ const MANAGEMENT_PROTOCOL = 1;
 // an older backend simply sees no flag and skips pushing instead of erroring.
 const NATIVE_MODELS_INGEST = 1;
 const MAX_INGEST_ENTRIES = 5000;
+// Upper bound for each shutdown wait (in-flight requests, monitor flush, socket
+// closure). Generous enough that ordinary drains finish first, short enough that
+// a stuck one cannot turn SIGTERM into a no-op.
+const DRAIN_TIMEOUT_MS = 5000;
 const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', 'monitor.cjs', 'monitor-stats.cjs', 'native-cache.cjs', '../config.cjs', '../proxy.cjs', '../update.cjs', '../catalog.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/chat.cjs', '../protocol/responses.cjs', '../protocol/anthropic.cjs'];
 function sourceId() {
   const hash = crypto.createHash('sha256');
@@ -33,7 +37,7 @@ function runtimeIdentity(root, freshSource = false) {
 }
 function controlFile(root) { return path.join(root, 'runtime-control.json'); }
 
-async function startBackend({ root, port = PORT, log = () => {} }) {
+async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs = DRAIN_TIMEOUT_MS }) {
   const identity = runtimeIdentity(root);
   const instanceId = crypto.randomUUID();
   const controlToken = crypto.randomBytes(32).toString('hex');
@@ -66,6 +70,37 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
   function flushNativeCache() {
     if (cacheTimer !== undefined) { clearTimeout(cacheTimer); cacheTimer = undefined; }
     try { saveNativeCache(nativeCacheFile, [...observedNatives.values()]); } catch {}
+  }
+  // Waiting for a drain is not the same as being able to wait forever. A
+  // half-read SSE stream can leave a request that never settles — the response
+  // is neither finished nor closed — so `release()` never runs, the drain never
+  // completes, and `close()`/`stopped` never resolve. That is what made SIGTERM
+  // a no-op (its handler awaits `close()`) and left an orphan backend that only
+  // SIGKILL could remove. Bounded waits keep shutdown finite; whatever is still
+  // open is force-closed afterwards.
+  function waitForDrain(ms) {
+    if (activeRequests === 0) return Promise.resolve(true);
+    return new Promise(resolve => {
+      let timer;
+      const waiter = () => { clearTimeout(timer); resolve(true); };
+      timer = setTimeout(() => {
+        const index = drainedWaiters.indexOf(waiter);
+        if (index >= 0) drainedWaiters.splice(index, 1);
+        resolve(false);
+      }, ms);
+      timer.unref?.();
+      drainedWaiters.push(waiter);
+    });
+  }
+  // Bounded too: an abandoned queue is already unwritable, and blocking the exit
+  // on it would reintroduce the hang this whole path exists to avoid.
+  async function closeMonitor(ms) {
+    if (!monitor) return true;
+    let timer;
+    const bound = new Promise(resolve => { timer = setTimeout(() => resolve(false), ms); timer.unref?.(); });
+    try {
+      return await Promise.race([Promise.resolve(monitor.close()).then(() => true, () => true), bound]);
+    } catch { return true; } finally { clearTimeout(timer); }
   }
   function scheduleNativeCacheSave() {
     if (cacheTimer !== undefined) return;
@@ -277,17 +312,29 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
     draining = true;
     closing = (async () => {
       flushNativeCache();
-      if (activeRequests > 0) await new Promise(resolve => drainedWaiters.push(resolve));
-      try { await monitor?.close(); } catch {}
-      await new Promise(resolve => {
-        server.close(() => {
-          try {
-            if (JSON.parse(fs.readFileSync(stateFile, 'utf8')).instanceId === instanceId) fs.unlinkSync(stateFile);
-          } catch { /* Another runtime may already own the control file. */ }
-          resolve();
-        });
+      if (!await waitForDrain(drainTimeoutMs)) log('drain-timeout', { activeRequests });
+      if (!await closeMonitor(drainTimeoutMs)) log('monitor-close-timeout');
+      const releaseControlFile = () => {
+        try {
+          if (JSON.parse(fs.readFileSync(stateFile, 'utf8')).instanceId === instanceId) fs.unlinkSync(stateFile);
+        } catch { /* Another runtime may already own the control file. */ }
+      };
+      // `server.close()` waits for every connection to end, so a lingering
+      // keep-alive or stream keeps the port bound and `stopped` pending. Bound
+      // it, then force the rest closed: an idle-only sweep is not enough, and
+      // the process must always reach `stopped` so its exit path runs.
+      const closed = await new Promise(resolve => {
+        let timer;
+        server.close(() => { clearTimeout(timer); releaseControlFile(); resolve(true); });
         server.closeIdleConnections?.();
+        timer = setTimeout(() => {
+          server.closeAllConnections?.();
+          releaseControlFile();
+          resolve(false);
+        }, drainTimeoutMs);
+        timer.unref?.();
       });
+      if (!closed) log('close-timeout');
       resolveStopped();
     })();
     return closing;

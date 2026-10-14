@@ -534,13 +534,24 @@ test('a poorer backend sync never downgrades the richer bridge observation', asy
   assert.equal(find().disabled, true, 'fresher scalar fields are not masked');
   assert.deepEqual(find().sidekickDimension, rich.sidekickDimension, 'and the dimensions survive it');
 });
+// The push runs on a real timer, so settling by microtask/setImmediate rounds is
+// not enough to observe it: wait for the effect with a deadline instead of
+// assuming a tick count.
+const waitFor = async (check, ms = 1000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (check()) return true;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  return check();
+};
+
 test('the host pushes its richer observations to the backend once they grow', async t => {
   const f = fixture(t);
   f.setNativeRead(async () => ({ status: 'ready', models: [{ uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }] }));
   await f.activate(f.context);
-  await f.settle();
+  assert.ok(await waitFor(() => f.pushes().length >= 1), 'activation already offers what it has');
   const first = f.pushes().length;
-  assert.ok(first >= 1, 'activation already offers what it has');
   // The payload crosses the sandbox realm, so compare serialized values.
   const offered = JSON.parse(JSON.stringify(f.pushes().at(-1).models));
   assert.deepEqual(offered.map(entry => entry.uid), ['swe-2-high']);
@@ -551,14 +562,17 @@ test('the host pushes its richer observations to the backend once they grow', as
   // native extension revealed has to come through here.
   f.bridges.at(-1).onNativeModels([{ uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'],
     sidekickDimension: { order: 2, name: 'SWE-2 High', fastModeOrder: 0 } }]);
-  await f.settle(40);
-  assert.ok(f.pushes().length > first, 'a richer observation is offered too');
+  assert.ok(await waitFor(() => f.pushes().length > first), 'a richer observation is offered too');
   const latest = JSON.parse(JSON.stringify(f.pushes().at(-1).models)).find(entry => entry.uid === 'swe-2-high');
   assert.deepEqual(latest.sidekickDimension, { order: 2, name: 'SWE-2 High', fastModeOrder: 0 });
 
   // A steady state stops sending: the same key must not keep pushing forever.
   const settled = f.pushes().length;
-  await f.settle(40);
+  // Drive refreshes with the same observation set: without the "unchanged view
+  // is not re-sent" gate each one schedules another push, so the window has to
+  // outlast the 5s throttle for the assertion to mean anything.
+  for (let i = 0; i < 3; i++) await f.managerOptions().refreshNativeModels();
+  await new Promise(resolve => setTimeout(resolve, 5500));
   assert.equal(f.pushes().length, settled, 'an unchanged view is not re-sent');
 });
 
@@ -567,8 +581,7 @@ test('a failing push is logged and never disturbs the activation flow', async t 
   f.setPushResult({ pushed: 0, reason: 'unavailable' });
   f.setNativeRead(async () => ({ status: 'ready', models: [{ uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }] }));
   await f.activate(f.context);
-  await f.settle(40);
-  assert.ok(f.logs.some(line => line.includes('native-push-skip')), 'the skip is reported');
+  assert.ok(await waitFor(() => f.logs.some(line => line.includes('native-push-skip'))), 'the skip is reported');
   assert.equal(f.counts().installed, 1);
   assert.ok(f.logs.every(line => !line.includes('"event":"error"')));
 });
@@ -576,6 +589,6 @@ test('a failing push is logged and never disturbs the activation flow', async t 
 test('a disabled plugin never pushes', async t => {
   const f = fixture(t, { config: { enabled: false } });
   await f.activate(f.context);
-  await f.settle(40);
+  await new Promise(resolve => setTimeout(resolve, 250));
   assert.deepEqual(f.pushes(), []);
 });

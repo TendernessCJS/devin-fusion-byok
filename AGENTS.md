@@ -76,6 +76,7 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 - **陈旧 emit 条目的判别指纹**：官方 fusion 条目恒带能力记录（proto field 32，含 `fusion-sidekick-*` 注册条目），我方 emit 永不写 field 32——「`fusion-*` uid 且无 f32」即我方条目（含无 `dfbyok` 标记的 native×native 形态，`ownUid`/`matrixUids` 都抓不住它们）。若未来给我方条目补 field 32 或额外 harness，必须同步更新该指纹；`team_settings` 白名单里的陈旧 uid 是死指针、无对应条目，不清理。
 - **清理条件必须保守：不在 emit 集合里 ≠ 陈旧**。`staleFusionUids` 的完整形态是 `{ emitted, known, excluded }`——只有「uid 拆不出 lead/sidekick」「某一侧已不在 `known`（模型消失 / BYOK uid digest 随配置变了）」「某一侧被该角色显式排除」才判为可删。**禁止退回「不在 emitted 就删」**（传 Set/Array 的旧形式保留该语义，仅为兼容测试）：我们的 emit 集合会随原生 Sidekick 维度到达时序在 24↔155 之间波动，按缺席删除一次就静默删掉 131 条有效组合（2026-10-14 实测：`bak` 24 条 vs 现文件 155 条）。角色排除仍会退休条目，否则关掉的模型会继续把自己的维度值喂进 picker。
 - **原生观测的两条通道必须按「谁更完整」合并，不能后者覆盖**：backend 看的是 CLI 侧流量（CLI 常读自己的缓存、很少重取 → 它的观测可能长期是 seed 的贫化形态），扩展宿主看的是原生扩展 UI 侧的流量（带完整 field 30）。`mergeNativeEntry`（`native-cache.cjs`）在合并时保留 `sidekickDimension`/`fusionMetadata`/`harnessUids`，缺失的一方不会把完整的一方降级；标量字段（`disabled`/`label`）仍以新到者为准。**一旦被贫化条目覆盖，所有原生 Sidekick 解析不到 → 镜像组合消失 → 又被上一条的清理逻辑删除**，这是级联失效。`refreshNativeModels` 与 `observeNativeModels` 都已走该合并。
+- **关闭路径的每一段等待都必须有上限**：`close()` 里三段等待（在途请求排水、监控队列 flush、`server.close()` 等连接结束）原本都无上限。半读的 SSE 流会让请求既不 finish 也不 close → `release()` 永不执行 → 排水永不完成 → `close()`/`stopped` 永不 resolve；而 SIGTERM 的处理器本身就在 `await close()`，于是**信号变成空操作**，进程只能 SIGKILL（2026-10-14 实测：必须 `kill -9` 才清掉孤儿 backend）。现在三段都用 `drainTimeoutMs` 兜底，超时后 `closeAllConnections()` 强制收尾并继续走到 `stopped`，保证「关得掉、也杀得掉」。**不要退回无上限等待**，也不要只在超时日志里记录而不强制关闭。
 - backend 的原生缓存落盘条件包含「任一入口的维度变富」，不再只看条目数：seed 已是满员（875）时条目数永不变化，只看数量就永远不会把更完整的观测写回磁盘，每次重启都重新 seed 回贫化形态（`runtime.log` 的 `native-observed` 全天只出现 2 次就是这个征兆）。
 
 ## 平台支持
@@ -167,7 +168,7 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 | `src/config.cjs`、`test/config.test.cjs` | 模型发现使用独立 Agent 的 `directFetch`；显式 request 注入测试；不依赖宿主 fetch 或全局 Agent |
 | `src/extension.cjs`、`test/extension-lifecycle.test.cjs` | 错误自动继续达到预算后显示中文警告，安全处理提示 Promise；激活时执行一次带备份的预设退役迁移；`checkCliCaches` 返回报告并同时服务面板手动刷新 |
 | `src/runtime/auto-continue.cjs`、`test/auto-continue.test.cjs` | 连续错误最多自动重试 5 次、窗口 10 分钟；停止时结算并清理，回调不能影响新回合 |
-| `src/runtime/backend.cjs`、`test/backend.test.cjs` | 关闭前同时等待响应与处理器结束，再刷监控队列、最后释放端口；源码身份包含 `proxy.cjs` 与 `monitor-stats.cjs` |
+| `src/runtime/backend.cjs`、`test/backend.test.cjs` | 关闭前同时等待响应与处理器结束，再刷监控队列、最后释放端口；**每一段等待都有上限**（`drainTimeoutMs`，默认 5 秒）、超时记 `drain-timeout`/`monitor-close-timeout`/`close-timeout` 并强制 `closeAllConnections`；宿主可 `POST /_runtime/native-models` 推送完整观测（`/health` 的 `nativeModelsIngest` 为能力标志）；源码身份包含 `proxy.cjs` 与 `monitor-stats.cjs` |
 | `src/runtime/bridge.cjs`、`test/bridge.test.cjs` | 转发增加连接 10 秒、响应头 120 秒、流空闲 120 秒超时；无流总时长限制，取消/错误清理计时；`catalog` 日志只报 `models`/`matrix`（预设计数已删） |
 | `src/panel/controller.cjs` | state 成功投递后才去重；发送串行化，ready 强制同步，旧面板不得污染新缓存 |
 | `src/panel/view.cjs` | tab 顺序「模型 / Fusion / 用量 / Goal / Fast Context / 设置」；Fusion 页即官方 Fusion 卡片的角色配置（Lead/Sidekick 勾选），默认 tab 为「模型」；设置页含「官方模型显示」与「CLI 缓存」（手动刷新入口）；会话选择器单行省略、日期控件、监控分页与诊断分行布局 |
@@ -184,5 +185,6 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 ## 测试注意
 
 - `test/support/installed-renderer.cjs` 与 5 处条件 `skip` 依赖本机已安装的 Devin 原生渲染文件；缺失时会跳过而非失败。
+- **等异步效果不要靠「跑几轮 `setImmediate`」**：扩展 fixture 的 `settle(n)` 只排空微任务与 `setImmediate`，**不会让 `setTimeout` 触发**（实测 20 轮后 `setTimeout(0)` 仍未执行）。依赖真实定时器的行为（例如宿主的推送节流）必须用带 deadline 的轮询等待，否则测试会在负载变化时假性通过或假性失败——`extension-lifecycle` 的推送用例就这样脆弱过一轮。反过来，若某断言依赖「节流窗口已过」，等待时间必须**长于**节流间隔，否则删掉节流门控也测不出来。
 - Goal 与 Fast Context 目前只有模拟连接 / 合成代码的测试，尚未在真实 Devin 窗口完成端到端验收。
 - 「重启 Devin」触发即退出 Devin，无法在会话内端到端验证；其探测与时序由 `test/app-restart.test.cjs` 的合成 app 覆盖。
