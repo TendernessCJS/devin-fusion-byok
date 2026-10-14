@@ -390,7 +390,7 @@ async function activate(context) {
     return operation;
   };
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.selectFusion', run(async () => {
-    const choices = Object.entries(catalog().fusions).map(([uid, item]) => ({ label: item.label || uid, uid }));
+    const choices = catalog().models.filter(model => model.kind === 'fusion').map(model => ({ label: model.label || model.uid, uid: model.uid }));
     if (!choices.length) { management?.open(); vscode.window.showInformationMessage('请先在控制面板新建并命名 Fusion 预设。'); return; }
     const choice = await vscode.window.showQuickPick(choices, { title: '选择 Fusion 预设', matchOnDescription: true }); if (!choice) return;
     await saveFusionChoice(choice.uid);
@@ -427,11 +427,13 @@ async function activate(context) {
   const reconcileSelection = async () => {
     const settings = vscode.workspace.getConfiguration('devin.acp');
     const preferences = globalSetting(settings, 'agentPreferences'), current = preferences['devin-cli']?.model;
-    if (!/^(?:fusion-)?dfbyok-/.test(current || '') || catalog().models.some(model => model.uid === current)) return;
+    const isOwnSelection = uid => typeof uid === 'string' &&
+      (/^(?:fusion-)?dfbyok-/.test(uid) || (catalog().matrixUids instanceof Set && catalog().matrixUids.has(uid)));
+    if (!isOwnSelection(current) || catalog().models.some(model => model.uid === current)) return;
     const receipt = readReceipt(root, context.extensionPath);
     const changes = receipt.changes.filter(change => change.path[0] === 'devin.acp.agentPreferences');
     const restored = restoreObject({ 'devin.acp.agentPreferences': preferences }, changes).value['devin.acp.agentPreferences'];
-    if (/^(?:fusion-)?dfbyok-/.test(restored['devin-cli']?.model || '')) delete restored['devin-cli'].model;
+    if (isOwnSelection(restored['devin-cli']?.model)) delete restored['devin-cli'].model;
     await settings.update('agentPreferences', restored, vscode.ConfigurationTarget.Global);
   };
   const statusBar = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 20);
@@ -441,7 +443,7 @@ async function activate(context) {
   }
   let nativeSyncSize = -1;
   const updateStatusBar = () => {
-    try { if (statusBar) statusBar.tooltip = `Fusion BYOK：目录 ${catalog().models.length} 模型 / ${Object.keys(catalog().fusions).length} Fusion 预设（原生已观测 ${nativeModels.size}）`; } catch {}
+    try { if (statusBar) statusBar.tooltip = `Fusion BYOK：目录 ${catalog().models.length} 条目（Fusion 预设 ${catalog().models.filter(model => model.kind === 'fusion').length} / 官方卡片镜像 ${catalog().matrixUids?.size ?? 0}）· 原生已观测 ${nativeModels.size}`; } catch {}
   };
   const pickerRefresh = createPickerRefresh({ log,
     executeCommand: command => vscode.commands.executeCommand(command),

@@ -74,7 +74,7 @@ function encodeConfig(config) {
     s(22, config.modelUid), m(23, infoRaw), m(30, encodeFamily(config.modelFamilyMetadata))]);
 }
 
-function configFor({ uid, label, family, familyUid, contextWindow, maxOutputTokens, effort, fusion, supportsImages, inferenceServerUrl }) {
+function configFor({ uid, label, family, familyUid, contextWindow, maxOutputTokens, effort, fusion, supportsImages, inferenceServerUrl, kind }) {
   const json = {
     label, modelUid: uid, provider: fusion ? 1 : 2,
     maxTokens: contextWindow, supportsImages: !!supportsImages,
@@ -89,7 +89,7 @@ function configFor({ uid, label, family, familyUid, contextWindow, maxOutputToke
     },
     modelFamilyMetadata: family,
   };
-  return { uid, label, effort, kind: fusion ? 'fusion' : 'model', json, raw: encodeConfig(json) };
+  return { uid, label, effort, kind: kind || (fusion ? 'fusion' : 'model'), json, raw: encodeConfig(json) };
 }
 
 function discoverOfficialRoles(nativeModels, hiddenSet, config = {}) {
@@ -593,8 +593,16 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
     if (typeof preset?.id === 'string') idCounts.set(preset.id, (idCounts.get(preset.id) || 0) + 1);
   }
   const presetStates = [];
-  const matrixUids = new Set(), matrixLeadOrders = new Map(), matrixSideOrders = new Map();
-  const matrixOrder = (map, key) => { if (!map.has(key)) map.set(key, 20 + map.size); return map.get(key); };
+  const matrixUids = new Set();
+  // Native uids can be eligible in both roles; keep role-specific harnesses
+  // separate so a uid used as sidekick never inherits the fusion lead harness.
+  const nativeHarnessUids = new Map(), nativeLeadHarnessUids = new Map();
+  for (const native of [...eligibleNativeSidekicks.values(), ...presetNativeSidekicks.values()]) {
+    if (!nativeHarnessUids.has(native.uid)) nativeHarnessUids.set(native.uid, native.harnessUids);
+  }
+  for (const native of [...eligibleNativeLeads.values(), ...presetNativeLeads.values()]) {
+    if (!nativeLeadHarnessUids.has(native.uid)) nativeLeadHarnessUids.set(native.uid, native.leadHarnessUids || native.harnessUids);
+  }
   const labels = new Set([...models.map(item => item.label), ...nativeModels.map(item => item.label)]);
   const presetModels = [];
   // An unresolved preset that references a native model may simply predate the
@@ -631,31 +639,60 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
       ...(lead.native ? { leadHarnessUids: lead.leadHarnessUids } : {}),
       ...(sidekick.native ? { sidekickHarnessUids: sidekick.harnessUids } : {}) };
     fusions[uid] = { uid, label, presetId: preset.id, ...members };
-    // Mirror the preset into the official Fusion family card: an
-    // official-shaped `fusion-<lead>-sidekick-<side>` uid plus self-declared
-    // dimension values makes our BYOK members selectable in the native
-    // Lead/Effort/Sidekick dropdowns. Pure-native pairs are skipped — they
-    // are already covered (or would collide) in the official catalog.
-    if (config.fusionMatrix === true && (!lead.native || !sidekick.native)) {
-      const matrixUid = `fusion-${lead.uid}-sidekick-${sidekick.uid}`;
-      if (!matrixUids.has(matrixUid)) {
-        matrixUids.add(matrixUid);
-        fusions[matrixUid] = { uid: matrixUid, label, presetId: preset.id, ...members };
+  }
+  // Mirror our members into the official Fusion family card: official-shaped
+  // `fusion-<lead>-sidekick-<side>` uids with self-declared dimension values
+  // make BYOK models selectable in the native Lead/Effort/Sidekick dropdowns.
+  // The picker derives each dimension's choices from entries sharing the Lead
+  // value, so every lead needs the full cross product of sidekicks (and its own
+  // effort variants) or the dropdown locks to a single value. Pure-native
+  // pairs are skipped — the official catalog already covers them and a uid
+  // collision would shadow the official entry.
+  if (config.fusionMatrix === true) {
+    const sidekickPools = new Map();
+    for (const item of candidates.sidekick) {
+      const key = item.native ? `native${item.uid}` : item.key;
+      if (!sidekickPools.has(key)) sidekickPools.set(key, []);
+      sidekickPools.get(key).push(item);
+    }
+    const sidekickReps = [...sidekickPools.values()].map(variants =>
+      variants.find(item => !item.effort) || variants.find(item => item.effort === 'high') || variants[0]);
+    const pairs = [], leadNames = new Set(), sideNames = new Set();
+    for (const lead of candidates.lead) {
+      for (const sidekick of sidekickReps) {
+        if (lead.native && sidekick.native) continue;
         const leadDim = lead.native ? lead.label : lead.familyLabel;
-        const effort = lead.effort ? effortMetadata(lead.effort) : null;
-        presetModels.push(configFor({ ...lead, uid: matrixUid, label: `Fusion (${leadDim} + ${sidekick.label})`,
-          inferenceServerUrl: 'https://server.codeium.com',
-          family: { modelFamilyLabel: 'Fusion', entries: [
-            { key: 'Lead', value: { order: matrixOrder(matrixLeadOrders, leadDim), name: leadDim, controlType: 3 } },
-            ...(effort ? [{ key: 'Effort', value: { order: effort.order, name: effort.name, controlType: 1 } }] : []),
-            { key: 'Sidekick', value: { order: matrixOrder(matrixSideOrders, sidekick.label), name: sidekick.label, controlType: 3 } },
-            { key: 'Fast Mode', value: { order: 0, name: '', controlType: 2 } },
-            { key: 'Recommended Sidekick', value: { order: 0, name: sidekick.label, controlType: 0 } },
-          ] }, familyUid: 'fusion', fusion: true }));
+        const sideDim = sidekick.native ? sidekick.label : sidekick.familyLabel;
+        const uid = `fusion-${lead.uid}-sidekick-${sidekick.uid}`;
+        if (matrixUids.has(uid)) continue;
+        leadNames.add(leadDim); sideNames.add(sideDim);
+        pairs.push({ lead, sidekick, leadDim, sideDim, uid });
       }
     }
+    const leadOrders = new Map([...leadNames].sort().map((name, index) => [name, 20 + index]));
+    const sideOrders = new Map([...sideNames].sort().map((name, index) => [name, 20 + index]));
+    for (const { lead, sidekick, leadDim, sideDim, uid } of pairs) {
+      matrixUids.add(uid);
+      const leadLabel = lead.native ? lead.label
+        : lead.familyLabel + (lead.effort ? ` ${effortMetadata(lead.effort).name}` : '');
+      const label = `Fusion (${leadLabel} + ${sideDim})`;
+      const effort = lead.effort ? effortMetadata(lead.effort) : null;
+      fusions[uid] = { uid, label, leadUid: lead.uid, sidekickUid: sidekick.uid,
+        leadNative: lead.native, sidekickNative: sidekick.native,
+        ...(lead.native ? { leadHarnessUids: lead.leadHarnessUids } : {}),
+        ...(sidekick.native ? { sidekickHarnessUids: sidekick.harnessUids } : {}) };
+      presetModels.push(configFor({ ...lead, uid, label,
+        inferenceServerUrl: 'https://server.codeium.com',
+        family: { modelFamilyLabel: 'Fusion', entries: [
+          { key: 'Lead', value: { order: leadOrders.get(leadDim), name: leadDim, controlType: 3 } },
+          ...(effort ? [{ key: 'Effort', value: { order: effort.order, name: effort.name, controlType: 1 } }] : []),
+          { key: 'Sidekick', value: { order: sideOrders.get(sideDim), name: sideDim, controlType: 3 } },
+          { key: 'Fast Mode', value: { order: 0, name: '', controlType: 2 } },
+          { key: 'Recommended Sidekick', value: { order: 0, name: sideDim, controlType: 0 } },
+        ] }, familyUid: 'fusion', fusion: true, kind: 'matrix' }));
+    }
   }
-  return { models: [...presetModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids, matrixUids,
+  return { models: [...presetModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids, matrixUids, nativeHarnessUids, nativeLeadHarnessUids,
     presetStates, savedPresets, migratedFrom,
     migrationPending: !Object.hasOwn(config, 'fusionPresets') && !!config.defaultFusionUid && !migratedFrom,
     presetCandidates: Object.fromEntries(Object.entries(candidates).map(([role, items]) => [role, items.map(item => ({ ref: item.ref, label: item.label }))])),
@@ -932,7 +969,7 @@ function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNati
   for (const label of hiddenLabels) if (retainedLabels.has(label)) hiddenLabels.delete(label);
   const labels = models.map(model => model.label);
   const groups = [{ name: '我的 Fusion', items: models.filter(model => model.kind === 'fusion') },
-    { name: OWN_GROUP, items: models.filter(model => model.kind !== 'fusion') }]
+    { name: OWN_GROUP, items: models.filter(model => model.kind === 'model') }]
     .filter(group => group.items.length).map(group => concat([s(1, group.name), ...group.items.map(model => s(2, model.label))]));
   let sorts = 0;
   const result = preserved.map(field => {
@@ -993,7 +1030,7 @@ function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativ
   }
   for (const label of hiddenLabels) if (retainedLabels.has(label)) hiddenLabels.delete(label);
   const groups = [{ groupName: '我的 Fusion', modelLabels: models.filter(model => model.kind === 'fusion').map(model => model.label) },
-    { groupName: OWN_GROUP, modelLabels: models.filter(model => model.kind !== 'fusion').map(model => model.label) }].filter(group => group.modelLabels.length);
+    { groupName: OWN_GROUP, modelLabels: models.filter(model => model.kind === 'model').map(model => model.label) }].filter(group => group.modelLabels.length);
   const append = sort => ({ ...sort, groups: [...groups, ...(sort.groups || []).map(value => {
     const labelsKey = has(value, 'modelLabels') ? 'modelLabels' : has(value, 'model_labels') ? 'model_labels' : '';
     if (!labelsKey || !Array.isArray(value[labelsKey]) || !hiddenLabels.size) return value;
@@ -1114,6 +1151,22 @@ function resolveAssignment(data, format = {}, catalog, lockedFusionUids) {
     if (!fusion && uid.startsWith('fusion-') && !ownUid(uid) && lockedFusionUids instanceof Set && lockedFusionUids.has(uid)) {
       fusion = defaultFusion(catalog);
       redirected = !!fusion;
+    }
+    // The picker may allow combinations we never emitted (e.g. a BYOK lead
+    // with an official sidekick outside our pools). Split official-shaped
+    // uids instead of failing. Fast-mode variants are refused: BYOK has no
+    // fast capability, so downgrading silently would fake success.
+    if (!fusion) {
+      const marker = typeof uid === 'string' ? uid.lastIndexOf('-sidekick-') : -1;
+      if (marker > 'fusion-'.length && uid.startsWith('fusion-')) {
+        const leadUid = uid.slice('fusion-'.length, marker), sidekickUid = uid.slice(marker + '-sidekick-'.length);
+        if (sidekickUid && !leadUid.endsWith('-fast')) {
+          const leadNative = !ownUid(leadUid), sidekickNative = !ownUid(sidekickUid);
+          fusion = { uid, label: uid, leadUid, sidekickUid, leadNative, sidekickNative,
+            ...(leadNative ? { leadHarnessUids: catalog?.nativeLeadHarnessUids?.get(leadUid) } : {}),
+            ...(sidekickNative ? { sidekickHarnessUids: catalog?.nativeHarnessUids?.get(sidekickUid) } : {}) };
+        }
+      }
     }
     if (!fusion) return null;
     const modelUid = leadRouter ? fusion.sidekickUid : fusion.leadUid;

@@ -46,6 +46,7 @@ function fixture(t, initial = {}) {
   let fetchImpl = async () => new Response(JSON.stringify({ ...identity, draining: false }));
   let injectionGate = null;
   let nativeRead = async () => ({ status: 'empty', models: [] });
+  let matrixUids = new Set(), extraCatalogModels = [];
   const overrides = {
     vscode,
     'node:fs': { ...fs, watchFile: (_file, _options, callback) => watchers.push(callback), unwatchFile: () => {} },
@@ -59,8 +60,12 @@ function fixture(t, initial = {}) {
       writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)),
       importLegacy: () => ({}), discover: async () => 2,
     },
-    './catalog.cjs': { normalizeFusionConfig: config => config, buildCatalog: config => ({ models: config.providers?.length ? ['own'] : [],
-      fusions: config.providers?.length ? { 'fusion-dfbyok-selected': { label: 'CPA Fusion' }, 'fusion-dfbyok-another': { label: 'CPA Fusion Alt' } } : {} }) },
+    './catalog.cjs': { normalizeFusionConfig: config => config, buildCatalog: config => ({ models: config.providers?.length
+        ? [{ uid: 'dfbyok-own', label: 'own', kind: 'model' },
+          { uid: 'fusion-dfbyok-selected', label: 'CPA Fusion', kind: 'fusion' },
+          { uid: 'fusion-dfbyok-another', label: 'CPA Fusion Alt', kind: 'fusion' }, ...extraCatalogModels] : [],
+      fusions: config.providers?.length ? { 'fusion-dfbyok-selected': { label: 'CPA Fusion' }, 'fusion-dfbyok-another': { label: 'CPA Fusion Alt' } } : {},
+      matrixUids }) },
     './runtime/native-models.cjs': { readNativeModels: options => nativeRead(options) },
     './runtime/goal-continue.cjs': { installGoalContinue: () => null },
     './runtime/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
@@ -79,11 +84,15 @@ function fixture(t, initial = {}) {
     } },
   };
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, exports: module.exports, process,
+  const sandbox = { module, exports: module.exports, process,
     AbortController, AbortSignal, setInterval, clearInterval, setTimeout: (fn, _ms) => setTimeout(fn, 0), clearTimeout,
     fetch: (...args) => fetchImpl(...args),
     require: name => Object.hasOwn(overrides, name) ? overrides[name] : realRequire(name),
-  }, { filename });
+  };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), sandbox, { filename });
+  // Realm boundaries break instanceof inside the sandboxed module, so the
+  // matrix uid set must be built with the sandbox realm's Set constructor.
+  const vmSet = vm.runInNewContext('Set', sandbox);
   const context = { globalStorageUri: { fsPath: root }, extensionPath, subscriptions: [],
     globalState: { get: (key, fallback) => state.has(key) ? state.get(key) : fallback, update: async (key, value) => value === undefined ? state.delete(key) : state.set(key, value) } };
   t.after(async () => { await module.exports.deactivate(); context.subscriptions.forEach(value => value.dispose()); });
@@ -91,6 +100,8 @@ function fixture(t, initial = {}) {
     preferenceListeners, managerOptions: () => managerOptions, spawns, autoContinueOptions: () => autoContinueOptions,
     setFetch: impl => { fetchImpl = impl; },
     setNativeRead: impl => { nativeRead = impl; },
+    setMatrixUids: uids => { matrixUids = new vmSet(uids); },
+    setCatalogModels: models => { extraCatalogModels = models; },
     gateInjection: () => { let release; injectionGate = new Promise(resolve => { release = resolve; }); return release; },
     setWarningResult: value => { warningResult = value; },
     firePreference: (key = 'devin.acp.agentPreferences') => Promise.all(preferenceListeners.map(fn => fn({ affectsConfiguration: name => name === key }))),
@@ -129,7 +140,7 @@ test('disable preserves subsequent user choices for native model and server URL'
 });
 test('another window disabling stops catalog injection immediately and releases the hook on file notification', async t => {
   const f = fixture(t); await f.activate(f.context);
-  assert.equal(f.bridges[0].getCatalog().models.length, 1);
+  assert.equal(f.bridges[0].getCatalog().models.length, 3);
   const config = JSON.parse(fs.readFileSync(f.configFile)); config.enabled = false; fs.writeFileSync(f.configFile, JSON.stringify(config));
   assert.equal(f.bridges[0].getCatalog().models.length, 0);
   f.watchers[0](); await next();
@@ -195,6 +206,24 @@ test('a stale or absent remembered combination never replaces an official or mis
     await f.settle();
     assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-official');
   }
+});
+test('a stale matrix fusion selection rolls back while a live one is kept', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  const stale = 'fusion-native-lead-sidekick-dfbyok-gone';
+  f.setMatrixUids([stale]);
+  f.globals.agentPreferences['devin-cli'].model = stale;
+  await f.managerOptions().afterChange('saveFusionPreset');
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, undefined,
+    'a matrix uid that is no longer in the catalog is rolled back');
+  const live = 'fusion-native-lead-sidekick-dfbyok-live';
+  f.setMatrixUids([live]);
+  f.setCatalogModels([{ uid: live }]);
+  f.globals.agentPreferences['devin-cli'].model = live;
+  const writes = f.updates.length;
+  await f.managerOptions().afterChange('saveFusionPreset');
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, live, 'a live matrix selection is preserved');
+  assert.equal(f.updates.length, writes);
 });
 test('a saved own Fusion selection survives an official reset across reload', async t => {
   const f = fixture(t);

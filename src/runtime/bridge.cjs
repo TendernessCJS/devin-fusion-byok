@@ -88,7 +88,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         outgoing = wire.encode(augmented, { ...format, gzip: false, compressed: false });
         delete outgoingHeaders['content-encoding']; delete outgoingHeaders['connect-content-encoding'];
         delete outgoingHeaders['transfer-encoding']; outgoingHeaders['content-length'] = String(outgoing.length);
-        log('catalog', { rpc: target.pathname.split('/').pop(), models: catalog.models.length, presets: Object.keys(catalog.fusions || {}).length, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented) });
+        log('catalog', { rpc: target.pathname.split('/').pop(), models: catalog.models.length, presets: catalog.models.filter(model => model.kind === 'fusion').length, matrix: catalog.matrixUids?.size ?? 0, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented) });
       } catch { log('catalog-error', { code: 'catalog_transform_failed' }); }
       response.writeHead(upstream.statusCode, outgoingHeaders); response.end(outgoing);
     } catch { fail(); }

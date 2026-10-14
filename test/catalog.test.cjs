@@ -973,3 +973,99 @@ test('fusionMatrix mirrors BYOK-member presets into the official Fusion family c
   assert.equal(off.matrixUids.size, 0, 'matrix emission stays gated behind fusionMatrix');
   assert.equal(off.models.find(model => model.uid === mixed), undefined);
 });
+
+test('fusionMatrix emits the full lead-by-sidekick cross product so dropdowns stay switchable', () => {
+  const probe = buildSavedCatalog({ ...config(), fusionMatrix: true }, OBSERVED_SWE);
+  const leadRefs = probe.presetCandidates.lead.map(item => item.ref);
+  const sideKeys = new Map();
+  for (const item of probe.presetCandidates.sidekick) {
+    const ref = item.ref;
+    sideKeys.set(ref.nativeUid ? 'native:' + ref.nativeUid : `byok:${ref.providerId}/${ref.model}`, ref);
+  }
+  const nativeLeads = leadRefs.filter(ref => ref.nativeUid).length;
+  const nativeSides = [...sideKeys.values()].filter(ref => ref.nativeUid).length;
+  const expected = leadRefs.length * sideKeys.size - nativeLeads * nativeSides;
+  const matrix = probe.models.filter(model => model.kind === 'matrix');
+  assert.equal(matrix.length, expected, 'every lead variant pairs with every sidekick representative');
+  assert.equal(probe.matrixUids.size, expected);
+  for (const model of matrix) {
+    assert.match(model.uid, /^fusion-.+-sidekick-.+$/);
+    assert.ok(probe.matrixUids.has(model.uid));
+    assert.ok(probe.fusions[model.uid], 'matrix uid resolves through the fusions table');
+    assert.equal(probe.fusions[model.uid].presetId, undefined, 'matrix entries are not presets');
+    assert.equal(model.json.modelInfo.modelFamilyUid, 'fusion');
+    assert.equal(model.json.modelInfo.isModelRouter, true);
+    assert.equal(model.json.modelInfo.displayOption, 3);
+    const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+    assert.equal(dims.Lead.controlType, 3);
+    assert.equal(dims.Sidekick.controlType, 3);
+    assert.equal(dims['Fast Mode'].controlType, 2);
+    assert.equal(dims['Fast Mode'].name, '');
+    assert.equal(dims['Recommended Sidekick'].controlType, 0);
+    assert.equal(dims['Recommended Sidekick'].name, dims.Sidekick.name);
+    const fusion = probe.fusions[model.uid];
+    const leadRoute = probe.routes[fusion.leadUid];
+    if (leadRoute?.effort) {
+      assert.equal(dims.Effort.controlType, 1, 'effort variants declare the Effort dimension');
+      assert.equal(dims.Effort.name, leadRoute.effort === 'high' ? 'High' : 'Medium');
+      assert.equal(dims.Effort.order, leadRoute.effort === 'high' ? 3 : 2);
+      assert.ok(!dims.Lead.name.endsWith(dims.Effort.name), 'Lead dimension names carry no effort suffix');
+    } else if (!fusion.leadNative) {
+      assert.equal(dims.Effort, undefined, 'effortless leads declare no Effort dimension');
+    }
+    assert.match(model.label, /^Fusion \(.+ \+ .+\)$/);
+  }
+  const labels = matrix.map(model => model.label);
+  assert.equal(new Set(labels).size, labels.length, 'effort variants of one pair keep distinct labels');
+  const byokVariant = matrix.filter(model => model.json.modelFamilyMetadata.entries.some(entry => entry.key === 'Effort'));
+  assert.ok(byokVariant.length >= 2, 'multi-effort leads emit one entry per variant');
+});
+
+test('matrix entries never leak into the panel model groups in either wire format', () => {
+  const probe = buildSavedCatalog({ ...config(), fusionMatrix: true }, OBSERVED_SWE);
+  const matrixLabels = new Set(probe.models.filter(model => model.kind === 'matrix').map(model => model.label));
+  assert.ok(matrixLabels.size > 0);
+  const presetLabels = new Set(probe.models.filter(model => model.kind === 'fusion').map(model => model.label));
+  const input = cat(m(2, cat(s(1, 'Official'), m(2, cat(s(1, 'Official'), s(2, 'Official SWE'))))));
+  const output = augmentCatalog(input, { rpc: 'GetCascadeModelConfigs', format: proto, catalog: probe });
+  for (const group of fields(getNested(output, 2), 2)) {
+    for (const item of fields(group.value, 2)) {
+      assert.ok(!matrixLabels.has(item.value.toString('utf8')), 'matrix labels stay out of proto sort groups');
+    }
+  }
+  const jsonInput = { clientModelConfigs: [{ label: 'Official SWE', modelUid: 'swe-2-max' }],
+    clientModelSorts: [{ name: 'Recommended', groups: [{ groupName: 'Official', modelLabels: ['Official SWE'] }] }] };
+  const jsonOutput = augmentCatalog(jsonInput, { rpc: 'GetCliModelConfigs', format: json, catalog: probe });
+  const groupLabels = jsonOutput.clientModelSorts.flatMap(sort => sort.groups.flatMap(group => group.modelLabels));
+  for (const label of groupLabels) assert.ok(!matrixLabels.has(label), 'matrix labels stay out of JSON sort groups');
+  assert.ok([...presetLabels].every(label => groupLabels.includes(label)), 'saved presets still land in the panel Fusion group');
+});
+
+test('unemitted official-shaped fusion uids resolve by uid split with observed harnesses', () => {
+  const probe = buildSavedCatalog(config(), OBSERVED_SWE);
+  const byokLead = Object.keys(probe.routes)[0], byokSide = Object.keys(probe.routes)[1];
+  const uid = `fusion-${byokLead}-sidekick-swe-2-max`;
+  assert.ok(!Object.hasOwn(probe.fusions, uid), 'fixture pair is genuinely un-emitted');
+  const assign = resolveAssignment({ modelRouterUid: uid }, json, probe);
+  assert.equal(assign.assignment.modelUid, byokLead);
+  assert.deepEqual(assign.assignment.harnessUids, ['fusion']);
+  const side = resolveAssignment({ fusionLeadRouterUid: uid }, json, probe);
+  assert.equal(side.assignment.modelUid, 'swe-2-max');
+  assert.deepEqual(side.assignment.harnessUids, ['swe-1p6', 'swe-1p5']);
+  const nativeLead = resolveAssignment({ modelRouterUid: `fusion-swe-2-max-sidekick-${byokSide}` }, json, probe);
+  assert.equal(nativeLead.assignment.modelUid, 'swe-2-max');
+  assert.ok(nativeLead.assignment.harnessUids.includes('fusion'), 'native lead harness comes from observed records');
+  const unknown = resolveAssignment({ modelRouterUid: `fusion-${byokLead}-sidekick-native-never-observed` }, json, probe);
+  assert.equal(resolveAssignment({ fusionLeadRouterUid: `fusion-${byokLead}-sidekick-native-never-observed` }, json, probe), null,
+    'a never-observed native sidekick fails closed');
+  assert.equal(unknown.assignment.modelUid, byokLead, 'the BYOK lead still resolves from routes');
+});
+
+test('fast-mode fusion uids are refused outright instead of downgraded', () => {
+  const probe = buildSavedCatalog(config(), OBSERVED_SWE);
+  const byokLead = Object.keys(probe.routes)[0];
+  assert.equal(resolveAssignment({ modelRouterUid: `fusion-${byokLead}-fast-sidekick-swe-2-max` }, json, probe), null);
+  assert.equal(resolveAssignment({ fusionLeadRouterUid: `fusion-${byokLead}-fast-sidekick-swe-2-max` }, json, probe), null);
+  assert.equal(resolveAssignment({ modelRouterUid: 'fusion--sidekick-swe-2-max' }, json, probe), null);
+  assert.equal(resolveAssignment({ modelRouterUid: `fusion-${byokLead}-sidekick-` }, json, probe), null);
+});

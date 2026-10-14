@@ -254,6 +254,24 @@ test('forward abandons a connection that never completes the handshake', async t
   } finally { http.request = original; }
 });
 
+test('the catalog log reports named presets separately from matrix mirrors', async t => {
+  const events = [];
+  const matrixCatalog = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [{ id: 'a' }] }],
+    fusionPresets: [{ id: 'x', name: 'X', lead: { providerId: 'p', model: 'a' }, sidekick: { providerId: 'p', model: 'a' } }],
+    fusionMatrix: true });
+  assert.equal(matrixCatalog.matrixUids.size, 1);
+  const native = await listen((req, res) => { res.writeHead(200, { 'content-type': 'application/proto' }); res.end(wire.s(7, 'swe-2-medium')); });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => matrixCatalog, log: (event, data) => events.push([event, data]) });
+  t.after(() => bridge.close());
+  const response = await request(bridge.port, '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings');
+  assert.equal(response.status, 200);
+  const entry = events.find(([event]) => event === 'catalog');
+  assert.ok(entry, 'a catalog RPC emits the catalog log event');
+  assert.equal(entry[1].presets, 1, 'presets counts named presets only');
+  assert.equal(entry[1].matrix, 1, 'matrix mirrors are counted separately');
+});
+
 test('forward returns 502 when the upstream accepts but never sends headers', async t => {
   const events = [];
   const native = await listen((req, res) => { req.socket.on('close', () => res.destroy()); });
