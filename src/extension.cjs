@@ -450,6 +450,12 @@ async function activate(context) {
     try { if (statusBar) statusBar.tooltip = `Fusion BYOK：目录 ${catalog().models.length} 条目（Fusion 预设 ${catalog().models.filter(model => model.kind === 'fusion').length} / 官方卡片镜像 ${catalog().matrixUids?.size ?? 0}）· 原生已观测 ${nativeModels.size}`; } catch {}
   };
   const pickerRefresh = createPickerRefresh({ log,
+    // devin.reloadAcpConnections drops every ACP connection on execution —
+    // users see "ACP connection closed" and a conversation-area reload, and a
+    // window reload follows it by ~5-35s (observed 2026-10-14). The in-place
+    // CLI cache rewrite already guarantees what the next session reads, so no
+    // command is wired in here; keep the module for signature tracking/tests.
+    lightCommands: [],
     executeCommand: command => vscode.commands.executeCommand(command),
     readModels: () => catalog().models,
     observe: () => acpObservationSeq,

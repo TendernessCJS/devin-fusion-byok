@@ -57,7 +57,12 @@ function saveReceipt(receipt) {
   const pointersFile = path.join(receipt.extensionPath, POINTERS);
   let roots = [];
   try { roots = JSON.parse(fs.readFileSync(pointersFile, 'utf8')).roots || []; } catch {}
-  atomicJson(pointersFile, { roots: [...new Set([...roots.filter(root => typeof root === 'string' && path.isAbsolute(root)), receipt.root])] });
+  const existing = roots.filter(root => typeof root === 'string' && path.isAbsolute(root));
+  // Writing inside the installed extension dir is observed to restart the
+  // extension host (the app watches extension folders); only touch the file
+  // when the roots list actually changes.
+  if (existing.includes(receipt.root)) return;
+  atomicJson(pointersFile, { roots: [...existing, receipt.root] });
 }
 function restoreObject(object, changes) {
   const restored = JSON.parse(JSON.stringify(object || {}));

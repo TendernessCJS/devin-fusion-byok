@@ -4,13 +4,16 @@
 // push: the renderer catalog (GetUserStatus) and the CLI session options
 // (GetCliModelConfigs). To refresh them the extension must trigger Devin's own
 // re-fetch. The lightweight devin.reloadAcpConnections command (the native
-// extension uses it after auth changes) reloads the ACP registry; executing it
-// counts as success because sessions spawn lazily and cli-cache refresh
-// already guarantees the data the next session reads. The ACP observer only
-// records whether a fresh session arrived in time. Heavier paths that spawn a
-// new conversation were removed: they fired on every reload whenever no ACP
-// session happened to appear inside the verify window. A second refresh inside
-// the CLI cache window would still see the stale list, so the delay is kept.
+// extension uses it after auth changes) reloads the ACP registry — but it
+// drops every ACP connection (users see "ACP connection closed" plus a
+// conversation-area reload, and a window reload follows within ~30s), so the
+// production wiring passes lightCommands: [] and keeps correctness entirely on
+// the in-place CLI cache rewrite; new sessions read the fresh payload. The
+// command list stays injectable for tests and future lighter commands.
+// Heavier paths that spawn a new conversation were removed: they fired on
+// every reload whenever no ACP session happened to appear inside the verify
+// window. A second refresh inside the CLI cache window would still see the
+// stale list, so the delay is kept.
 const LIGHT_COMMANDS = ['devin.reloadAcpConnections'];
 const DEBOUNCE_MS = 1500;
 const CLI_CACHE_MS = 65 * 1000;
@@ -35,6 +38,7 @@ function createPickerRefresh({ executeCommand, readModels, log = () => {}, now =
     timer = undefined;
     if (disposed) return;
     lastRun = now();
+    if (!lightCommands.length) return;
     const canVerify = typeof observe === 'function' && typeof applied === 'function';
     for (const command of lightCommands) {
       let token;
