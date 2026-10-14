@@ -82,13 +82,20 @@ const presentUids = (payload, expected) => {
 // preserved verbatim. Files without the dfbyok marker belong to other
 // identities and are never touched; the primary file is never renamed or
 // deleted.
-function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment } = {}) {
+// Rewrites stale backend-owned cache files in place. The augmented payload must
+// keep every expected uid already present and differ from the stored bytes —
+// adding missing uids, dropping stale emitted entries, or (with `force`)
+// refreshing entries whose shape changed while their uids stayed the same, e.g.
+// a dimension value that gained an explicit order. `force` is what the panel
+// button uses: the automatic check only looks at uid presence, so it cannot see
+// a payload that is complete yet out of date.
+function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, force = false } = {}) {
   requireDir(dir);
   const { expected, entries, checked } = inspectCliCaches({ dir, expectedUids, staleProbe });
   const refreshed = [], skipped = [], errors = [];
   const canAugment = typeof augment === 'function';
   for (const entry of entries) {
-    if (!entry.missing.length && !(entry.stale || []).length) continue;
+    if (!force && !entry.missing.length && !(entry.stale || []).length) continue;
     const rpc = CACHE_RPC[entry.name.slice(0, entry.name.indexOf('.'))];
     if (!rpc || !canAugment) { skipped.push({ name: entry.name, reason: 'unsupported' }); continue; }
     let envelope, payload;
@@ -99,10 +106,9 @@ function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment } =
     let next;
     try { next = augment(payload, rpc); } catch { next = null; }
     if (!Buffer.isBuffer(next) || !next.length) { skipped.push({ name: entry.name, reason: 'augment-failed' }); continue; }
-    // Rewrite when the augmented payload loses no expected uid and actually
-    // changes the bytes: adding missing uids, dropping stale emitted entries,
-    // or removing hidden natives are all improvements. An identical payload
-    // is the only no-improvement case (it also avoids pointless .bak churn).
+    // Rewrite only when the augmented payload loses no expected uid and actually
+    // changes the bytes; an identical payload is the one no-improvement case
+    // (it also avoids pointless .bak churn).
     const before = presentUids(payload, expected), after = presentUids(next, expected);
     if (![...before].every(uid => after.has(uid)) || payload.equals(next)) {
       skipped.push({ name: entry.name, reason: 'no-improvement' });

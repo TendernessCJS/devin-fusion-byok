@@ -139,9 +139,19 @@ function effortMetadata(effort) {
   return { order: orders[key] ?? 100 + parseInt(digest(key).slice(0, 6), 16), name: names[key] || key, controlType: 1 };
 }
 
+// A dimension value is encoded exactly as declared: an absent `order`/`name`/
+// `controlType` stays absent on the wire. That matters for the two informational
+// dimensions — the official card writes `Fast Mode` with only a controlType and
+// `Recommended Sidekick` with only a name, and the picker dedupes dimension
+// values by `order`, so writing an explicit 0 there puts our entries in a
+// separate bucket and surfaces controls the official catalog never shows.
 function encodeFamily(family) {
   return concat([s(1, family.modelFamilyLabel), ...family.entries.map(entry => m(2,
-    concat([s(1, entry.key), m(2, concat([v(1, entry.value.order || 0), s(2, entry.value.name || ''), v(3, entry.value.controlType || 0)]))])))]);
+    concat([s(1, entry.key), m(2, concat([
+      ...(entry.value.order === undefined ? [] : [v(1, entry.value.order)]),
+      ...(entry.value.name === undefined ? [] : [s(2, entry.value.name)]),
+      ...(entry.value.controlType === undefined ? [] : [v(3, entry.value.controlType)]),
+    ]))])))]);
 }
 
 function encodeConfig(config) {
@@ -805,8 +815,12 @@ function buildCatalog(config = {}, nativeModels = []) {
         { key: 'Lead', value: { order: leadOrder, name: leadDim, controlType: 3 } },
         ...(effort ? [{ key: 'Effort', value: { order: effort.order, name: effort.name, controlType: 1 } }] : []),
         { key: 'Sidekick', value: { order: sideOrder, name: sideDim, controlType: 3 } },
-        { key: 'Fast Mode', value: { order: 0, name: '', controlType: 2 } },
-        { key: 'Recommended Sidekick', value: { order: 0, name: sideDim, controlType: 0 } },
+        // Official shape for the two informational dimensions: no order (they
+        // are not selectable), a controlType only on Fast Mode, and a name only
+        // on Recommended Sidekick. Our entries then merge into the official
+        // values instead of inventing extra buckets.
+        { key: 'Fast Mode', value: { controlType: 2 } },
+        { key: 'Recommended Sidekick', value: { name: sideDim } },
       ] }, familyUid: 'fusion', fusion: true, kind: 'matrix' }));
   }
   // Matrix entries lead the list, matching the order the picker saw before the

@@ -164,3 +164,45 @@ test('stale probe failures and empty results leave the file untouched', () => {
     assert.deepEqual(readCache(dir, name).raw, before.raw);
   }
 });
+
+test('force rewrites a payload whose uids are all present but whose entries changed', () => {
+  const dir = tmpdir();
+  const name = 'model_configs_v5.bbbbbbbbbbbbbbbb.bin';
+  writeCache(dir, name, [...OWN, 'native-1']);
+  const before = readCache(dir, name);
+  // The uid set is complete, so the automatic check sees nothing to do...
+  const gated = refreshStaleCliCaches({ dir, expectedUids: OWN,
+    augment: () => Buffer.from(OWN.join('\x00') + '\x00reshaped', 'utf8') });
+  assert.deepEqual(gated.refreshed, [], 'an unforced check leaves a complete payload alone');
+  assert.deepEqual(gated.skipped, [], 'a complete payload is not even read');
+  assert.deepEqual(readCache(dir, name).raw, before.raw);
+  // ...while a forced refresh repairs the entry shape.
+  const forced = refreshStaleCliCaches({ dir, expectedUids: OWN, force: true,
+    augment: () => Buffer.from(OWN.join('\x00') + '\x00reshaped', 'utf8') });
+  assert.deepEqual(forced.refreshed, [name]);
+  assert.equal(Buffer.from(readCache(dir, name).envelope.payload, 'base64').toString('utf8'), OWN.join('\x00') + '\x00reshaped');
+  assert.deepEqual(readCache(dir, name + '.bak').raw, before.raw, 'the pre-repair bytes are kept');
+});
+
+test('a forced refresh still refuses to lose an expected uid or write identical bytes', () => {
+  const dir = tmpdir();
+  const name = 'user_status.aaaaaaaaaaaaaaaa.bin';
+  writeCache(dir, name, [...OWN, 'native-1']);
+  const before = readCache(dir, name);
+  assert.deepEqual(refreshStaleCliCaches({ dir, expectedUids: OWN, force: true, augment: () => Buffer.from(OWN[0], 'utf8') }).skipped,
+    [{ name, reason: 'no-improvement' }]);
+  assert.deepEqual(refreshStaleCliCaches({ dir, expectedUids: OWN, force: true, augment: payload => payload }).skipped,
+    [{ name, reason: 'no-improvement' }]);
+  assert.deepEqual(readCache(dir, name).raw, before.raw);
+  assert.ok(!fs.existsSync(path.join(dir, name + '.bak')), 'no backup is written when nothing changed');
+});
+
+test('force never touches files without the marker or an unusable augment', () => {
+  const dir = tmpdir();
+  const foreign = 'model_configs_v5.cccccccccccccccc.bin', own = 'team_settings.dddddddddddddddd.bin';
+  writeCache(dir, foreign, ['native-only']);
+  writeCache(dir, own, ['dfbyok-old-uid']);
+  assert.deepEqual(refreshStaleCliCaches({ dir, expectedUids: OWN, force: true }).skipped, [{ name: own, reason: 'unsupported' }]);
+  assert.deepEqual(readCache(dir, foreign).raw, readCache(dir, foreign).raw);
+  assert.equal(fs.existsSync(path.join(dir, own + '.bak')), false);
+});

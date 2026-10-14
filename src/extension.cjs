@@ -487,19 +487,19 @@ async function activate(context) {
   // missing file, so stale caches are refreshed in place by rewriting the
   // payload through the same augmentation the backend applies.
   let cliCacheReport = null;
-  const checkCliCaches = () => {
+  const checkCliCaches = ({ force = false } = {}) => {
     try {
       if (config().enabled === false) return cliCacheReport;
       const current = catalog();
       const expectedUids = current.models.map(model => model.uid);
       if (!expectedUids.length) return cliCacheReport;
       const emittedFusionUids = new Set(Object.keys(current.fusions || {}));
-      const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids,
+      const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force,
         staleProbe: payload => staleFusionUids(payload, emittedFusionUids),
         augment: (payload, rpc) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current }) });
       cliCacheReport = { at: new Date().toISOString(), checked: result.checked,
         refreshed: result.refreshed, skipped: result.skipped || [], errors: result.errors || [] };
-      if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed });
+      if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed, force });
       for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });
       for (const error of result.errors || []) log('cli-cache-write-error', { name: error.name, code: error.code });
     } catch (error) { log('cli-cache-check-failed', { code: error?.code || 'unknown' }); }
@@ -507,9 +507,12 @@ async function activate(context) {
   };
   // Manual counterpart of the automatic check: the panel button exists so a
   // user whose picker looks stale can force the rewrite now instead of waiting
-  // for the next config change or native sync.
+  // for the next config change or native sync. It is forced because the
+  // automatic check only sees uid presence, while a payload can be complete and
+  // still carry out-of-date entries (a changed dimension shape, a stale
+  // label) — exactly the case the button is for.
   const refreshCliCaches = async () => {
-    const report = checkCliCaches();
+    const report = checkCliCaches({ force: true });
     await management?.publish();
     return report;
   };

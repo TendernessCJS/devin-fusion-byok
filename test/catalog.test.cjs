@@ -94,9 +94,22 @@ test('own protobuf metadata matches JSON and advertises required execution harne
     assert.equal(fields(model.raw, 12).length, 0, 'no copied user eligibility');
     const family = getNested(model.raw, 30);
     assert.equal(str(family, 1), model.json.modelFamilyMetadata.modelFamilyLabel);
-    assert.deepEqual(fields(family, 2).map(field => ({ key: str(field.value, 1), value: {
-      order: num(getNested(field.value, 2), 1), name: str(getNested(field.value, 2), 2), controlType: num(getNested(field.value, 2), 3),
-    } })), model.json.modelFamilyMetadata.entries);
+    // Decode preserving absence: the informational dimensions legitimately omit
+    // order/name/controlType, so a 0/'' default would hide the official shape.
+    const decodeValue = entry => {
+      const inner = getNested(entry, 2), optional = number => {
+        const found = fields(inner, number)[0];
+        return found ? (found.wire === 2 ? found.value.toString('utf8') : found.value) : undefined;
+      };
+      const value = {};
+      for (const [key, number] of [['order', 1], ['name', 2], ['controlType', 3]]) {
+        const decoded = optional(number);
+        if (decoded !== undefined) value[key] = decoded;
+      }
+      return value;
+    };
+    assert.deepEqual(fields(family, 2).map(field => ({ key: str(field.value, 1), value: decodeValue(field.value) })),
+      model.json.modelFamilyMetadata.entries);
   }
 });
 
@@ -676,7 +689,13 @@ test('eligible observed native Sidekicks combine with every imported Lead using 
   for (const model of result.models.filter(value => value.kind === 'matrix')) {
     const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
     assert.ok(dims.Lead?.name && dims.Sidekick?.name, 'matrix entries declare both role dimensions');
-    assert.equal(dims['Fast Mode'].name, '', 'BYOK never advertises a Fast Mode capability');
+    // The two informational dimensions follow the official wire shape exactly:
+    // Fast Mode carries only a controlType, Recommended Sidekick only a name.
+    // Writing an explicit order 0 there would split them into their own bucket
+    // (the picker dedupes values by order) and surface controls the official
+    // card never shows.
+    assert.deepEqual(dims['Fast Mode'], { controlType: 2 }, 'no Fast Mode capability and no stray order');
+    assert.deepEqual(dims['Recommended Sidekick'], { name: dims.Sidekick.name });
   }
   const assignedMax = resolveAssignment(cat(s(2, bySidekick('swe-2-max').uid), s(6, bySidekick('swe-2-max').uid)), proto, result);
   assert.deepEqual(fields(getNested(assignedMax, 1), 3).map(field => field.value.toString()), ['swe-1p6', 'swe-1p5', 'other-harness']);
@@ -974,7 +993,8 @@ test('the official Fusion family card mirrors both BYOK members and native pairi
     assert.equal(model.json.modelInfo.displayOption, 3);
     const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
     assert.equal(model.json.modelFamilyMetadata.modelFamilyLabel, 'Fusion');
-    assert.ok(dims['Fast Mode'].controlType === 2 && dims['Recommended Sidekick'].name, 'constant dims present');
+    assert.deepEqual(dims['Fast Mode'], { controlType: 2 }, 'constant dims match the official shape');
+    assert.deepEqual(dims['Recommended Sidekick'], { name: dims.Sidekick.name });
     assert.ok(dims.Lead.name && dims.Sidekick.name, 'member dims present');
   }
   const mixedDims = Object.fromEntries(probe.models.find(model => model.uid === mixed).json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
@@ -1020,10 +1040,8 @@ test('the matrix emits the full lead-by-sidekick cross product so dropdowns stay
     const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
     assert.equal(dims.Lead.controlType, 3);
     assert.equal(dims.Sidekick.controlType, 3);
-    assert.equal(dims['Fast Mode'].controlType, 2);
-    assert.equal(dims['Fast Mode'].name, '');
-    assert.equal(dims['Recommended Sidekick'].controlType, 0);
-    assert.equal(dims['Recommended Sidekick'].name, dims.Sidekick.name);
+    assert.deepEqual(dims['Fast Mode'], { controlType: 2 });
+    assert.deepEqual(dims['Recommended Sidekick'], { name: dims.Sidekick.name });
     const fusion = probe.fusions[model.uid];
     const leadRoute = probe.routes[fusion.leadUid];
     if (leadRoute?.effort) {
@@ -1143,4 +1161,23 @@ test('staleFusionUids reports only unemitted f32-less fusion uids in both payloa
   assert.deepEqual(staleFusionUids(nested, emitted), ['fusion-claude-x-sidekick-claude-y']);
   assert.deepEqual(staleFusionUids(flat, new Set(['fusion-a-sidekick-b', 'fusion-claude-x-sidekick-claude-y'])), []);
   assert.deepEqual(staleFusionUids(Buffer.from('garbage'), emitted), []);
+});
+
+test('informational dimensions omit order so the picker merges them with the official values', () => {
+  const matrix = catalog.models.filter(model => model.kind === 'matrix');
+  assert.ok(matrix.length);
+  for (const model of matrix) {
+    const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+    // The picker dedupes dimension values by `order` and drops every dimension
+    // left with fewer than two values, so an explicit order here would put our
+    // entries in their own bucket: Fast Mode grew a third option and the
+    // informational Recommended Sidekick turned into a real control.
+    assert.equal(Object.hasOwn(dims['Fast Mode'], 'order'), false, model.uid);
+    assert.equal(Object.hasOwn(dims['Recommended Sidekick'], 'order'), false, model.uid);
+    assert.deepEqual(dims['Fast Mode'], { controlType: 2 });
+    assert.deepEqual(dims['Recommended Sidekick'], { name: dims.Sidekick.name });
+    // Selectable dimensions keep a real order; that is what makes them work.
+    for (const key of ['Lead', 'Sidekick']) assert.equal(Number.isSafeInteger(dims[key].order), true, key + ' on ' + model.uid);
+    if (dims.Effort) assert.equal(Number.isSafeInteger(dims.Effort.order), true, 'Effort on ' + model.uid);
+  }
 });
