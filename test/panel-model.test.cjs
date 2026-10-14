@@ -65,6 +65,24 @@ test('public state reports the mirrored combination count and carries no preset 
   assert.ok(state.roleLists.lead.length > 0, 'the Fusion tab is driven by the role lists');
 });
 
+test('public state names the last Fusion combination the card was seen holding', () => {
+  const input = fixture();
+  const catalog = buildCatalog(input, OBSERVED_SWE);
+  const mirroredUid = Object.keys(catalog.fusions)[0];
+
+  assert.equal(publicState(input, OBSERVED_SWE, 'unavailable', 'ready').lastFusion, null,
+    'no remembered selection means nothing to report');
+
+  const ours = publicState({ ...input, lastFusionSelection: mirroredUid }, OBSERVED_SWE, 'unavailable', 'ready').lastFusion;
+  assert.deepEqual(ours, { uid: mirroredUid, label: catalog.fusions[mirroredUid].label, source: 'mirrored' });
+
+  const official = publicState({ ...input, lastFusionSelection: 'fusion-lead-a-sidekick-swe-2-max' }, OBSERVED_SWE, 'unavailable', 'ready').lastFusion;
+  assert.deepEqual(official, { uid: 'fusion-lead-a-sidekick-swe-2-max', label: 'F', source: 'official' });
+
+  const stale = publicState({ ...input, lastFusionSelection: 'fusion-gone-sidekick-gone' }, OBSERVED_SWE, 'unavailable', 'ready').lastFusion;
+  assert.deepEqual(stale, { uid: 'fusion-gone-sidekick-gone', label: 'fusion-gone-sidekick-gone', source: 'unresolved' });
+});
+
 test('public state carries the last CLI cache report for the settings tab', () => {
   const report = { at: '2026-10-14T00:00:00.000Z', checked: 2, refreshed: ['model_configs_v5.abcd.bin'], skipped: [], errors: [] };
   assert.deepEqual(publicState(fixture(), [], 'unavailable', 'ready', report).cliCache, report);

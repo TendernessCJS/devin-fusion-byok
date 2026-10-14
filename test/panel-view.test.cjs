@@ -222,6 +222,17 @@ test('a state push never pulls focus back into a hidden panel', () => {
   assert.notStrictEqual(ui.activeElement(), next, 'a hidden webview must not steal focus back from the editor');
 });
 
+test('the Fusion tab reports the mirrored count and the last combination used', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), fusionCount: 236,
+    lastFusion: { uid: 'fusion-a-sidekick-b', label: 'Fusion (CPA · Saved + SWE-2 Max)', source: 'mirrored' } } } });
+  assert.equal(byId('fusion-summary').textContent,
+    '已镜像 236 条组合；最近一次使用：Fusion (CPA · Saved + SWE-2 Max)（插件镜像）');
+
+  receive({ data: { type: 'state', state: { ...state(), fusionCount: 12, lastFusion: null } } });
+  assert.equal(byId('fusion-summary').textContent, '已镜像 12 条组合；还没有在 Fusion 卡片里选过组合');
+});
+
 test('a cache report without rewrites says so instead of staying blank', () => {
   const { byId, receive } = panel();
   receive({ data: { type: 'state', state: state() } });

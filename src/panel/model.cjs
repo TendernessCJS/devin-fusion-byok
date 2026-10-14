@@ -76,6 +76,21 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
       eligible: eligibleLeads.has(entry.uid) || eligibleSidekicks.has(entry.uid) });
   }
   for (const uid of hidden) if (!observed.has(uid)) natives.push({ uid, label: uid, disabled: false, hidden: true, eligibleLead: false, eligibleSidekick: false, eligible: false });
+  // The Fusion card selection this extension last observed. It is a memory
+  // (`lastFusionSelection`), so picking a plain model afterwards leaves it
+  // pointing at the previous combination — the panel therefore labels it as
+  // the most recent one, not as the current one. The name comes from our
+  // mirrored entry when it is one of ours, else from the observed native
+  // entry, so an official combination is named too.
+  const lastFusionUid = typeof catalog.lastFusionSelection === 'string' ? catalog.lastFusionSelection : '';
+  const observedFusion = lastFusionUid ? nativeModels.find(entry => entry?.uid === lastFusionUid) || null : null;
+  const mirroredFusion = lastFusionUid && own(catalog.fusions, lastFusionUid) ? catalog.fusions[lastFusionUid] : null;
+  const lastFusionLabel = (mirroredFusion && typeof mirroredFusion.label === 'string' && mirroredFusion.label) ||
+    (observedFusion && typeof observedFusion.label === 'string' && observedFusion.label) || '';
+  const lastFusion = lastFusionUid ? {
+    uid: lastFusionUid, label: lastFusionLabel || lastFusionUid,
+    source: mirroredFusion ? 'mirrored' : observedFusion ? 'official' : 'unresolved',
+  } : null;
   return {
     enabled: config.enabled !== false,
     providers: config.providers.map(provider => ({ id: provider.id, name: provider.name, baseUrl: provider.baseUrl,
@@ -90,6 +105,7 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     nativeModels: natives,
     modelCount: Object.keys(catalog.routes).length,
     fusionCount: catalog.matrixUids.size,
+    lastFusion,
     cliCache: cliCache && typeof cliCache === 'object' ? cliCache : null,
     autoContinueOnProviderError: config.autoContinueOnProviderError === true,
     autoContinueUntilPlanComplete: config.autoContinueUntilPlanComplete === true,

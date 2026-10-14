@@ -165,6 +165,7 @@ function renderPanel({ nonce, cspSource }) {
     </section>
     <section id="view-fusion" role="tabpanel" aria-labelledby="tab-fusion" hidden>
       <div class="section-head"><h2>Fusion 可选模型</h2><span id="role-count" class="hint"></span></div>
+      <p id="fusion-summary" class="hint mb"></p>
       <p class="hint mb">这里打开的模型就是 Devin 官方 Fusion 卡片里 Lead / Sidekick 下拉的候选；Lead 按系列（Effort 档位）成组，官方默认项本来就是可用的，不必再手动添加。关掉的模型会从下拉里移除，由它组成的组合也不再提供；如果你正用着其中一条，请在 Fusion 卡片里重新选一次。</p>
       <div class="role-grid"><div id="role-lead"></div><div id="role-sidekick"></div></div>
     </section>
@@ -468,10 +469,22 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
       element('p', { class: 'warn mt', text: status || '', hidden: !status }));
   }
 
+  const FUSION_SOURCES = { mirrored: '插件镜像', official: '官方', unresolved: '不在当前目录' };
+  // Live status for the Fusion tab: how many combinations this extension
+  // mirrors into the official card, plus the last combination the card was
+  // seen holding. Read-only — the card itself stays the source of truth.
+  function fusionSummary() {
+    const last = state.lastFusion;
+    return '已镜像 ' + (state.fusionCount || 0) + ' 条组合；' + (last && last.uid
+      ? '最近一次使用：' + (last.label || last.uid) + '（' + (FUSION_SOURCES[last.source] || '未知') + '）'
+      : '还没有在 Fusion 卡片里选过组合');
+  }
+
   function renderRoles() {
     const lists = state.roleLists || {};
     const on = role => (lists[role] || []).filter(item => item.selected).length;
     byId('role-count').textContent = 'Lead ' + on('lead') + ' · Sidekick ' + on('sidekick');
+    byId('fusion-summary').textContent = fusionSummary();
     for (const role of ['lead', 'sidekick']) {
       const container = byId('role-' + role);
       const name = role === 'lead' ? 'Lead' : 'Sidekick';
