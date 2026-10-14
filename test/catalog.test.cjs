@@ -933,3 +933,43 @@ test('order and uid claim conflicts poison both the uids and the contested order
     'unpaired swe-2-max cannot join sidekicks without an official pairing');
   assert.ok(maxModel && uidConflict.sidekicks.find(item => item.uid === 'swe-2-max').dimension.order === 3, 'swe-2-max keeps canonical order 3 when officially bound');
 });
+
+test('fusionMatrix mirrors BYOK-member presets into the official Fusion family card', () => {
+  const presets = [
+    { id: 'p-mix', name: 'Mix', lead: { providerId: 'cpa', model: 'grok-4.6', effort: 'high' }, sidekick: { nativeUid: 'swe-2-max' } },
+    { id: 'p-both', name: 'Both', lead: { providerId: 'cpa', model: 'ws-swe-2-max' }, sidekick: { providerId: 'other', model: 'some-model' } },
+  ];
+  const probe = buildSavedCatalog({ ...config(), fusionMatrix: true, fusionPresets: presets }, OBSERVED_SWE);
+  const routeUid = (model, effort) => Object.values(probe.routes).find(route => route.model === model && route.effort === effort).uid;
+  const leadUid = routeUid('grok-4.6', 'high'), byokLead = routeUid('ws-swe-2-max', null), byokSide = routeUid('some-model', null);
+  const mixed = `fusion-${leadUid}-sidekick-swe-2-max`, both = `fusion-${byokLead}-sidekick-${byokSide}`;
+  for (const uid of [mixed, both]) {
+    const model = probe.models.find(model => model.uid === uid);
+    assert.ok(model, uid + ' emitted as a family entry');
+    assert.ok(probe.matrixUids.has(uid), uid + ' tracked as own');
+    assert.equal(model.json.modelInfo.modelFamilyUid, 'fusion');
+    assert.equal(model.json.modelInfo.isModelRouter, true);
+    assert.equal(model.json.modelInfo.displayOption, 3);
+    const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+    assert.equal(model.json.modelFamilyMetadata.modelFamilyLabel, 'Fusion');
+    assert.ok(dims['Fast Mode'].controlType === 2 && dims['Recommended Sidekick'].name, 'constant dims present');
+    assert.ok(dims.Lead.name && dims.Sidekick.name, 'member dims present');
+  }
+  const mixedDims = Object.fromEntries(probe.models.find(model => model.uid === mixed).json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+  assert.equal(mixedDims.Lead.name, 'CPA · Grok 4.6');
+  assert.equal(mixedDims.Effort.name, 'High');
+  assert.equal(mixedDims.Sidekick.name, 'SWE-2 Max');
+  const bothDims = Object.fromEntries(probe.models.find(model => model.uid === both).json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+  assert.equal(bothDims.Effort, undefined, 'effortless leads declare no Effort dimension');
+  const assign = resolveAssignment({ modelRouterUid: mixed }, json, probe);
+  assert.equal(assign.assignment.modelUid, leadUid);
+  assert.deepEqual(assign.assignment.harnessUids, ['fusion']);
+  const sideAssign = resolveAssignment({ fusionLeadRouterUid: mixed }, json, probe);
+  assert.equal(sideAssign.assignment.modelUid, 'swe-2-max');
+  assert.deepEqual(sideAssign.assignment.harnessUids, ['swe-1p6', 'swe-1p5']);
+  const bothAssign = resolveAssignment({ fusionLeadRouterUid: both }, json, probe);
+  assert.equal(bothAssign.assignment.modelUid, byokSide);
+  const off = buildSavedCatalog({ ...config(), fusionPresets: presets }, OBSERVED_SWE);
+  assert.equal(off.matrixUids.size, 0, 'matrix emission stays gated behind fusionMatrix');
+  assert.equal(off.models.find(model => model.uid === mixed), undefined);
+});

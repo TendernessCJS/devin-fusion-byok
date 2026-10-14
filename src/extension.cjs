@@ -457,7 +457,13 @@ async function activate(context) {
   const checkCliCaches = () => {
     try {
       if (config().enabled === false) return;
-      const ownUids = catalog().models.map(model => model.uid).filter(uid => /^dfbyok-|^fusion-dfbyok-/.test(uid));
+      // Matrix mirror entries are additive dimension decorations — they can
+      // never be the user's persisted selection before they exist, so a cache
+      // missing them must not be invalidated (renaming the cache leaves the
+      // picker empty until the CLI lazily re-fetches).
+      const matrixUids = catalog().matrixUids;
+      const ownUids = catalog().models.map(model => model.uid)
+        .filter(uid => /^dfbyok-|^fusion-dfbyok-/.test(uid) && !(matrixUids instanceof Set && matrixUids.has(uid)));
       if (!ownUids.length) return;
       const result = invalidateStaleCliCaches({ expectedUids: ownUids });
       if (result.invalidated.length) { log('cli-cache-invalidated', { files: result.invalidated.length }); pickerRefresh.force(); }

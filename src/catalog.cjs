@@ -593,6 +593,8 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
     if (typeof preset?.id === 'string') idCounts.set(preset.id, (idCounts.get(preset.id) || 0) + 1);
   }
   const presetStates = [];
+  const matrixUids = new Set(), matrixLeadOrders = new Map(), matrixSideOrders = new Map();
+  const matrixOrder = (map, key) => { if (!map.has(key)) map.set(key, 20 + map.size); return map.get(key); };
   const labels = new Set([...models.map(item => item.label), ...nativeModels.map(item => item.label)]);
   const presetModels = [];
   // An unresolved preset that references a native model may simply predate the
@@ -624,12 +626,36 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
     labels.add(label);
     const family = { modelFamilyLabel: label, entries: [] };
     presetModels.push(configFor({ ...lead, uid, label, family, familyUid: `dfbyok-preset-family-${digest(preset.id).slice(0, 24)}`, fusion: true }));
-    fusions[uid] = { uid, label, presetId: preset.id, leadUid: lead.uid, sidekickUid: sidekick.uid,
+    const members = { leadUid: lead.uid, sidekickUid: sidekick.uid,
       leadNative: lead.native, sidekickNative: sidekick.native,
       ...(lead.native ? { leadHarnessUids: lead.leadHarnessUids } : {}),
       ...(sidekick.native ? { sidekickHarnessUids: sidekick.harnessUids } : {}) };
+    fusions[uid] = { uid, label, presetId: preset.id, ...members };
+    // Mirror the preset into the official Fusion family card: an
+    // official-shaped `fusion-<lead>-sidekick-<side>` uid plus self-declared
+    // dimension values makes our BYOK members selectable in the native
+    // Lead/Effort/Sidekick dropdowns. Pure-native pairs are skipped — they
+    // are already covered (or would collide) in the official catalog.
+    if (config.fusionMatrix === true && (!lead.native || !sidekick.native)) {
+      const matrixUid = `fusion-${lead.uid}-sidekick-${sidekick.uid}`;
+      if (!matrixUids.has(matrixUid)) {
+        matrixUids.add(matrixUid);
+        fusions[matrixUid] = { uid: matrixUid, label, presetId: preset.id, ...members };
+        const leadDim = lead.native ? lead.label : lead.familyLabel;
+        const effort = lead.effort ? effortMetadata(lead.effort) : null;
+        presetModels.push(configFor({ ...lead, uid: matrixUid, label: `Fusion (${leadDim} + ${sidekick.label})`,
+          inferenceServerUrl: 'https://server.codeium.com',
+          family: { modelFamilyLabel: 'Fusion', entries: [
+            { key: 'Lead', value: { order: matrixOrder(matrixLeadOrders, leadDim), name: leadDim, controlType: 3 } },
+            ...(effort ? [{ key: 'Effort', value: { order: effort.order, name: effort.name, controlType: 1 } }] : []),
+            { key: 'Sidekick', value: { order: matrixOrder(matrixSideOrders, sidekick.label), name: sidekick.label, controlType: 3 } },
+            { key: 'Fast Mode', value: { order: 0, name: '', controlType: 2 } },
+            { key: 'Recommended Sidekick', value: { order: 0, name: sidekick.label, controlType: 0 } },
+          ] }, familyUid: 'fusion', fusion: true }));
+      }
+    }
   }
-  return { models: [...presetModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids,
+  return { models: [...presetModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids, matrixUids,
     presetStates, savedPresets, migratedFrom,
     migrationPending: !Object.hasOwn(config, 'fusionPresets') && !!config.defaultFusionUid && !migratedFrom,
     presetCandidates: Object.fromEntries(Object.entries(candidates).map(([role, items]) => [role, items.map(item => ({ ref: item.ref, label: item.label }))])),
@@ -889,13 +915,14 @@ function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNati
   reportNativeModels(entries, false, onNativeModels);
   const hiddenNative = new Set(catalog.hiddenNativeModelUids || []);
   const hiddenFusion = new Set(catalog.hiddenFusionUids || []);
+  const matrixUids = catalog.matrixUids instanceof Set ? catalog.matrixUids : new Set(catalog.matrixUids || []);
   const retainedLabels = new Set(models.map(model => model.label));
   const hiddenLabels = new Set();
   const preserved = [];
   for (const field of parsed) {
     if (field.number === 1 && field.wire === 2) {
       const uid = protoUid(field.value), label = str(field.value, 1);
-      if (ownUid(uid)) { existingLabels.add(label); continue; }
+      if (ownUid(uid) || matrixUids.has(uid)) { existingLabels.add(label); continue; }
       if (hiddenNative.has(uid)) { if (label) hiddenLabels.add(label); continue; }
       if (hiddenFusion.has(uid)) { if (label) hiddenLabels.add(label); continue; }
       retainedLabels.add(label);
@@ -951,13 +978,14 @@ function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativ
   reportNativeModels(existing, true, onNativeModels);
   const hiddenNative = new Set(catalog.hiddenNativeModelUids || []);
   const hiddenFusion = new Set(catalog.hiddenFusionUids || []);
+  const matrixUids = catalog.matrixUids instanceof Set ? catalog.matrixUids : new Set(catalog.matrixUids || []);
   const labels = models.map(model => model.label), existingLabels = new Set(labels);
   const retainedLabels = new Set(labels);
   const hiddenLabels = new Set();
   const kept = [];
   for (const model of existing) {
     const uid = nativeUid(model);
-    if (ownUid(uid)) { existingLabels.add(model?.label); continue; }
+    if (ownUid(uid) || matrixUids.has(uid)) { existingLabels.add(model?.label); continue; }
     if (hiddenNative.has(uid)) { if (typeof model.label === 'string') hiddenLabels.add(model.label); continue; }
     if (hiddenFusion.has(uid)) { if (typeof model.label === 'string') hiddenLabels.add(model.label); continue; }
     if (typeof model?.label === 'string') retainedLabels.add(model.label);
@@ -1041,9 +1069,11 @@ function augmentLocalModelChoices(data, format, catalog) {
     // An absent or empty list is unrestricted; do not turn it into a restriction.
     if (entries === undefined || Array.isArray(entries) && entries.length === 0) return data;
     if (!Array.isArray(entries) || entries.some(uid => typeof uid !== 'string')) return data;
-    const native = new Set(entries.filter(uid => !ownUid(uid)));
+    const matrixUids = catalog.matrixUids instanceof Set ? catalog.matrixUids : new Set(catalog.matrixUids || []);
+    const isOwn = uid => ownUid(uid) || matrixUids.has(uid);
+    const native = new Set(entries.filter(uid => !isOwn(uid)));
     const additions = catalog.models.filter(model => {
-      if (!ownUid(model.uid)) return false;
+      if (!isOwn(model.uid)) return false;
       if (Object.hasOwn(catalog.routes, model.uid)) return true;
       const fusion = catalog.fusions[model.uid];
       if (!fusion) return false;
@@ -1054,8 +1084,8 @@ function augmentLocalModelChoices(data, format, catalog) {
       return ownUid(fusion.leadUid) && Object.hasOwn(catalog.routes, fusion.leadUid) &&
         (fusion.sidekickNative ? native.has(fusion.sidekickUid) : ownUid(fusion.sidekickUid) && Object.hasOwn(catalog.routes, fusion.sidekickUid));
     }).map(model => model.uid);
-    if (format.json) return { ...data, [key]: [...entries.filter(uid => !ownUid(uid)), ...additions] };
-    return concat([...parsed.filter(f => !(f.number === 7 && ownUid(f.value.toString('utf8')))).map(f => f.raw), ...additions.map(uid => s(7, uid))]);
+    if (format.json) return { ...data, [key]: [...entries.filter(uid => !isOwn(uid)), ...additions] };
+    return concat([...parsed.filter(f => !(f.number === 7 && isOwn(f.value.toString('utf8')))).map(f => f.raw), ...additions.map(uid => s(7, uid))]);
   } catch { return data; }
 }
 
