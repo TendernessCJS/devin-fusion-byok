@@ -132,13 +132,21 @@ function stableOrders(keys, reserved) {
   return result;
 }
 
-// A native uid ends with its effort tier slug, optionally followed by -fast;
-// everything before that is the family base. Bare uids whose label carries a
-// tier (`swe-1-7` is "SWE-1.7 Max") keep themselves as the base — the label,
-// not the uid, decides the tier for them.
+// A native uid ends with its effort tier slug, optionally followed by a fast
+// marker (-fast / -priority); a scale qualifier (-1m) may sit after the tier.
+// Everything before that is the family base, with the qualifier kept on it.
+// Bare uids whose label carries a tier (`swe-1-7` is "SWE-1.7 Max") keep
+// themselves as the base — the label, not the uid, decides the tier for them.
 const NATIVE_EFFORT_SUFFIX = /-(none|minimal|low|medium|high|xhigh|max|ultra)(?:-fast|-priority)?$/;
 function leadFamilyBase(uid) {
-  return uid.replace(NATIVE_EFFORT_SUFFIX, '') || uid;
+  const scale = /-(\d+m)$/.exec(uid);
+  const head = scale ? uid.slice(0, -scale[0].length) : uid;
+  const base = head.replace(NATIVE_EFFORT_SUFFIX, '') || head;
+  return scale ? base + scale[0] : base;
+}
+function leadFamilyTier(uid) {
+  const head = uid.replace(/-\d+m$/, '');
+  return (head.match(NATIVE_EFFORT_SUFFIX) || [])[1] || '';
 }
 
 // Display names a uid tier token maps to. `none` is "No Thinking" on native
@@ -150,8 +158,10 @@ const NATIVE_EFFORT_NAMES = { none: 'No Thinking', minimal: 'Minimal', low: 'Low
 // markers stripped; members of one family share that base.
 const NATIVE_LABEL_SUFFIX = /(?:\s+(?:No Thinking|None|Minimal|Low|Medium|High|XHigh|Max|Ultra|Fast|Thinking))+$/;
 function leadFamilyLabel(label) {
-  const stripped = (typeof label === 'string' ? label : '').replace(NATIVE_LABEL_SUFFIX, '').trim();
-  return stripped || label || '';
+  const scale = /\s+(\d+M)$/i.exec(label || '');
+  const head = scale ? label.slice(0, -scale[0].length) : label;
+  const stripped = (typeof head === 'string' ? head : '').replace(NATIVE_LABEL_SUFFIX, '').trim();
+  return (stripped || head || label) + (scale ? ' ' + scale[1] : '');
 }
 
 function effortMetadata(effort) {
@@ -479,46 +489,41 @@ function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles) {
     if (officialLead) {
       leads.set(native.uid, { ...officialLead, familyKey: `base:${leadFamilyBase(native.uid)}` });
     } else {
-      // Non-official leads still come in effort series: derive the family base
-      // from the observed Effort dimension (uid ends with its slug, optionally
-      // followed by -fast) so selecting the model emits the whole series.
+      // Every native lead groups by the uid's family base. Members emit the
+      // family label as their shared Lead name, so one selected row offers
+      // the whole series — a tier token or the observed Effort dimension
+      // supplies each member's own Effort value.
       const record = { ...native, leadHarnessUids: [...new Set(['fusion', ...native.harnessUids])] };
-      const eff = (Array.isArray(native.fusionMetadata) ? native.fusionMetadata : [])
-        .find(dim => dim?.key === 'Effort' && Number.isSafeInteger(dim.order) && typeof dim.name === 'string' && dim.name);
-      const slug = eff ? eff.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : '';
-      const suffix = slug && (native.uid.endsWith(`-${slug}-fast`) ? `-${slug}-fast`
-        : native.uid.endsWith(`-${slug}`) ? `-${slug}` : '');
-      if (suffix && native.uid.length > suffix.length + 1) {
-        record.leadBaseUid = native.uid.slice(0, -suffix.length);
-        record.effortDimension = { order: eff.order, name: eff.name, controlType: 1 };
-        const labelSuffix = ` ${eff.name}${suffix.endsWith('-fast') ? ' Fast' : ''}`;
-        record.leadBaseLabel = native.label.endsWith(labelSuffix) ? native.label.slice(0, -labelSuffix.length) : native.label;
-      }
       const baseUid = leadFamilyBase(native.uid);
       const officialDim = officialLeadBases.get(baseUid);
-      const fastMode = (Array.isArray(native.fusionMetadata) ? native.fusionMetadata : [])
-        .some(dim => dim?.key === 'Fast Mode' && dim.order !== 0);
-      if (officialDim && fastMode) {
-        // A fast sibling joins the official family and inherits the official
-        // Lead identity (consumed by the family aggregation, so the family
-        // still reads as official even if the declared members were dropped as
-        // record conflicts), and its tier token maps onto the official Effort
-        // value. Fast leads are never emitted — a matrix entry cannot carry the
-        // Fast Mode order they would need — so what keeps an emitted entry off
-        // a hash-ordered duplicate is that refusal, not this identity; re-enable
-        // emission only together with this inheritance.
-        record.leadDimension = officialDim;
-        const token = (native.uid.match(NATIVE_EFFORT_SUFFIX) || [])[1];
-        const effortName = token ? NATIVE_EFFORT_NAMES[token] : '';
-        const effortOrder = effortName ? officialEffortOrders.get(effortName) : undefined;
-        if (Number.isSafeInteger(effortOrder)) {
-          record.effortDimension = { order: effortOrder, name: effortName, controlType: 1 };
+      const token = leadFamilyTier(native.uid);
+      const eff = (Array.isArray(native.fusionMetadata) ? native.fusionMetadata : [])
+        .find(dim => dim?.key === 'Effort' && Number.isSafeInteger(dim.order) && typeof dim.name === 'string' && dim.name);
+      // The Effort name comes from the uid token (else the observed Effort
+      // name); the order always comes from the official Effort space, with a
+      // reserved-collision-free hash order for names the official card lacks
+      // — an observed order lives in another space (GLM High=1 vs official
+      // High=3) and would split same-named values in the picker.
+      const effortName = token ? NATIVE_EFFORT_NAMES[token] : (eff ? eff.name : '');
+      if (effortName) {
+        let effortOrder = officialEffortOrders.get(effortName);
+        if (!Number.isSafeInteger(effortOrder)) {
+          effortOrder = stableOrders(new Set([effortName]), new Set(officialEffortOrders.values())).get(effortName);
         }
+        record.effortDimension = { order: effortOrder, name: effortName, controlType: 1 };
+      }
+      // An official family admits any member whose uid carries a tier token —
+      // officially declared uids, Fast siblings (-fast/-priority) and extra
+      // tiers the card never declared (-none). A tokenless outsider cannot be
+      // slotted into an Effort value and stays a single-member row.
+      if (officialDim && token) {
+        record.leadDimension = officialDim;
         record.familyKey = `base:${baseUid}`;
       } else {
         record.familyKey = officialDim ? `uid:${native.uid}` : `base:${baseUid}`;
       }
-      record.familyLabelBase = leadFamilyLabel(native.label);
+      record.leadBaseLabel = leadFamilyLabel(native.label);
+      record.familyLabelBase = record.leadBaseLabel;
       leads.set(native.uid, record);
     }
     sidekicks.set(native.uid, officialSidekick || { ...native, dimension: undefined });

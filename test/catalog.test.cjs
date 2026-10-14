@@ -1311,30 +1311,78 @@ test('official Fast Mode siblings join the official family and inherit its dimen
   }
 });
 
-test('a non-fast non-official uid sharing an official base stays a single-member row', () => {
+test('a non-fast non-official uid with a tier token joins the official family', () => {
   const natives = [OFFICIAL_SIDEKICK, ...officialSeries('gpt-sol', 4, 'GPT Sol'),
     nativeLead('gpt-sol-none', 'GPT Sol No Thinking',
       [{ key: 'Effort', order: 0, name: 'No Thinking', controlType: 1 }, { key: 'Fast Mode', order: 0 }])];
   const roles = buildRoleLists(config(), natives);
   const official = roles.lead.filter(item => item.native && item.label === 'GPT Sol');
   assert.equal(official.length, 1);
-  assert.equal(official[0].memberUids.length, 5, 'the unrelated none variant must not join the official family');
-  const orphan = roles.lead.find(item => item.native && (item.memberUids || []).includes('gpt-sol-none'));
-  assert.deepEqual(orphan.memberUids, ['gpt-sol-none'], 'it stays selectable on its own row');
+  assert.equal(official[0].memberUids.length, 6, 'the none sibling is an extra Effort value of the official family');
+  assert.ok(official[0].memberUids.includes('gpt-sol-none'));
+
   const catalog = buildCatalog(config(), natives);
-  const leadEfforts = new Map();
-  for (const model of catalog.models.filter(model => model.kind === 'matrix' && model.fusions === undefined)) {
+  const emitted = catalog.models.filter(model => model.kind === 'matrix' && model.uid.startsWith('fusion-gpt-sol-none-sidekick-dfbyok-'));
+  assert.ok(emitted.length > 0, 'the default-selected family emits the extra tier with BYOK sidekicks');
+  for (const model of emitted) {
     const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
-    if (dims.Lead?.name === 'GPT Sol' && dims.Effort) {
-      if (!leadEfforts.has(dims.Effort.name)) leadEfforts.set(dims.Effort.name, new Set());
-      leadEfforts.get(dims.Effort.name).add(dims.Effort.order);
-    }
+    assert.deepEqual(dims.Lead, { order: 4, name: 'GPT Sol', controlType: 3 },
+      'the admitted member inherits the official Lead identity: ' + model.uid);
+    assert.equal(dims.Effort.name, 'No Thinking', 'its own tier token supplies the Effort name');
+    assert.ok(!Object.values(OFFICIAL_EFFORT_ORDERS).includes(dims.Effort.order) &&
+      dims.Effort.order > 0x10000000,
+      'No Thinking lives outside the official Effort space on a hash order, not on an invented official slot');
   }
-  for (const name of leadEfforts.keys()) {
-    assert.ok(Object.values(OFFICIAL_EFFORT_NAMES).includes(name),
-      'no invented Effort value appears under the official Lead: ' + name);
+});
+
+test('a scale qualifier joins the same tier family', () => {
+  const roles = buildRoleLists(config(), [
+    nativeLead('glm-x-high', 'GLM X High', [{ key: 'Effort', order: 1, name: 'High', controlType: 1 }]),
+    nativeLead('glm-x-1m', 'GLM X High 1M', [{ key: 'Effort', order: 1, name: 'High', controlType: 1 }]),
+    nativeLead('glm-x-max-1m', 'GLM X Max 1M', [{ key: 'Effort', order: 2, name: 'Max', controlType: 1 }]),
+    nativeLead('glm-x-none-1m', 'GLM X No Thinking 1M', [{ key: 'Effort', order: 0, name: 'No Thinking', controlType: 1 }])]);
+  const scaled = roles.lead.filter(item => item.native && item.label === 'GLM X 1M');
+  assert.equal(scaled.length, 1, 'the three 1M variants collapse into a single row');
+  assert.deepEqual(scaled[0].memberUids.sort(), ['glm-x-1m', 'glm-x-max-1m', 'glm-x-none-1m']);
+  const plain = roles.lead.find(item => item.native && item.label === 'GLM X');
+  assert.deepEqual(plain.memberUids, ['glm-x-high'], 'the unscaled sibling keeps its own row');
+});
+
+test('every member of a selected family emits the same Lead name with its own Effort', () => {
+  const natives = [
+    nativeLead('glm-x-1m', 'GLM X High 1M', [{ key: 'Effort', order: 1, name: 'High', controlType: 1 }]),
+    nativeLead('glm-x-max-1m', 'GLM X Max 1M', [{ key: 'Effort', order: 2, name: 'Max', controlType: 1 }]),
+    nativeLead('glm-x-none-1m', 'GLM X No Thinking 1M', [{ key: 'Effort', order: 0, name: 'No Thinking', controlType: 1 }])];
+  const cfg = { ...config(), roleInclusions: { lead: [{ nativeUid: 'glm-x-1m' }] } };
+  const catalog = buildCatalog(cfg, natives);
+  const emitted = catalog.models.filter(model => model.kind === 'matrix' &&
+    /^fusion-glm-x-(1m|max-1m|none-1m)-sidekick-/.test(model.uid));
+  assert.ok(emitted.length > 0, 'the included family emits combinations');
+  const leadNames = new Set(emitted.map(model =>
+    model.json.modelFamilyMetadata.entries.find(entry => entry.key === 'Lead').value.name));
+  assert.deepEqual([...leadNames], ['GLM X 1M'], 'all members share the family label as the Lead name');
+  for (const model of emitted) {
+    const effort = model.json.modelFamilyMetadata.entries.find(entry => entry.key === 'Effort')?.value;
+    assert.ok(effort && typeof effort.name === 'string' && Number.isSafeInteger(effort.order),
+      'every member carries an Effort value: ' + model.uid);
   }
-  assert.equal(leadEfforts.has('No Thinking'), false, 'the none variant never invents an official tier');
+});
+
+test('a native member emits the official Effort order for a same-named tier', () => {
+  // The observed Effort order lives in another space (here High=1); the emitted
+  // value must use the official space (High=3) or the picker shows two Highs.
+  const natives = [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
+    nativeLead('luna-high', 'Luna High', [{ key: 'Effort', order: 1, name: 'High', controlType: 1 }]),
+    nativeLead('luna-max', 'Luna Max', [{ key: 'Effort', order: 2, name: 'Max', controlType: 1 }])];
+  const cfg = { ...config(), roleInclusions: { lead: [{ nativeUid: 'luna-high' }] } };
+  const catalog = buildCatalog(cfg, natives);
+  const emitted = catalog.models.filter(model => model.kind === 'matrix' && model.uid.startsWith('fusion-luna-'));
+  assert.ok(emitted.length > 0, 'the included family emits');
+  for (const model of emitted) {
+    const dims = Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+    assert.equal(dims.Effort.order, OFFICIAL_EFFORT_ORDERS[dims.Effort.name.toLowerCase()],
+      dims.Effort.name + ' must reuse the official order, not the observed one: ' + model.uid);
+  }
 });
 
 test('emitted entries never give one dimension name two different orders', () => {
