@@ -136,7 +136,7 @@ function stableOrders(keys, reserved) {
 // everything before that is the family base. Bare uids whose label carries a
 // tier (`swe-1-7` is "SWE-1.7 Max") keep themselves as the base — the label,
 // not the uid, decides the tier for them.
-const NATIVE_EFFORT_SUFFIX = /-(none|minimal|low|medium|high|xhigh|max|ultra)(?:-fast)?$/;
+const NATIVE_EFFORT_SUFFIX = /-(none|minimal|low|medium|high|xhigh|max|ultra)(?:-fast|-priority)?$/;
 function leadFamilyBase(uid) {
   return uid.replace(NATIVE_EFFORT_SUFFIX, '') || uid;
 }
@@ -764,21 +764,29 @@ function buildCatalog(config = {}, nativeModels = []) {
   const selectedImportedLeads = leads.filter(lead => selectedLeadKeys.has(refKey({ providerId: lead.providerId, model: lead.model })));
   // Lead role items group official uids into effort families; expand every
   // selected family's member uids so the whole series emits combinations.
-  // Native fast-tier leads are aggregated and displayed in the role list but
-  // never emitted: our matrix entries cannot express the Fast Mode order the
-  // official Fast variants carry (declaring one would add a third Fast Mode
-  // option), so an emitted fast lead would duplicate its non-fast twin
-  // dimension for dimension. `staleFusionUids`/`resolveAssignment` also treat
-  // a `-fast` lead uid as illegitimate — not emitting keeps all three in step.
-  // Sidekicks are untouched: the official Sidekick dimension has no sub-tiers,
-  // so a fast sidekick uid is a legitimate value of its own.
-  const NATIVE_FAST_LEAD = /-fast$/;
+  // Fast leads are never emitted: our matrix entries cannot carry the Fast
+  // Mode order the official Fast variants carry (declaring one would add a
+  // third Fast Mode option), so an emitted fast lead would duplicate its
+  // non-fast twin dimension for dimension. `staleFusionUids`/`resolveAssignment`
+  // also treat a fast lead uid as illegitimate — not emitting keeps all three
+  // in step. Which uids are fast is read from the observed Fast Mode dimension
+  // rather than a uid suffix: the upstream catalog marks the same concept as
+  // `-fast` on Claude models and `-priority` on the GPT ones. Sidekicks are
+  // untouched: the official Sidekick dimension has no sub-tiers, so a fast
+  // sidekick uid is a legitimate value of its own.
+  const fastLeadUids = new Set();
+  for (const entry of Array.isArray(nativeModels) ? nativeModels : []) {
+    const uid = typeof entry?.uid === 'string' ? entry.uid : '';
+    if (!uid || uid.startsWith('fusion-') || ownUid(uid)) continue;
+    if ((Array.isArray(entry.fusionMetadata) ? entry.fusionMetadata : [])
+      .some(dim => dim?.key === 'Fast Mode' && dim.order !== 0)) fastLeadUids.add(uid);
+  }
   const selectedNativeLeadUids = new Set(), selectedNativeSidekickUids = new Set();
   for (const [role, items, set] of [['lead', roleSelection.lead, selectedNativeLeadUids], ['sidekick', roleSelection.sidekick, selectedNativeSidekickUids]]) {
     for (const item of items) {
       if (!item.selected || !item.native) continue;
       for (const uid of item.memberUids || [item.ref.nativeUid]) {
-        if (role === 'lead' && NATIVE_FAST_LEAD.test(uid)) continue;
+        if (role === 'lead' && fastLeadUids.has(uid)) continue;
         set.add(uid);
       }
     }

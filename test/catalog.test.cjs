@@ -1267,9 +1267,9 @@ const officialSeries = (base, leadOrder, leadName) => Object.entries(OFFICIAL_EF
   const uid = `${base}-${tier}`;
   return [nativeLead(uid, `${leadName} ${OFFICIAL_EFFORT_NAMES[effortOrder]}`), officialCombo(uid, leadOrder, leadName, effortOrder)];
 });
-const fastSiblings = (base, leadName, tiers) => tiers.map(tier => {
+const fastSiblings = (base, leadName, tiers, suffix = 'fast') => tiers.map(tier => {
   const name = OFFICIAL_EFFORT_NAMES[OFFICIAL_EFFORT_ORDERS[tier]];
-  return nativeLead(`${base}-${tier}-fast`, `${leadName} ${name} Fast`,
+  return nativeLead(`${base}-${tier}-${suffix}`, `${leadName} ${name} Fast`,
     [{ key: 'Effort', order: 0, name, controlType: 1 }, { key: 'Fast Mode', order: 1 }]);
 });
 
@@ -1355,14 +1355,52 @@ test('emitted entries never give one dimension name two different orders', () =>
   }
 });
 
+test('priority-named fast siblings join their effort family too', () => {
+  // An official family gains a -priority sibling the same way it gains -fast ones.
+  const natives = [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
+    ...fastSiblings('claude-x', 'Claude X', ['high'], 'priority')];
+  const roles = buildRoleLists(config(), natives);
+  const rows = roles.lead.filter(item => item.native && item.label === 'Claude X');
+  assert.equal(rows.length, 1, 'the -priority sibling merges into the official row');
+  assert.equal(rows[0].memberUids.length, 6);
+  assert.ok(rows[0].memberUids.includes('claude-x-high-priority'));
+
+  // A non-official effort series groups its -priority variants identically
+  // (the GPT Luna/Terra shape: labels write "Thinking Fast").
+  const luna = buildRoleLists(config(), [
+    nativeLead('luna-low', 'Luna Low Thinking'), nativeLead('luna-medium', 'Luna Medium Thinking'),
+    nativeLead('luna-high', 'Luna High Thinking'),
+    ...['low', 'medium', 'high'].map(tier => nativeLead(`luna-${tier}-priority`,
+      `Luna ${OFFICIAL_EFFORT_NAMES[OFFICIAL_EFFORT_ORDERS[tier]]} Thinking Fast`, [{ key: 'Fast Mode', order: 1 }]))]);
+  const lunaRows = luna.lead.filter(item => item.native && item.label === 'Luna');
+  assert.equal(lunaRows.length, 1, 'six variants collapse into a single Luna row');
+  assert.equal(lunaRows[0].memberUids.length, 6);
+  assert.ok(!/Fast/.test(lunaRows[0].label), 'no Fast marker survives in the family label');
+});
+
 test('no emitted matrix entry carries a fast lead uid', () => {
-  const catalog = buildCatalog(config(), [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
-    ...fastSiblings('claude-x', 'Claude X', ['low', 'medium', 'high', 'xhigh', 'max'])]);
+  const natives = [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
+    ...fastSiblings('claude-x', 'Claude X', ['low', 'xhigh'], 'fast'),
+    ...fastSiblings('claude-x', 'Claude X', ['medium', 'high'], 'priority')];
+  const catalog = buildCatalog(config(), natives);
+  const fastUids = new Set(natives.filter(entry => (entry.fusionMetadata || [])
+    .some(dim => dim.key === 'Fast Mode' && dim.order !== 0)).map(entry => entry.uid));
+  assert.equal(fastUids.size, 4, 'fixture covers both fast spellings');
   for (const uid of catalog.matrixUids) {
     const marker = uid.lastIndexOf('-sidekick-');
     const leadUid = uid.slice('fusion-'.length, marker);
-    assert.ok(!leadUid.endsWith('-fast'), uid + ' must not be emitted — it duplicates its non-fast twin dimension for dimension');
+    assert.ok(!fastUids.has(leadUid),
+      uid + ' must not be emitted — it duplicates its non-fast twin dimension for dimension');
   }
+});
+
+test('non-fast official leads still emit alongside the fast-lead filter', () => {
+  const catalog = buildCatalog(config(), [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
+    ...fastSiblings('claude-x', 'Claude X', ['high'], 'priority')]);
+  assert.ok([...catalog.matrixUids].some(uid => uid.startsWith('fusion-claude-x-high-sidekick-dfbyok-')),
+    'the non-fast twin keeps pairing with BYOK sidekicks');
+  assert.ok(![...catalog.matrixUids].some(uid => uid.includes('-priority-sidekick-')),
+    'the priority sibling never emits as a lead');
 });
 
 test('no two emitted matrix entries share the exact same dimension tuple', () => {
