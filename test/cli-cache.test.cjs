@@ -131,3 +131,36 @@ test('files without the dfbyok marker and a missing augment are never rewritten'
   assert.deepEqual(readCache(dir, foreign).raw, foreignBefore.raw);
   assert.deepEqual(readCache(dir, own).raw, ownBefore.raw);
 });
+
+test('stale-only caches are refreshed even when no expected uid is missing', () => {
+  const dir = tmpdir();
+  const name = 'model_configs_v5.bbbbbbbbbbbbbbbb.bin';
+  writeCache(dir, name, [...OWN, 'fusion-stale-leftover']);
+  const result = refreshStaleCliCaches({ dir, expectedUids: OWN,
+    staleProbe: () => ['fusion-stale-leftover'],
+    augment: payload => Buffer.concat([Buffer.from('dfbyok-provider-aaaa-model-x-1111\x00dfbyok-provider-aaaa-model-y-2222\x00fusion-dfbyok-preset-3333', 'utf8')]) });
+  assert.deepEqual(result.refreshed, [name], 'a stale probe hit alone triggers the rewrite');
+});
+
+test('a rewrite that only removes stale entries counts as improvement', () => {
+  const dir = tmpdir();
+  const name = 'model_configs_v5.bbbbbbbbbbbbbbbb.bin';
+  writeCache(dir, name, [...OWN, 'fusion-stale-leftover']);
+  const clean = Buffer.from(OWN.join('\x00'), 'utf8');
+  const result = refreshStaleCliCaches({ dir, expectedUids: OWN,
+    staleProbe: () => ['fusion-stale-leftover'], augment: () => clean });
+  assert.deepEqual(result.refreshed, [name]);
+  assert.equal(Buffer.from(readCache(dir, name).envelope.payload, 'base64').toString('utf8'), OWN.join('\x00'));
+});
+
+test('stale probe failures and empty results leave the file untouched', () => {
+  const dir = tmpdir();
+  const name = 'model_configs_v5.bbbbbbbbbbbbbbbb.bin';
+  writeCache(dir, name, OWN);
+  const before = readCache(dir, name);
+  for (const staleProbe of [() => { throw new Error('boom'); }, () => undefined]) {
+    const result = refreshStaleCliCaches({ dir, expectedUids: OWN, staleProbe, augment: payload => payload });
+    assert.deepEqual(result.refreshed, []);
+    assert.deepEqual(readCache(dir, name).raw, before.raw);
+  }
+});

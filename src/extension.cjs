@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { importLegacy, readConfig, writeConfig } = require('./config.cjs');
-const { buildCatalog, normalizeFusionConfig, augmentCatalog } = require('./catalog.cjs');
+const { buildCatalog, normalizeFusionConfig, augmentCatalog, staleFusionUids } = require('./catalog.cjs');
 const { createManager } = require('./panel/model.cjs');
 const { installLsInjection } = require('./runtime/ls-injection.cjs');
 const { createLsBridge } = require('./runtime/bridge.cjs');
@@ -473,7 +473,9 @@ async function activate(context) {
       const current = catalog();
       const expectedUids = current.models.map(model => model.uid);
       if (!expectedUids.length) return;
+      const emittedFusionUids = new Set(Object.keys(current.fusions || {}));
       const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids,
+        staleProbe: payload => staleFusionUids(payload, emittedFusionUids),
         augment: (payload, rpc) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current }) });
       if (result.refreshed.length) {
         log('cli-cache-refreshed', { files: result.refreshed });

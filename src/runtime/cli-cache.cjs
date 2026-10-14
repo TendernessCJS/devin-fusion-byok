@@ -33,7 +33,7 @@ function requireDir(dir) {
 // Lists cache files owned by a backend-routed identity (payload carries at
 // least one dfbyok uid) and reports which expected uids each one is missing.
 // `dir` is required so no caller can silently aim at the real user cache.
-function inspectCliCaches({ dir, expectedUids = [] } = {}) {
+function inspectCliCaches({ dir, expectedUids = [], staleProbe } = {}) {
   requireDir(dir);
   const expected = [...new Set(expectedUids)].filter(uid => typeof uid === 'string' && uid.includes(OWN_MARKER));
   const entries = [];
@@ -50,7 +50,11 @@ function inspectCliCaches({ dir, expectedUids = [] } = {}) {
     } catch { continue; }
     const text = payload.toString('latin1');
     if (!text.includes(OWN_MARKER)) continue;
-    entries.push({ name, file, missing: expected.filter(uid => !text.includes(uid)) });
+    let stale = [];
+    if (typeof staleProbe === 'function') {
+      try { stale = staleProbe(payload) || []; } catch { stale = []; }
+    }
+    entries.push({ name, file, missing: expected.filter(uid => !text.includes(uid)), stale });
   }
   return { expected, entries, checked: entries.length };
 }
@@ -78,13 +82,13 @@ const presentUids = (payload, expected) => {
 // preserved verbatim. Files without the dfbyok marker belong to other
 // identities and are never touched; the primary file is never renamed or
 // deleted.
-function refreshStaleCliCaches({ dir, expectedUids = [], augment } = {}) {
+function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment } = {}) {
   requireDir(dir);
-  const { expected, entries, checked } = inspectCliCaches({ dir, expectedUids });
+  const { expected, entries, checked } = inspectCliCaches({ dir, expectedUids, staleProbe });
   const refreshed = [], skipped = [], errors = [];
   const canAugment = typeof augment === 'function';
   for (const entry of entries) {
-    if (!entry.missing.length) continue;
+    if (!entry.missing.length && !(entry.stale || []).length) continue;
     const rpc = CACHE_RPC[entry.name.slice(0, entry.name.indexOf('.'))];
     if (!rpc || !canAugment) { skipped.push({ name: entry.name, reason: 'unsupported' }); continue; }
     let envelope, payload;
@@ -95,8 +99,12 @@ function refreshStaleCliCaches({ dir, expectedUids = [], augment } = {}) {
     let next;
     try { next = augment(payload, rpc); } catch { next = null; }
     if (!Buffer.isBuffer(next) || !next.length) { skipped.push({ name: entry.name, reason: 'augment-failed' }); continue; }
+    // Rewrite when the augmented payload loses no expected uid and actually
+    // changes the bytes: adding missing uids, dropping stale emitted entries,
+    // or removing hidden natives are all improvements. An identical payload
+    // is the only no-improvement case (it also avoids pointless .bak churn).
     const before = presentUids(payload, expected), after = presentUids(next, expected);
-    if (after.size <= before.size || ![...before].every(uid => after.has(uid))) {
+    if (![...before].every(uid => after.has(uid)) || payload.equals(next)) {
       skipped.push({ name: entry.name, reason: 'no-improvement' });
       continue;
     }

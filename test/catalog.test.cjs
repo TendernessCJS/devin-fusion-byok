@@ -329,10 +329,10 @@ test('unlocked, unobserved or fallback-less official Fusion assignments still pa
 for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} catalog augmentation reports locked official Fusion uids`, () => {
   const lockedNative = format.json
     ? { label: 'Fusion (Locked)', modelUid: 'fusion-official-locked', disabled: true }
-    : cat(s(1, 'Fusion (Locked)'), s(22, 'fusion-official-locked'), v(4, 1));
+    : cat(s(1, 'Fusion (Locked)'), s(22, 'fusion-official-locked'), v(4, 1), m(32, v(1, 1)));
   const openNative = format.json
     ? { label: 'Fusion (Open)', modelUid: 'fusion-official-open', disabled: false }
-    : cat(s(1, 'Fusion (Open)'), s(22, 'fusion-official-open'));
+    : cat(s(1, 'Fusion (Open)'), s(22, 'fusion-official-open'), m(32, v(1, 1)));
   const plain = format.json
     ? { label: 'Official SWE', modelUid: 'swe-2-max', disabled: true }
     : cat(s(1, 'Official SWE'), s(22, 'swe-2-max'), v(4, 1));
@@ -353,10 +353,10 @@ for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} v
   const withDefault = { ...catalog, defaultFusionUid: preferred.uid };
   const lockedNative = format.json
     ? { label: 'Fusion (Locked)', model_uid: 'fusion-official-locked', disabled: true, disabled_reason: 'pro' }
-    : cat(s(1, 'Fusion (Locked)'), s(22, 'fusion-official-locked'), v(4, 1), s(33, 'pro'));
+    : cat(s(1, 'Fusion (Locked)'), s(22, 'fusion-official-locked'), v(4, 1), s(33, 'pro'), m(32, v(1, 1)));
   const openNative = format.json
     ? { label: 'Fusion (Open)', model_uid: 'fusion-official-open', disabled: false }
-    : cat(s(1, 'Fusion (Open)'), s(22, 'fusion-official-open'));
+    : cat(s(1, 'Fusion (Open)'), s(22, 'fusion-official-open'), m(32, v(1, 1)));
   const list = format.json ? { client_model_configs: [lockedNative, openNative] }
     : cat(m(1, lockedNative), m(1, openNative));
   let report;
@@ -380,7 +380,7 @@ for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} a
     { ...catalog, defaultFusionUid: Object.values(catalog.fusions).find(fusion => fusion.sidekickNative === false).uid, routes: {} }];
   const lockedNative = format.json
     ? { label: 'Fusion (Locked)', modelUid: 'fusion-official-locked', disabled: true, disabledReason: 'pro' }
-    : cat(s(1, 'Fusion (Locked)'), s(22, 'fusion-official-locked'), v(4, 1), s(33, 'pro'));
+    : cat(s(1, 'Fusion (Locked)'), s(22, 'fusion-official-locked'), v(4, 1), s(33, 'pro'), m(32, v(1, 1)));
   const list = format.json ? { clientModelConfigs: [lockedNative] } : m(1, lockedNative);
   const request = format.json ? { modelRouterUid: 'fusion-official-locked' } : s(2, 'fusion-official-locked');
   for (const candidate of candidates) {
@@ -423,10 +423,10 @@ test('installed ACP picker requires own UIDs in session config_options as well a
 
 test('hidden official uids are removed from proto lists while observation still reports them', () => {
   const withHidden = { ...catalog, hiddenNativeModelUids: ['fusion-official-locked', 'swe-2-max'] };
-  const locked = cat(s(1, 'Fusion (Locked)'), s(22, 'fusion-official-locked'), v(4, 1), s(33, 'pro'));
+  const locked = cat(s(1, 'Fusion (Locked)'), s(22, 'fusion-official-locked'), v(4, 1), s(33, 'pro'), m(32, v(1, 1)));
   const sharedHidden = cat(s(1, 'Shared Label'), s(22, 'swe-2-max'));
   const sharedKept = cat(s(1, 'Shared Label'), s(22, 'swe-2-high'));
-  const open = cat(s(1, 'Fusion (Open)'), s(22, 'fusion-official-open'));
+  const open = cat(s(1, 'Fusion (Open)'), s(22, 'fusion-official-open'), m(32, v(1, 1)));
   const sort = cat(s(1, 'Recommended'), m(2, cat(s(1, 'Official Group'), s(2, 'Fusion (Locked)'), s(2, 'Shared Label'), s(2, 'Fusion (Open)'))));
   const input = cat(m(1, locked), m(1, sharedHidden), m(1, sharedKept), m(1, open), m(2, sort));
   let nativeReport, fusionReport;
@@ -1068,4 +1068,56 @@ test('fast-mode fusion uids are refused outright instead of downgraded', () => {
   assert.equal(resolveAssignment({ fusionLeadRouterUid: `fusion-${byokLead}-fast-sidekick-swe-2-max` }, json, probe), null);
   assert.equal(resolveAssignment({ modelRouterUid: 'fusion--sidekick-swe-2-max' }, json, probe), null);
   assert.equal(resolveAssignment({ modelRouterUid: `fusion-${byokLead}-sidekick-` }, json, probe), null);
+});
+
+test('matrix dimension orders are hash-stable across catalog generations', () => {
+  const sweX = { uid: 'swe-x', label: 'SWE-X', disabled: false, isModelRouter: false, harnessUids: [] };
+  const withX = buildSavedCatalog({ ...config(), fusionMatrix: true }, [...OBSERVED_SWE, sweX,
+    { uid: 'fusion-claude-fable-5-1-medium-sidekick-swe-x', label: 'F', disabled: false, isModelRouter: true,
+      harnessUids: ['fusion'], sidekickDimension: { order: 9, name: 'SWE-X' } }]);
+  const leadOrders = cat => new Map(cat.models.filter(model => model.kind === 'matrix')
+    .map(model => [model.uid, Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value])).Lead]));
+  const a = leadOrders(buildSavedCatalog({ ...config(), fusionMatrix: true }, OBSERVED_SWE));
+  const b = leadOrders(withX);
+  const byName = map => {
+    const names = new Map();
+    for (const dim of map.values()) names.set(dim.name, dim.order);
+    return names;
+  };
+  const namesA = byName(a), namesB = byName(b);
+  for (const [name, order] of namesA) {
+    assert.equal(namesB.get(name), order, `lead dim "${name}" keeps its order when the sidekick pool grows`);
+  }
+  const orders = [...namesB.values()];
+  assert.equal(new Set(orders).size, orders.length, 'custom lead orders never collide');
+  for (const order of orders) assert.ok(order >= 0x10000000, 'custom orders stay out of the official range');
+});
+
+test('augmentation drops f32-less fusion entries emitted by earlier catalog generations', () => {
+  const probe = buildSavedCatalog({ ...config(), fusionMatrix: true }, OBSERVED_SWE);
+  const stale = cat(s(1, 'Fusion (Claude Haiku 5.5 Medium + GLM)'), s(22, 'fusion-claude-haiku-5-5-medium-sidekick-glm-5-2'),
+    m(30, cat(s(1, 'Fusion'), m(2, cat(s(1, 'Lead'), m(2, cat(v(1, 20), s(2, 'Claude Haiku 5.5 Medium'))))))));
+  const official = cat(s(1, 'Fusion (Claude Fable 5.1 Medium + SWE)'), s(22, 'fusion-claude-fable-5-1-medium-sidekick-swe-2-max'),
+    m(30, cat(s(1, 'Fusion'))), m(32, v(1, 1)));
+  const input = cat(m(1, stale), m(1, official));
+  const output = augmentCatalog(input, { rpc: 'GetCliModelConfigs', format: proto, catalog: probe });
+  const uids = configs(output).map(entry => str(entry, 22));
+  assert.ok(!uids.includes('fusion-claude-haiku-5-5-medium-sidekick-glm-5-2'), 'stale emitted uid is dropped');
+  assert.ok(uids.includes('fusion-claude-fable-5-1-medium-sidekick-swe-2-max'), 'official f32 entry is preserved');
+  for (const model of probe.models) assert.ok(uids.includes(model.uid), 'current emit is re-added');
+});
+
+test('staleFusionUids reports only unemitted f32-less fusion uids in both payload shapes', () => {
+  const { staleFusionUids } = require('../src/catalog.cjs');
+  const emitted = new Set(['fusion-a-sidekick-b']);
+  const ours = cat(s(1, 'F'), s(22, 'fusion-a-sidekick-b'));
+  const staleEntry = cat(s(1, 'F2'), s(22, 'fusion-claude-x-sidekick-claude-y'));
+  const official = cat(s(1, 'F3'), s(22, 'fusion-official-a-sidekick-b'), m(32, v(1, 1)));
+  const plain = cat(s(1, 'P'), s(22, 'swe-2-max'));
+  const flat = cat(m(1, ours), m(1, staleEntry), m(1, official), m(1, plain));
+  assert.deepEqual(staleFusionUids(flat, emitted), ['fusion-claude-x-sidekick-claude-y']);
+  const nested = cat(m(1, cat(s(1, 'status'), m(33, cat(m(1, staleEntry), m(1, official))))));
+  assert.deepEqual(staleFusionUids(nested, emitted), ['fusion-claude-x-sidekick-claude-y']);
+  assert.deepEqual(staleFusionUids(flat, new Set(['fusion-a-sidekick-b', 'fusion-claude-x-sidekick-claude-y'])), []);
+  assert.deepEqual(staleFusionUids(Buffer.from('garbage'), emitted), []);
 });

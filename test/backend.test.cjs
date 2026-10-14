@@ -218,7 +218,7 @@ test('an own plain model is listed, allowed and callable standalone against a th
   assert.equal(uids[0], 'native-gpt');
   assert.ok(uids.includes(own));
   assert.equal(Object.keys(catalog.fusions).length, 0);
-  const lockedNative = Buffer.concat([wire.s(1, 'Fusion (Locked)'), wire.s(22, 'fusion-official-locked'), wire.v(4, 1)]);
+  const lockedNative = Buffer.concat([wire.s(1, 'Fusion (Locked)'), wire.s(22, 'fusion-official-locked'), wire.v(4, 1), wire.m(32, wire.v(1, 1))]);
   const listed = augmentCatalog(wire.m(1, lockedNative), { rpc: API + 'GetCliModelConfigs', format: proto, catalog });
   const entries = wire.parseFields(listed).filter(field => field.number === 1 && field.wire === 2).map(field => field.value);
   assert.equal(wire.str(entries[0], 22), own);

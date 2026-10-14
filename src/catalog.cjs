@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { parseFields, str, num, s, v, m } = require('./protocol/wire.cjs');
+const { parseFields, fields, str, num, s, v, m } = require('./protocol/wire.cjs');
 const { modelEfforts, modelSupportsImages } = require('./model-capabilities.cjs');
 
 const OWN_GROUP = 'Devin Fusion BYOK';
@@ -516,7 +516,8 @@ function buildRoleLists(config = {}, nativeModels = []) {
     });
   }
 
-  return { lead: leadList, sidekick: sidekickList };
+  return { lead: leadList, sidekick: sidekickList,
+    reservedLeadOrders: officialRoles.reservedLeadOrders, reservedSidekickOrders: officialRoles.reservedOrders };
 }
 
 /** Build a secret-free catalog. Provider credentials stay solely in caller configuration. */
@@ -754,8 +755,13 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
         pairs.push({ lead, sidekick, leadDim, sideDim, uid });
       }
     }
-    const leadOrders = new Map([...customLeadNames].sort().map((name, index) => [name, 20 + index]));
-    const sideOrders = new Map([...customSideNames].sort().map((name, index) => [name, 20 + index]));
+    // Custom dimension values take hash-derived orders well above the official
+    // range. Sequential orders would shift whenever the selected set changes,
+    // and stale entries kept in the CLI cache carry their old order — two
+    // different names landing on the same order make the picker drop one
+    // silently (it dedupes dimension values by order).
+    const leadOrders = stableOrders(customLeadNames, roleSelection.reservedLeadOrders);
+    const sideOrders = stableOrders(customSideNames, roleSelection.reservedSidekickOrders);
     for (const { lead, sidekick, leadDim, sideDim, uid } of pairs) {
       matrixUids.add(uid);
       const leadLabel = lead.native ? lead.label
@@ -1050,6 +1056,13 @@ function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNati
     if (field.number === 1 && field.wire === 2) {
       const uid = protoUid(field.value), label = str(field.value, 1);
       if (ownUid(uid) || matrixUids.has(uid)) { existingLabels.add(label); continue; }
+      // Entries we emitted but no longer emit (config changed, uid drifted)
+      // look like official fusions yet are dead weight: they keep stale
+      // dimension values alive and can shadow current ones when the picker
+      // dedupes by order. Official fusion entries always carry capability
+      // records (field 32); our emit never does, so an f32-less `fusion-*`
+      // entry is safely ours to drop. Fresh entries are re-added below.
+      if (uid.startsWith('fusion-') && !fields(field.value, 32).length) continue;
       if (hiddenNative.has(uid)) { if (label) hiddenLabels.add(label); continue; }
       if (hiddenFusion.has(uid)) { if (label) hiddenLabels.add(label); continue; }
       retainedLabels.add(label);
@@ -1153,6 +1166,33 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
     if (!shape.status) return augmentProtoList(data, catalog, shape.sorts, onFusionStatus, onNativeModels);
     return rewriteMessage(data, shape.field, status => rewriteMessage(status, 33, list => augmentProtoList(list, catalog, true, onFusionStatus, onNativeModels), true));
   } catch { return data; }
+}
+
+// Fusion entries we emitted but no longer do are indistinguishable from the
+// official catalog by uid shape (they mirror `fusion-<a>-sidekick-<b>`). The
+// reliable discriminator is structural: official fusion entries always carry
+// capability records (field 32), our emit never writes that field. Scans the
+// model-entry lists of either known payload shape (flat clientModelConfigs or
+// the user_status nesting) and returns f32-less `fusion-*` uids not in the
+// current emit — i.e. residue from a previous catalog generation.
+function staleFusionUids(data, emittedUids) {
+  const emitted = emittedUids instanceof Set ? emittedUids : new Set(emittedUids || []);
+  const stale = [];
+  const scan = buffer => {
+    const uid = protoUid(buffer);
+    if (uid.startsWith('fusion-') && !emitted.has(uid) && !fields(buffer, 32).length) stale.push(uid);
+  };
+  try {
+    for (const top of parseFields(data).filter(field => field.number === 1 && field.wire === 2)) {
+      scan(top.value);
+      try {
+        for (const list of parseFields(top.value).filter(field => field.number === 33 && field.wire === 2)) {
+          for (const entry of parseFields(list.value).filter(field => field.number === 1 && field.wire === 2)) scan(entry.value);
+        }
+      } catch { /* not a status envelope — the flat scan above already ran */ }
+    }
+  } catch { /* unparseable payloads simply report no stale entries */ }
+  return stale;
 }
 
 function collectNativeModels(data, { rpc, format = {} } = {}) {
@@ -1282,4 +1322,4 @@ function resolveAssignment(data, format = {}, catalog, lockedFusionUids) {
   } catch { return null; }
 }
 
-module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, buildRoleLists, refKey, presetUid, normalizeFusionConfig };
+module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, buildRoleLists, refKey, presetUid, normalizeFusionConfig, staleFusionUids };
