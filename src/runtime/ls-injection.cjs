@@ -110,6 +110,7 @@ async function installLsInjection({ nativeMainPath, createBridge, log = () => {}
     pending = attempt;
     pendingCount++;
     state = 'connecting';
+    report('ls port observed ' + port);
     Promise.resolve().then(() => {
       if (disposed || attempt.generation !== generation) return null;
       return createBridge(port);

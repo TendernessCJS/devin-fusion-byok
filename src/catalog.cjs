@@ -461,7 +461,7 @@ function buildRoleLists(config = {}, nativeModels = []) {
 }
 
 /** Build a secret-free catalog. Provider credentials stay solely in caller configuration. */
-function buildCatalog(config = {}, nativeModels = []) {
+function buildCatalog(config = {}, nativeModels = [], options = {}) {
   if (config.enabled === false) {
     return { models: [], routes: {}, fusions: {}, sidekicks: [], hiddenNativeModelUids: [], hiddenFusionUids: [] };
   }
@@ -610,17 +610,29 @@ function buildCatalog(config = {}, nativeModels = []) {
   const presetStates = [];
   const labels = new Set([...models.map(item => item.label), ...nativeModels.map(item => item.label)]);
   const presetModels = [];
+  // An unresolved preset that references a native model may simply predate the
+  // next catalog sync: the native catalog is observed, never persisted, so it
+  // is empty right after a restart. `nativeCatalogPending` marks that window so
+  // callers can render a softer notice instead of a hard removal warning.
+  const nativePending = options.nativeCatalogPending === true;
+  const isNativeRef = ref => typeof ref?.nativeUid === 'string' && ref.nativeUid.length > 0;
   for (const preset of savedPresets) {
     if (!preset || typeof preset !== 'object' || Array.isArray(preset)) continue;
     const valid = typeof preset.id === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(preset.id) && idCounts.get(preset.id) === 1 &&
       typeof preset.name === 'string' && preset.name.trim().length > 0 && preset.name.length <= 80 && !/[\u0000-\u001f]/.test(preset.name) && nameCounts.get(preset.name.trim().toLowerCase()) === 1;
     const lead = indexes.lead.get(candidateKey(preset.lead));
     const sidekick = indexes.sidekick.get(candidateKey(preset.sidekick));
+    const pendingLead = !lead && nativePending && isNativeRef(preset.lead);
+    const pendingSidekick = !sidekick && nativePending && isNativeRef(preset.sidekick);
     const uid = presetUid(preset.id);
     const available = !!(valid && lead && sidekick);
     presetStates.push({ id: preset.id, name: preset.name, lead: preset.lead, sidekick: preset.sidekick, uid, available,
+      pending: valid && (pendingLead || pendingSidekick),
       leadLabel: lead?.label, sidekickLabel: sidekick?.label,
-      reason: !valid ? '预设名称或标识无效或重复' : !lead ? 'Lead 当前不可用或已从角色列表移除' : !sidekick ? 'Sidekick 当前不可用或已从角色列表移除' : '' });
+      reason: !valid ? '预设名称或标识无效或重复'
+        : !lead ? (pendingLead ? '官方模型目录尚未同步，稍后会自动重试' : 'Lead 当前不可用或已从角色列表移除')
+        : !sidekick ? (pendingSidekick ? '官方模型目录尚未同步，稍后会自动重试' : 'Sidekick 当前不可用或已从角色列表移除')
+        : '' });
     if (!available) continue;
     let label = preset.name.trim();
     if (labels.has(label)) label += ` · Fusion ${digest(preset.id).slice(0, 8)}`;

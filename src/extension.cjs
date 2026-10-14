@@ -13,6 +13,8 @@ const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } 
 const { readNativeModels } = require('./runtime/native-models.cjs');
 const { installAutoContinue } = require('./runtime/auto-continue.cjs');
 const { installGoalContinue } = require('./runtime/goal-continue.cjs');
+const { installAcpObserver } = require('./runtime/acp-observer.cjs');
+const { invalidateStaleCliCaches } = require('./runtime/cli-cache.cjs');
 const { createPickerRefresh } = require('./runtime/picker-refresh.cjs');
 const { createGoalController } = require('./runtime/goal-state.cjs');
 let stopNativeSync;
@@ -21,7 +23,7 @@ let resetAutoContinue;
 let cancelAutoContinueSession;
 let stopGoalContinue;
 let goalController;
-let connection;
+let connection, acpObserver;
 let runtimeWaitAbort;
 let activationGeneration = 0;
 let reconcileHalted = true;
@@ -210,6 +212,7 @@ async function activate(context) {
   let management, manager;
   const nativeModels = new Map(), localNativeModels = new Map();
   let nativeCatalogStatus = 'loading', syncPending, syncAbort, syncTimer;
+  let acpObservationSeq = 0, acpOwnModels = 0;
   const refreshNativeModels = () => {
     if (activationDisposed || config().enabled === false) return Promise.resolve();
     if (syncPending) return syncPending;
@@ -225,6 +228,10 @@ async function activate(context) {
       for (const entry of localNativeModels.values()) nativeModels.set(entry.uid, entry);
       for (const entry of result.models) nativeModels.set(entry.uid, entry);
       try { await management?.publish(); } catch {}
+      updateStatusBar();
+      if (nativeModels.size !== nativeSyncSize) { nativeSyncSize = nativeModels.size; log('native-sync', { count: nativeSyncSize }); }
+      pickerRefresh?.changed?.();
+      checkCliCaches?.();
     })().finally(() => { if (syncAbort === abort) { syncAbort = undefined; syncPending = undefined; } });
     return syncPending;
   };
@@ -259,7 +266,7 @@ async function activate(context) {
         localNativeModels.set(next.uid, next); nativeModels.set(next.uid, next); changed = true;
       }
     }
-    if (changed && !activationDisposed) try { void management?.publish()?.catch(() => {}); } catch {}
+    if (changed && !activationDisposed) try { void management?.publish()?.catch(() => {}); updateStatusBar(); pickerRefresh?.changed?.(); checkCliCaches?.(); } catch {}
   };
   let enableQueue = Promise.resolve();
   const ensureEnabled = () => {
@@ -324,6 +331,8 @@ async function activate(context) {
       return;
     }
     connection = injected;
+    try { if (nativeMain) { acpObserver?.dispose?.(); acpObserver = installAcpObserver({ nativeMainPath: nativeMain, log, onModels: counts => { acpObservationSeq++; acpOwnModels = counts.ownModels; } }); } }
+    catch { log('acp-observer-error'); }
     startNativeSync();
     log('activated', { nativeVersion: native.packageJSON.version, storage: root });
   }
@@ -430,11 +439,32 @@ async function activate(context) {
     statusBar.text = 'Fusion BYOK'; statusBar.tooltip = '管理供应商、模型列表与 Fusion 组合';
     statusBar.command = 'devinFusionByok.openPanel'; statusBar.show(); context.subscriptions.push(statusBar);
   }
+  let nativeSyncSize = -1;
+  const updateStatusBar = () => {
+    try { if (statusBar) statusBar.tooltip = `Fusion BYOK：目录 ${catalog().models.length} 模型 / ${Object.keys(catalog().fusions).length} Fusion 预设（原生已观测 ${nativeModels.size}）`; } catch {}
+  };
   const pickerRefresh = createPickerRefresh({ log,
     executeCommand: command => vscode.commands.executeCommand(command),
-    readModels: () => catalog().models });
+    readModels: () => catalog().models,
+    observe: () => acpObservationSeq,
+    applied: token => acpObservationSeq > token && acpOwnModels > 0 });
   pickerRefresh.prime();
   context.subscriptions.push(pickerRefresh);
+  // The CLI intersects its picker with per-identity caches under
+  // ~/.cache/devin/cli; a cache written before a config change keeps the old
+  // uid digests and drops the affected entries. Detect and invalidate those
+  // files so the next CLI read re-fetches a current catalog.
+  const checkCliCaches = () => {
+    try {
+      if (config().enabled === false) return;
+      const ownUids = catalog().models.map(model => model.uid).filter(uid => /^dfbyok-|^fusion-dfbyok-/.test(uid));
+      if (!ownUids.length) return;
+      const result = invalidateStaleCliCaches({ expectedUids: ownUids });
+      if (result.invalidated.length) { log('cli-cache-invalidated', { files: result.invalidated.length }); pickerRefresh.force(); }
+      for (const error of result.errors || []) log('cli-cache-invalidate-error', { name: error.name, code: error.code });
+    } catch { /* cache inspection is best-effort */ }
+  };
+  checkCliCaches();
   manager = createManager({ read: config, write: current => writeConfig(configFile, current),
     nativeModels: () => [...nativeModels.values()], refreshNativeModels, nativeCatalogStatus: () => nativeCatalogStatus,
     autoContinueStatus: () => autoContinue ? (autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
@@ -450,6 +480,7 @@ async function activate(context) {
       else if (type === 'setUpdateProxy') {}
       else if (config().enabled !== false) { await ensureEnabled(); await reconcileSelection(); }
       pickerRefresh.changed();
+      checkCliCaches();
     } });
   const updater = require('./update.cjs').createUpdateHost({ vscode, context,
     proxy: () => config().updateProxy,
@@ -530,6 +561,8 @@ async function teardown() {
   stopNativeSync?.(); stopNativeSync = undefined;
   activationGeneration++; runtimeWaitAbort?.abort(); reconcileHalted = true;
   if (connection) { const current = connection; connection = undefined; await current.dispose(); }
+  try { acpObserver?.dispose?.(); } catch {}
+  acpObserver = undefined;
 }
 async function deactivate() {
   activationDisposed = true;

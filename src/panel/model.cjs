@@ -6,6 +6,9 @@ const { modelSupportsImages } = require('../model-capabilities.cjs');
 const { normalizeBaseUrlPath } = require('./base-url.cjs');
 const { parseProxy, maskProxy } = require('../proxy.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+// The native catalog is observed, never persisted: 'loading', 'empty' and
+// 'unavailable' all mean a nativeUid preset reference may yet resolve.
+const NATIVE_PENDING_STATUSES = new Set(['loading', 'empty', 'unavailable']);
 class PanelInputError extends Error {}
 const fail = message => { throw new PanelInputError(message); };
 function text(value, label, maximum = 256) {
@@ -47,8 +50,9 @@ function cleanSidekicks(config) {
       provider.models.some(model => model.id === sidekick?.model && model.enabled !== false)));
   config.sidekicks = valid;
 }
-function publicState(config, selectedFusionUid, nativeModels = [], autoContinueStatus = 'unavailable') {
-  const catalog = buildCatalog({ ...config, enabled: true }, nativeModels);
+function publicState(config, selectedFusionUid, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready') {
+  const catalog = buildCatalog({ ...config, enabled: true }, nativeModels,
+    { nativeCatalogPending: NATIVE_PENDING_STATUSES.has(nativeCatalogStatus) });
   const hidden = new Set(catalog.hiddenNativeModelUids || []);
   const roleLists = buildRoleLists(config, nativeModels);
   const eligibleLeads = new Set(roleLists.lead.filter(item => item.available).map(item => item.ref.nativeUid).filter(Boolean));
@@ -94,8 +98,9 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
   let pendingImport;
   const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey]);
   const state = () => {
-    const config = read(), result = publicState(config, selectedFusion(), nativeModels(), autoContinueStatus());
-    result.nativeCatalogStatus = nativeCatalogStatus();
+    const config = read(), status = nativeCatalogStatus();
+    const result = publicState(config, selectedFusion(), nativeModels(), autoContinueStatus(), status);
+    result.nativeCatalogStatus = status;
     const provider = config.providers.find(p => p.id === pendingImport?.providerId);
     result.importCandidates = provider && signature(provider) === pendingImport.signature ? {
       providerId: provider.id, token: pendingImport.token,

@@ -61,6 +61,24 @@ test('all controls share the --control-h height token so rows align', () => {
   assert.doesNotMatch(html, /h1, h2, h3, p \{ margin: 0 \}/, 'the heading reset must include lists too');
 });
 
+test('a preset pending native catalog sync renders muted instead of a hard warning', () => {
+  const { byId, receive } = panel();
+  const pending = { ...state(), fusionPresets: [{ id: 'ds', name: 'DS Pro', uid: 'u1', available: false, pending: true,
+    lead: { providerId: 'cpa', model: 'lead' }, sidekick: { nativeUid: 'swe-2-max' },
+    leadLabel: 'CPA · lead', sidekickLabel: 'SWE-2 Max', reason: '官方模型目录尚未同步，稍后会自动重试' }] };
+  receive({ data: { type: 'state', state: pending } });
+  const muted = collect(byId('fusion'), 'span', node => node.className.includes('pending'));
+  assert.equal(muted.length, 1);
+  assert.match(muted[0].textContent, /尚未同步/);
+  const hard = { ...state(), fusionPresets: [{ ...pending.fusionPresets[0], pending: false, reason: 'Sidekick 当前不可用或已从角色列表移除' }] };
+  receive({ data: { type: 'state', state: hard } });
+  const warnings = collect(byId('fusion'), 'span', node => node.className.includes('warn'));
+  assert.equal(warnings.length, 1);
+  assert.ok(!warnings[0].className.includes('pending'));
+  assert.match(warnings[0].textContent, /已从角色列表移除/);
+  assert.match(renderPanel({ nonce: 'safe', cspSource: 'test:' }), /\.warn\.pending \{ color: var\(--muted\); \}/);
+});
+
 test('the add-model dialog renders the 131072-token output default and keeps saved values', () => {
   const { byId, posts, receive } = panel();
   receive({ data: { type: 'state', state: state() } });

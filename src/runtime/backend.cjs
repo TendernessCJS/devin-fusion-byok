@@ -9,12 +9,13 @@ const wire = require('../protocol/wire.cjs');
 const { parseChat } = require('../protocol/chat.cjs');
 const { serveChat } = require('../protocol/responses.cjs');
 const { forward, collect } = require('./bridge.cjs');
+const { normalizeNativeEntry, loadNativeCache, saveNativeCache } = require('./native-cache.cjs');
 const PORT = 39842;
 const VERSION = require('../../package.json').version;
 const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
 const SERVICE = 'devin-fusion-byok';
 const MANAGEMENT_PROTOCOL = 1;
-const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', 'monitor.cjs', 'monitor-stats.cjs', '../config.cjs', '../proxy.cjs', '../catalog.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/chat.cjs', '../protocol/responses.cjs', '../protocol/anthropic.cjs'];
+const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', 'monitor.cjs', 'monitor-stats.cjs', 'native-cache.cjs', '../config.cjs', '../proxy.cjs', '../catalog.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/chat.cjs', '../protocol/responses.cjs', '../protocol/anthropic.cjs'];
 function sourceId() {
   const hash = crypto.createHash('sha256');
   for (const name of SOURCE_FILES) hash.update(name).update('\0').update(fs.readFileSync(path.resolve(__dirname, name))).update('\0');
@@ -49,20 +50,34 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
   const configFile = path.join(root, 'config.json');
   const config = () => readConfig(configFile);
   const observedNatives = new Map();
+  const nativeCacheFile = path.join(root, 'native-cache.json');
+  let observedSize = 0;
+  try {
+    const seeded = loadNativeCache(nativeCacheFile);
+    for (const entry of seeded) observedNatives.set(entry.uid, entry);
+    if (seeded.length) { observedSize = observedNatives.size; log('native-cache-load', { count: observedSize }); }
+  } catch {}
+  let cacheTimer;
+  function flushNativeCache() {
+    if (cacheTimer !== undefined) { clearTimeout(cacheTimer); cacheTimer = undefined; }
+    try { saveNativeCache(nativeCacheFile, [...observedNatives.values()]); } catch {}
+  }
+  function scheduleNativeCacheSave() {
+    if (cacheTimer !== undefined) return;
+    cacheTimer = setTimeout(() => { cacheTimer = undefined; flushNativeCache(); }, 2000);
+    cacheTimer.unref?.();
+  }
   const onNativeModels = entries => {
     if (!Array.isArray(entries)) return;
     for (const entry of entries) {
-      if (!entry || typeof entry.uid !== 'string' || !entry.uid) continue;
-      const dimension = entry.sidekickDimension;
-      observedNatives.set(entry.uid, { uid: entry.uid, label: typeof entry.label === 'string' ? entry.label : '',
-        disabled: entry.disabled === true, isModelRouter: entry.isModelRouter === true,
-        harnessUids: Array.isArray(entry.harnessUids) ? entry.harnessUids.filter(value => typeof value === 'string') : [],
-        ...(dimension && typeof dimension === 'object'
-          ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } } : {}),
-        ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
-        ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
-        ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
-        ...(entry.supportsImages ? { supportsImages: true } : {}) });
+      const normalized = normalizeNativeEntry(entry);
+      if (!normalized) continue;
+      observedNatives.set(normalized.uid, normalized);
+    }
+    if (observedNatives.size !== observedSize) {
+      observedSize = observedNatives.size;
+      log('native-observed', { count: observedSize });
+      scheduleNativeCacheSave();
     }
   };
   const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()]); };
@@ -209,6 +224,7 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
     if (closing) return closing;
     draining = true;
     closing = (async () => {
+      flushNativeCache();
       if (activeRequests > 0) await new Promise(resolve => drainedWaiters.push(resolve));
       try { await monitor?.close(); } catch {}
       await new Promise(resolve => {

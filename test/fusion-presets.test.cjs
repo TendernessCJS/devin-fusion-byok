@@ -33,6 +33,27 @@ test('only explicitly saved presets generate routers; imported variants stay sta
   }
 });
 
+test('an unresolved native reference is pending while the native catalog is still syncing', () => {
+  const input = config();
+  input.fusionPresets = [
+    preset('ds', 'DS Pro', ref('a', 'high'), { nativeUid: 'swe-2-medium' }),
+    preset('gone', '失联', ref('missing'), ref('b')),
+  ];
+  let catalog = buildCatalog(input, [], { nativeCatalogPending: true });
+  assert.equal(catalog.presetStates[0].available, false);
+  assert.equal(catalog.presetStates[0].pending, true);
+  assert.match(catalog.presetStates[0].reason, /尚未同步/);
+  assert.equal(catalog.presetStates[1].pending, false, 'a BYOK reference never counts as pending sync');
+  assert.match(catalog.presetStates[1].reason, /已从角色列表移除/);
+  catalog = buildCatalog(input, []);
+  assert.notEqual(catalog.presetStates[0].pending, true);
+  assert.match(catalog.presetStates[0].reason, /已从角色列表移除/);
+  const native = { uid: 'swe-2-medium', label: 'SWE-2 Medium', disabled: false, isModelRouter: false, harnessUids: ['h'] };
+  catalog = buildCatalog(input, [native], { nativeCatalogPending: true });
+  assert.equal(catalog.presetStates[0].available, true);
+  assert.equal(catalog.presetStates[0].pending, false);
+});
+
 test('independent exclusions and unavailable models preserve definitions without publishing stale routes', () => {
   const input = config(); input.fusionPresets = [preset(), preset('two', '逆向', ref('b'), ref('a', 'low'))];
   input.roleExclusions = { lead: [ref('a')], sidekick: [] };

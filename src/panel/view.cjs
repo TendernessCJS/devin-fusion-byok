@@ -129,6 +129,7 @@ function renderPanel({ nonce, cspSource }) {
     .monitor-table th { position: sticky; top: 0; background: var(--bg); font-weight: 500; color: var(--muted); }
     #usage-monitor:not(.detailed) .extra { display: none; }
     .update-notes { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 8px 0 0; }
+    .warn.pending { color: var(--muted); }
     dialog { width: min(500px, calc(100vw - 28px)); max-height: calc(100vh - 40px); overflow: auto; margin: auto; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-overlay); color: var(--vscode-foreground, #ddd); background: var(--bg); box-shadow: 0 8px 28px var(--vscode-widget-shadow, #0006); }
     dialog::backdrop { background: #0007; }
     dialog h2 { font-size: 16px; margin-bottom: 16px; }
@@ -350,7 +351,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
         element('div', { class: 'row-main' },
           element('button', { type: 'button', class: 'link-title', text: preset.name, 'aria-label': '编辑预设 ' + preset.name, onclick: () => presetDialog(preset) }),
           element('span', { class: 'row-sub' }, describe('lead', preset.leadLabel), element('span', { class: 'plus', text: '+' }), describe('sidekick', preset.sidekickLabel)),
-          preset.available ? null : element('span', { class: 'warn', text: preset.reason || '当前不可用' })),
+          preset.available ? null : element('span', { class: 'warn' + (preset.pending ? ' pending' : ''), text: preset.reason || '当前不可用' })),
         element('div', { class: 'actions' }, action, button('编辑', () => presetDialog(preset), 'quiet'))));
     }
     container.append(list);

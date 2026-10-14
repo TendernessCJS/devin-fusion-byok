@@ -33,6 +33,7 @@ function memory(options = {}) {
     selectFusion: async uid => { selections.push(uid); selected = uid; },
     selectedFusion: () => selected,
     nativeModels: options.nativeModels || (() => []),
+    ...(options.nativeCatalogStatus ? { nativeCatalogStatus: options.nativeCatalogStatus } : {}),
   });
   return { manager, writes, changes, selections,
     read: () => structuredClone(config),
@@ -65,6 +66,20 @@ test('public panel state exposes multiple providers and combinations without API
   assert.deepEqual(f.changes, []);
   const input = fixture(); input.providers[1].apiKey = '';
   assert.equal(publicState(input).providers[1].keyConfigured, false);
+});
+
+test('preset warnings distinguish a still-syncing native catalog from real removal', () => {
+  const input = fixture();
+  input.fusionPresets = [{ id: 'ds-pro', name: 'Fusion · DS Pro',
+    lead: { providerId: 'cpa', model: 'lead' }, sidekick: { nativeUid: 'swe-2-max' } }];
+  let state = memory({ config: input, nativeCatalogStatus: () => 'loading' }).manager.state();
+  assert.equal(state.fusionPresets[0].pending, true);
+  assert.match(state.fusionPresets[0].reason, /尚未同步/);
+  state = memory({ config: input, nativeCatalogStatus: () => 'ready' }).manager.state();
+  assert.equal(state.fusionPresets[0].pending, false);
+  assert.match(state.fusionPresets[0].reason, /已从角色列表移除/);
+  state = memory({ config: input, nativeCatalogStatus: () => 'unsupported' }).manager.state();
+  assert.equal(state.fusionPresets[0].pending, false);
 });
 
 test('editing a provider preserves its models, blank existing key, and every other provider', async () => {

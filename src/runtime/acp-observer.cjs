@@ -35,7 +35,7 @@ function restore(target, key, wrapper, descriptor) {
  * Logs only method names and model counts; never requests, response bodies,
  * session IDs, labels, model UID values, metadata, or credentials.
  */
-function installAcpObserver({ nativeMainPath, log = () => {} } = {}) {
+function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
   if (typeof nativeMainPath !== 'string' || !nativeMainPath || typeof log !== 'function') {
     throw new TypeError('nativeMainPath and a log function are required');
   }
@@ -55,6 +55,7 @@ function installAcpObserver({ nativeMainPath, log = () => {} } = {}) {
       responses++;
       last = counts;
       try { log('acp-models', counts); } catch (_) { /* Diagnostics cannot affect native requests. */ }
+      if (typeof onModels === 'function') { try { onModels(counts); } catch (_) {} }
     } catch (_) { /* Malformed diagnostics are ignored; native responses remain untouched. */ }
   }
 

@@ -65,6 +65,7 @@ function fixture(t, initial = {}) {
     './runtime/goal-continue.cjs': { installGoalContinue: () => null },
     './runtime/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
       return { status: () => ({}), reset() {}, cancelSession: () => false, dispose() {} }; } },
+    './runtime/acp-observer.cjs': { installAcpObserver: () => ({ dispose() {} }) },
     './runtime/backend.cjs': { runtimeIdentity: () => identity, controlFile: actualBackend.controlFile, PORT: 39842, MANAGEMENT_PROTOCOL: 1 },
     './runtime/bridge.cjs': { createLsBridge: async (_port, options) => { bridges.push(options); return { port: 4567, close() {} }; } },
     './runtime/ls-injection.cjs': { installLsInjection: async options => {
