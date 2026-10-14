@@ -45,7 +45,7 @@
       },
       {
         "command": "devinFusionByok.refreshModels",
-        "title": "Fusion BYOK：选择模型导入"
+        "title": "Fusion BYOK：导入模型"
       },
       {
         "command": "devinFusionByok.selectFusion",

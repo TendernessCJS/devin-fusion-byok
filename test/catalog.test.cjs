@@ -1216,6 +1216,20 @@ test('staleFusionUids rejects non-object arguments loudly instead of deleting ev
   assert.throws(() => staleFusionUids(flat), TypeError, 'a missing options argument must not mean an empty catalog');
 });
 
+test('staleFusionUids requires a populated `known` set instead of falling back to absence semantics', () => {
+  const { staleFusionUids } = require('../src/catalog.cjs');
+  const flat = cat(m(1, cat(s(1, 'F'), s(22, 'fusion-lead-sidekick-swe-2-high'))));
+  // `known` is the only real discriminator, so an absent or empty set would
+  // report every entry missing from `emitted` as stale — the absence semantics
+  // that once deleted 131 valid combinations.
+  assert.throws(() => staleFusionUids(flat, { emitted: new Set() }), TypeError);
+  assert.throws(() => staleFusionUids(flat, { emitted: new Set(), known: new Set() }), TypeError);
+  assert.throws(() => staleFusionUids(flat, { emitted: new Set(), known: [] }), TypeError);
+  assert.throws(() => staleFusionUids(flat, { emitted: new Set(), known: 'lead' }), TypeError);
+  // The populated form still keeps a pair whose members are merely unselected.
+  assert.deepEqual(staleFusionUids(flat, { emitted: new Set(), known: new Set(['lead', 'swe-2-high']) }), []);
+});
+
 test('a throwing staleProbe is a safe no-op for refreshStaleCliCaches', () => {
   const os = require('node:os'), nodePath = require('node:path');
   const { refreshStaleCliCaches } = require('../src/runtime/cli-cache.cjs');

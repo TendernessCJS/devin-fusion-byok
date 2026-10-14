@@ -1226,12 +1226,19 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
 // historical positional set implied "not emitted means stale", which deleted
 // perfectly servable combinations. A wrong argument type throws TypeError
 // instead of degrading into "everything is stale".
+// `known` is mandatory and must be non-empty for the same reason: it is the
+// only real discriminator below, so an absent (or empty) set silently restores
+// the absence semantics. `excluded` may stay optional — its default is the
+// conservative side.
 function staleFusionUids(data, options) {
   if (!options || typeof options !== 'object' || Array.isArray(options) || options instanceof Set) {
     throw new TypeError('staleFusionUids requires { emitted, known, excluded }');
   }
+  const known = options.known instanceof Set ? options.known : Array.isArray(options.known) ? new Set(options.known) : null;
+  if (!known || !known.size) {
+    throw new TypeError('staleFusionUids requires a non-empty `known` set');
+  }
   const emitted = options.emitted instanceof Set ? options.emitted : new Set(options.emitted || []);
-  const known = options.known instanceof Set ? options.known : new Set(options.known || []);
   const excluded = options.excluded || {};
   const stale = [];
   const scan = buffer => {
