@@ -61,4 +61,47 @@ async function readOnce({ root, port, signal, request }) {
 async function readNativeModels({ root, port = PORT, signal, request = fetch }) {
   return withConnectionRetry(() => readOnce({ root, port, signal, request }), { signal });
 }
-module.exports = { readNativeModels };
+// Hands this host's observations to the backend so both sides serve the same
+// catalog. It matters because the two sides see the same upstream catalog
+// through different channels: this process only learns from the CLI's traffic,
+// whose payloads can lack the Fusion family metadata, while the host reads the
+// native extension's traffic. Without the push, the CLI's own cache keeps
+// winning (24 combinations) against the host's richer view (155) and the picker
+// loses every native Sidekick pairing until the host rewrites the cache.
+// Best-effort by design: the caller treats any failure as "not pushed" and keeps
+// relying on its own view, which is already the richer one.
+async function pushNativeModels({ root, models, port = PORT, signal, request = fetch }) {
+  if (!Array.isArray(models) || !models.length) return { pushed: 0, reason: 'empty' };
+  const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000);
+  const base = 'http://127.0.0.1:' + port;
+  let health;
+  try {
+    const response = await request(base + '/health', { signal: timeout, redirect: 'error' });
+    if (!response.ok) return { pushed: 0, reason: 'unavailable' };
+    health = await response.json();
+  } catch { return { pushed: 0, reason: 'unavailable' }; }
+  const expected = runtimeIdentity(root);
+  if (health.service !== expected.service || health.rootId !== expected.rootId || !health.instanceId) return { pushed: 0, reason: 'identity' };
+  // An older backend has no ingest endpoint; skipping is the correct outcome.
+  if (health.nativeModelsIngest !== 1) return { pushed: 0, reason: 'unsupported' };
+  let control;
+  try { control = JSON.parse(fs.readFileSync(controlFile(root), 'utf8')); } catch { return { pushed: 0, reason: 'identity' }; }
+  if (control.rootId !== health.rootId || control.instanceId !== health.instanceId || control.sourceId !== health.sourceId ||
+    !/^[a-f0-9]{64}$/.test(control.token || '')) return { pushed: 0, reason: 'identity' };
+  // Our own uids are never upstream observations; the backend rejects them too.
+  const payload = models.filter(entry => entry && typeof entry.uid === 'string' && entry.uid && entry.uid.length <= 256 &&
+    !/^(?:fusion-)?dfbyok-/.test(entry.uid));
+  if (!payload.length) return { pushed: 0, reason: 'empty' };
+  try {
+    const response = await request(base + '/_runtime/native-models', {
+      method: 'POST', signal: timeout, redirect: 'error',
+      headers: { authorization: 'Bearer ' + control.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ models: payload }),
+    });
+    if (!response.ok) return { pushed: 0, reason: 'rejected' };
+    const result = await response.json();
+    if (result.instanceId !== health.instanceId) return { pushed: 0, reason: 'identity' };
+    return { pushed: payload.length, count: result.count, improved: result.improved === true };
+  } catch { return { pushed: 0, reason: 'unavailable' }; }
+}
+module.exports = { readNativeModels, pushNativeModels };

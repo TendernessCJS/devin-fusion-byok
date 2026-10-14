@@ -482,3 +482,66 @@ test('same-version monitor-stats changes invalidate the runtime source identity'
   assert.notEqual(module.exports.runtimeIdentity('/synthetic-runtime-root', true).sourceId, loaded.sourceId);
   assert.equal(module.exports.runtimeIdentity('/synthetic-runtime-root').sourceId, loaded.sourceId);
 });
+
+test('the host can push its richer observations and the backend serves them', async t => {
+  const f = await fixture(t);
+  const { pushNativeModels } = require('../src/runtime/native-models.cjs');
+  const health = await f.health();
+  assert.equal(health.nativeModelsIngest, 1, 'the ingest capability is advertised');
+  const endpoint = f.base + '/_runtime/native-models';
+  // The shape the native extension really reports: the model itself plus the
+  // official pairing entry that binds it as a Sidekick.
+  const rich = [
+    { uid: 'swe-2-high', label: 'SWE-2 High', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'],
+      fusionMetadata: [{ key: 'Effort', order: 3, name: 'High', controlType: 1 }] },
+    { uid: 'fusion-swe-2-high-sidekick-swe-2-high', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'],
+      sidekickDimension: { order: 2, name: 'SWE-2 High', fastModeOrder: 0 } },
+  ];
+
+  // Auth and origin are enforced exactly like the read endpoint.
+  assert.equal((await fetch(endpoint, { method: 'POST', body: '{}' })).status, 403);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { authorization: 'Bearer ' + f.control().token, origin: 'https://example.com' }, body: '{}' })).status, 403);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { authorization: 'Bearer ' + f.control().token }, body: '"not-an-object"' })).status, 400);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { authorization: 'Bearer ' + f.control().token }, body: JSON.stringify({ models: 'nope' }) })).status, 400);
+
+  const pushed = await pushNativeModels({ root: f.root, port: f.backend.port, models: rich });
+  assert.equal(pushed.pushed, 2);
+  assert.equal(pushed.improved, true, 'the backend had nothing, so the push improved it');
+  const read = await (await fetch(endpoint, { headers: { authorization: 'Bearer ' + f.control().token } })).json();
+  assert.deepEqual(read.models, rich, 'the backend now serves the pushed observations');
+  // A second identical push is accepted but changes nothing, so a throttled
+  // host can repeat it without churning the cache file.
+  const again = await pushNativeModels({ root: f.root, port: f.backend.port, models: rich });
+  assert.equal(again.pushed, 2);
+  assert.equal(again.improved, false);
+
+  // The point of the push: the backend's own catalog now resolves the native
+  // Sidekick, so the payload and allowlist it serves agree with the host
+  // instead of mirroring only the configurations the CLI happened to reveal.
+  const built = buildCatalog(f.config, read.models);
+  assert.ok(Object.values(built.fusions).some(fusion => fusion.sidekickUid === 'swe-2-high'),
+    'the pushed binding produces the native Sidekick combinations');
+  assert.ok(built.matrixUids.size >= 1);
+});
+
+test('a push is refused when identity, capability or the payload do not line up', async t => {
+  const f = await fixture(t);
+  const { pushNativeModels } = require('../src/runtime/native-models.cjs');
+  const models = [{ uid: 'swe-2-high', label: 'F', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }];
+  assert.deepEqual(await pushNativeModels({ root: f.root + '-wrong', port: f.backend.port, models }), { pushed: 0, reason: 'identity' });
+  // Our own uids are never upstream observations, so a payload of only those is
+  // not worth sending.
+  assert.deepEqual(await pushNativeModels({ root: f.root, port: f.backend.port,
+    models: [{ uid: 'dfbyok-own', label: 'x', disabled: false, isModelRouter: false, harnessUids: ['fusion'] }] }), { pushed: 0, reason: 'empty' });
+  assert.deepEqual(await pushNativeModels({ root: f.root, port: f.backend.port, models: [] }), { pushed: 0, reason: 'empty' });
+  // A dead port is a skip, never a throw: the host keeps its own richer view.
+  assert.deepEqual((await pushNativeModels({ root: f.root, port: 1, models })).reason, 'unavailable');
+  // An older backend advertises no ingest capability and is left alone.
+  const legacy = await fixture(t);
+  const legacyFetch = async (url, options) => {
+    if (String(url).endsWith('/health')) return { ok: true, json: async () => ({ ...(await legacy.health()), nativeModelsIngest: undefined }) };
+    throw new Error('must not push');
+  };
+  assert.deepEqual(await pushNativeModels({ root: legacy.root, port: legacy.backend.port, models, request: legacyFetch }),
+    { pushed: 0, reason: 'unsupported' });
+});

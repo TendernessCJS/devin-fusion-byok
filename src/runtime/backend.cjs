@@ -15,6 +15,11 @@ const VERSION = require('../../package.json').version;
 const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
 const SERVICE = 'devin-fusion-byok';
 const MANAGEMENT_PROTOCOL = 1;
+// Capability flag for POST /_runtime/native-models. Kept separate from
+// nativeModelsProtocol so the read contract stays unchanged: a host talking to
+// an older backend simply sees no flag and skips pushing instead of erroring.
+const NATIVE_MODELS_INGEST = 1;
+const MAX_INGEST_ENTRIES = 5000;
 const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', 'monitor.cjs', 'monitor-stats.cjs', 'native-cache.cjs', '../config.cjs', '../proxy.cjs', '../update.cjs', '../catalog.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/chat.cjs', '../protocol/responses.cjs', '../protocol/anthropic.cjs'];
 function sourceId() {
   const hash = crypto.createHash('sha256');
@@ -113,6 +118,39 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
       log('fusion-status', { locked: lockedFusion.size, seen: seen.length });
     }
   };
+  // Ingest the extension host's observations. The two sides see the same
+  // upstream catalog through different channels and their copies are not
+  // equally complete: this process only learns from the CLI's traffic, whose
+  // payloads can lack the Fusion family metadata, while the host reads the
+  // native extension's traffic. Without this the CLI's own cache keeps winning
+  // (24 combinations) against the host's richer view (155), and the picker
+  // loses every native Sidekick pairing until the host rewrites the cache.
+  const ingest = entries => {
+    if (!Array.isArray(entries) || entries.length > MAX_INGEST_ENTRIES) return null;
+    let accepted = 0, improved = false;
+    for (const entry of entries) {
+      const normalized = normalizeNativeEntry(entry);
+      if (!normalized) continue;
+      accepted++;
+      const prior = observedNatives.get(normalized.uid);
+      const merged = mergeNativeEntry(prior, normalized);
+      if (!prior || JSON.stringify(prior) !== JSON.stringify(merged)) improved = true;
+      observedNatives.set(normalized.uid, merged);
+    }
+    if (observedNatives.size !== observedSize) {
+      observedSize = observedNatives.size;
+      log('native-observed', { count: observedSize, source: 'host' });
+      improved = true;
+    }
+    if (improved) scheduleNativeCacheSave();
+    return { accepted, count: observedNatives.size, improved };
+  };
+  const authorized = request => {
+    const provided = typeof request.headers.authorization === 'string' ? request.headers.authorization : '';
+    const expected = 'Bearer ' + controlToken;
+    return Buffer.byteLength(provided) === Buffer.byteLength(expected) &&
+      crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+  };
   const handle = async (request, response) => {
     const incoming = new URL(request.url, 'https://server.codeium.com');
     const rpc = incoming.pathname;
@@ -161,14 +199,10 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
     if (request.headers.origin) { response.writeHead(403); response.end(); return; }
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify({ ...identity, pid: process.pid, instanceId, managementProtocol: MANAGEMENT_PROTOCOL, nativeModelsProtocol: 1, monitorProtocol: monitor ? 1 : 0, activeRequests, draining })); return;
+      response.end(JSON.stringify({ ...identity, pid: process.pid, instanceId, managementProtocol: MANAGEMENT_PROTOCOL, nativeModelsProtocol: 1, nativeModelsIngest: NATIVE_MODELS_INGEST, monitorProtocol: monitor ? 1 : 0, activeRequests, draining })); return;
     }
     if (request.method === 'GET' && request.url === '/_runtime/monitor') {
-      const provided = typeof request.headers.authorization === 'string' ? request.headers.authorization : '';
-      const expected = 'Bearer ' + controlToken;
-      if (Buffer.byteLength(provided) !== Buffer.byteLength(expected) || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) {
-        response.writeHead(403); response.end(); return;
-      }
+      if (!authorized(request)) { response.writeHead(403); response.end(); return; }
       Promise.resolve().then(() => monitor?.snapshot()).then(snapshot => {
         if (response.destroyed) return;
         response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -177,20 +211,28 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
       return;
     }
     if (request.method === 'GET' && request.url === '/_runtime/native-models') {
-      const provided = typeof request.headers.authorization === 'string' ? request.headers.authorization : '';
-      const expected = 'Bearer ' + controlToken;
-      if (Buffer.byteLength(provided) !== Buffer.byteLength(expected) || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) {
-        response.writeHead(403); response.end(); return;
-      }
+      if (!authorized(request)) { response.writeHead(403); response.end(); return; }
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       response.end(JSON.stringify({ instanceId, models: [...observedNatives.values()] })); return;
     }
+    if (request.method === 'POST' && request.url === '/_runtime/native-models') {
+      if (!authorized(request)) { response.writeHead(403); response.end(); return; }
+      collect(request).then(body => {
+        if (body.length > 4 * 1024 * 1024) throw new Error('too_large');
+        const payload = JSON.parse(body.toString('utf8'));
+        const result = ingest(payload?.models);
+        if (!result) throw new Error('invalid');
+        response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        response.end(JSON.stringify({ instanceId, ...result }));
+      }).catch(() => {
+        if (response.destroyed) return;
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ instanceId, error: 'invalid_payload' }));
+      });
+      return;
+    }
     if (request.method === 'POST' && request.url === '/_runtime/shutdown') {
-      const provided = typeof request.headers.authorization === 'string' ? request.headers.authorization : '';
-      const expected = 'Bearer ' + controlToken;
-      if (Buffer.byteLength(provided) !== Buffer.byteLength(expected) || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) {
-        response.writeHead(403); response.end(); return;
-      }
+      if (!authorized(request)) { response.writeHead(403); response.end(); return; }
       if (activeRequests > 0) {
         response.writeHead(409, { 'content-type': 'application/json' }); response.end(JSON.stringify({ activeRequests })); return;
       }

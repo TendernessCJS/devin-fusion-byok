@@ -10,7 +10,7 @@ const { installLsInjection } = require('./runtime/ls-injection.cjs');
 const { createLsBridge } = require('./runtime/bridge.cjs');
 const { runtimeIdentity, controlFile, PORT, MANAGEMENT_PROTOCOL } = require('./runtime/backend.cjs');
 const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } = require('./lifecycle/owned-settings.cjs');
-const { readNativeModels } = require('./runtime/native-models.cjs');
+const { readNativeModels, pushNativeModels } = require('./runtime/native-models.cjs');
 const { mergeNativeEntry } = require('./runtime/native-cache.cjs');
 const { installAutoContinue } = require('./runtime/auto-continue.cjs');
 const { installGoalContinue } = require('./runtime/goal-continue.cjs');
@@ -230,6 +230,38 @@ async function activate(context) {
   migrateConfig();
   let nativeCatalogStatus = 'loading', syncPending, syncAbort, syncTimer;
   let acpObservationSeq = 0, acpOwnModels = 0;
+  // Push the merged view to the backend so it serves (and whitelists) the same
+  // catalog this host does. The backend only sees the CLI's traffic, whose
+  // payloads can lack the Fusion family metadata, so without this push the CLI's
+  // own cache keeps winning (24 combinations) against this host's richer view
+  // (155) and the picker loses every native Sidekick pairing until the host
+  // rewrites the cache.
+  let pushTimer, lastPushAt = 0, lastPushKey = '';
+  const PUSH_INTERVAL_MS = 5 * 1000;
+  // Only the local (bridge-observed) copy is worth offering, and only while it
+  // is actually growing: the richer-entries count is the signal, so a steady
+  // state sends nothing and a push can never loop back into another push.
+  const pushKey = () => localNativeModels.size + ':' +
+    [...localNativeModels.values()].filter(entry => entry.sidekickDimension || entry.fusionMetadata).length;
+  const pushToBackend = () => {
+    if (activationDisposed || config().enabled === false || pushTimer !== undefined) return;
+    const key = pushKey();
+    if (key === lastPushKey) return;
+    const wait = Math.max(0, lastPushAt + PUSH_INTERVAL_MS - Date.now());
+    pushTimer = setTimeout(() => {
+      pushTimer = undefined;
+      if (activationDisposed || config().enabled === false) return;
+      lastPushAt = Date.now();
+      lastPushKey = key;
+      pushNativeModels({ root, models: [...nativeModels.values()] })
+        .then(result => {
+          if (result?.pushed) log('native-push', { pushed: result.pushed, count: result.count, improved: result.improved === true });
+          else if (result?.reason && result.reason !== 'empty') log('native-push-skip', { reason: result.reason });
+        })
+        .catch(() => {});
+    }, wait);
+    pushTimer.unref?.();
+  };
   const refreshNativeModels = () => {
     if (activationDisposed || config().enabled === false) return Promise.resolve();
     if (syncPending) return syncPending;
@@ -254,12 +286,14 @@ async function activate(context) {
       if (nativeModels.size !== nativeSyncSize) { nativeSyncSize = nativeModels.size; log('native-sync', { count: nativeSyncSize }); }
       pickerRefresh?.changed?.();
       checkCliCaches?.();
+      pushToBackend();
     })().finally(() => { if (syncAbort === abort) { syncAbort = undefined; syncPending = undefined; } });
     return syncPending;
   };
   const startNativeSync = () => {
     stopNativeSync?.();
-    stopNativeSync = () => { clearInterval(syncTimer); syncAbort?.abort(); syncAbort = undefined; syncPending = undefined; };
+    stopNativeSync = () => { clearInterval(syncTimer); syncAbort?.abort(); syncAbort = undefined; syncPending = undefined;
+      if (pushTimer !== undefined) { clearTimeout(pushTimer); pushTimer = undefined; } };
     syncTimer = setInterval(() => { void refreshNativeModels(); }, 3000); syncTimer.unref?.();
     void refreshNativeModels();
   };
@@ -284,7 +318,10 @@ async function activate(context) {
         localNativeModels.set(next.uid, merged); nativeModels.set(next.uid, merged); changed = true;
       }
     }
-    if (changed && !activationDisposed) try { void management?.publish()?.catch(() => {}); updateStatusBar(); pickerRefresh?.changed?.(); checkCliCaches?.(); } catch {}
+    if (changed && !activationDisposed) try {
+      void management?.publish()?.catch(() => {}); updateStatusBar(); pickerRefresh?.changed?.(); checkCliCaches?.();
+      pushToBackend();
+    } catch {}
   };
   let enableQueue = Promise.resolve();
   const ensureEnabled = () => {

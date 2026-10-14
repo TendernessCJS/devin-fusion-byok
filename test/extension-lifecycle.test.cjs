@@ -47,6 +47,8 @@ function fixture(t, initial = {}) {
   let fetchImpl = async () => new Response(JSON.stringify({ ...identity, draining: false }));
   let injectionGate = null;
   let nativeRead = async () => ({ status: 'empty', models: [] });
+  const pushes = [];
+  let pushResult = { pushed: 0, reason: 'empty' };
   let matrixUids = new Set(), extraCatalogModels = [];
   const overrides = {
     vscode,
@@ -68,7 +70,8 @@ function fixture(t, initial = {}) {
           { uid: 'fusion-dfbyok-another', label: 'CPA Fusion Alt', kind: 'matrix' }, ...extraCatalogModels] : [],
       fusions: config.providers?.length ? { 'fusion-dfbyok-selected': { label: 'CPA Fusion' }, 'fusion-dfbyok-another': { label: 'CPA Fusion Alt' } } : {},
       lastFusionSelection: config.lastFusionSelection, matrixUids }) },
-    './runtime/native-models.cjs': { readNativeModels: options => nativeRead(options) },
+    './runtime/native-models.cjs': { readNativeModels: options => nativeRead(options),
+      pushNativeModels: options => { pushes.push(options); return Promise.resolve(pushResult); } },
     './runtime/goal-continue.cjs': { installGoalContinue: () => null },
     './runtime/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
       return { status: () => ({}), reset() {}, cancelSession: () => false, dispose() {} }; } },
@@ -105,6 +108,8 @@ function fixture(t, initial = {}) {
     preferenceListeners, managerOptions: () => managerOptions, spawns, autoContinueOptions: () => autoContinueOptions,
     setFetch: impl => { fetchImpl = impl; },
     setNativeRead: impl => { nativeRead = impl; },
+    pushes: () => pushes,
+    setPushResult: value => { pushResult = value; },
     setMatrixUids: uids => { matrixUids = new vmSet(uids); },
     setCatalogModels: models => { extraCatalogModels = models; },
     gateInjection: () => { let release; injectionGate = new Promise(resolve => { release = resolve; }); return release; },
@@ -528,4 +533,49 @@ test('a poorer backend sync never downgrades the richer bridge observation', asy
   await f.settle();
   assert.equal(find().disabled, true, 'fresher scalar fields are not masked');
   assert.deepEqual(find().sidekickDimension, rich.sidekickDimension, 'and the dimensions survive it');
+});
+test('the host pushes its richer observations to the backend once they grow', async t => {
+  const f = fixture(t);
+  f.setNativeRead(async () => ({ status: 'ready', models: [{ uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }] }));
+  await f.activate(f.context);
+  await f.settle();
+  const first = f.pushes().length;
+  assert.ok(first >= 1, 'activation already offers what it has');
+  // The payload crosses the sandbox realm, so compare serialized values.
+  const offered = JSON.parse(JSON.stringify(f.pushes().at(-1).models));
+  assert.deepEqual(offered.map(entry => entry.uid), ['swe-2-high']);
+  assert.equal(f.pushes().at(-1).root, f.root);
+
+  // A richer bridge observation must be offered again, and it is the union that
+  // travels: the backend only sees the CLI side of the catalog, so whatever the
+  // native extension revealed has to come through here.
+  f.bridges.at(-1).onNativeModels([{ uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'],
+    sidekickDimension: { order: 2, name: 'SWE-2 High', fastModeOrder: 0 } }]);
+  await f.settle(40);
+  assert.ok(f.pushes().length > first, 'a richer observation is offered too');
+  const latest = JSON.parse(JSON.stringify(f.pushes().at(-1).models)).find(entry => entry.uid === 'swe-2-high');
+  assert.deepEqual(latest.sidekickDimension, { order: 2, name: 'SWE-2 High', fastModeOrder: 0 });
+
+  // A steady state stops sending: the same key must not keep pushing forever.
+  const settled = f.pushes().length;
+  await f.settle(40);
+  assert.equal(f.pushes().length, settled, 'an unchanged view is not re-sent');
+});
+
+test('a failing push is logged and never disturbs the activation flow', async t => {
+  const f = fixture(t);
+  f.setPushResult({ pushed: 0, reason: 'unavailable' });
+  f.setNativeRead(async () => ({ status: 'ready', models: [{ uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }] }));
+  await f.activate(f.context);
+  await f.settle(40);
+  assert.ok(f.logs.some(line => line.includes('native-push-skip')), 'the skip is reported');
+  assert.equal(f.counts().installed, 1);
+  assert.ok(f.logs.every(line => !line.includes('"event":"error"')));
+});
+
+test('a disabled plugin never pushes', async t => {
+  const f = fixture(t, { config: { enabled: false } });
+  await f.activate(f.context);
+  await f.settle(40);
+  assert.deepEqual(f.pushes(), []);
 });
