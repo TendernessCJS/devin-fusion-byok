@@ -47,8 +47,8 @@ function publicState(config, selectedFusionUid, nativeModels = [], autoContinueS
     { nativeCatalogPending: NATIVE_PENDING_STATUSES.has(nativeCatalogStatus) });
   const hidden = new Set(catalog.hiddenNativeModelUids || []);
   const roleLists = buildRoleLists(config, nativeModels);
-  const eligibleLeads = new Set(roleLists.lead.filter(item => item.available).map(item => item.ref.nativeUid).filter(Boolean));
-  const eligibleSidekicks = new Set(roleLists.sidekick.filter(item => item.available).map(item => item.ref.nativeUid).filter(Boolean));
+  const eligibleLeads = new Set(roleLists.lead.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
+  const eligibleSidekicks = new Set(roleLists.sidekick.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
   const observed = new Set();
   const natives = [];
   for (const entry of nativeModels) {
@@ -228,7 +228,8 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
 
         const currentRoles = buildRoleLists(config, nativeModels());
         const candidateList = currentRoles[role] || [];
-        const candidate = candidateList.find(item => refKey(item.ref) === key);
+        const candidate = candidateList.find(item => refKey(item.ref) === key ||
+          hasNative && (item.memberUids || []).some(uid => refKey({ nativeUid: uid }) === key));
         if (enabled && (!candidate || !candidate.available)) fail('该模型当前不可用，无法添加。');
 
         if (!config.roleExclusions) config.roleExclusions = { lead: [], sidekick: [] };
@@ -238,7 +239,10 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
 
         const refToStore = hasNative ? { nativeUid: model.nativeUid } : { providerId: model.providerId, model: model.model };
         if (enabled) {
-          config.roleExclusions[role] = config.roleExclusions[role].filter(r => refKey(r) !== key);
+          // A role item may cover an official effort family — clear exclusions
+          // recorded on any member uid, not only the item's own ref.
+          const memberKeys = new Set((candidate?.memberUids || [model.nativeUid]).map(uid => refKey({ nativeUid: uid })));
+          config.roleExclusions[role] = config.roleExclusions[role].filter(r => !memberKeys.has(refKey(r)) && refKey(r) !== key);
           if (hasNative && !config.roleInclusions[role].some(r => refKey(r) === key)) {
             config.roleInclusions[role].push(refToStore);
           }

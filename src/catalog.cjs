@@ -248,6 +248,20 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}) {
   if (config.enabled !== false) {
     const leadExclusions = new Set((Array.isArray(config.roleExclusions?.lead) ? config.roleExclusions.lead : []).map(refKey));
     const sidekickExclusions = new Set((Array.isArray(config.roleExclusions?.sidekick) ? config.roleExclusions.sidekick : []).map(refKey));
+    // Official leads group into effort families; an exclusion recorded on any
+    // family member hides every official combo of the whole series.
+    const leadFamilyByUid = new Map();
+    for (const [uid, native] of eligibleNativeLeads) {
+      const dim = native.leadDimension;
+      const key = dim && Number.isSafeInteger(dim.order) ? `${dim.order}:${dim.name}` : `uid:${uid}`;
+      let family = leadFamilyByUid.get(key);
+      if (!family) leadFamilyByUid.set(key, family = []);
+      family.push(uid);
+    }
+    for (const family of leadFamilyByUid.values()) {
+      if (!family.some(uid => leadExclusions.has(refKey({ nativeUid: uid })))) continue;
+      for (const uid of family) leadExclusions.add(refKey({ nativeUid: uid }));
+    }
     for (const combo of officialCombos) {
       if (combo.disabled) {
         hiddenFusionUids.push(combo.uid);
@@ -312,6 +326,7 @@ function discoverNamedPresetRoles(nativeModels, hiddenSet, officialRoles) {
       harnessUids.length > 0 && harnessUids.every(value => typeof value === 'string' && value.trim().length > 0);
     const record = { uid, label: typeof entry.label === 'string' && entry.label ? entry.label : uid,
       harnessUids: Array.isArray(harnessUids) ? [...harnessUids] : null, eligible,
+      fusionMetadata: Array.isArray(entry.fusionMetadata) ? entry.fusionMetadata : undefined,
       maxTokens: entry.maxTokens, maxOutputTokens: entry.maxOutputTokens, supportsImages: entry.supportsImages === true };
     const prior = records.get(uid);
     if (prior && (prior.eligible !== record.eligible || JSON.stringify(prior.harnessUids) !== JSON.stringify(record.harnessUids) ||
@@ -324,7 +339,26 @@ function discoverNamedPresetRoles(nativeModels, hiddenSet, officialRoles) {
     if (!native.eligible) continue;
     const officialLead = officialRoles.eligibleNativeLeads.get(native.uid);
     const officialSidekick = officialRoles.eligibleNativeSidekicks.get(native.uid);
-    leads.set(native.uid, officialLead || { ...native, leadHarnessUids: [...new Set(['fusion', ...native.harnessUids])] });
+    if (officialLead) {
+      leads.set(native.uid, officialLead);
+    } else {
+      // Non-official leads still come in effort series: derive the family base
+      // from the observed Effort dimension (uid ends with its slug, optionally
+      // followed by -fast) so selecting the model emits the whole series.
+      const record = { ...native, leadHarnessUids: [...new Set(['fusion', ...native.harnessUids])] };
+      const eff = (Array.isArray(native.fusionMetadata) ? native.fusionMetadata : [])
+        .find(dim => dim?.key === 'Effort' && Number.isSafeInteger(dim.order) && typeof dim.name === 'string' && dim.name);
+      const slug = eff ? eff.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : '';
+      const suffix = slug && (native.uid.endsWith(`-${slug}-fast`) ? `-${slug}-fast`
+        : native.uid.endsWith(`-${slug}`) ? `-${slug}` : '');
+      if (suffix && native.uid.length > suffix.length + 1) {
+        record.leadBaseUid = native.uid.slice(0, -suffix.length);
+        record.effortDimension = { order: eff.order, name: eff.name, controlType: 1 };
+        const labelSuffix = ` ${eff.name}${suffix.endsWith('-fast') ? ' Fast' : ''}`;
+        record.leadBaseLabel = native.label.endsWith(labelSuffix) ? native.label.slice(0, -labelSuffix.length) : native.label;
+      }
+      leads.set(native.uid, record);
+    }
     sidekicks.set(native.uid, officialSidekick || { ...native, dimension: undefined });
   }
   return { eligibleNativeLeads: leads, eligibleNativeSidekicks: sidekicks };
@@ -351,7 +385,6 @@ function buildRoleLists(config = {}, nativeModels = []) {
   const hiddenSet = new Set(Array.isArray(config.hiddenNativeModelUids) ? config.hiddenNativeModelUids : []);
   const officialRoles = discoverOfficialRoles(nativeModels, hiddenSet, config);
   const { eligibleNativeLeads, eligibleNativeSidekicks } = discoverNamedPresetRoles(nativeModels, hiddenSet, officialRoles);
-  const strictLeadUids = new Set(officialRoles.eligibleNativeLeads.keys());
   const strictSidekickUids = new Set(officialRoles.eligibleNativeSidekicks.keys());
   const leadRefs = roleRefs(config, 'lead');
   const sidekickRefs = roleRefs(config, 'sidekick');
@@ -392,15 +425,39 @@ function buildRoleLists(config = {}, nativeModels = []) {
     }
   }
 
+  // Leads are effort series: official members group by the official lead
+  // dimension, other native models group by the family base derived from their
+  // own Effort dimension. A family is excluded when any member uid is excluded
+  // and selected when official or any member uid was included/saved.
+  const leadFamilies = new Map();
   for (const nativeLead of eligibleNativeLeads.values()) {
-    const ref = { nativeUid: nativeLead.uid };
+    const dim = nativeLead.leadDimension;
+    const official = dim && Number.isSafeInteger(dim.order);
+    const key = official ? `dim:${dim.order}:${dim.name}` : `uid:${nativeLead.leadBaseUid || nativeLead.uid}`;
+    let family = leadFamilies.get(key);
+    if (!family) {
+      leadFamilies.set(key, family = {
+        official, order: official ? dim.order : Infinity, uids: [],
+        label: official ? (dim.name || nativeLead.uid) : (nativeLead.leadBaseLabel || nativeLead.label || nativeLead.uid),
+      });
+    }
+    family.uids.push(nativeLead.uid);
+  }
+  const orderedFamilies = [...leadFamilies.values()].map(family => (family.uids.sort(), family))
+    .sort((a, b) => a.order - b.order || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
+
+  for (const family of orderedFamilies) {
+    const repUid = family.uids[0];
+    const ref = { nativeUid: repUid };
     const key = refKey(ref);
-    seenLeadKeys.add(key);
+    const memberKeys = family.uids.map(uid => refKey({ nativeUid: uid }));
+    for (const member of memberKeys) seenLeadKeys.add(member);
     leadList.push({
-      ref, label: nativeLead.label || nativeLead.uid, native: true,
-      available: true, selected: roleSelected(ref, leadRefs, strictLeadUids.has(nativeLead.uid)),
-      defaultSelected: strictLeadUids.has(nativeLead.uid),
-      explicitIncluded: leadRefs.inclusions.has(key) || leadRefs.saved.has(key),
+      ref, label: family.label, native: true, ...(family.official ? { official: true } : {}),
+      available: true, defaultSelected: family.official, memberUids: family.uids,
+      selected: !memberKeys.some(member => leadRefs.exclusions.has(member)) &&
+        (family.official || memberKeys.some(member => leadRefs.inclusions.has(member) || leadRefs.saved.has(member))),
+      explicitIncluded: memberKeys.some(member => leadRefs.inclusions.has(member) || leadRefs.saved.has(member)),
     });
   }
 
@@ -408,10 +465,12 @@ function buildRoleLists(config = {}, nativeModels = []) {
     const ref = { nativeUid: nativeSidekick.uid };
     const key = refKey(ref);
     seenSidekickKeys.add(key);
+    const official = strictSidekickUids.has(nativeSidekick.uid);
     sidekickList.push({
       ref, label: nativeSidekick.label || nativeSidekick.uid, native: true,
-      available: true, selected: roleSelected(ref, sidekickRefs, strictSidekickUids.has(nativeSidekick.uid)),
-      defaultSelected: strictSidekickUids.has(nativeSidekick.uid),
+      ...(official ? { official: true } : {}),
+      available: true, selected: roleSelected(ref, sidekickRefs, official),
+      defaultSelected: official, memberUids: [nativeSidekick.uid],
       explicitIncluded: sidekickRefs.inclusions.has(key) || sidekickRefs.saved.has(key),
     });
   }
@@ -527,8 +586,17 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
   const selectedSidekickKeys = new Set(roleSelection.sidekick.filter(item => item.selected).map(item => refKey(item.ref)));
 
   const selectedImportedLeads = leads.filter(lead => selectedLeadKeys.has(refKey({ providerId: lead.providerId, model: lead.model })));
-  const selectedPresetNativeLeads = [...presetNativeLeads.values()].filter(native => selectedLeadKeys.has(refKey({ nativeUid: native.uid })));
-  const presetNativeSidekickCandidates = [...presetNativeSidekicks.values()].filter(native => selectedSidekickKeys.has(refKey({ nativeUid: native.uid })));
+  // Lead role items group official uids into effort families; expand every
+  // selected family's member uids so the whole series emits combinations.
+  const selectedNativeLeadUids = new Set(), selectedNativeSidekickUids = new Set();
+  for (const [items, set] of [[roleSelection.lead, selectedNativeLeadUids], [roleSelection.sidekick, selectedNativeSidekickUids]]) {
+    for (const item of items) {
+      if (!item.selected || !item.native) continue;
+      for (const uid of item.memberUids || [item.ref.nativeUid]) set.add(uid);
+    }
+  }
+  const selectedPresetNativeLeads = [...presetNativeLeads.values()].filter(native => selectedNativeLeadUids.has(native.uid));
+  const presetNativeSidekickCandidates = [...presetNativeSidekicks.values()].filter(native => selectedNativeSidekickUids.has(native.uid));
 
   const sidekicks = [], seenSidekicks = new Set();
   const leadFamilies = new Map();
@@ -670,10 +738,15 @@ function buildCatalog(config = {}, nativeModels = [], options = {}) {
     const pairs = [], customLeadNames = new Set(), customSideNames = new Set();
     for (const lead of candidates.lead) {
       for (const sidekick of sidekickReps) {
+        // Only emit pairs with at least one added member (a BYOK model or a
+        // native model outside the official dimension list): official lead ×
+        // official sidekick stays the native catalog's authority — emitting
+        // combinations it does not offer would invent unsupported pairs.
+        if (lead.native && lead.leadDimension && sidekick.native && sidekick.dimension) continue;
         const uid = `fusion-${lead.uid}-sidekick-${sidekick.uid}`;
         if (matrixUids.has(uid) || officialFusionUids.has(uid)) continue;
-        const leadDim = lead.native && lead.leadDimension ? lead.leadDimension.name
-          : lead.native ? lead.label : lead.familyLabel;
+        const leadDim = lead.native ? (lead.leadDimension ? lead.leadDimension.name : lead.leadBaseLabel || lead.label)
+          : lead.familyLabel;
         const sideDim = sidekick.native && sidekick.dimension ? sidekick.dimension.name
           : sidekick.native ? sidekick.label : sidekick.familyLabel;
         if (!(lead.native && lead.leadDimension)) customLeadNames.add(leadDim);

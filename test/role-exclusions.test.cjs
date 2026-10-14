@@ -68,7 +68,7 @@ test('role lists default: all imported enabled and official eligible unlocked mo
   assert.equal(leadImported.available, true);
   assert.equal(leadImported.native, false);
 
-  const leadNative = roles.lead.find(r => r.ref.nativeUid === 'claude-fable-5-1-medium');
+  const leadNative = roles.lead.find(r => (r.memberUids || [r.ref.nativeUid]).includes('claude-fable-5-1-medium'));
   assert.ok(leadNative);
   assert.equal(leadNative.selected, true);
   assert.equal(leadNative.available, true);
@@ -334,7 +334,8 @@ test('nativeLead and official fusion exclusion filters fast mode variants and pr
   assert.ok(catalog.hiddenFusionUids.includes('fusion-claude-fable-5-1-medium-fast-sidekick-gpt-5-6-luna-high-priority'));
   assert.ok(catalog.hiddenFusionUids.includes('fusion-claude-fable-5-1-medium-fast-sidekick-gpt-5-6-sol-high-priority'));
 
-  assert.ok(!catalog.hiddenFusionUids.includes('fusion-claude-fable-5-1-high-sidekick-swe-2-medium'));
+  // Excluding one family member hides the whole official effort series.
+  assert.ok(catalog.hiddenFusionUids.includes('fusion-claude-fable-5-1-high-sidekick-swe-2-medium'));
 
   const jsonCatalog = {
     clientModelConfigs: [

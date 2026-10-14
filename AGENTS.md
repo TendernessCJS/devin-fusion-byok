@@ -71,6 +71,7 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 - `AssignModel` 本地应答不含 `assignment_jwt`（官方 `ModelAssignment` 响应带该字段）。当前 CLI（3000.10.48 实测）不校验；若未来版本强制校验，本地指派整体失效——届时改为转发上游或显式降级，不得伪造成功。
 - 修改行为时不要放宽现有安全校验（Origin 一律 403、控制令牌 `timingSafeEqual`、webview 只用 `createElement`/`textContent` 不用 `innerHTML`、CSP nonce）。
 - matrix 条目（`fusionMatrix` 交叉积）的 `kind` 是 `'matrix'`，**不得进入面板分组**（「我的 Fusion」只收 `kind === 'fusion'`，自定义组只收 `kind === 'model'`）；官方 Fusion 卡片的维度候选来自「同 family 条目的自声明维度」，所以每个 Lead 值下必须有多条不同 Sidekick/Effort 条目（全交叉积），否则下拉被锁死；`fusion-<lead>-fast-sidekick-<side>` 形式的 `-fast` uid 显式拒绝（BYOK 无 fast 能力，不得伪装降级）。
+- 矩阵只 emit「至少一方是新增成员」的组合：官方维度成员（lead 有 `leadDimension`、sidekick 有 `dimension`）之间的配对永远交给官方目录，即使官方没有覆盖该组合也不替它发明（避免产出官方不支持的组合）；BYOK 或非官方原生成员与官方成员配对时，官方成员条目复用官方维度 `name+order` 直接并入官方选项，不另造维度值。Lead 一律按**系列**组织：官方 lead 按 `leadDimension` 聚族，其余原生模型按「uid 去掉 Effort 维度名 slug（可带 `-fast` 后缀）」推导族基；面板里一族是一个开关，排除/选中都是整族粒度，`memberUids` 承载全部成员 uid。
 
 ## 平台支持
 

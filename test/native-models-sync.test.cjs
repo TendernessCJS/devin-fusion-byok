@@ -165,7 +165,7 @@ test('createManager.ready hydrates panel state from a synced backend with zero L
   assert.deepEqual(Object.values(fresh.fusions)[0].sidekickHarnessUids, ['gpt-5p6'], 'saved preset uses the synced native harness');
   assert.ok(!JSON.stringify(state).includes('fixture-secret'), 'no credentials leak into public state');
   const roleLists = buildRoleLists(saved, backendModels);
-  assert.ok(roleLists.lead.some(r => r.ref.nativeUid === 'claude-fable-5-1-medium'), 'Claude Lead is present from backend observations');
+  assert.ok(roleLists.lead.some(r => (r.memberUids || [r.ref.nativeUid]).includes('claude-fable-5-1-medium')), 'Claude Lead is present from backend observations');
   const nativeCreated = await manager.dispatch('saveFusionPreset', { name: 'Native Lead', lead: { nativeUid: 'claude-fable-5-1-medium' }, sidekick: lead.ref });
   assert.equal(nativeCreated.fusionCount, 2);
 });
