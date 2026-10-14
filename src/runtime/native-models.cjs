@@ -2,6 +2,11 @@
 const fs = require('node:fs');
 const { runtimeIdentity, controlFile, PORT } = require('./backend.cjs');
 const { withConnectionRetry } = require('./retry.cjs');
+// Upstream observations only: our own uids are never part of the native
+// catalog, and the reader rejects a payload containing them outright. Both the
+// reader's validation and the push payload derive from this one predicate so the
+// two sides cannot drift apart.
+const isUpstreamUid = uid => typeof uid === 'string' && !!uid && uid.length <= 256 && !/^(?:fusion-)?dfbyok-/.test(uid);
 async function readOnce({ root, port, signal, request }) {
   const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(2000)]) : AbortSignal.timeout(2000);
   const base = 'http://127.0.0.1:' + port;
@@ -25,7 +30,7 @@ async function readOnce({ root, port, signal, request }) {
   const data = await read(base + '/_runtime/native-models', { authorization: 'Bearer ' + control.token });
   if (data.instanceId !== health.instanceId || !Array.isArray(data.models)) throw new Error('native_catalog_identity');
   const models = data.models.map(entry => {
-    if (!entry || typeof entry.uid !== 'string' || !entry.uid || entry.uid.length > 256 || /^(?:fusion-)?dfbyok-/.test(entry.uid) ||
+    if (!entry || !isUpstreamUid(entry.uid) ||
       typeof entry.disabled !== 'boolean' || typeof entry.isModelRouter !== 'boolean' || !Array.isArray(entry.harnessUids) ||
       entry.harnessUids.some(uid => typeof uid !== 'string')) throw new Error('native_catalog_invalid');
     const next = { uid: entry.uid, label: typeof entry.label === 'string' ? entry.label : entry.uid,
@@ -88,9 +93,7 @@ async function pushNativeModels({ root, models, port = PORT, signal, request = f
   try { control = JSON.parse(fs.readFileSync(controlFile(root), 'utf8')); } catch { return { pushed: 0, reason: 'identity' }; }
   if (control.rootId !== health.rootId || control.instanceId !== health.instanceId || control.sourceId !== health.sourceId ||
     !/^[a-f0-9]{64}$/.test(control.token || '')) return { pushed: 0, reason: 'identity' };
-  // Our own uids are never upstream observations; the backend rejects them too.
-  const payload = models.filter(entry => entry && typeof entry.uid === 'string' && entry.uid && entry.uid.length <= 256 &&
-    !/^(?:fusion-)?dfbyok-/.test(entry.uid));
+  const payload = models.filter(entry => entry && isUpstreamUid(entry.uid));
   if (!payload.length) return { pushed: 0, reason: 'empty' };
   try {
     const response = await request(base + '/_runtime/native-models', {
@@ -104,4 +107,4 @@ async function pushNativeModels({ root, models, port = PORT, signal, request = f
     return { pushed: payload.length, count: result.count, improved: result.improved === true };
   } catch { return { pushed: 0, reason: 'unavailable' }; }
 }
-module.exports = { readNativeModels, pushNativeModels };
+module.exports = { readNativeModels, pushNativeModels, isUpstreamUid };

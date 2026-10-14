@@ -165,7 +165,9 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     let accepted = 0, improved = false;
     for (const entry of entries) {
       const normalized = normalizeNativeEntry(entry);
-      if (!normalized) continue;
+      // Never store our own entries: the host's reader treats a served dfbyok
+      // uid as an invalid catalog and would fail every refresh.
+      if (!normalized || /^(?:fusion-)?dfbyok-/.test(normalized.uid)) continue;
       accepted++;
       const prior = observedNatives.get(normalized.uid);
       const merged = mergeNativeEntry(prior, normalized);

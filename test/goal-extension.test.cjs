@@ -95,6 +95,7 @@ function fixture(t) {
     './catalog.cjs': { normalizeFusionConfig: config => config,
       buildCatalog: config => ({ models: [], fusions: {}, matrixUids: new Set(), rolePool: { lead: [], sidekick: [] } }) },
     './runtime/native-models.cjs': { readNativeModels: async () => ({ status: 'empty', models: [] }),
+      isUpstreamUid: realRequire('./runtime/native-models.cjs').isUpstreamUid,
       pushNativeModels: async () => ({ pushed: 0, reason: 'empty' }) },
     './runtime/backend.cjs': { runtimeIdentity: () => identity, controlFile: actualBackend.controlFile, PORT: 39842, MANAGEMENT_PROTOCOL: 1 },
     './runtime/bridge.cjs': { createLsBridge: async () => ({ port: 4567, close() {} }) },

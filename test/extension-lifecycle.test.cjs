@@ -71,6 +71,7 @@ function fixture(t, initial = {}) {
       fusions: config.providers?.length ? { 'fusion-dfbyok-selected': { label: 'CPA Fusion' }, 'fusion-dfbyok-another': { label: 'CPA Fusion Alt' } } : {},
       lastFusionSelection: config.lastFusionSelection, matrixUids }) },
     './runtime/native-models.cjs': { readNativeModels: options => nativeRead(options),
+      isUpstreamUid: realRequire('./runtime/native-models.cjs').isUpstreamUid,
       pushNativeModels: options => { pushes.push(options); return Promise.resolve(pushResult); } },
     './runtime/goal-continue.cjs': { installGoalContinue: () => null },
     './runtime/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
@@ -584,6 +585,44 @@ test('a failing push is logged and never disturbs the activation flow', async t 
   assert.ok(await waitFor(() => f.logs.some(line => line.includes('native-push-skip'))), 'the skip is reported');
   assert.equal(f.counts().installed, 1);
   assert.ok(f.logs.every(line => !line.includes('"event":"error"')));
+});
+
+// The gate used to key off the local bridge observations while sending the
+// merged view. A first refresh that answered with nothing claimed the key, so
+// the immediately following meaningful refresh looked "unchanged" and the push
+// never happened — masked only by whichever timing happened to work.
+test('an empty first refresh does not suppress the next push', async t => {
+  const f = fixture(t);
+  let calls = 0;
+  const rich = [{ uid: 'swe-2-high', label: 'SWE-2 High', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'],
+    sidekickDimension: { order: 2, name: 'SWE-2 High', fastModeOrder: 0 } }];
+  f.setPushResult({ pushed: 1, count: 1, improved: true });
+  f.setNativeRead(async () => { calls++; return calls === 1 ? { status: 'loading', models: [] } : { status: 'ready', models: rich }; });
+  await f.activate(f.context);
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.deepEqual(f.pushes(), [], 'an empty first refresh offers nothing and claims no key');
+  // Drive the second read deterministically instead of waiting for the 3s sync
+  // timer, so the assertion is about the gate rather than about timing.
+  await f.managerOptions().refreshNativeModels();
+  assert.ok(await waitFor(() => f.pushes().length >= 1), 'the next meaningful refresh still pushes');
+  const offered = JSON.parse(JSON.stringify(f.pushes().at(-1).models));
+  assert.deepEqual(offered.map(entry => entry.uid), ['swe-2-high']);
+  assert.ok(f.logs.some(line => line.includes('"event":"native-push"')), 'and it is reported');
+});
+
+test('our own uids are never part of a push payload', async t => {
+  const f = fixture(t);
+  f.setNativeRead(async () => ({ status: 'ready', models: [{ uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['h'] }] }));
+  await f.activate(f.context);
+  assert.ok(await waitFor(() => f.pushes().length >= 1));
+  // The backend's reader rejects a catalog containing our uids, so offering them
+  // would break every subsequent refresh of this host.
+  f.bridges.at(-1).onNativeModels([{ uid: 'dfbyok-own', label: 'own', disabled: false, isModelRouter: false, harnessUids: ['fusion'] }]);
+  await f.managerOptions().refreshNativeModels();
+  await new Promise(resolve => setTimeout(resolve, 250));
+  for (const push of f.pushes()) {
+    assert.ok(push.models.every(entry => !/^(?:fusion-)?dfbyok-/.test(entry.uid)), 'no own uid is ever offered');
+  }
 });
 
 test('a disabled plugin never pushes', async t => {

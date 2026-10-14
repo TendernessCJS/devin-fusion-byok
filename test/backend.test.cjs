@@ -632,3 +632,27 @@ test('a stuck monitor flush cannot block shutdown either', async t => {
   assert.ok(logs.some(([event]) => event === 'monitor-close-timeout'), 'the abandoned flush is reported');
   await backend.stopped;
 });
+
+// The host's reader treats a served dfbyok uid as an invalid catalog and fails
+// the whole refresh, so the backend must never store one — even if a future
+// caller forgets to filter its payload.
+test('the backend never stores our own uids, so a read cannot be poisoned', async t => {
+  const f = await fixture(t);
+  const endpoint = f.base + '/_runtime/native-models';
+  const headers = { authorization: 'Bearer ' + f.control().token, 'content-type': 'application/json' };
+  const pushed = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify({ models: [
+    { uid: 'dfbyok-provider-x-model-y-1111', label: 'own', disabled: false, isModelRouter: false, harnessUids: ['fusion'] },
+    { uid: 'fusion-dfbyok-preset-2222', label: 'own fusion', disabled: false, isModelRouter: true, harnessUids: ['fusion'] },
+    { uid: 'swe-2-high', label: 'SWE-2 High', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] },
+  ] }) });
+  assert.equal(pushed.status, 200);
+  const result = await pushed.json();
+  assert.equal(result.accepted, 1, 'only the upstream entry is accepted');
+  const read = await (await fetch(endpoint, { headers })).json();
+  assert.deepEqual(read.models.map(entry => entry.uid), ['swe-2-high']);
+  // And the host's own reader agrees the payload is usable.
+  const { readNativeModels } = require('../src/runtime/native-models.cjs');
+  const seen = await readNativeModels({ root: f.root, port: f.backend.port });
+  assert.equal(seen.status, 'ready');
+  assert.deepEqual(seen.models.map(entry => entry.uid), ['swe-2-high']);
+});

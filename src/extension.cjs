@@ -10,7 +10,7 @@ const { installLsInjection } = require('./runtime/ls-injection.cjs');
 const { createLsBridge } = require('./runtime/bridge.cjs');
 const { runtimeIdentity, controlFile, PORT, MANAGEMENT_PROTOCOL } = require('./runtime/backend.cjs');
 const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } = require('./lifecycle/owned-settings.cjs');
-const { readNativeModels, pushNativeModels } = require('./runtime/native-models.cjs');
+const { readNativeModels, pushNativeModels, isUpstreamUid } = require('./runtime/native-models.cjs');
 const { mergeNativeEntry } = require('./runtime/native-cache.cjs');
 const { installAutoContinue } = require('./runtime/auto-continue.cjs');
 const { installGoalContinue } = require('./runtime/goal-continue.cjs');
@@ -238,13 +238,20 @@ async function activate(context) {
   // rewrites the cache.
   let pushTimer, lastPushAt = 0, lastPushKey = '';
   const PUSH_INTERVAL_MS = 5 * 1000;
-  // Only the local (bridge-observed) copy is worth offering, and only while it
-  // is actually growing: the richer-entries count is the signal, so a steady
-  // state sends nothing and a push can never loop back into another push.
-  const pushKey = () => localNativeModels.size + ':' +
-    [...localNativeModels.values()].filter(entry => entry.sidekickDimension || entry.fusionMetadata).length;
+  // The gate must describe what is actually sent, not some proxy for it. Keying
+  // it off the local bridge observations looked equivalent but was not: on the
+  // first refresh the backend can answer with nothing yet, so an empty payload
+  // claimed the key and the immediately following meaningful refresh was then
+  // judged "unchanged" and skipped — the push silently never happened (only the
+  // previous successful push, whose timing differed, hid it).
+  const pushPayload = () => [...nativeModels.values()].filter(entry => isUpstreamUid(entry?.uid));
+  const pushKey = () => localNativeModels.size + ':' + pushPayload().length + ':' +
+    pushPayload().filter(entry => entry.sidekickDimension || entry.fusionMetadata).length;
   const pushToBackend = () => {
     if (activationDisposed || config().enabled === false || pushTimer !== undefined) return;
+    // Nothing to offer yet: do not spend the key on an empty payload, or the
+    // first useful observation will look unchanged.
+    if (!pushPayload().length) return;
     const key = pushKey();
     if (key === lastPushKey) return;
     const wait = Math.max(0, lastPushAt + PUSH_INTERVAL_MS - Date.now());
@@ -253,7 +260,7 @@ async function activate(context) {
       if (activationDisposed || config().enabled === false) return;
       lastPushAt = Date.now();
       lastPushKey = key;
-      pushNativeModels({ root, models: [...nativeModels.values()] })
+      pushNativeModels({ root, models: pushPayload() })
         .then(result => {
           if (result?.pushed) log('native-push', { pushed: result.pushed, count: result.count, improved: result.improved === true });
           else if (result?.reason && result.reason !== 'empty') log('native-push-skip', { reason: result.reason });
