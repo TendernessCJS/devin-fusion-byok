@@ -57,7 +57,7 @@ function fixture(t, initial = {}) {
     './config.cjs': {
       readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
       writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)),
-      importLegacy: () => ({}), discover: async () => 2, updateSidekicks() {},
+      importLegacy: () => ({}), discover: async () => 2,
     },
     './catalog.cjs': { normalizeFusionConfig: config => config, buildCatalog: config => ({ models: config.providers?.length ? ['own'] : [],
       fusions: config.providers?.length ? { 'fusion-dfbyok-selected': { label: 'CPA Fusion' }, 'fusion-dfbyok-another': { label: 'CPA Fusion Alt' } } : {} }) },

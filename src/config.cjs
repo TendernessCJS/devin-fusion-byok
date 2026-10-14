@@ -53,8 +53,4 @@ async function discover(provider, { request = directFetch } = {}) {
   });
   return provider.models.length;
 }
-function updateSidekicks(config) {
-  const available = config.providers.flatMap(p => p.models.filter(m => /(?:^|[-/])swe[-_]?2.*max/i.test(m.id)).map(m => ({ providerId: p.id, model: m.id })));
-  config.sidekicks = available;
-}
-module.exports = { readConfig, writeConfig, importLegacy, discover, updateSidekicks };
+module.exports = { readConfig, writeConfig, importLegacy, discover };

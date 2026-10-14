@@ -91,7 +91,7 @@ function fixture(t) {
     'node:child_process': { spawn: () => { const child = new EventEmitter(); child.unref = () => {}; return child; } },
     './config.cjs': { readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
       writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)), importLegacy: () => ({}),
-      discover: async () => 0, updateSidekicks() {} },
+      discover: async () => 0 },
     './catalog.cjs': { normalizeFusionConfig: config => config,
       buildCatalog: config => ({ models: [], fusions: {}, presetStates: [], presetCandidates: { lead: [], sidekick: [] } }) },
     './runtime/native-models.cjs': { readNativeModels: async () => ({ status: 'empty', models: [] }) },
