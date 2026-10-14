@@ -1181,3 +1181,30 @@ test('informational dimensions omit order so the picker merges them with the off
     if (dims.Effort) assert.equal(Number.isSafeInteger(dims.Effort.order), true, 'Effort on ' + model.uid);
   }
 });
+
+test('staleFusionUids keeps entries whose members are merely unselected', () => {
+  const { staleFusionUids } = require('../src/catalog.cjs');
+  const emitted = new Set(['fusion-live-sidekick-swe-2-max']);
+  const unselected = cat(s(1, 'F'), s(22, 'fusion-lead-sidekick-swe-2-high'));
+  const orphan = cat(s(1, 'F'), s(22, 'fusion-gone-sidekick-also-gone'));
+  const byokGone = cat(s(1, 'F'), s(22, 'fusion-dfbyok-old-digest-sidekick-swe-2-max'));
+  const excluded = cat(s(1, 'F'), s(22, 'fusion-lead-sidekick-swe-2-medium'));
+  const malformed = cat(s(1, 'F'), s(22, 'fusion-sidekick-claude-haiku-5-5-medium'));
+  const flat = cat(m(1, unselected), m(1, orphan), m(1, byokGone), m(1, excluded), m(1, malformed));
+  const known = new Set(['lead', 'swe-2-high', 'swe-2-max', 'swe-2-medium', 'fusion-live-sidekick-swe-2-max']);
+  // The complete form: only entries that can never be served again are reported.
+  const sorted = uids => [...uids].sort();
+  assert.deepEqual(sorted(staleFusionUids(flat, { emitted, known })),
+    sorted(['fusion-gone-sidekick-also-gone', 'fusion-dfbyok-old-digest-sidekick-swe-2-max', 'fusion-sidekick-claude-haiku-5-5-medium']),
+    'a merely unselected pair survives, unknown members and malformed uids do not');
+  // Role-specific exclusions still retire an entry, so turning a model off
+  // actually removes its dimension values from the picker.
+  assert.deepEqual(sorted(staleFusionUids(flat, { emitted, known, excluded: { lead: new Set(), sidekick: new Set(['swe-2-medium']) } })),
+    sorted(['fusion-gone-sidekick-also-gone', 'fusion-dfbyok-old-digest-sidekick-swe-2-max', 'fusion-lead-sidekick-swe-2-medium', 'fusion-sidekick-claude-haiku-5-5-medium']));
+  assert.deepEqual(sorted(staleFusionUids(flat, { emitted, known, excluded: { lead: new Set(['lead']), sidekick: new Set() } })),
+    sorted(['fusion-gone-sidekick-also-gone', 'fusion-dfbyok-old-digest-sidekick-swe-2-max', 'fusion-lead-sidekick-swe-2-high', 'fusion-lead-sidekick-swe-2-medium', 'fusion-sidekick-claude-haiku-5-5-medium']),
+    'a lead exclusion only retires entries that use it as a lead');
+  // The legacy positional form keeps its historical "not emitted means stale".
+  assert.deepEqual(sorted(staleFusionUids(flat, emitted)), sorted(['fusion-dfbyok-old-digest-sidekick-swe-2-max', 'fusion-gone-sidekick-also-gone',
+    'fusion-lead-sidekick-swe-2-high', 'fusion-lead-sidekick-swe-2-medium', 'fusion-sidekick-claude-haiku-5-5-medium']));
+});

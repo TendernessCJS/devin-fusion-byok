@@ -11,6 +11,7 @@ const { createLsBridge } = require('./runtime/bridge.cjs');
 const { runtimeIdentity, controlFile, PORT, MANAGEMENT_PROTOCOL } = require('./runtime/backend.cjs');
 const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } = require('./lifecycle/owned-settings.cjs');
 const { readNativeModels } = require('./runtime/native-models.cjs');
+const { mergeNativeEntry } = require('./runtime/native-cache.cjs');
 const { installAutoContinue } = require('./runtime/auto-continue.cjs');
 const { installGoalContinue } = require('./runtime/goal-continue.cjs');
 const { installAcpObserver } = require('./runtime/acp-observer.cjs');
@@ -241,8 +242,13 @@ async function activate(context) {
       if (abort.signal.aborted || generation !== activationGeneration || activationDisposed || config().enabled === false) return;
       nativeCatalogStatus = result.status;
       nativeModels.clear();
+      // Both channels observe the same upstream catalog from different sides —
+      // the backend sees the CLI's traffic, this host sees the native
+      // extension's — and their copies are not equally complete. Merge instead
+      // of letting the last one win: a dimension-less copy makes every native
+      // Sidekick unresolvable and the mirrored combinations vanish.
       for (const entry of localNativeModels.values()) nativeModels.set(entry.uid, entry);
-      for (const entry of result.models) nativeModels.set(entry.uid, entry);
+      for (const entry of result.models) nativeModels.set(entry.uid, mergeNativeEntry(nativeModels.get(entry.uid), entry));
       try { await management?.publish(); } catch {}
       updateStatusBar();
       if (nativeModels.size !== nativeSyncSize) { nativeSyncSize = nativeModels.size; log('native-sync', { count: nativeSyncSize }); }
@@ -273,13 +279,9 @@ async function activate(context) {
         ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
         ...(entry.supportsImages ? { supportsImages: true } : {}) };
       const previous = nativeModels.get(next.uid);
-      if (!previous || previous.label !== next.label || previous.disabled !== next.disabled ||
-        previous.isModelRouter !== next.isModelRouter || JSON.stringify(previous.harnessUids) !== JSON.stringify(next.harnessUids) ||
-        JSON.stringify(previous.sidekickDimension) !== JSON.stringify(next.sidekickDimension) ||
-        JSON.stringify(previous.fusionMetadata) !== JSON.stringify(next.fusionMetadata) ||
-        previous.maxTokens !== next.maxTokens || previous.maxOutputTokens !== next.maxOutputTokens ||
-        previous.supportsImages !== next.supportsImages) {
-        localNativeModels.set(next.uid, next); nativeModels.set(next.uid, next); changed = true;
+      const merged = mergeNativeEntry(previous, next);
+      if (!previous || JSON.stringify(previous) !== JSON.stringify(merged)) {
+        localNativeModels.set(next.uid, merged); nativeModels.set(next.uid, merged); changed = true;
       }
     }
     if (changed && !activationDisposed) try { void management?.publish()?.catch(() => {}); updateStatusBar(); pickerRefresh?.changed?.(); checkCliCaches?.(); } catch {}
@@ -494,8 +496,20 @@ async function activate(context) {
       const expectedUids = current.models.map(model => model.uid);
       if (!expectedUids.length) return cliCacheReport;
       const emittedFusionUids = new Set(Object.keys(current.fusions || {}));
+      const knownUids = new Set([...Object.keys(current.routes || {}), ...emittedFusionUids, ...nativeModels.keys()]);
+      const excludedUids = role => {
+        const set = new Set();
+        for (const ref of Array.isArray(config().roleExclusions?.[role]) ? config().roleExclusions[role] : []) {
+          if (typeof ref?.nativeUid === 'string') { set.add(ref.nativeUid); continue; }
+          for (const [uid, route] of Object.entries(current.routes || {})) {
+            if (route.providerId === ref?.providerId && route.model === ref?.model) set.add(uid);
+          }
+        }
+        return set;
+      };
+      const excluded = { lead: excludedUids('lead'), sidekick: excludedUids('sidekick') };
       const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force,
-        staleProbe: payload => staleFusionUids(payload, emittedFusionUids),
+        staleProbe: payload => staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded }),
         augment: (payload, rpc) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current }) });
       cliCacheReport = { at: new Date().toISOString(), checked: result.checked,
         refreshed: result.refreshed, skipped: result.skipped || [], errors: result.errors || [] };

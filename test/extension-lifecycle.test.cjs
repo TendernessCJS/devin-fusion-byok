@@ -497,3 +497,35 @@ test('the stop callback returns the warning promise so rejections stay contained
   await assert.rejects(result, /toast failed/);
   assert.match(f.notices.at(-1), /自动继续/);
 });
+test('a poorer backend sync never downgrades the richer bridge observation', async t => {
+  const uid = 'fusion-live-sidekick-swe-2-high';
+  const rich = { uid, label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'],
+    sidekickDimension: { order: 2, name: 'SWE-2 High', fastModeOrder: 0 },
+    fusionMetadata: [{ key: 'Sidekick', order: 2, name: 'SWE-2 High', controlType: 3 }] };
+  const poor = { uid, label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'] };
+  const f = fixture(t);
+  f.setNativeRead(async () => ({ status: 'ready', models: [poor] }));
+  await f.activate(f.context);
+  await f.settle();
+  f.bridges.at(-1).onNativeModels([rich]);
+  await f.settle();
+  // The extension runs in a separate realm, so its objects never share a
+  // prototype with the test's: compare serialized values.
+  const find = () => JSON.parse(JSON.stringify(f.managerOptions().nativeModels().find(entry => entry.uid === uid) || null));
+  assert.deepEqual(find().sidekickDimension, rich.sidekickDimension, 'the bridge observation carried the dimensions');
+  // The backend observes the CLI side of the same catalog, whose copy can lack
+  // the Fusion family metadata. Letting it win would make every native Sidekick
+  // unresolvable, so the mirrored combinations disappear and are then reported
+  // unemitted and deleted from the CLI cache.
+  await f.managerOptions().refreshNativeModels();
+  await f.settle();
+  assert.deepEqual(find().sidekickDimension, rich.sidekickDimension, 'the sync kept the richer copy');
+  assert.deepEqual(find().fusionMetadata, rich.fusionMetadata);
+  assert.equal(find().disabled, false);
+  // A genuine capability change still lands, so the merge never hides state.
+  f.setNativeRead(async () => ({ status: 'ready', models: [{ ...poor, disabled: true }] }));
+  await f.managerOptions().refreshNativeModels();
+  await f.settle();
+  assert.equal(find().disabled, true, 'fresher scalar fields are not masked');
+  assert.deepEqual(find().sidekickDimension, rich.sidekickDimension, 'and the dimensions survive it');
+});

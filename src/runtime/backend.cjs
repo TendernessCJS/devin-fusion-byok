@@ -9,7 +9,7 @@ const wire = require('../protocol/wire.cjs');
 const { parseChat } = require('../protocol/chat.cjs');
 const { serveChat } = require('../protocol/responses.cjs');
 const { forward, collect } = require('./bridge.cjs');
-const { normalizeNativeEntry, loadNativeCache, saveNativeCache } = require('./native-cache.cjs');
+const { normalizeNativeEntry, mergeNativeEntry, loadNativeCache, saveNativeCache } = require('./native-cache.cjs');
 const PORT = 39842;
 const VERSION = require('../../package.json').version;
 const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
@@ -67,18 +67,28 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
     cacheTimer = setTimeout(() => { cacheTimer = undefined; flushNativeCache(); }, 2000);
     cacheTimer.unref?.();
   }
+  // Persisted copies must converge to the richest observation, not just to the
+  // newest uid set: a seeded entry can lack the Fusion family metadata that a
+  // later observation carries, and gating the save on the entry count alone
+  // (a full seed never changes it) meant that improvement was never written —
+  // every restart re-seeded the poorer form and the mirrored combinations
+  // flipped between complete and empty.
   const onNativeModels = entries => {
     if (!Array.isArray(entries)) return;
+    let improved = false;
     for (const entry of entries) {
       const normalized = normalizeNativeEntry(entry);
       if (!normalized) continue;
-      observedNatives.set(normalized.uid, normalized);
+      const prior = observedNatives.get(normalized.uid);
+      const merged = mergeNativeEntry(prior, normalized);
+      const dimsOf = value => JSON.stringify([value.sidekickDimension ?? null, value.fusionMetadata ?? null]);
+      if (!prior || prior.disabled !== merged.disabled || prior.label !== merged.label ||
+        dimsOf(prior) !== dimsOf(merged)) improved = true;
+      observedNatives.set(normalized.uid, merged);
     }
-    if (observedNatives.size !== observedSize) {
-      observedSize = observedNatives.size;
-      log('native-observed', { count: observedSize });
-      scheduleNativeCacheSave();
-    }
+    const grew = observedNatives.size !== observedSize;
+    if (grew) { observedSize = observedNatives.size; log('native-observed', { count: observedSize }); }
+    if (grew || improved) scheduleNativeCacheSave();
   };
   const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()]); };
   // Official Fusion uids observed as disabled in catalog responses. Entries

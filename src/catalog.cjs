@@ -1209,14 +1209,37 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
 // reliable discriminator is structural: official fusion entries always carry
 // capability records (field 32), our emit never writes that field. Scans the
 // model-entry lists of either known payload shape (flat clientModelConfigs or
-// the user_status nesting) and returns f32-less `fusion-*` uids not in the
-// current emit — i.e. residue from a previous catalog generation.
-function staleFusionUids(data, emittedUids) {
-  const emitted = emittedUids instanceof Set ? emittedUids : new Set(emittedUids || []);
+// the user_status nesting) and returns f32-less `fusion-*` uids that are safe
+// to drop.
+//
+// "Safe" is deliberately conservative. A uid that is merely absent from the
+// current emit is NOT stale: our emit set shrinks whenever a native model's
+// observation is incomplete (the Sidekick dimensions arrive late), and dropping
+// by absence alone deleted 131 valid combinations in one pass (2026-10-14).
+// An entry is reported only when it can never be served again:
+//   - its uid no longer splits into a lead/sidekick pair (a malformed leftover)
+//   - one of its sides is no longer a known uid at all (the model is gone or
+//     the BYOK uid digest changed with the configuration)
+//   - one of its sides was explicitly turned off for that role, because then it
+//     must stop feeding dimension values into the picker
+// Callers that pass a plain set keep the historical "not emitted means stale"
+// behaviour; callers with catalog knowledge should pass the object form.
+function staleFusionUids(data, options) {
+  const legacy = options instanceof Set || Array.isArray(options);
+  const emitted = legacy ? (options instanceof Set ? options : new Set(options || []))
+    : (options?.emitted instanceof Set ? options.emitted : new Set(options?.emitted || []));
+  const known = legacy ? emitted : (options?.known instanceof Set ? options.known : new Set(options?.known || []));
+  const excluded = legacy ? {} : (options?.excluded || {});
   const stale = [];
   const scan = buffer => {
     const uid = protoUid(buffer);
-    if (uid.startsWith('fusion-') && !emitted.has(uid) && !fields(buffer, 32).length) stale.push(uid);
+    if (!uid.startsWith('fusion-') || emitted.has(uid) || fields(buffer, 32).length) return;
+    const marker = uid.lastIndexOf('-sidekick-');
+    if (marker <= 'fusion-'.length) { stale.push(uid); return; }
+    const leadUid = uid.slice('fusion-'.length, marker), sidekickUid = uid.slice(marker + '-sidekick-'.length);
+    if (!leadUid || !sidekickUid || leadUid.endsWith('-fast')) { stale.push(uid); return; }
+    const dead = (uid, role) => !known.has(uid) || (excluded[role] instanceof Set && excluded[role].has(uid));
+    if (dead(leadUid, 'lead') || dead(sidekickUid, 'sidekick')) stale.push(uid);
   };
   try {
     for (const top of parseFields(data).filter(field => field.number === 1 && field.wire === 2)) {

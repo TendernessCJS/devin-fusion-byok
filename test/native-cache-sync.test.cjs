@@ -7,8 +7,9 @@ const os = require('node:os');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { collect } = require('../src/runtime/bridge.cjs');
-const { augmentCatalog, buildCatalog, migrateFusionConfig } = require('../src/catalog.cjs');
-const { parseFields, s } = require('../src/protocol/wire.cjs');
+const { augmentCatalog, buildCatalog, migrateFusionConfig, collectNativeModels } = require('../src/catalog.cjs');
+const { parseFields, s, m, v } = require('../src/protocol/wire.cjs');
+const cat = (...parts) => Buffer.concat(parts.flat());
 
 const TEAM_RPC = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
 const proto = { json: false, type: 'application/proto', framed: false };
@@ -91,4 +92,63 @@ test('without a cache the same combination is invisible in the first answer (the
   assert.ok(!values.includes(nativeSidekickCombo(SEEDED)), 'a cold backend cannot resolve native-Sidekick combinations');
   assert.ok(values.some(value => value.startsWith('dfbyok-') && !value.startsWith('fusion-')),
     'plain BYOK models are unaffected by the blind window');
+});
+
+// The persisted cache must converge to the richest observation. Gating the save
+// on the entry count alone never fires once a full seed is loaded (a seed of 875
+// entries never changes size), so a dimension-less seed kept winning every
+// restart and the mirrored combinations flipped between complete and empty.
+test('an observation that only adds family metadata is still persisted', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-cache-improve-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ enabled: true,
+    providers: [{ id: 'p', name: 'P', models: [{ id: 'lead', label: 'Lead' }] }] }));
+  // Seeded without the dimensions the next observation will carry.
+  fs.writeFileSync(path.join(root, 'native-cache.json'), JSON.stringify({ version: 1, savedAt: new Date().toISOString(),
+    models: [{ uid: 'fusion-lead-a-sidekick-swe-2-high', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'] }] }));
+
+  const dimensioned = cat(s(1, 'F'), s(22, 'fusion-lead-a-sidekick-swe-2-high'), m(23, cat(s(20, 'fusion'))),
+    m(30, cat(s(1, 'Fusion'),
+      m(2, cat(s(1, 'Lead'), m(2, cat(v(1, 1), s(2, 'Lead'))))),
+      m(2, cat(s(1, 'Sidekick'), m(2, cat(v(1, 2), s(2, 'SWE-2 High'), v(3, 3))))),
+      m(2, cat(s(1, 'Fast Mode'), m(2, cat(v(3, 2))))))));
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout,
+    require(name) {
+      if (name === './bridge.cjs') return {
+        collect,
+        async forward(req, res, target, options) {
+          const upstream = cat(m(1, dimensioned));
+          const observed = collectNativeModels(upstream, { rpc: target.pathname, format: proto });
+          if (observed.length) options.onNativeModels?.(observed);
+          res.writeHead(200, { 'content-type': 'application/proto' });
+          res.end(upstream);
+        },
+      };
+      return realRequire(name);
+    },
+  }, { filename });
+  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  const response = await fetch('http://127.0.0.1:' + backend.port + '/exa.api_server_pb.ApiServerService/GetCliModelConfigs',
+    { method: 'POST', body: 'native' });
+  assert.equal(response.status, 200);
+  // Read while the backend is still running: close() flushes unconditionally, so
+  // only the content trigger can make the file richer before shutdown.
+  const cacheFile = path.join(root, 'native-cache.json');
+  const deadline = Date.now() + 5000;
+  let saved = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+  while (Date.now() < deadline && !saved.models[0]?.sidekickDimension) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    saved = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+  }
+  await backend.close();
+  assert.equal(saved.models.length, 1, 'the uid set is unchanged, so only the content trigger can fire');
+  const entry = saved.models[0];
+  assert.deepEqual(entry.sidekickDimension, { order: 2, name: 'SWE-2 High', fastModeOrder: 0 },
+    'the richer observation replaced the seeded copy');
+  assert.deepEqual((entry.fusionMetadata || []).map(dim => dim.key), ['Lead', 'Sidekick', 'Fast Mode']);
 });

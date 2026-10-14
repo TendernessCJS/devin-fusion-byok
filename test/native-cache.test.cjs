@@ -110,3 +110,27 @@ test('the real filesystem round-trip writes a private readable file', t => {
   assert.equal(loaded.length, 1);
   assert.equal(loaded[0].uid, 'swe-2-medium');
 });
+
+test('mergeNativeEntry keeps the richer form when a poorer copy arrives later', () => {
+  const { mergeNativeEntry, normalizeNativeEntry } = require('../src/runtime/native-cache.cjs');
+  const rich = normalizeNativeEntry({ uid: 'fusion-a-sidekick-swe-2-high', label: 'F', disabled: false, isModelRouter: true,
+    harnessUids: ['fusion'], sidekickDimension: { order: 2, name: 'SWE-2 High', fastModeOrder: 0 },
+    fusionMetadata: [{ key: 'Sidekick', order: 2, name: 'SWE-2 High', controlType: 3 }] });
+  const poor = normalizeNativeEntry({ uid: 'fusion-a-sidekick-swe-2-high', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'] });
+  // A seeded entry (rich) followed by a dimension-less observation keeps its
+  // dimensions: without them every native Sidekick becomes unresolvable and the
+  // mirrored combinations are reported unemitted and deleted.
+  assert.deepEqual(mergeNativeEntry(rich, poor), rich);
+  // A fresher scalar still wins, so capability changes are never masked.
+  const flipped = normalizeNativeEntry({ ...poor, disabled: true });
+  assert.equal(mergeNativeEntry(rich, flipped).disabled, true);
+  assert.deepEqual(mergeNativeEntry(rich, flipped).sidekickDimension, rich.sidekickDimension);
+  // Richer incoming data replaces the poorer stored copy.
+  assert.deepEqual(mergeNativeEntry(poor, rich), rich);
+  assert.deepEqual(mergeNativeEntry(poor, poor), poor);
+  assert.deepEqual(mergeNativeEntry(undefined, rich), rich);
+  assert.deepEqual(mergeNativeEntry(rich, undefined), rich);
+  // Harnesses are carried over too: a combination cannot be routed without them.
+  const noHarness = normalizeNativeEntry({ uid: 'swe-2-high', disabled: false, isModelRouter: false });
+  assert.deepEqual(mergeNativeEntry({ ...rich, harnessUids: ['swe-1p6'] }, noHarness).harnessUids, ['swe-1p6']);
+});
