@@ -174,6 +174,10 @@ function renderPanel({ nonce, cspSource }) {
     <section id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
       <div id="settings-general"></div>
       <details id="native-group" class="group"><summary>官方模型显示<span id="native-count" class="hint"></span></summary><div class="group-body" id="native-models"></div></details>
+      <details id="cache-group" class="group"><summary>CLI 缓存<span id="cache-hint" class="hint"></span></summary><div class="group-body">
+        <p class="hint mb">模型选择器读的是 Devin CLI 在 <code class="cmd">~/.cache/devin/cli</code> 下的按身份缓存。配置改过之后如果下拉里少条目或出现已删除的模型，手动刷新一次即可原地重写这些缓存文件（原文件会留成 <code class="cmd">.bak</code>，不会改名或删除）。</p>
+        <div class="actions"><button id="refresh-cache" type="button">刷新缓存</button><span id="cache-report" class="hint"></span></div>
+      </div></details>
       ${updateMarkup()}
     </section>
   </main>
@@ -314,6 +318,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     renderGeneral();
     renderRoles();
     renderNative();
+    renderCache();
     if (busy) {
       for (const node of controls()) {
         node.dataset.wasDisabled = String(node.disabled);
@@ -474,6 +479,21 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
       container.append(details);
     }
     if (!rows.length) container.append(element('div', { class: 'empty', text: list.length ? '没有匹配的模型。' : '暂无可选模型。' }));
+  }
+
+  function renderCache() {
+    const report = state.cliCache;
+    const hint = byId('cache-hint'), detail = byId('cache-report');
+    hint.textContent = report && report.at ? '最近 ' + new Date(report.at).toLocaleTimeString('zh-CN', { hour12: false }) : '';
+    detail.replaceChildren();
+    if (!report) { detail.append(document.createTextNode('还没有记录，点一次「刷新缓存」即可。')); return; }
+    const parts = [];
+    if (report.refreshed?.length) parts.push('已重写 ' + report.refreshed.map(name => name.split('.')[0]).join('、'));
+    for (const skip of report.skipped || []) parts.push(skip.name.split('.')[0] + ' 无需重写（' + skip.reason + '）');
+    for (const error of report.errors || []) parts.push(error.name.split('.')[0] + ' 写入失败（' + error.code + '）');
+    if (!report.checked) parts.push('没有找到本插件写入的缓存文件');
+    else if (!parts.length) parts.push('检查了 ' + report.checked + ' 个文件，内容已是最新');
+    detail.append(document.createTextNode(parts.join('；')));
   }
 
   function renderNative() {
@@ -693,6 +713,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     setEnabled(value).then(ok => { if (!ok) event.target.checked = !value; });
   });
   byId('enable-now').addEventListener('click', () => setEnabled(true));
+  byId('refresh-cache').addEventListener('click', () => run(() => request('refreshCliCaches'), '正在刷新缓存…', '缓存已检查。'));
   byId('open-goal').addEventListener('click', () => {
     request('goal.open').catch(error => notice(error.message || '无法打开目标进度。', 'error'));
   });

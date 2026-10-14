@@ -6,7 +6,6 @@ const fs = require('node:fs');
 const { modelEfforts } = require('../src/model-capabilities.cjs');
 const { buildCatalog, resolveAssignment } = require('../src/catalog.cjs');
 const { buildRequestBody } = require('../src/protocol/responses.cjs');
-const { withPresets } = require('./fixtures/presets.cjs');
 const { createManager } = require('../src/panel/model.cjs');
 const { rendererFile, loadFamilyPicker } = require('./support/installed-renderer.cjs');
 const config = () => ({ providers: [{ id: 'load', name: 'load', apiFormat: 'openai-responses', models:
@@ -29,7 +28,7 @@ test('legacy empty effort lists gain GPT presets while retaining provider-defaul
   assert.equal(maxModel.label, 'load · gpt-6-astra Max');
   assert.deepEqual(maxModel.json.modelFamilyMetadata.entries, [{ key: 'Effort', value: { order: 5, name: 'Max', controlType: 1 } }]);
   for (const role of ['lead', 'sidekick']) {
-    assert.ok(catalog.presetCandidates[role].some(item => item.ref.providerId === 'load' && item.ref.model === 'gpt-6-astra' && item.ref.effort === 'max'),
+    assert.ok(catalog.rolePool[role].some(item => item.ref.providerId === 'load' && item.ref.model === 'gpt-6-astra' && item.ref.effort === 'max'),
       role + ' candidates expose the automatic Max preset');
   }
   assert.deepEqual(modelEfforts({ id: 'o3', efforts: [] }), [null, 'low', 'medium', 'high', 'xhigh', 'max']);
@@ -46,16 +45,16 @@ test('every enabled import is a Sidekick without a second configuration step', (
   const catalog = buildCatalog(input, OBSERVED_SWE);
   assert.deepEqual(new Set(catalog.sidekicks.filter(s => !s.native).map(s => s.providerId + '/' + s.model)),
     new Set(['load/gpt-6-astra', 'load/swe-2-high', 'load/swe-2-max', 'load/swe-2-medium', 'other/extra']));
-  for (const route of Object.values(catalog.routes)) {
-    const pairs = Object.values(catalog.fusions).filter(f => f.leadUid === route.uid);
-    assert.equal(pairs.length, 0);
-    assert.ok(catalog.presetCandidates.sidekick.length >= 6);
-  }
+  const perLead = new Set(Object.values(catalog.routes).map(route =>
+    Object.values(catalog.fusions).filter(fusion => fusion.leadUid === route.uid).length));
+  assert.equal(perLead.size, 1, 'every Lead is mirrored with the same Sidekick set');
+  assert.ok([...perLead][0] >= 5, 'each Lead pairs with every Sidekick family representative');
+  assert.ok(catalog.rolePool.sidekick.length >= 6);
   assert.equal(input.sidekicks.length, 2, 'catalog generation does not rewrite user settings');
 });
 
 test('selected native Fusion effort resolves to the actual Responses and Chat API parameter', () => {
-  const catalog = buildCatalog(withPresets(config()));
+  const catalog = buildCatalog(config());
   const request = { systemPrompt: '', messages: [{ role: 'user', content: 'Hello' }] };
   for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
     const pair = Object.values(catalog.fusions).find(f => catalog.routes[f.leadUid].model === 'gpt-6-astra' && catalog.routes[f.leadUid].effort === effort &&
@@ -74,12 +73,17 @@ test('selected native Fusion effort resolves to the actual Responses and Chat AP
 
 test('actual installed Fusion picker enables every GPT effort and imported Sidekick', { skip: !fs.existsSync(rendererFile) }, () => {
   const native = loadFamilyPicker();
-  const catalog = buildCatalog(withPresets(config(), OBSERVED_SWE), OBSERVED_SWE);
-  const models = catalog.models.filter(m => m.kind === 'fusion').map(m => ({ modelUid: m.uid, disabled: false, familyUid: m.json.modelInfo.modelFamilyUid,
+  const catalog = buildCatalog(config(), OBSERVED_SWE);
+  const models = catalog.models.filter(m => m.kind === 'matrix').map(m => ({ modelUid: m.uid, disabled: false, familyUid: m.json.modelInfo.modelFamilyUid,
     familyMetadata: Object.fromEntries(m.json.modelFamilyMetadata.entries.map(e => [e.key, e.value])) }));
   const rows = native.rows(models);
-  assert.equal(rows.length, Object.keys(catalog.fusions).length);
-  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) assert.ok(rows.some(row => catalog.routes[catalog.fusions[row.model.modelUid].leadUid].effort === effort));
+  assert.equal(rows.length, 1, 'mirrored entries join the single official Fusion family');
+  const variants = rows[0].family.models;
+  assert.equal(variants.length, models.length, 'every mirrored combination stays in the family');
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    assert.ok(variants.some(model => catalog.routes[catalog.fusions[model.modelUid].leadUid].effort === effort),
+      effort + ' remains reachable through the family');
+  }
 });
 
 test('selective import immediately exposes the new model in both roles and effort settings are editable', async () => {
@@ -88,21 +92,27 @@ test('selective import immediately exposes the new model in both roles and effor
   const manager = createManager({ read: () => structuredClone(current), write: c => { current = c; },
     discover: async p => { p.models = [{ id: 'gpt-6-astra', efforts: [] }] }, nativeModels: () => OBSERVED_SWE });
   const preview = await manager.dispatch('refreshModels', { providerId: 'load' });
-  assert.equal(preview.fusionCount, 0);
+  // Before any import the only selectable Lead is the explicitly included
+  // native one, so it mirrors exactly one combination.
+  assert.equal(preview.fusionCount, 1, 'only the included native Lead is mirrored before an import');
   const imported = await manager.dispatch('importModels', { providerId: 'load', token: preview.importCandidates.token, ids: ['gpt-6-astra'] });
-  assert.equal(imported.fusionCount, 0);
-  assert.equal(imported.presetCandidates.lead.filter(item => !item.ref.nativeUid).length, 6);
-  assert.ok(imported.presetCandidates.lead.some(item => item.ref.nativeUid === 'swe-2-max'));
-  assert.ok(imported.presetCandidates.lead.some(item => item.ref.model === 'gpt-6-astra' && item.ref.effort === 'max'));
-  assert.ok(imported.presetCandidates.sidekick.some(item => item.ref.model === 'gpt-6-astra' && item.ref.effort === 'max'));
-  assert.ok(imported.presetCandidates.lead.some(item => item.ref.model === 'gpt-6-astra' && item.ref.effort === null));
+  assert.ok(imported.fusionCount > 0, 'importing a model mirrors its combinations');
+  // The per-variant pool lives on the catalog (the panel only sees family-level
+  // role rows), so it is read from the persisted config the manager wrote.
+  const pool = role => buildCatalog(current, OBSERVED_SWE).rolePool[role];
+  assert.equal(pool('lead').filter(item => !item.ref.nativeUid).length, 6);
+  assert.ok(pool('lead').some(item => item.ref.nativeUid === 'swe-2-max'));
+  assert.ok(pool('lead').some(item => item.ref.model === 'gpt-6-astra' && item.ref.effort === 'max'));
+  assert.ok(pool('sidekick').some(item => item.ref.model === 'gpt-6-astra' && item.ref.effort === 'max'));
+  assert.ok(pool('lead').some(item => item.ref.model === 'gpt-6-astra' && item.ref.effort === null));
+  assert.ok(imported.roleLists.lead.some(item => item.ref.model === 'gpt-6-astra'), 'the panel row appears too');
   assert.ok(imported.sidekicks.some(s => s.providerId === 'load' && s.model === 'gpt-6-astra'));
   const custom = await manager.dispatch('updateModels', { providerId: 'load', changes: [{ id: 'gpt-6-astra', effortMode: 'manual', efforts: ['low', 'high'] }] });
-  assert.equal(custom.fusionCount, 0);
-  assert.equal(custom.presetCandidates.lead.filter(item => !item.ref.nativeUid).length, 2);
-  assert.ok(custom.presetCandidates.lead.some(item => item.ref.nativeUid === 'swe-2-max'));
+  assert.ok(custom.fusionCount < imported.fusionCount, 'fewer effort variants mirror fewer combinations');
+  assert.equal(pool('lead').filter(item => !item.ref.nativeUid).length, 2);
+  assert.ok(pool('lead').some(item => item.ref.nativeUid === 'swe-2-max'));
   const providerDefault = await manager.dispatch('updateModels', { providerId: 'load', changes: [{ id: 'gpt-6-astra', effortMode: 'none' }] });
-  assert.equal(providerDefault.fusionCount, 0);
-  assert.equal(providerDefault.presetCandidates.lead.filter(item => !item.ref.nativeUid).length, 1);
-  assert.ok(providerDefault.presetCandidates.lead.some(item => item.ref.nativeUid === 'swe-2-max'));
+  assert.ok(providerDefault.fusionCount < custom.fusionCount, 'a single variant mirrors the fewest combinations');
+  assert.equal(pool('lead').filter(item => !item.ref.nativeUid).length, 1);
+  assert.ok(pool('lead').some(item => item.ref.nativeUid === 'swe-2-max'));
 });

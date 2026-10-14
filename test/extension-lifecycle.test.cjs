@@ -61,12 +61,13 @@ function fixture(t, initial = {}) {
       writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)),
       importLegacy: () => ({}), discover: async () => 2,
     },
-    './catalog.cjs': { normalizeFusionConfig: config => config, buildCatalog: config => ({ models: config.providers?.length
+    './catalog.cjs': { migrateFusionConfig: () => false, staleFusionUids: () => [],
+      buildCatalog: config => ({ models: config.providers?.length
         ? [{ uid: 'dfbyok-own', label: 'own', kind: 'model' },
-          { uid: 'fusion-dfbyok-selected', label: 'CPA Fusion', kind: 'fusion' },
-          { uid: 'fusion-dfbyok-another', label: 'CPA Fusion Alt', kind: 'fusion' }, ...extraCatalogModels] : [],
+          { uid: 'fusion-dfbyok-selected', label: 'CPA Fusion', kind: 'matrix' },
+          { uid: 'fusion-dfbyok-another', label: 'CPA Fusion Alt', kind: 'matrix' }, ...extraCatalogModels] : [],
       fusions: config.providers?.length ? { 'fusion-dfbyok-selected': { label: 'CPA Fusion' }, 'fusion-dfbyok-another': { label: 'CPA Fusion Alt' } } : {},
-      matrixUids }) },
+      lastFusionSelection: config.lastFusionSelection, matrixUids }) },
     './runtime/native-models.cjs': { readNativeModels: options => nativeRead(options) },
     './runtime/goal-continue.cjs': { installGoalContinue: () => null },
     './runtime/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
@@ -169,30 +170,34 @@ test('legacy env originals migrate without mutating frozen configuration values'
   assert.equal(f.globals.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL, 'https://before-plugin.example');
   assert.equal(nativeEnv.HTTPS_PROXY, 'http://legacy-proxy');
 });
-test('an official Fusion reset at startup restores the remembered own combination', async t => {
-  const f = fixture(t, { config: { defaultFusionUid: 'fusion-dfbyok-selected' },
+test('an official Fusion selection is respected while our remembered choice stays on record', async t => {
+  const f = fixture(t, { config: { lastFusionSelection: 'fusion-dfbyok-selected' },
     globals: { agentPreferences: { 'devin-cli': { model: 'fusion-official-claude', effort: 'high' } } } });
   await f.activate(f.context);
-  assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-selected');
+  // The official card's own combinations are legitimate: rewriting them would
+  // silently undo what the user (or Devin) chose.
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-official-claude');
   assert.equal(f.globals.agentPreferences['devin-cli'].effort, 'high');
-  const receipt = JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT), 'utf8'));
-  assert.equal(receipt.changes.find(change => change.path[0] === 'devin.acp.agentPreferences').managed, 'fusion-dfbyok-selected');
+  assert.equal(JSON.parse(fs.readFileSync(f.configFile)).lastFusionSelection, 'fusion-dfbyok-selected',
+    'the remembered combination survives as the locked-fallback target');
+  assert.equal(f.updates.includes('agentPreferences'), false, 'accepting an official selection writes nothing');
 });
-test('a mid-session official reset re-selects the remembered combination without a write loop', async t => {
-  const f = fixture(t, { config: { defaultFusionUid: 'fusion-dfbyok-selected' } });
+test('an official selection mid-session is never rewritten and causes no write loop', async t => {
+  const f = fixture(t, { config: { lastFusionSelection: 'fusion-dfbyok-selected' } });
   await f.activate(f.context);
   assert.equal(f.globals.agentPreferences['devin-cli'].model, 'native-max');
-  f.globals.agentPreferences['devin-cli'].model = 'fusion-official-claude';
-  await f.firePreference();
-  assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-selected');
-  const writes = f.updates.length;
-  await f.firePreference();
-  await f.settle();
-  assert.equal(f.updates.length, writes);
-  assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-selected');
+  for (const official of ['fusion-official-claude', 'fusion-official', 'fusion-claude-fable-5-1-medium-sidekick-swe-2-medium']) {
+    f.globals.agentPreferences['devin-cli'].model = official;
+    const writes = f.updates.length;
+    await f.firePreference();
+    await f.settle();
+    assert.equal(f.globals.agentPreferences['devin-cli'].model, official);
+    assert.equal(f.updates.length, writes, 'an official selection triggers no preference write');
+  }
+  assert.equal(JSON.parse(fs.readFileSync(f.configFile)).lastFusionSelection, 'fusion-dfbyok-selected');
 });
 test('plain native and plain own model selections are never overwritten', async t => {
-  const f = fixture(t, { config: { defaultFusionUid: 'fusion-dfbyok-selected' } });
+  const f = fixture(t, { config: { lastFusionSelection: 'fusion-dfbyok-selected' } });
   await f.activate(f.context);
   for (const plain of ['native-max', 'dfbyok-plain-model', 'swe-2-max']) {
     f.globals.agentPreferences['devin-cli'].model = plain;
@@ -204,7 +209,7 @@ test('plain native and plain own model selections are never overwritten', async 
   }
 });
 test('a stale or absent remembered combination never replaces an official or missing selection', async t => {
-  for (const config of [{ defaultFusionUid: 'fusion-dfbyok-removed' }, { providers: [], defaultFusionUid: 'fusion-dfbyok-selected' }, {}]) {
+  for (const config of [{ lastFusionSelection: 'fusion-dfbyok-removed' }, { providers: [], lastFusionSelection: 'fusion-dfbyok-selected' }, {}]) {
     const f = fixture(t, { config, globals: { agentPreferences: { 'devin-cli': { model: 'fusion-official' } } } });
     await f.activate(f.context);
     await f.firePreference();
@@ -227,7 +232,7 @@ test('a stale matrix fusion selection rolls back while a live one is kept', asyn
   const stale = 'fusion-native-lead-sidekick-dfbyok-gone';
   f.setMatrixUids([stale]);
   f.globals.agentPreferences['devin-cli'].model = stale;
-  await f.managerOptions().afterChange('saveFusionPreset');
+  await f.managerOptions().afterChange('setRoleModel');
   assert.equal(f.globals.agentPreferences['devin-cli'].model, undefined,
     'a matrix uid that is no longer in the catalog is rolled back');
   const live = 'fusion-native-lead-sidekick-dfbyok-live';
@@ -235,40 +240,51 @@ test('a stale matrix fusion selection rolls back while a live one is kept', asyn
   f.setCatalogModels([{ uid: live }]);
   f.globals.agentPreferences['devin-cli'].model = live;
   const writes = f.updates.length;
-  await f.managerOptions().afterChange('saveFusionPreset');
+  await f.managerOptions().afterChange('setRoleModel');
   assert.equal(f.globals.agentPreferences['devin-cli'].model, live, 'a live matrix selection is preserved');
   assert.equal(f.updates.length, writes);
 });
-test('a saved own Fusion selection survives an official reset across reload', async t => {
+test('a saved own Fusion selection is remembered across reload and restores an emptied preference', async t => {
   const f = fixture(t);
   await f.activate(f.context);
   await f.commands.get('devinFusionByok.selectFusion')();
   assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-selected');
-  assert.equal(JSON.parse(fs.readFileSync(f.configFile)).defaultFusionUid, 'fusion-dfbyok-selected');
+  assert.equal(JSON.parse(fs.readFileSync(f.configFile)).lastFusionSelection, 'fusion-dfbyok-selected');
   await f.deactivate();
+  // An official selection Devin made meanwhile is left alone...
   f.globals.agentPreferences['devin-cli'].model = 'fusion-official-claude';
   await f.activate(f.context);
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-official-claude');
+  // ...but a preference that ends up empty is restored from the memory.
+  delete f.globals.agentPreferences['devin-cli'].model;
+  await f.firePreference();
+  await f.settle();
   assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-selected');
 });
 test('a remembered combination saved by another window applies on the config notification', async t => {
   const f = fixture(t);
   await f.activate(f.context);
   const current = JSON.parse(fs.readFileSync(f.configFile));
-  current.defaultFusionUid = 'fusion-dfbyok-selected';
+  current.lastFusionSelection = 'fusion-dfbyok-selected';
   fs.writeFileSync(f.configFile, JSON.stringify(current));
   f.globals.agentPreferences['devin-cli'].model = 'fusion-official';
   f.watchers[0]();
   await f.settle();
-  assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-selected');
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-official', 'the official selection stands');
+  delete f.globals.agentPreferences['devin-cli'].model;
+  f.watchers[0]();
+  await f.settle();
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-selected',
+    'the other window memory fills an empty preference');
 });
 test('preference reconciliation stays inert while disabled and after unload', async t => {
-  const f = fixture(t, { config: { enabled: false, defaultFusionUid: 'fusion-dfbyok-selected' },
+  const f = fixture(t, { config: { enabled: false, lastFusionSelection: 'fusion-dfbyok-selected' },
     globals: { agentPreferences: { 'devin-cli': { model: 'fusion-official' } } } });
   await f.activate(f.context);
   await f.firePreference();
   await f.settle();
   assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-official');
-  const enabled = fixture(t, { config: { defaultFusionUid: 'fusion-dfbyok-selected' } });
+  const enabled = fixture(t, { config: { lastFusionSelection: 'fusion-dfbyok-selected' } });
   await enabled.activate(enabled.context);
   await enabled.deactivate();
   enabled.globals.agentPreferences['devin-cli'].model = 'fusion-official';
@@ -284,11 +300,11 @@ test('a native preference event with a valid own Fusion records it as the rememb
   const writes = () => f.updates.filter(key => key === 'agentPreferences').length;
   f.globals.agentPreferences['devin-cli'].model = 'fusion-dfbyok-selected';
   await f.firePreference();
-  assert.equal(JSON.parse(fs.readFileSync(f.configFile)).defaultFusionUid, 'fusion-dfbyok-selected');
+  assert.equal(JSON.parse(fs.readFileSync(f.configFile)).lastFusionSelection, 'fusion-dfbyok-selected');
   assert.equal(writes(), 0);
   f.globals.agentPreferences['devin-cli'].model = 'fusion-dfbyok-another';
   await f.firePreference();
-  assert.equal(JSON.parse(fs.readFileSync(f.configFile)).defaultFusionUid, 'fusion-dfbyok-another');
+  assert.equal(JSON.parse(fs.readFileSync(f.configFile)).lastFusionSelection, 'fusion-dfbyok-another');
   delete f.globals.agentPreferences['devin-cli'].model;
   await f.firePreference();
   assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-another');
@@ -297,7 +313,7 @@ test('a native preference event with a valid own Fusion records it as the rememb
   assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-another');
 });
 test('re-enabling from the panel re-arms reconciliation after a disable', async t => {
-  const f = fixture(t, { config: { defaultFusionUid: 'fusion-dfbyok-selected' } });
+  const f = fixture(t, { config: { lastFusionSelection: 'fusion-dfbyok-selected' } });
   await f.activate(f.context);
   const { write, afterChange } = f.managerOptions();
   write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: false });
@@ -307,18 +323,14 @@ test('re-enabling from the panel re-arms reconciliation after a disable', async 
   write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: true });
   await afterChange('setEnabled');
   assert.equal(f.counts().installed, 2);
+  // Reconciliation is armed again: an official selection still stands, while an
+  // emptied preference is filled from the memory it re-read.
   f.globals.agentPreferences['devin-cli'].model = 'fusion-official-claude';
   await f.firePreference();
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-official-claude');
+  delete f.globals.agentPreferences['devin-cli'].model;
+  await f.firePreference();
   assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-selected');
-});
-test('the panel reports the remembered combination while the current selection is a plain model', async t => {
-  const f = fixture(t, { config: { defaultFusionUid: 'fusion-dfbyok-selected' } });
-  await f.activate(f.context);
-  assert.equal(f.managerOptions().selectedFusion(), 'fusion-dfbyok-selected');
-  f.globals.agentPreferences['devin-cli'].model = 'fusion-official';
-  assert.equal(f.managerOptions().selectedFusion(), 'fusion-official');
-  f.globals.agentPreferences['devin-cli'].model = 'dfbyok-plain';
-  assert.equal(f.managerOptions().selectedFusion(), 'fusion-dfbyok-selected');
 });
 
 const oldRuntimeHealth = idle => ({ service: 'devin-fusion-byok', version: '0.1.0', sourceId: 'old', rootId: 'root',

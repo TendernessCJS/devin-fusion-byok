@@ -7,21 +7,28 @@ const os = require('node:os');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { collect } = require('../src/runtime/bridge.cjs');
-const { augmentCatalog, presetUid } = require('../src/catalog.cjs');
+const { augmentCatalog, buildCatalog, migrateFusionConfig } = require('../src/catalog.cjs');
 const { parseFields, s } = require('../src/protocol/wire.cjs');
 
 const TEAM_RPC = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
 const proto = { json: false, type: 'application/proto', framed: false };
+const SEEDED = [{ uid: 'swe-2-medium', label: 'SWE-2 Medium', disabled: false, isModelRouter: false, harnessUids: ['swe-2'] }];
+// The stored shape before presets were retired: the sidekick is selected only
+// because a preset referenced it, which the migration turns into a role
+// inclusion.
+const legacyConfig = () => ({
+  enabled: true,
+  providers: [{ id: 'p', name: 'P', baseUrl: 'https://p.invalid/v1', apiKey: 'fixture-secret', apiFormat: 'openai',
+    models: [{ id: 'lead', label: 'Lead' }] }],
+  fusionPresets: [{ id: 'ds', name: 'DS Pro', lead: { providerId: 'p', model: 'lead', effort: null },
+    sidekick: { nativeUid: 'swe-2-medium' } }],
+});
 
 async function fixture(t, { seedCache = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-cache-sync-'));
-  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({
-    enabled: true,
-    providers: [{ id: 'p', name: 'P', baseUrl: 'https://p.invalid/v1', apiKey: 'fixture-secret', apiFormat: 'openai',
-      models: [{ id: 'lead', label: 'Lead' }] }],
-    fusionPresets: [{ id: 'ds', name: 'DS Pro', lead: { providerId: 'p', model: 'lead', effort: null },
-      sidekick: { nativeUid: 'swe-2-medium' } }],
-  }));
+  const config = legacyConfig();
+  migrateFusionConfig(config, seedCache ? SEEDED : []);
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
   if (seedCache) {
     fs.writeFileSync(path.join(root, 'native-cache.json'), JSON.stringify({
       version: 1, savedAt: new Date().toISOString(),
@@ -60,18 +67,28 @@ const teamChoices = async base => {
   return parseFields(body).filter(field => field.number === 7).map(field => field.value.toString('utf8'));
 };
 
-test('a seeded native cache keeps saved Fusion presets in the first team-settings answer', async t => {
+// A BYOK Lead combined with a native Sidekick is only emittable once the native
+// catalog knows that sidekick, so its matrix uid marks "resolvable now".
+const nativeSidekickCombo = nativeModels => {
+  const config = legacyConfig();
+  assert.equal(migrateFusionConfig(config, nativeModels), true, 'the fixture config must need migrating');
+  const catalog = buildCatalog(config, nativeModels);
+  const leadUid = Object.keys(catalog.routes)[0];
+  return `fusion-${leadUid}-sidekick-swe-2-medium`;
+};
+
+test('a seeded native cache resolves native-Sidekick combinations in the first team-settings answer', async t => {
   const f = await fixture(t, { seedCache: true });
   const values = await teamChoices(f.base);
-  assert.ok(values.includes(presetUid('ds')),
-    'the very first answer must already contain the Fusion preset, not wait for live observations');
+  assert.ok(values.includes(nativeSidekickCombo(SEEDED)),
+    'the very first answer must already contain the combination, not wait for live observations');
   assert.ok(values.some(value => value.startsWith('dfbyok-')), 'plain BYOK models remain listed');
 });
 
-test('without a cache the same preset is invisible in the first answer (the blind window)', async t => {
+test('without a cache the same combination is invisible in the first answer (the blind window)', async t => {
   const f = await fixture(t, { seedCache: false });
   const values = await teamChoices(f.base);
-  assert.ok(!values.includes(presetUid('ds')), 'a cold backend cannot resolve native-referencing presets');
+  assert.ok(!values.includes(nativeSidekickCombo(SEEDED)), 'a cold backend cannot resolve native-Sidekick combinations');
   assert.ok(values.some(value => value.startsWith('dfbyok-') && !value.startsWith('fusion-')),
     'plain BYOK models are unaffected by the blind window');
 });

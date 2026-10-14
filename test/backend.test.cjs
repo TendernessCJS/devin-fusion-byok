@@ -37,8 +37,10 @@ test('same-version Anthropic adapter changes invalidate the runtime source ident
 
 async function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-test-'));
+  // The retired preset list selected these natives; a role inclusion is the
+  // current spelling of the same intent.
   const config = { providers: [{ id: 'test', name: 'Test', models: [{ id: 'model', label: 'Model' }] }], sidekicks: [{ nativeUid: 'swe-2-max', label: 'SWE-2 Max' }],
-    fusionPresets: ['swe-2-max', 'gpt-5-6-luna-high', 'swe-odd'].map(uid => ({ id: uid, name: uid, lead: { providerId: 'test', model: 'model', effort: null }, sidekick: { nativeUid: uid } })) };
+    roleInclusions: { lead: [], sidekick: ['swe-2-max', 'gpt-5-6-luna-high', 'swe-odd'].map(uid => ({ nativeUid: uid })) } };
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
   const forwarded = [], chats = [], logs = [];
   const held = new Map();
@@ -217,11 +219,14 @@ test('an own plain model is listed, allowed and callable standalone against a th
   const uids = wire.parseFields(allowed).filter(field => field.number === 7).map(field => field.value.toString());
   assert.equal(uids[0], 'native-gpt');
   assert.ok(uids.includes(own));
-  assert.equal(Object.keys(catalog.fusions).length, 0);
+  const mirrored = Object.values(catalog.fusions);
+  assert.equal(mirrored.length, 1, 'the BYOK pair is mirrored even without any native observation');
+  assert.equal(mirrored[0].leadUid, own);
   const lockedNative = Buffer.concat([wire.s(1, 'Fusion (Locked)'), wire.s(22, 'fusion-official-locked'), wire.v(4, 1), wire.m(32, wire.v(1, 1))]);
   const listed = augmentCatalog(wire.m(1, lockedNative), { rpc: API + 'GetCliModelConfigs', format: proto, catalog });
   const entries = wire.parseFields(listed).filter(field => field.number === 1 && field.wire === 2).map(field => field.value);
-  assert.equal(wire.str(entries[0], 22), own);
+  assert.equal(wire.str(entries[0], 22), mirrored[0].uid, 'mirrored combinations lead the list');
+  assert.equal(wire.str(entries[1], 22), own);
   assert.equal(wire.str(entries.at(-1), 22), 'fusion-official-locked');
   assert.equal(wire.num(entries.at(-1), 4), 1);
   const response = await fetch('http://127.0.0.1:' + backend.port + API + 'GetChatMessage', {
@@ -281,8 +286,9 @@ test('officially paired and standalone native Sidekicks assign declared harnesse
   const built = buildCatalog(f.config, observed);
   const luna = Object.values(built.fusions).find(fusion => fusion.sidekickUid === 'gpt-5-6-luna-high');
   assert.ok(luna, 'enabled official pairing makes the unfamiliar-harness native eligible');
+  // Both natives are included as Sidekicks, so both are mirrored.
   const odd = Object.values(built.fusions).find(fusion => fusion.sidekickUid === 'swe-odd');
-  assert.ok(odd, 'an unlocked standalone native is eligible for named presets');
+  assert.ok(odd, 'an unlocked standalone native is eligible once included');
   assert.deepEqual(odd.sidekickHarnessUids, ['odd-harness']);
   f.setNatives(observed);
   await fetch(f.base + API + 'GetCliModelConfigs', { method: 'POST', body: 'native' });
@@ -291,10 +297,9 @@ test('officially paired and standalone native Sidekicks assign declared harnesse
   const data = JSON.parse(await resolved.text());
   assert.equal(data.assignment.modelUid, 'gpt-5-6-luna-high');
   assert.deepEqual(data.assignment.harnessUids, ['gpt-5p6'], 'the declared official harness is forwarded exactly');
-  const firstProvider = f.config.providers.find(provider => provider.enabled !== false && provider.models?.some(model => model.enabled !== false));
-  const firstModel = firstProvider.models.find(model => model.enabled !== false);
-  f.config.fusionPresets = [{ id: 'odd', name: 'Odd', lead: { providerId: firstProvider.id, model: firstModel.id }, sidekick: { nativeUid: 'swe-odd' } }];
-  fs.writeFileSync(path.join(f.root, 'config.json'), JSON.stringify(f.config));
+  // `odd` is only emittable against a selected Lead, so the observation is
+  // dropped first to prove the harness travels on the mirrored entry itself.
+  assert.ok(Object.values(built.fusions).some(fusion => fusion.sidekickUid === 'swe-odd'));
   const oddPreset = Object.values(buildCatalog(f.config, observed).fusions).find(fusion => fusion.sidekickUid === 'swe-odd');
   assert.ok(oddPreset);
   const oddResolved = await fetch(f.base + API + 'AssignModel', { method: 'POST', headers: { 'content-type': 'application/json' },

@@ -4,8 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { buildCatalog: buildSavedCatalog, buildRoleLists, refKey, augmentCatalog, resolveAssignment } = require('../src/catalog.cjs');
-const { withPresets } = require('./fixtures/presets.cjs');
-const buildCatalog = (config, natives = []) => buildSavedCatalog(withPresets(config, natives), natives);
+const buildCatalog = buildSavedCatalog;
 const { createManager } = require('../src/panel/model.cjs');
 
 const fixture = JSON.parse(fs.readFileSync('test/fixtures/real-picker-0.3.11.json', 'utf8'));
@@ -220,7 +219,9 @@ test('manager setRoleModel validates role, rejects malformed/mixed refs, and upd
   await assert.rejects(() => manager.dispatch('setRoleModel', { role: 'lead', model: { nativeUid: 'unobserved-native' }, enabled: true }), /无法添加/);
 
   await manager.dispatch('setRoleModel', { role: 'lead', model: { nativeUid: 'claude-fable-5-1-medium' }, enabled: true });
-  assert.ok(!savedConfig.roleExclusions.lead.some(r => r.nativeUid === 'claude-fable-5-1-medium'));
+  // Re-enabling clears the exclusion record; an emptied list is pruned entirely
+  // rather than persisted as an empty array.
+  assert.deepEqual(savedConfig.roleExclusions?.lead || [], []);
 });
 
 test('nativeLead + BYOK sidekick assignment executes exact UID and declared lead harness', () => {

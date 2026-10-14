@@ -21,6 +21,13 @@ class Element {
   reportValidity() { return true; }
 }
 
+// The panel writes most copy through createTextNode, so reading an aggregated
+// element means walking its children (textContent itself stays empty in the stub).
+function textOf(node) {
+  if (!node) return '';
+  return String(node.textContent || '') + (node.children || []).map(textOf).join('');
+}
+
 function collect(node, tag, predicate = () => true) {
   const found = [];
   if (node.tag === tag && predicate(node)) found.push(node);
@@ -47,7 +54,7 @@ function panel() {
 const state = () => ({ enabled: true, providers: [{ id: 'cpa', name: 'CPA', baseUrl: 'https://cpa.invalid/v1', apiFormat: 'openai',
   enabled: true, keyConfigured: true, models: [{ id: 'saved', label: 'Saved', enabled: true, efforts: [],
     contextWindow: 200000, maxOutputTokens: 32768 }] }], nativeModels: [], roleLists: { lead: [], sidekick: [] },
-  fusionPresets: [], autoContinueStatus: 'unavailable' });
+  autoContinueStatus: 'unavailable' });
 
 test('all controls share the --control-h height token so rows align', () => {
   const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
@@ -146,4 +153,25 @@ test('deleting a model lives in its edit dialog', () => {
   assert.equal(collect(byId('models'), 'button', node => node.textContent === '删除').length, 0, 'rows carry no delete button');
   collect(byId('models'), 'button', node => String(node.attributes['aria-label'] || '').startsWith('编辑模型'))[0].listeners.click();
   assert.equal(collect(byId('editor-dialog'), 'button', node => node.textContent === '删除').length, 1);
+});
+
+test('the settings tab exposes the CLI cache refresh and reports the last run', () => {
+  const { byId, posts, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 2,
+    refreshed: ['model_configs_v5.abcd1234.bin'], skipped: [{ name: 'team_settings.abcd1234.bin', reason: 'no-improvement' }], errors: [] } } } });
+  assert.match(textOf(byId('cache-report')), /已重写 model_configs_v5/);
+  assert.match(textOf(byId('cache-report')), /team_settings 无需重写/);
+  assert.match(textOf(byId('cache-hint')), /\d{2}:\d{2}/);
+  byId('refresh-cache').listeners.click();
+  assert.ok(posts.some(message => message.type === 'refreshCliCaches'), 'the button asks the host to refresh');
+});
+
+test('a cache report without rewrites says so instead of staying blank', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: state() } });
+  assert.match(textOf(byId('cache-report')), /还没有记录/);
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 3, refreshed: [], skipped: [], errors: [] } } } });
+  assert.match(textOf(byId('cache-report')), /已是最新/);
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 0, refreshed: [], skipped: [], errors: [] } } } });
+  assert.match(textOf(byId('cache-report')), /没有找到本插件写入的缓存文件/);
 });

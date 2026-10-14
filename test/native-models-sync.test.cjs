@@ -155,19 +155,24 @@ test('createManager.ready hydrates panel state from a synced backend with zero L
   assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-2-max')?.eligible, true);
   assert.equal(state.nativeModels.find(entry => entry.uid === 'gpt-5-6-luna-high-priority')?.eligible, true);
   const built = buildCatalog(saved, backendModels);
-  const nativeCombos = Object.values(built.fusions).filter(fusion => fusion.sidekickNative);
-  assert.equal(nativeCombos.length, 0, 'hydration offers candidates without generating unsaved combinations');
-  assert.equal(state.fusionCount, 0);
-  const lead = state.presetCandidates.lead.find(item => item.ref.providerId);
-  const created = await manager.dispatch('saveFusionPreset', { name: 'Synced Luna', lead: lead.ref, sidekick: { nativeUid: 'gpt-5-6-luna-high' } });
-  assert.equal(created.fusionCount, 1);
+  const luna = Object.values(built.fusions).find(fusion => fusion.sidekickUid === 'gpt-5-6-luna-high');
+  assert.ok(luna, 'the synced native Sidekick is mirrored once its harness is known');
+  assert.deepEqual(luna.sidekickHarnessUids, ['gpt-5p6'], 'the mirrored combination uses the synced native harness');
+  assert.ok(state.fusionCount > 0, 'the mirrored combinations are reported to the panel');
+  const lead = built.rolePool.lead.find(item => item.ref.providerId);
+  const created = await manager.dispatch('setRoleModel', { role: 'lead', enabled: true, model: lead.ref });
+  assert.ok(created.roleLists.lead.some(item => item.ref.providerId === lead.ref.providerId && item.selected));
   const fresh = buildCatalog(JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8')), backendModels);
-  assert.deepEqual(Object.values(fresh.fusions)[0].sidekickHarnessUids, ['gpt-5p6'], 'saved preset uses the synced native harness');
+  assert.deepEqual(Object.values(fresh.fusions).find(fusion => fusion.sidekickUid === 'gpt-5-6-luna-high').sidekickHarnessUids, ['gpt-5p6']);
   assert.ok(!JSON.stringify(state).includes('fixture-secret'), 'no credentials leak into public state');
   const roleLists = buildRoleLists(saved, backendModels);
   assert.ok(roleLists.lead.some(r => (r.memberUids || [r.ref.nativeUid]).includes('claude-fable-5-1-medium')), 'Claude Lead is present from backend observations');
-  const nativeCreated = await manager.dispatch('saveFusionPreset', { name: 'Native Lead', lead: { nativeUid: 'claude-fable-5-1-medium' }, sidekick: lead.ref });
-  assert.equal(nativeCreated.fusionCount, 2);
+  const nativeCreated = await manager.dispatch('setRoleModel', { role: 'lead', enabled: true, model: { nativeUid: 'claude-fable-5-1-medium' } });
+  assert.ok(Object.values(buildCatalog(JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8')), backendModels).fusions)
+    .some(fusion => fusion.leadUid === 'claude-fable-5-1-medium'), 'the native Lead is mirrored too');
+  // Native Leads are grouped into effort families, so the uid shows up as a member.
+  assert.ok(nativeCreated.roleLists.lead.some(item =>
+    (item.memberUids || [item.ref.nativeUid]).includes('claude-fable-5-1-medium') && item.selected));
 });
 
 test('backend observations remain scoped to the live instance', async t => {

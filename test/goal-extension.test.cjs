@@ -93,7 +93,7 @@ function fixture(t) {
       writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)), importLegacy: () => ({}),
       discover: async () => 0 },
     './catalog.cjs': { normalizeFusionConfig: config => config,
-      buildCatalog: config => ({ models: [], fusions: {}, presetStates: [], presetCandidates: { lead: [], sidekick: [] } }) },
+      buildCatalog: config => ({ models: [], fusions: {}, matrixUids: new Set(), rolePool: { lead: [], sidekick: [] } }) },
     './runtime/native-models.cjs': { readNativeModels: async () => ({ status: 'empty', models: [] }) },
     './runtime/backend.cjs': { runtimeIdentity: () => identity, controlFile: actualBackend.controlFile, PORT: 39842, MANAGEMENT_PROTOCOL: 1 },
     './runtime/bridge.cjs': { createLsBridge: async () => ({ port: 4567, close() {} }) },

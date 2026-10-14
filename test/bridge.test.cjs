@@ -171,8 +171,7 @@ test('the first catalog response already combines a newly observed eligible nati
     res.end(JSON.stringify(original));
   });
   t.after(() => native.close());
-  const config = { providers: [{ id: 'test', name: 'Test', models: [{ id: 'lead', label: 'Lead' }] }],
-    fusionPresets: ['swe-2-medium', 'gpt-5-6-luna-high'].map(uid => ({ id: uid, name: uid, lead: { providerId: 'test', model: 'lead' }, sidekick: { nativeUid: uid } })) };
+  const config = { providers: [{ id: 'test', name: 'Test', models: [{ id: 'lead', label: 'Lead' }] }] };
   let observations = 0;
   const bridge = await createLsBridge(native.port, {
     getCatalog: () => buildCatalog(config, observed),
@@ -182,13 +181,14 @@ test('the first catalog response already combines a newly observed eligible nati
   const response = await request(bridge.port, LS + 'GetCliModelConfigs');
   assert.equal(response.status, 200);
   assert.equal(observations, 1, 'one observation callback per catalog response');
-  const expected = buildCatalog(config, observed).fusions;
-  const combo = Object.values(expected).find(fusion => fusion.sidekickUid === 'swe-2-medium');
-  assert.ok(combo);
+  const built = buildCatalog(config, observed);
+  const combo = Object.values(built.fusions).find(fusion => fusion.sidekickUid === 'swe-2-medium');
+  assert.ok(combo, 'the newly observed native Sidekick is combined');
   assert.deepEqual(combo.sidekickHarnessUids, ['swe-1p5']);
   const uids = JSON.parse(response.body).clientModelConfigs.map(model => model.modelUid);
   assert.ok(uids.includes(combo.uid), 'the same response already carries the new combination');
-  assert.equal(uids.filter(uid => uid.startsWith('fusion-dfbyok-')).length, 1, 'only the saved preset with observed native capability is emitted');
+  assert.equal(uids.filter(uid => uid.startsWith('fusion-dfbyok-')).length, built.matrixUids.size,
+    'every mirrored combination is emitted, and the locked native is not');
 });
 
 test('the first catalog response binds official Sidekick dimensions and unlocks paired harnesses', async t => {
@@ -205,8 +205,7 @@ test('the first catalog response binds official Sidekick dimensions and unlocks 
     res.end(JSON.stringify(original));
   });
   t.after(() => native.close());
-  const config = { providers: [{ id: 'test', name: 'Test', models: [{ id: 'lead', label: 'Lead' }] }],
-    fusionPresets: ['swe-2-medium', 'gpt-5-6-luna-high'].map(uid => ({ id: uid, name: uid, lead: { providerId: 'test', model: 'lead' }, sidekick: { nativeUid: uid } })) };
+  const config = { providers: [{ id: 'test', name: 'Test', models: [{ id: 'lead', label: 'Lead' }] }] };
   const reports = [];
   const bridge = await createLsBridge(native.port, {
     getCatalog: () => buildCatalog(config, observed),
@@ -223,9 +222,11 @@ test('the first catalog response binds official Sidekick dimensions and unlocks 
   assert.deepEqual(combo.sidekickHarnessUids, ['gpt-5p6']);
   const emitted = JSON.parse(response.body).clientModelConfigs.find(model => model.modelUid === combo.uid);
   assert.ok(emitted, 'the same response already carries the bound combination');
-  assert.deepEqual(emitted.modelFamilyMetadata.entries, []);
-  assert.equal(emitted.label, 'gpt-5-6-luna-high');
-  assert.match(emitted.modelInfo.modelFamilyUid, /^dfbyok-preset-family-/);
+  const dims = Object.fromEntries(emitted.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+  assert.deepEqual(dims.Sidekick, { order: 4, name: 'GPT-5.6 Luna High', controlType: 3 },
+    'the emitted entry reuses the official Sidekick dimension');
+  assert.match(emitted.label, /^Fusion \(/);
+  assert.equal(emitted.modelInfo.modelFamilyUid, 'fusion');
 });
 
 const settleWithin = (promise, ms = 2000) => {
@@ -254,11 +255,9 @@ test('forward abandons a connection that never completes the handshake', async t
   } finally { http.request = original; }
 });
 
-test('the catalog log reports named presets separately from matrix mirrors', async t => {
+test('the catalog log reports the mirrored combination count', async t => {
   const events = [];
-  const matrixCatalog = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [{ id: 'a' }] }],
-    fusionPresets: [{ id: 'x', name: 'X', lead: { providerId: 'p', model: 'a' }, sidekick: { providerId: 'p', model: 'a' } }],
-    fusionMatrix: true });
+  const matrixCatalog = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [{ id: 'a' }] }] });
   assert.equal(matrixCatalog.matrixUids.size, 1);
   const native = await listen((req, res) => { res.writeHead(200, { 'content-type': 'application/proto' }); res.end(wire.s(7, 'swe-2-medium')); });
   t.after(() => native.close());
@@ -268,9 +267,8 @@ test('the catalog log reports named presets separately from matrix mirrors', asy
   assert.equal(response.status, 200);
   const entry = events.find(([event]) => event === 'catalog');
   assert.ok(entry, 'a catalog RPC emits the catalog log event');
-  assert.equal(entry[1].presets, 0, 'matrix mode emits no named-preset cards');
-  assert.equal(entry[1].matrix, 1, 'matrix mirrors are counted separately');
-  assert.ok(Object.keys(matrixCatalog.fusions).some(uid => uid.startsWith('fusion-dfbyok-preset-')), 'named preset stays resolvable');
+  assert.equal(entry[1].matrix, 1, 'mirrored combinations are counted');
+  assert.equal(Object.hasOwn(entry[1], 'presets'), false, 'the retired preset counter is gone from the log');
 });
 
 test('forward returns 502 when the upstream accepts but never sends headers', async t => {

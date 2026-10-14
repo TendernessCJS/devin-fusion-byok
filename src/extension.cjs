@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { importLegacy, readConfig, writeConfig } = require('./config.cjs');
-const { buildCatalog, normalizeFusionConfig, augmentCatalog, staleFusionUids } = require('./catalog.cjs');
+const { buildCatalog, migrateFusionConfig, augmentCatalog, staleFusionUids } = require('./catalog.cjs');
 const { createManager } = require('./panel/model.cjs');
 const { installLsInjection } = require('./runtime/ls-injection.cjs');
 const { createLsBridge } = require('./runtime/bridge.cjs');
@@ -211,6 +211,22 @@ async function activate(context) {
   const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...nativeModels.values()]); };
   let management, manager;
   const nativeModels = new Map(), localNativeModels = new Map();
+  // Named presets are retired; run the one-shot config migration before
+  // anything reads the config. The pre-migration bytes are kept beside it so a
+  // preset list the user authored is never lost without a copy.
+  const migrateConfig = () => {
+    const backup = configFile + '.pre-preset-retirement.bak';
+    try {
+      if (fs.existsSync(backup)) return false;
+      const current = config();
+      if (!migrateFusionConfig(current, [...nativeModels.values()])) return false;
+      fs.copyFileSync(configFile, backup);
+      writeConfig(configFile, current);
+      log('config-migrated', { backup: path.basename(backup) });
+      return true;
+    } catch { log('config-migration-failed'); return false; }
+  };
+  migrateConfig();
   let nativeCatalogStatus = 'loading', syncPending, syncAbort, syncTimer;
   let acpObservationSeq = 0, acpOwnModels = 0;
   const refreshNativeModels = () => {
@@ -355,12 +371,25 @@ async function activate(context) {
     remember(receipt, keys, valueAt({ 'devin.acp.agentPreferences': preferences }, keys), uid);
     saveReceipt(receipt);
     await settings.update('agentPreferences', { ...preferences, 'devin-cli': { ...(preferences['devin-cli'] || {}), model: uid } }, vscode.ConfigurationTarget.Global);
-    const current = normalizeFusionConfig(config(), [...nativeModels.values()]);
-    if (/^fusion-dfbyok-/.test(uid)) { current.defaultFusionUid = uid; writeConfig(configFile, current); }
+    rememberFusion(uid);
     await management?.publish();
   };
+  // Memory of the combination this extension serves (matrix entries included).
+  // It is what a locked official selection falls back to, and what an emptied
+  // preference is restored from — so it is recorded whenever one is chosen, but
+  // recording it never re-writes the preference itself.
+  const rememberFusion = uid => {
+    if (!Object.hasOwn(catalog().fusions, uid)) return false;
+    const current = config();
+    if (current.lastFusionSelection === uid) return false;
+    current.lastFusionSelection = uid;
+    writeConfig(configFile, current);
+    return true;
+  };
+  // The remembered combination is also the fallback served when a locked
+  // official Fusion entry is selected, so it is kept only while it resolves.
   const rememberedFusion = () => {
-    const currentCatalog = catalog(), uid = currentCatalog.defaultFusionUid || config().defaultFusionUid;
+    const currentCatalog = catalog(), uid = currentCatalog.lastFusionSelection;
     return typeof uid === 'string' && Object.hasOwn(currentCatalog.fusions, uid) ? uid : '';
   };
   let reconcileQueue = Promise.resolve();
@@ -368,25 +397,15 @@ async function activate(context) {
     const operation = reconcileQueue.then(async () => {
       if (reconcileHalted || config().enabled === false) return;
       const current = globalSetting(vscode.workspace.getConfiguration('devin.acp'), 'agentPreferences')['devin-cli']?.model;
-      const migration = catalog();
-      if (migration.migratedFrom === current && migration.defaultFusionUid) {
-        await saveFusionChoice(migration.defaultFusionUid);
+      // Any fusion-shaped selection is legitimate — the official card's own
+      // combinations and our mirrored ones alike — so it is only remembered,
+      // never rewritten: the picker value the user sees must stay what they
+      // (or Devin) chose.
+      if (typeof current === 'string' && current.startsWith('fusion-')) {
+        rememberFusion(current);
         return;
       }
-      if (typeof current === 'string' && /^fusion-dfbyok-/.test(current)) {
-        if (!Object.hasOwn(catalog().fusions, current)) return;
-        if (rememberedFusion() !== current) {
-          const next = config();
-          next.defaultFusionUid = current;
-          writeConfig(configFile, next);
-        }
-        return;
-      }
-      // Official card combos and native-lead matrix mirrors are legitimate
-      // selections once the matrix is on — never rewrite them to the
-      // remembered preset.
-      if (typeof current === 'string' && current.startsWith('fusion-') && config().fusionMatrix === true) return;
-      if (typeof current === 'string' && current && !current.startsWith('fusion-')) return;
+      if (typeof current === 'string' && current) return;
       const remembered = rememberedFusion();
       if (remembered) await saveFusionChoice(remembered);
     }).catch(() => log('preference-reconcile-error'));
@@ -394,7 +413,7 @@ async function activate(context) {
     return operation;
   };
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.selectFusion', run(async () => {
-    const choices = catalog().models.filter(model => model.kind === 'fusion').map(model => ({ label: model.label || model.uid, uid: model.uid }));
+    const choices = catalog().models.filter(model => model.kind === 'matrix').map(model => ({ label: model.label || model.uid, uid: model.uid }));
     if (!choices.length) { management?.open(); vscode.window.showInformationMessage('Fusion 组合在 Devin 的模型选择器里选（打开 Fusion 卡片）；控制面板的「Fusion」页用来决定哪些模型能出现在那张卡片的下拉里。'); return; }
     const choice = await vscode.window.showQuickPick(choices, { title: '选择 Fusion 组合', matchOnDescription: true }); if (!choice) return;
     await saveFusionChoice(choice.uid);
@@ -467,37 +486,38 @@ async function activate(context) {
   // uid digests and drops the affected entries. This CLI never re-fetches a
   // missing file, so stale caches are refreshed in place by rewriting the
   // payload through the same augmentation the backend applies.
+  let cliCacheReport = null;
   const checkCliCaches = () => {
     try {
-      if (config().enabled === false) return;
+      if (config().enabled === false) return cliCacheReport;
       const current = catalog();
       const expectedUids = current.models.map(model => model.uid);
-      if (!expectedUids.length) return;
+      if (!expectedUids.length) return cliCacheReport;
       const emittedFusionUids = new Set(Object.keys(current.fusions || {}));
       const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids,
         staleProbe: payload => staleFusionUids(payload, emittedFusionUids),
         augment: (payload, rpc) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current }) });
-      if (result.refreshed.length) {
-        log('cli-cache-refreshed', { files: result.refreshed });
-        // Only the model_configs rewrite warrants an ACP reload: the CLI never
-        // re-fetches it on its own, while team_settings/user_status are
-        // re-issued by the CLI's own cadence and reach the picker without a
-        // disconnect.
-        if (result.refreshed.some(name => name.startsWith('model_configs'))) pickerRefresh.force();
-      }
+      cliCacheReport = { at: new Date().toISOString(), checked: result.checked,
+        refreshed: result.refreshed, skipped: result.skipped || [], errors: result.errors || [] };
+      if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed });
       for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });
       for (const error of result.errors || []) log('cli-cache-write-error', { name: error.name, code: error.code });
-    } catch { /* cache refresh is best-effort */ }
+    } catch (error) { log('cli-cache-check-failed', { code: error?.code || 'unknown' }); }
+    return cliCacheReport;
+  };
+  // Manual counterpart of the automatic check: the panel button exists so a
+  // user whose picker looks stale can force the rewrite now instead of waiting
+  // for the next config change or native sync.
+  const refreshCliCaches = async () => {
+    const report = checkCliCaches();
+    await management?.publish();
+    return report;
   };
   checkCliCaches();
   manager = createManager({ read: config, write: current => writeConfig(configFile, current),
     nativeModels: () => [...nativeModels.values()], refreshNativeModels, nativeCatalogStatus: () => nativeCatalogStatus,
     autoContinueStatus: () => autoContinue ? (autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
-    selectedFusion: () => {
-      const current = globalSetting(vscode.workspace.getConfiguration('devin.acp'), 'agentPreferences')['devin-cli']?.model;
-      if (typeof current === 'string' && current.startsWith('fusion-')) return current;
-      return rememberedFusion() || current || '';
-    },
+    refreshCliCaches, cliCacheStatus: () => cliCacheReport,
     selectFusion: saveFusionChoice,
     afterChange: async type => {
       if (type === 'setEnabled' && config().enabled === false) await disable();

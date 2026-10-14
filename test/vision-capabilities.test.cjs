@@ -3,8 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { modelSupportsImages } = require('../src/model-capabilities.cjs');
 const { buildCatalog: buildSavedCatalog, resolveAssignment } = require('../src/catalog.cjs');
-const { withPresets } = require('./fixtures/presets.cjs');
-const buildCatalog = (config, natives = []) => buildSavedCatalog(withPresets(config, natives), natives);
+const buildCatalog = buildSavedCatalog;
 const { publicState } = require('../src/panel/model.cjs');
 const { parseChat } = require('../src/protocol/chat.cjs');
 const { buildRequestBody } = require('../src/protocol/responses.cjs');
@@ -33,7 +32,7 @@ test('plain models and every Fusion variant advertise images in both native prot
   assert.ok(publicState(config).providers[0].models.every(m => m.supportsImages));
   config.providers[0].models[0].supportsImages = false;
   const disabled = buildCatalog(config);
-  for (const model of disabled.models.filter(m => m.kind === 'fusion' && disabled.routes[disabled.fusions[m.uid].leadUid].model === 'gpt-6-astra')) {
+  for (const model of disabled.models.filter(m => m.kind === 'matrix' && disabled.routes[disabled.fusions[m.uid].leadUid].model === 'gpt-6-astra')) {
     assert.equal(model.json.supportsImages, true);
   }
   for (const model of disabled.models.filter(m => m.kind === 'model' && disabled.routes[m.uid].model === 'gpt-6-astra')) {

@@ -1,14 +1,11 @@
 'use strict';
 const { randomUUID } = require('node:crypto');
-const { buildCatalog, buildRoleLists, refKey, presetUid, normalizeFusionConfig } = require('../catalog.cjs');
+const { buildCatalog, buildRoleLists, refKey } = require('../catalog.cjs');
 const { discover: discoverModels } = require('../config.cjs');
 const { modelSupportsImages } = require('../model-capabilities.cjs');
 const { normalizeBaseUrlPath } = require('./base-url.cjs');
 const { parseProxy, maskProxy } = require('../proxy.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
-// The native catalog is observed, never persisted: 'loading', 'empty' and
-// 'unavailable' all mean a nativeUid preset reference may yet resolve.
-const NATIVE_PENDING_STATUSES = new Set(['loading', 'empty', 'unavailable']);
 class PanelInputError extends Error {}
 const fail = message => { throw new PanelInputError(message); };
 function text(value, label, maximum = 256) {
@@ -24,6 +21,26 @@ function baseUrl(value) {
 function boolean(value, label) { if (typeof value !== 'boolean') fail(label + '无效。'); return value; }
 function number(value, label) { if (!Number.isSafeInteger(value) || value < 1 || value > 2147483647) fail(label + '必须是正整数。'); return value; }
 function providerAt(config, id) { return config.providers.find(provider => provider.id === id) || fail('该供应商已不存在，请刷新面板。'); }
+// A role reference to a BYOK model is authoritative in config, so a ref whose
+// provider or model is gone can never resolve again — and an unresolvable ref
+// renders as a switchless "not in the available list" row, so it would stick
+// around with no way to clear it. Native refs are deliberately left alone: the
+// native catalog is observed, so an absent uid usually just means "not synced
+// yet" and pruning would silently discard a real selection.
+function pruneDanglingRoleRefs(config) {
+  const models = new Map(config.providers.map(provider => [provider.id, new Set(provider.models.map(model => model.id))]));
+  for (const key of ['roleInclusions', 'roleExclusions']) {
+    const lists = config[key];
+    if (!lists || typeof lists !== 'object') continue;
+    for (const role of ['lead', 'sidekick']) {
+      if (!Array.isArray(lists[role])) continue;
+      const kept = lists[role].filter(ref => typeof ref?.nativeUid === 'string' ||
+        (typeof ref?.providerId === 'string' && models.get(ref.providerId)?.has(ref.model)));
+      if (!kept.length) delete lists[role]; else lists[role] = kept;
+    }
+    if (!Object.keys(lists).length) delete config[key];
+  }
+}
 function modelPatch(input, previous) {
   const model = { ...previous };
   if (own(input, 'label')) model.label = text(input.label, '模型名称');
@@ -42,9 +59,8 @@ function modelPatch(input, previous) {
   if (model.maxOutputTokens > model.contextWindow) fail('最大输出长度不能超过上下文长度。');
   return model;
 }
-function publicState(config, selectedFusionUid, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready') {
-  const catalog = buildCatalog({ ...config, enabled: true }, nativeModels,
-    { nativeCatalogPending: NATIVE_PENDING_STATUSES.has(nativeCatalogStatus) });
+function publicState(config, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready', cliCache) {
+  const catalog = buildCatalog({ ...config, enabled: true }, nativeModels);
   const hidden = new Set(catalog.hiddenNativeModelUids || []);
   const roleLists = buildRoleLists(config, nativeModels);
   const eligibleLeads = new Set(roleLists.lead.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
@@ -71,27 +87,23 @@ function publicState(config, selectedFusionUid, nativeModels = [], autoContinueS
     sidekicks: catalog.sidekicks.map(sidekick => sidekick.native
       ? { nativeUid: sidekick.uid, label: sidekick.label } : { providerId: sidekick.providerId, model: sidekick.model }),
     roleLists,
-    fusionPresets: catalog.presetStates || [],
-    presetCandidates: catalog.presetCandidates || { lead: [], sidekick: [] },
-    migrationPending: !!catalog.migrationPending,
-    selectedFusionUid: catalog.migratedFrom === selectedFusionUid ? catalog.defaultFusionUid : selectedFusionUid,
     nativeModels: natives,
     modelCount: Object.keys(catalog.routes).length,
-    fusionCount: catalog.models.filter(model => model.kind === 'fusion').length,
-    fusionChoices: catalog.models.filter(model => model.kind === 'fusion').map(model => ({ uid: model.uid, label: model.label })),
+    fusionCount: catalog.matrixUids.size,
+    cliCache: cliCache && typeof cliCache === 'object' ? cliCache : null,
     autoContinueOnProviderError: config.autoContinueOnProviderError === true,
     autoContinueUntilPlanComplete: config.autoContinueUntilPlanComplete === true,
     autoContinueStatus: typeof autoContinueStatus === 'string' ? autoContinueStatus : 'unavailable',
     updateProxy: maskProxy(config.updateProxy),
   };
 }
-function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, selectedFusion = () => '', nativeModels = () => [], refreshNativeModels = async () => {}, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable' }) {
+function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable' }) {
   let queue = Promise.resolve();
   let pendingImport;
   const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey]);
   const state = () => {
     const config = read(), status = nativeCatalogStatus();
-    const result = publicState(config, selectedFusion(), nativeModels(), autoContinueStatus(), status);
+    const result = publicState(config, nativeModels(), autoContinueStatus(), status, cliCacheStatus());
     result.nativeCatalogStatus = status;
     const provider = config.providers.find(p => p.id === pendingImport?.providerId);
     result.importCandidates = provider && signature(provider) === pendingImport.signature ? {
@@ -104,42 +116,19 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
   async function apply(type, payload = {}) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) fail('操作参数无效。');
     if (type === 'ready' || type === 'refreshNativeModels') { await refreshNativeModels(); return state(); }
-    let config = normalizeFusionConfig(read(), nativeModels());
+    if (type === 'refreshCliCaches') {
+      if (read().enabled === false) fail('请先启用 Fusion BYOK 再刷新缓存。');
+      if (typeof refreshCliCaches !== 'function') fail('当前环境不支持手动刷新缓存。');
+      await refreshCliCaches();
+      return state();
+    }
+    let config = read();
     if (type === 'selectFusion') {
       if (config.enabled === false) fail('请先启用 Fusion BYOK。');
       if (!own(buildCatalog(config, nativeModels()).fusions, payload.uid)) fail('该 Fusion 组合已不可用，请重新选择。');
       await selectFusion(payload.uid); return state();
     }
     switch (type) {
-      case 'saveFusionPreset': {
-        if (config.enabled === false) fail('请先启用插件再编辑预设。');
-        const presets = Array.isArray(config.fusionPresets) ? config.fusionPresets : [];
-        const existing = payload.id ? presets.find(item => item.id === payload.id) : null;
-        if (payload.id && !existing) fail('该预设已不存在，请刷新面板。');
-        const name = text(payload.name, '预设名称', 80);
-        if (presets.some(item => item !== existing && item.name?.trim().toLowerCase() === name.toLowerCase())) fail('预设名称不能重复。');
-        const candidates = buildCatalog(config, nativeModels()).presetCandidates;
-        const references = {};
-        for (const role of ['lead', 'sidekick']) {
-          const ref = payload[role];
-          if (!refKey(ref) || ref.nativeUid && own(ref, 'effort')) fail(role + ' 模型参数无效。');
-          const clean = ref.nativeUid ? { nativeUid: ref.nativeUid } : { providerId: ref.providerId, model: ref.model, effort: ref.effort ?? null };
-          const match = candidates[role].find(item => refKey(item.ref) === refKey(clean) && (item.ref.effort ?? null) === (clean.effort ?? null));
-          const unchanged = existing && refKey(existing[role]) === refKey(clean) && (existing[role].effort ?? null) === (clean.effort ?? null);
-          if (!match && !unchanged) fail(role + ' 当前不可用，请重新选择。');
-          references[role] = clean;
-        }
-        const preset = { id: existing?.id || randomUUID(), name, ...references };
-        config.fusionPresets = existing ? presets.map(item => item === existing ? preset : item) : [...presets, preset];
-        break;
-      }
-      case 'deleteFusionPreset': {
-        const presets = Array.isArray(config.fusionPresets) ? config.fusionPresets : [];
-        if (!presets.some(item => item.id === payload.id)) fail('该预设已不存在。');
-        config.fusionPresets = presets.filter(item => item.id !== payload.id);
-        if (config.defaultFusionUid === presetUid(payload.id)) delete config.defaultFusionUid;
-        break;
-      }
       case 'saveProvider': {
         const existing = payload.id ? providerAt(config, payload.id) : null;
         const name = text(payload.name, '供应商名称', 80), url = baseUrl(payload.baseUrl);
@@ -274,6 +263,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       }
       default: fail('不支持的操作。');
     }
+    pruneDanglingRoleRefs(config);
     buildCatalog(config, nativeModels()); // Validate the complete model graph before committing.
     write(config);
     if (type === 'importModels') pendingImport = undefined;

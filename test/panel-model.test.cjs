@@ -34,6 +34,8 @@ function memory(options = {}) {
     selectedFusion: () => selected,
     nativeModels: options.nativeModels || (() => []),
     ...(options.nativeCatalogStatus ? { nativeCatalogStatus: options.nativeCatalogStatus } : {}),
+    ...(options.refreshCliCaches ? { refreshCliCaches: options.refreshCliCaches } : {}),
+    ...(options.cliCacheStatus ? { cliCacheStatus: options.cliCacheStatus } : {}),
   });
   return { manager, writes, changes, selections,
     read: () => structuredClone(config),
@@ -51,22 +53,23 @@ function assertValidGraph(config, natives = []) {
   return catalog;
 }
 
-test('public state emits no preset cards while the matrix mirrors them', async () => {
+test('public state reports the mirrored combination count and carries no preset surface', () => {
   const input = fixture();
-  input.fusionMatrix = true;
-  input.fusionPresets = [{ id: 'p1', name: 'P1', lead: { providerId: 'cpa', model: 'lead' }, sidekick: { providerId: 'cpa', model: 'executor' } }];
   const catalog = buildCatalog(input, OBSERVED_SWE);
-  assert.ok(catalog.matrixUids.size > 0 && Object.keys(catalog.fusions).length > 1, 'matrix mirrors inflate the fusions table');
-  // The named preset stays resolvable for stored selections but emits no picker entry.
-  const presetUid = Object.keys(catalog.fusions).find(uid => uid.startsWith('fusion-dfbyok-preset-'));
-  assert.ok(presetUid, 'preset uid stays in the fusions table');
-  assert.equal(catalog.models.filter(model => model.uid === presetUid).length, 0, 'preset emits no model entry');
-  const state = publicState(input, '', OBSERVED_SWE, 'unavailable', 'ready');
-  assert.equal(state.fusionCount, 0);
-  assert.equal(state.fusionChoices.length, 0);
-  const off = publicState({ ...input, fusionMatrix: false }, '', OBSERVED_SWE, 'unavailable', 'ready');
-  assert.equal(off.fusionCount, 1);
-  assert.equal(off.fusionChoices[0].label, 'P1');
+  assert.ok(catalog.matrixUids.size > 0 && Object.keys(catalog.fusions).length > 1, 'the matrix mirrors every pairing');
+  const state = publicState(input, OBSERVED_SWE, 'unavailable', 'ready');
+  assert.equal(state.fusionCount, catalog.matrixUids.size);
+  for (const retired of ['fusionPresets', 'presetCandidates', 'migrationPending', 'selectedFusionUid', 'fusionChoices']) {
+    assert.equal(Object.hasOwn(state, retired), false, retired + ' is no longer part of the panel state');
+  }
+  assert.ok(state.roleLists.lead.length > 0, 'the Fusion tab is driven by the role lists');
+});
+
+test('public state carries the last CLI cache report for the settings tab', () => {
+  const report = { at: '2026-10-14T00:00:00.000Z', checked: 2, refreshed: ['model_configs_v5.abcd.bin'], skipped: [], errors: [] };
+  assert.deepEqual(publicState(fixture(), [], 'unavailable', 'ready', report).cliCache, report);
+  assert.equal(publicState(fixture(), [], 'unavailable', 'ready').cliCache, null);
+  assert.equal(publicState(fixture(), [], 'unavailable', 'ready', 'nonsense').cliCache, null);
 });
 
 test('public panel state exposes multiple providers and combinations without API credentials', async () => {
@@ -74,9 +77,8 @@ test('public panel state exposes multiple providers and combinations without API
   const state = await f.manager.dispatch('ready');
   assert.equal(state.providers.length, 2);
   assert.equal(state.modelCount, 3);
-  assert.equal(state.fusionCount, 0);
-  assert.equal(state.fusionChoices.length, 0);
-  assert.equal(state.presetCandidates.sidekick.length, 4);
+  assert.ok(state.fusionCount > 0, 'the mirrored combinations are counted');
+  assert.equal(state.roleLists.sidekick.filter(item => !item.native).length, 3);
   assert.equal(state.providers[0].keyConfigured, true);
   assert.equal(state.providers[0].baseUrl, 'https://cpa.invalid/v1');
   for (const secret of ['fixture-secret-cpa', 'fixture-secret-other', 'apiKey', 'Authorization']) assert.ok(!JSON.stringify(state).includes(secret));
@@ -86,18 +88,14 @@ test('public panel state exposes multiple providers and combinations without API
   assert.equal(publicState(input).providers[1].keyConfigured, false);
 });
 
-test('preset warnings distinguish a still-syncing native catalog from real removal', () => {
+test('an unselected native model never enters the combination pool', () => {
   const input = fixture();
-  input.fusionPresets = [{ id: 'ds-pro', name: 'Fusion · DS Pro',
-    lead: { providerId: 'cpa', model: 'lead' }, sidekick: { nativeUid: 'swe-2-max' } }];
-  let state = memory({ config: input, nativeCatalogStatus: () => 'loading' }).manager.state();
-  assert.equal(state.fusionPresets[0].pending, true);
-  assert.match(state.fusionPresets[0].reason, /尚未同步/);
-  state = memory({ config: input, nativeCatalogStatus: () => 'ready' }).manager.state();
-  assert.equal(state.fusionPresets[0].pending, false);
-  assert.match(state.fusionPresets[0].reason, /已从角色列表移除/);
-  state = memory({ config: input, nativeCatalogStatus: () => 'unsupported' }).manager.state();
-  assert.equal(state.fusionPresets[0].pending, false);
+  const catalog = buildCatalog(input, OBSERVED_SWE);
+  assert.equal(catalog.rolePool.sidekick.some(item => item.ref.nativeUid === 'swe-unselected'), false);
+  const selected = { ...input, roleInclusions: { lead: [], sidekick: [{ nativeUid: 'swe-unselected' }] } };
+  const withNative = buildCatalog(selected, [...OBSERVED_SWE, { uid: 'swe-unselected', label: 'Unselected', disabled: false, isModelRouter: false, harnessUids: ['h'] }]);
+  assert.equal(withNative.rolePool.sidekick.some(item => item.ref.nativeUid === 'swe-unselected'), true);
+  assert.ok(Object.values(withNative.fusions).some(fusion => fusion.sidekickUid === 'swe-unselected'));
 });
 
 test('editing a provider preserves its models, blank existing key, and every other provider', async () => {
@@ -217,8 +215,8 @@ test('disabling then re-enabling a provider preserves its keys and configured mo
 test('any enabled third-party model may be a Sidekick together with an eligible observed native', async () => {
   const f = memory({ nativeModels: () => OBSERVED_SWE });
   const catalog = assertValidGraph(f.read(), OBSERVED_SWE);
-  assert.equal(Object.keys(catalog.fusions).length, 0);
-  assert.deepEqual(new Set(catalog.presetCandidates.sidekick.filter(item => !item.ref.nativeUid).map(item => item.ref.model)),
+  assert.ok(Object.keys(catalog.fusions).length > 0, 'selected BYOK and native roles are mirrored');
+  assert.deepEqual(new Set(catalog.rolePool.sidekick.filter(item => !item.ref.nativeUid).map(item => item.ref.model)),
     new Set(['lead', 'executor', 'other-lead']));
 });
 
@@ -333,11 +331,10 @@ test('a model batch is validated as a whole before any persistent write', async 
 
 test('Fusion selection validates a currently available combination without writing provider configuration', async () => {
   const input = fixture();
-  input.fusionPresets = [{ id: 'selected', name: 'Selected', lead: { providerId: 'cpa', model: 'lead' }, sidekick: { providerId: 'cpa', model: 'executor' } }];
   const f = memory({ config: input }), uid = Object.keys(buildCatalog(f.read()).fusions)[0];
   const state = await f.manager.dispatch('selectFusion', { uid });
   assert.deepEqual(f.selections, [uid]);
-  assert.equal(state.selectedFusionUid, uid);
+  assert.equal(state.enabled, true);
   assert.equal(f.writes.length, 0);
   for (const invalid of ['', 'swe-2-max', '__proto__', 'constructor', 'fusion-dfbyok-missing']) {
     await assert.rejects(f.manager.dispatch('selectFusion', { uid: invalid }), PanelInputError);
@@ -348,9 +345,7 @@ test('Fusion selection validates a currently available combination without writi
 });
 
 test('a disabled or removed Lead cannot remain selectable through a stale Fusion UID', async () => {
-  const input = fixture();
-  input.fusionPresets = [{ id: 'selected', name: 'Selected', lead: { providerId: 'cpa', model: 'lead' }, sidekick: { providerId: 'cpa', model: 'executor' } }];
-  const f = memory({ config: input }), catalog = buildCatalog(f.read());
+  const f = memory({ config: fixture() }), catalog = buildCatalog(f.read());
   const uid = Object.values(catalog.fusions).find(fusion => catalog.routes[fusion.leadUid].model === 'lead').uid;
   await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'lead', enabled: false }] });
   await assert.rejects(f.manager.dispatch('selectFusion', { uid }), PanelInputError);
@@ -514,9 +509,10 @@ test('observed native Sidekick eligibility drives state flags, combinations and 
   assert.deepEqual(state.nativeModels.filter(entry => entry.eligible).map(entry => entry.uid).sort(), ['swe-2-max', 'swe-2-medium', 'swe-other-harness']);
   assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-naked').eligible, false);
   const catalog = assertValidGraph(f.read(), observed);
-  assert.equal(Object.keys(catalog.fusions).length, 0);
-  const created = await f.manager.dispatch('saveFusionPreset', { name: 'Medium', lead: { providerId: 'cpa', model: 'lead' }, sidekick: { nativeUid: 'swe-2-medium' } });
-  assert.equal(created.fusionCount, 1);
+  assert.ok(Object.keys(catalog.fusions).length > 0, 'selected roles are mirrored');
+  const excluded = await f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: false, model: { nativeUid: 'swe-2-medium' } });
+  assert.ok(excluded.fusionCount < state.fusionCount, 'excluding a Sidekick removes its combinations');
+  assert.ok(!Object.values(buildCatalog(f.read(), observed).fusions).some(fusion => fusion.sidekickUid === 'swe-2-medium'));
   for (const uid of ['swe-disabled', 'swe-router', 'swe-naked', 'swe-never-seen']) {
     await assert.rejects(f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: true, model: { nativeUid: uid } }), PanelInputError, uid);
   }
@@ -545,15 +541,16 @@ test('officially paired and standalone unlocked natives are offered as Sidekick 
       sidekickDimension: { order: 4, name: 'GPT-5.6 Luna High' } },
   ];
   const f = memory({ nativeModels: () => observed });
-  const state = publicState(fixture(), '', observed);
+  const state = publicState(fixture(), observed);
   assert.equal(state.nativeModels.find(entry => entry.uid === 'gpt-5-6-luna-high').eligible, true);
   assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-odd').eligible, true,
     'an unlocked standalone native is eligible for named presets');
   assert.ok(state.sidekicks.some(item => item.nativeUid === 'gpt-5-6-luna-high'));
   const disabled = observed.map(item => item.uid === 'swe-odd' ? { ...item, disabled: true } : item);
-  assert.equal(publicState(fixture(), '', disabled).nativeModels.find(entry => entry.uid === 'swe-odd').eligible, false);
-  const saved = await f.manager.dispatch('saveFusionPreset', { name: 'Luna', lead: { providerId: 'cpa', model: 'lead' }, sidekick: { nativeUid: 'gpt-5-6-luna-high' } });
-  assert.equal(saved.fusionCount, 1);
+  assert.equal(publicState(fixture(), disabled).nativeModels.find(entry => entry.uid === 'swe-odd').eligible, false);
+  const saved = await f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: true, model: { nativeUid: 'gpt-5-6-luna-high' } });
+  assert.ok(saved.roleLists.sidekick.some(item => item.ref.nativeUid === 'gpt-5-6-luna-high' && item.selected));
+  assert.ok(Object.values(buildCatalog(f.read(), observed).fusions).some(fusion => fusion.sidekickUid === 'gpt-5-6-luna-high'));
 });
 
 test('setUpdateProxy writes, echoes, clears and rejects bad input', async () => {
@@ -587,4 +584,19 @@ test('setUpdateProxy masks credentials and keeps them when the mask is saved bac
   assert.equal(state.updateProxy, 'http://***@10.0.0.1:3128');
   await f.manager.dispatch('setUpdateProxy', { value: '' });
   assert.equal('updateProxy' in f.read(), false);
+});
+
+test('the panel can ask for a CLI cache refresh and reports the result it got', async () => {
+  const calls = [];
+  const report = { at: '2026-10-14T12:00:00.000Z', checked: 1, refreshed: ['model_configs_v5.abcd.bin'], skipped: [], errors: [] };
+  const f = memory({ refreshCliCaches: async () => { calls.push('refresh'); return report; }, cliCacheStatus: () => report });
+  const state = await f.manager.dispatch('refreshCliCaches');
+  assert.deepEqual(calls, ['refresh']);
+  assert.deepEqual(state.cliCache, report);
+});
+
+test('a CLI cache refresh is refused while disabled or unsupported', async () => {
+  await assert.rejects(memory().manager.dispatch('refreshCliCaches'), PanelInputError, 'no refresher is wired in');
+  const disabled = memory({ config: { ...fixture(), enabled: false }, refreshCliCaches: async () => ({ checked: 1, refreshed: [], skipped: [], errors: [] }) });
+  await assert.rejects(disabled.manager.dispatch('refreshCliCaches'), PanelInputError);
 });
