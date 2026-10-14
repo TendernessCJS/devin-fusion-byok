@@ -247,7 +247,10 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
             config.roleInclusions[role].push(refToStore);
           }
         } else {
-          config.roleInclusions[role] = config.roleInclusions[role].filter(r => refKey(r) !== key);
+          // Clearing a role item must drop inclusions on every family member,
+          // or a stale member ref keeps explicitIncluded set and pins the row.
+          const memberKeys = new Set((candidate?.memberUids || [model.nativeUid]).map(uid => refKey({ nativeUid: uid })));
+          config.roleInclusions[role] = config.roleInclusions[role].filter(r => !memberKeys.has(refKey(r)) && refKey(r) !== key);
           if (!config.roleExclusions[role].some(r => refKey(r) === key)) {
             config.roleExclusions[role].push(refToStore);
           }

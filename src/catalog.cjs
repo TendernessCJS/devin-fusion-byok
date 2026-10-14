@@ -452,12 +452,17 @@ function buildRoleLists(config = {}, nativeModels = []) {
     const key = refKey(ref);
     const memberKeys = family.uids.map(uid => refKey({ nativeUid: uid }));
     for (const member of memberKeys) seenLeadKeys.add(member);
+    // An exclusion on any member turns the family off entirely; an exclusion
+    // also lifts the explicit-include pin, or a stale member inclusion would
+    // keep a deselected family floating in the expanded list.
+    const memberExcluded = memberKeys.some(member => leadRefs.exclusions.has(member));
     leadList.push({
       ref, label: family.label, native: true, ...(family.official ? { official: true } : {}),
       available: true, defaultSelected: family.official, memberUids: family.uids,
-      selected: !memberKeys.some(member => leadRefs.exclusions.has(member)) &&
+      selected: !memberExcluded &&
         (family.official || memberKeys.some(member => leadRefs.inclusions.has(member) || leadRefs.saved.has(member))),
-      explicitIncluded: memberKeys.some(member => leadRefs.inclusions.has(member) || leadRefs.saved.has(member)),
+      explicitIncluded: !memberExcluded &&
+        memberKeys.some(member => leadRefs.inclusions.has(member) || leadRefs.saved.has(member)),
     });
   }
 
@@ -471,7 +476,8 @@ function buildRoleLists(config = {}, nativeModels = []) {
       ...(official ? { official: true } : {}),
       available: true, selected: roleSelected(ref, sidekickRefs, official),
       defaultSelected: official, memberUids: [nativeSidekick.uid],
-      explicitIncluded: sidekickRefs.inclusions.has(key) || sidekickRefs.saved.has(key),
+      explicitIncluded: !sidekickRefs.exclusions.has(key) &&
+        (sidekickRefs.inclusions.has(key) || sidekickRefs.saved.has(key)),
     });
   }
 
