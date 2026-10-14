@@ -155,7 +155,7 @@ function renderPanel({ nonce, cspSource }) {
 <body>
   <main id="main" aria-busy="true">
     <header class="topbar">
-      <div class="topbar-row"><h1>Fusion BYOK</h1><div class="actions"><button id="reload-window" class="secondary" type="button" title="应用插件改动或刷新模型选择器时使用。会中断当前窗口正在进行的对话，但不关闭应用、不影响其他窗口，比重启 Devin 快。">重载窗口</button><button id="restart-devin" class="secondary" type="button" title="插件改动或模型列表没有自动更新时使用。会关闭所有窗口并中断正在进行的对话，之后自动重新打开（通常几秒，失败会自动重试）。">重启 Devin</button><label class="toggle"><span class="muted">启用</span><input id="plugin-enabled" class="switch" type="checkbox" role="switch" aria-label="启用插件" disabled></label></div></div>
+      <div class="topbar-row"><h1>Fusion BYOK</h1><div class="actions"><button id="reload-window" class="secondary" type="button" title="应用插件改动或刷新模型选择器时使用。会中断当前窗口正在进行的对话，但不关闭应用、不影响其他窗口，比重启 Devin 快。">重载窗口</button><button id="restart-devin" class="secondary" type="button" title="重载窗口仍无效时使用。会关闭所有窗口并中断正在进行的对话，之后自动重新打开（通常几秒，失败会自动重试）。">重启 Devin</button><label class="toggle"><span class="muted">启用</span><input id="plugin-enabled" class="switch" type="checkbox" role="switch" aria-label="启用插件" disabled></label></div></div>
       <nav class="tabs" role="tablist" aria-label="面板分区">${tabs}</nav>
     </header>
     <div id="disabled-banner" class="banner" hidden><span>插件已停用，导入的模型和预设不会出现在新对话里。</span><button id="enable-now" type="button">启用</button></div>

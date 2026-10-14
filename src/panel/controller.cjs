@@ -2,7 +2,7 @@
 const crypto = require('node:crypto');
 const { renderPanel } = require('./view.cjs');
 const { PanelInputError } = require('./model.cjs');
-function createPanelController({ vscode, context, manager, safeError, updater, restartApp, fastContext, readMonitor = async () => ({ status: 'unsupported', snapshot: null }) }) {
+function createPanelController({ vscode, context, manager, safeError, updater, restartApp, reloadWindow, fastContext, readMonitor = async () => ({ status: 'unsupported', snapshot: null }) }) {
   let panel;
   let monitorPending = false;
   const refreshMonitor = async () => {
@@ -64,9 +64,10 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
       if (message.type.startsWith('fastContext.')) { await handleFastContext(current, message); return; }
       try {
         if (message.type === 'window.reload') {
+          if (typeof reloadWindow !== 'function') throw new PanelInputError('当前环境不支持重载窗口。');
           const choice = await vscode.window.showWarningMessage('重载窗口会中断当前窗口正在进行的对话，但不会关闭应用、也不影响其他窗口。确定现在重载吗？', { modal: true }, '重载');
           if (choice === '重载') {
-            try { await vscode.commands.executeCommand('workbench.action.reloadWindow'); }
+            try { await reloadWindow(); }
             catch { throw new PanelInputError('无法重载窗口，请从命令面板执行 Developer: Reload Window。'); }
           }
           await current.webview.postMessage({ type: 'result', id: message.id, ok: true, cancelled: choice !== '重载' });
@@ -77,7 +78,10 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
           const choice = await vscode.window.showWarningMessage('重启 Devin 会关闭所有窗口并中断正在进行的对话，之后会自动重新打开（通常几秒，失败会自动重试）。确定现在重启吗？', { modal: true }, '重启');
           if (choice === '重启') {
             try { await restartApp(); }
-            catch { throw new PanelInputError('无法自动重启 Devin，请手动退出后重新打开。'); }
+            catch (error) {
+              if (error?.message === 'restart_unsupported') throw new PanelInputError('当前环境不支持重启 Devin。');
+              throw new PanelInputError('无法自动重启 Devin，请手动退出后重新打开。');
+            }
           }
           await current.webview.postMessage({ type: 'result', id: message.id, ok: true, cancelled: choice !== '重启' });
           return;

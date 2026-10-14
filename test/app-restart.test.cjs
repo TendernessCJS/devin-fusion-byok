@@ -182,8 +182,8 @@ test('restart failures are reported without leaking details', async () => {
   assert.equal(result.error, '无法自动重启 Devin，请手动退出后重新打开。');
 });
 
-test('window reload runs workbench.action.reloadWindow only after the modal is confirmed', async () => {
-  let reloads = 0; const commands = [];
+test('window reload invokes the injected command only after the modal is confirmed', async () => {
+  let reloads = 0;
   const make = choice => {
     let handler; const posted = [];
     const panel = { visible: true, reveal() {}, dispose() {}, onDidDispose: () => ({ dispose() {} }),
@@ -191,22 +191,30 @@ test('window reload runs workbench.action.reloadWindow only after the modal is c
         onDidReceiveMessage: fn => { handler = fn; return { dispose() {} }; } } };
     const warnings = [];
     const vscode = { ViewColumn: { Active: 1 },
-      window: { createWebviewPanel: () => panel, showWarningMessage: async (...args) => { warnings.push(args); return choice; } },
-      commands: { executeCommand: async command => { commands.push(command); reloads++; } } };
+      window: { createWebviewPanel: () => panel, showWarningMessage: async (...args) => { warnings.push(args); return choice; } } };
     createPanelController({ vscode, context: { subscriptions: [] },
+      reloadWindow: async () => { reloads++; },
       manager: { state: () => ({}), dispatch: async () => { throw new Error('reload must not reach the manager'); } },
       safeError: () => ({ message: 'x' }) }).open();
     return { send: message => handler(message), posted, warnings };
   };
   const confirmed = make('重载');
   await confirmed.send({ id: 'r1', type: 'window.reload' });
-  assert.deepEqual(commands, ['workbench.action.reloadWindow']);
+  assert.equal(reloads, 1);
   assert.equal(confirmed.warnings[0][1].modal, true);
   assert.deepEqual(confirmed.posted.find(m => m.type === 'result'), { type: 'result', id: 'r1', ok: true, cancelled: false });
   const cancelled = make(undefined);
   await cancelled.send({ id: 'r2', type: 'window.reload' });
   assert.equal(reloads, 1, 'a dismissed modal never reloads the window');
   assert.equal(cancelled.posted.find(m => m.type === 'result').cancelled, true);
+});
+
+test('unsupported restarts surface the platform limitation rather than a transient failure', async () => {
+  const unsupported = panelHarness('重启', async () => { throw new Error('restart_unsupported'); });
+  await unsupported.send({ id: 'u', type: 'app.restart' });
+  const result = unsupported.posted.find(m => m.type === 'result');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, '当前环境不支持重启 Devin。');
 });
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));

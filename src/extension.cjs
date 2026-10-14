@@ -488,6 +488,7 @@ async function activate(context) {
   management = require('./panel/controller.cjs').createPanelController({ vscode, context, manager, safeError, updater,
     fastContext: require('./fast-context/config-ui.cjs').createFastContextHost({ vscode, context }),
     restartApp: () => { log('app-restart-requested'); return require('./runtime/app-restart.cjs').restartApp({ vscode, spawn, logFile: path.join(root, 'restart.log'), userData: path.resolve(root, '..', '..', '..') }); },
+    reloadWindow: () => { log('window-reload-requested'); return vscode.commands.executeCommand('workbench.action.reloadWindow'); },
     readMonitor: () => require('./runtime/monitor-client.cjs').readMonitor({ root }) });
   let contextObserver;
   try {
