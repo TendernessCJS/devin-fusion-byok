@@ -5,14 +5,14 @@ const COLUMNS = [['开始时间（本机）'], ['模型／档位'], ['状态'], 
   ['首输出 s', true], ['正文首字 s', true], ['正文 TPS', true], ['请求吞吐 TPS', true], ['总耗时 s'], ['会话关联', true]];
 function monitorMarkup() {
   const head = COLUMNS.map(([label, extra]) => `<th${extra ? ' class="extra"' : ''}>${label}</th>`).join('');
-  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><select id="monitor-time-range" aria-label="时间区间"><option value="this-month">当月</option><option value="last-month">上月</option><option value="last-7-days">最近 7 天</option><option value="all">全部保留记录</option><option value="custom">自定义</option></select><span id="monitor-date-controls" hidden><label for="monitor-date-start">开始日期 <input id="monitor-date-start" type="date" min="0001-01-01" max="9999-12-31"></label><label for="monitor-date-end">结束日期 <input id="monitor-date-end" type="date" min="0001-01-01" max="9999-12-31"></label></span><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><p id="monitor-diagnostics" class="hint mb" role="status" aria-live="polite" hidden></p><p id="monitor-range-error" class="warn mb" role="alert" hidden></p><p id="monitor-range-info" class="hint mb" role="status" hidden></p><div id="monitor-summary" class="tiles"></div><div class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
+  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><select id="monitor-time-range" aria-label="时间区间"><option value="this-month">当月</option><option value="last-month">上月</option><option value="last-7-days">最近 7 天</option><option value="all">全部保留记录</option><option value="custom">自定义</option></select><span id="monitor-date-controls" hidden><label for="monitor-date-start">开始日期 <input id="monitor-date-start" type="date" min="0001-01-01" max="9999-12-31"></label><label for="monitor-date-end">结束日期 <input id="monitor-date-end" type="date" min="0001-01-01" max="9999-12-31"></label></span><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><p id="monitor-diagnostics" class="hint mb" role="status" aria-live="polite" hidden></p><p id="monitor-range-error" class="warn mb" role="alert" hidden></p><p id="monitor-range-info" class="hint mb" role="status" hidden></p><div id="monitor-summary" class="tiles"></div><div id="monitor-table-wrap" class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
 }
 function monitorScript() {
   return `
   (() => {
     const { monitorDateRange, filteredMonitorView } = (${createMonitorStats.toString()})();
     const PAGE_SIZE = 100;
-    let snapshot = null, page = 0, rowsSignature = '', summarySignature = '', rangeKey = '';
+    let snapshot = null, page = 0, rowsSignature = '', summarySignature = '', rangeKey = '', selectorSignature;
     const root = document.getElementById('usage-monitor');
     const selector = document.getElementById('monitor-session');
     const status = document.getElementById('monitor-status');
@@ -41,6 +41,7 @@ function monitorScript() {
     };
     const summary = document.getElementById('monitor-summary');
     const rows = document.getElementById('monitor-requests');
+    const tableWrap = document.getElementById('monitor-table-wrap');
     const detail = document.getElementById('monitor-detail');
     const prev = document.getElementById('monitor-prev');
     const next = document.getElementById('monitor-next');
@@ -110,6 +111,11 @@ function monitorScript() {
       if (!pageRecords.length) rowsKey += '|' + (range.error ? 'invalid' : range.from === null ? 'all' : 'range');
       if (rowsKey !== rowsSignature) {
         rowsSignature = rowsKey;
+        // Replacing the tbody's children transiently collapses the table, and the
+        // scroll container is the static wrapper: its scrollTop gets clamped to 0
+        // and never comes back, so the user's scroll position dies on every
+        // refresh that brings new records.
+        const tableScroll = tableWrap ? tableWrap.scrollTop : 0;
         rows.replaceChildren();
         for (const r of pageRecords) {
           const row = document.createElement('tr');
@@ -120,6 +126,7 @@ function monitorScript() {
           row.title = '请求 ID：' + r.id + (r.code ? ' · ' + r.code : ''); rows.append(row);
         }
         if (!pageRecords.length) { const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = EXTRA.length; cell.className = 'hint'; cell.textContent = range.error ? '请修正时间区间后查看用量。' : range.from === null ? '还没有请求记录。' : '所选时间区间内暂无保留记录。'; row.append(cell); rows.append(row); }
+        if (tableWrap) tableWrap.scrollTop = tableScroll;
       }
       pageLabel.textContent = selected ? '第 ' + (page + 1) + ' / ' + totalPages + ' 页 · 共 ' + selected.records.length + ' 条' : '';
       prev.disabled = !selected || page === 0;
@@ -181,20 +188,25 @@ function monitorScript() {
       }
       status.textContent = warnings.join(' ');
       status.hidden = !status.textContent;
-      const previous = selector.value; selector.replaceChildren();
-      const all = document.createElement('option'); all.value = 'all'; all.textContent = '全部会话'; all.title = all.textContent; selector.append(all);
-      for (const session of snapshot?.sessions || []) {
-        const option = document.createElement('option');
-        option.value = session.sessionId || '__unassigned__';
-        if (!session.sessionId) { option.textContent = '未归属／有歧义'; option.title = option.textContent; selector.append(option); continue; }
-        const parts = [session.title || session.sessionId];
-        const time = ago(session.lastActivityAt);
-        if (time) parts.push(time);
-        option.textContent = parts.join(' · ');
-        option.title = option.textContent;
-        selector.append(option);
+      const selectorKey = (snapshot?.sessions || []).map(session =>
+        (session.sessionId || '__unassigned__') + '|' + (session.title || '') + '|' + ago(session.lastActivityAt)).join('~');
+      if (selectorKey !== selectorSignature) {
+        selectorSignature = selectorKey;
+        const previous = selector.value; selector.replaceChildren();
+        const all = document.createElement('option'); all.value = 'all'; all.textContent = '全部会话'; all.title = all.textContent; selector.append(all);
+        for (const session of snapshot?.sessions || []) {
+          const option = document.createElement('option');
+          option.value = session.sessionId || '__unassigned__';
+          if (!session.sessionId) { option.textContent = '未归属／有歧义'; option.title = option.textContent; selector.append(option); continue; }
+          const parts = [session.title || session.sessionId];
+          const time = ago(session.lastActivityAt);
+          if (time) parts.push(time);
+          option.textContent = parts.join(' · ');
+          option.title = option.textContent;
+          selector.append(option);
+        }
+        if ([...selector.options].some(o => o.value === previous)) selector.value = previous;
       }
-      if ([...selector.options].some(o => o.value === previous)) selector.value = previous;
       syncSelectorTitle();
       render();
     });

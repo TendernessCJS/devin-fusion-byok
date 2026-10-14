@@ -7,7 +7,7 @@ const { monitorScript } = require('../src/panel/monitor-view.cjs');
 const { createPanelController } = require('../src/panel/controller.cjs');
 test('monitor browser script compiles, uses text nodes, and preserves zero versus missing', () => {
   class Element {
-    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; }
+    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; this.scrollTop = 0; }
     append(child) { this.children.push(child); }
     replaceChildren() { this.children = []; }
     addEventListener(name, listener) { this.listeners[name] = listener; }
@@ -45,7 +45,7 @@ test('monitor browser script compiles, uses text nodes, and preserves zero versu
 });
 test('session options show titles and relative times instead of internal slugs', () => {
   class Element {
-    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; }
+    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; this.scrollTop = 0; }
     append(child) { this.children.push(child); }
     replaceChildren() { this.children = []; }
     addEventListener(name, listener) { this.listeners[name] = listener; }
@@ -84,7 +84,7 @@ test('session options show titles and relative times instead of internal slugs',
 });
 test('long titles reach the option and select tooltips intact, empty titles still fall back', () => {
   class Element {
-    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; }
+    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; this.scrollTop = 0; }
     append(child) { this.children.push(child); }
     replaceChildren() { this.children = []; }
     addEventListener(name, listener) { this.listeners[name] = listener; }
@@ -109,6 +109,56 @@ test('long titles reach the option and select tooltips intact, empty titles stil
   byId('monitor-session').value = 's-long';
   byId('monitor-session').listeners.change();
   assert.equal(byId('monitor-session').title, longTitle, 'select tooltip keeps the full tail');
+});
+
+test('a usage refresh keeps the table scroll offset instead of clamping it to zero', () => {
+  // The stub has no layout engine, so it models the real clamp explicitly: when
+  // a node's children are replaced its parent scroller's scrollTop collapses to
+  // 0 — exactly what a tbody rebuild does to the static .monitor-table-wrap.
+  class Element {
+    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; this.scrollTop = 0; this.parentNode = null; }
+    append(child) { child.parentNode = this; this.children.push(child); }
+    replaceChildren() { if (this.parentNode) this.parentNode.scrollTop = 0; this.children = []; }
+    addEventListener(name, listener) { this.listeners[name] = listener; }
+    get options() { return this.children; }
+  }
+  const elements = new Map();
+  const byId = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
+  byId('monitor-session').value = 'all';
+  let receive;
+  vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} } });
+  byId('monitor-time-range').value = 'all';
+  const wrap = byId('monitor-table-wrap');
+  byId('monitor-requests').parentNode = wrap;
+  const record = n => ({ id: 'r' + n, startedAt: 't', model: 'm', status: 'success', usageState: 'missing', attribution: 'tool-id' });
+  const summary = { requests: 1, success: 1, error: 0, cancelled: 0 };
+  receive({ data: { type: 'monitor-state', result: { snapshot: { summary, sessionStatus: 'ready', sessions: [], records: [record(1)] } } } });
+  wrap.scrollTop = 200;
+  receive({ data: { type: 'monitor-state', result: { snapshot: { summary, sessionStatus: 'ready', sessions: [], records: [record(2)] } } } });
+  assert.equal(wrap.scrollTop, 200, 'replacing the tbody must not reset the wrapper scroll position');
+});
+
+test('an unchanged session list does not rebuild the selector', () => {
+  class Element {
+    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; this.scrollTop = 0; }
+    append(child) { this.children.push(child); }
+    replaceChildren() { this.children = []; }
+    addEventListener(name, listener) { this.listeners[name] = listener; }
+    get options() { return this.children; }
+  }
+  const elements = new Map();
+  const byId = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
+  byId('monitor-session').value = 'all';
+  let receive;
+  vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} } });
+  byId('monitor-time-range').value = 'all';
+  const session = { sessionId: 'sprout-skull', title: '标题', lastActivityAt: 1700000000, attribution: 'tool-id', summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, records: [] };
+  const payload = () => ({ type: 'monitor-state', result: { snapshot: { summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, sessionStatus: 'ready', sessions: [session], records: [] } } });
+  receive({ data: payload() });
+  const first = byId('monitor-session').children.at(-1);
+  receive({ data: payload() });
+  assert.strictEqual(byId('monitor-session').children.at(-1), first,
+    'identical sessions must keep the same option nodes, or an open dropdown collapses and the select loses focus every 5s');
 });
 
 test('usage monitor renders once inside the usage tab', () => {
@@ -249,7 +299,7 @@ test('a stale send cannot pollute the state cache after the panel is replaced', 
 
 function panelDom() {
   class Element {
-    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; }
+    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; this.scrollTop = 0; }
     append(child) { this.children.push(child); }
     replaceChildren() { this.children = []; }
     addEventListener(name, listener) { this.listeners[name] = listener; }
@@ -359,7 +409,7 @@ function monitorFixture({ now } = {}) {
   let fakeNow = now ?? Date.now();
   class FakeDate extends Date { static now() { return fakeNow; } }
   class Element {
-    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; this.disabled = false; this.hidden = false; }
+    constructor() { this.children = []; this.value = ''; this.textContent = ''; this.listeners = {}; this.style = {}; this.disabled = false; this.hidden = false; this.scrollTop = 0; }
     append(...children) { this.children.push(...children); }
     replaceChildren() { this.children = []; }
     addEventListener(name, listener) { this.listeners[name] = listener; }
