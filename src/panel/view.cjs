@@ -249,19 +249,30 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
   }
 
   const controls = () => document.querySelectorAll('main button:not(.tab), main input, main select');
+  // The original disabled state of every locked control lives here, not on the
+  // node: a state update that arrives while a request is in flight (the host
+  // posts state before the result) re-applies the lock from render(), and a
+  // node-born copy of the original would be overwritten with `true` at that
+  // moment — the control would then be restored to `true` and stay dead for the
+  // rest of the panel's life. Recorded once per node, on first lock.
+  const lockedControls = new Map();
+
+  function lockControls() {
+    for (const node of controls()) {
+      if (!lockedControls.has(node)) lockedControls.set(node, node.disabled);
+      node.disabled = true;
+    }
+  }
+
+  function unlockControls() {
+    for (const [node, disabled] of lockedControls) node.disabled = disabled;
+    lockedControls.clear();
+  }
 
   function setBusy(value) {
     busy = value;
     byId('main').setAttribute('aria-busy', String(value));
-    for (const node of controls()) {
-      if (value) {
-        node.dataset.wasDisabled = String(node.disabled);
-        node.disabled = true;
-      } else if (node.dataset.wasDisabled != null) {
-        node.disabled = node.dataset.wasDisabled === 'true';
-        delete node.dataset.wasDisabled;
-      }
-    }
+    if (value) lockControls(); else unlockControls();
   }
 
   function request(type, payload = {}) {
@@ -319,12 +330,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     renderRoles();
     renderNative();
     renderCache();
-    if (busy) {
-      for (const node of controls()) {
-        node.dataset.wasDisabled = String(node.disabled);
-        node.disabled = true;
-      }
-    }
+    if (busy) lockControls();
   }
 
   function renderProviders() {

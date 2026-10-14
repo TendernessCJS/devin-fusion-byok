@@ -35,16 +35,18 @@ function collect(node, tag, predicate = () => true) {
   return found;
 }
 
-function panel() {
+function panel(controlTags = {}) {
   const elements = new Map(), posts = [], listeners = [];
-  const byId = id => { if (!elements.has(id)) elements.set(id, new Element('div')); return elements.get(id); };
+  const byId = id => { if (!elements.has(id)) elements.set(id, new Element(controlTags[id] || 'div')); return elements.get(id); };
   const createElement = tag => {
     const node = new Element(tag);
     node.setAttribute = (key, value) => { node.attributes[key] = value; if (key === 'id' && !elements.has(value)) elements.set(value, node); };
     return node;
   };
   const document = { getElementById: byId, createElement, createTextNode: text => ({ textContent: text }),
-    querySelectorAll: () => [] };
+    querySelectorAll: selector => selector.includes('main')
+      ? [...elements.values()].filter(node => ['button', 'input', 'select'].includes(node.tag) && node.attributes.class !== 'tab')
+      : [] };
   vm.runInNewContext(renderPanel({ nonce: 'safe', cspSource: 'test:' }).match(/<script[^>]*>([\s\S]*?)<\/script>/)[1],
     { acquireVsCodeApi: () => ({ getState: () => ({}), setState() {}, postMessage: message => posts.push(message) }), document,
       window: { addEventListener: (name, listener) => { if (name === 'message') listeners.push(listener); } }, setTimeout: () => 0, clearTimeout() {} });
@@ -164,6 +166,23 @@ test('the settings tab exposes the CLI cache refresh and reports the last run', 
   assert.match(textOf(byId('cache-hint')), /\d{2}:\d{2}/);
   byId('refresh-cache').listeners.click();
   assert.ok(posts.some(message => message.type === 'refreshCliCaches'), 'the button asks the host to refresh');
+});
+
+test('a state render mid-request keeps the busy lock but must not stick it', async () => {
+  const { byId, posts, receive } = panel({ 'refresh-cache': 'button', 'reload-window': 'button', 'restart-devin': 'button',
+    'plugin-enabled': 'input', 'add-provider': 'button' });
+  receive({ data: { type: 'state', state: state() } });
+  byId('refresh-cache').listeners.click();
+  const request = posts.at(-1);
+  assert.equal(request.type, 'refreshCliCaches');
+  assert.equal(byId('refresh-cache').disabled, true, 'busy locks the clicked control');
+  assert.equal(byId('reload-window').disabled, true, 'busy locks static controls');
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: 'x', checked: 1, refreshed: [], skipped: [], errors: [] } } } },
+    'the host posts state before the result, so render lands while busy');
+  receive({ data: { type: 'result', id: request.id, ok: true } });
+  await Promise.resolve();
+  assert.equal(byId('refresh-cache').disabled, false, 'unlock restores the original false, not a recorded true');
+  assert.equal(byId('reload-window').disabled, false);
 });
 
 test('a cache report without rewrites says so instead of staying blank', () => {
