@@ -61,22 +61,38 @@ test('all controls share the --control-h height token so rows align', () => {
   assert.doesNotMatch(html, /h1, h2, h3, p \{ margin: 0 \}/, 'the heading reset must include lists too');
 });
 
-test('a preset pending native catalog sync renders muted instead of a hard warning', () => {
+test('the tab strip puts models first and Fusion second', () => {
+  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  assert.deepEqual([...html.matchAll(/data-tab="([a-z]+)"/g)].map(match => match[1]),
+    ['models', 'fusion', 'usage', 'goal', 'fastcontext', 'settings']);
+  const first = html.indexOf('id="view-models"'), second = html.indexOf('id="view-fusion"');
+  assert.ok(first > 0 && second > first, 'the Fusion section follows the model section');
+  assert.doesNotMatch(html, /id="view-presets"/, 'the preset tab is gone');
+  assert.doesNotMatch(html, /id="fusion"/, 'the preset list container is gone');
+  assert.doesNotMatch(html, /新建预设|我的预设/, 'no preset authoring copy survives');
+  const sectionTag = id => html.match(new RegExp('<section[^>]*id="' + id + '"[^>]*>'))[0];
+  assert.ok(!sectionTag('view-models').includes('hidden'), 'the first tab renders visible');
+  assert.ok(sectionTag('view-fusion').includes('hidden'), 'the Fusion tab starts hidden');
+});
+
+test('the Fusion tab hosts the role grids that drive the official Fusion card', () => {
   const { byId, receive } = panel();
-  const pending = { ...state(), fusionPresets: [{ id: 'ds', name: 'DS Pro', uid: 'u1', available: false, pending: true,
-    lead: { providerId: 'cpa', model: 'lead' }, sidekick: { nativeUid: 'swe-2-max' },
-    leadLabel: 'CPA · lead', sidekickLabel: 'SWE-2 Max', reason: '官方模型目录尚未同步，稍后会自动重试' }] };
-  receive({ data: { type: 'state', state: pending } });
-  const muted = collect(byId('fusion'), 'span', node => node.className.includes('pending'));
-  assert.equal(muted.length, 1);
-  assert.match(muted[0].textContent, /尚未同步/);
-  const hard = { ...state(), fusionPresets: [{ ...pending.fusionPresets[0], pending: false, reason: 'Sidekick 当前不可用或已从角色列表移除' }] };
-  receive({ data: { type: 'state', state: hard } });
-  const warnings = collect(byId('fusion'), 'span', node => node.className.includes('warn'));
-  assert.equal(warnings.length, 1);
-  assert.ok(!warnings[0].className.includes('pending'));
-  assert.match(warnings[0].textContent, /已从角色列表移除/);
-  assert.match(renderPanel({ nonce: 'safe', cspSource: 'test:' }), /\.warn\.pending \{ color: var\(--muted\); \}/);
+  receive({ data: { type: 'state', state: { ...state(), roleLists: {
+    lead: [{ ref: { providerId: 'cpa', model: 'saved' }, label: 'CPA · Saved', native: false, available: true, selected: true },
+      { ref: { nativeUid: 'claude-haiku-5-5-high' }, label: 'Claude Haiku 5.5', native: true, available: true,
+        selected: false, defaultSelected: false, explicitIncluded: false, memberUids: ['claude-haiku-5-5-high'] }],
+    sidekick: [] } } } });
+  assert.equal(byId('role-count').textContent, 'Lead 1 · Sidekick 0');
+  const list = byId('lead-role-list');
+  const titles = child => collect(child, 'span', node => node.className === 'row-title').map(node => node.textContent);
+  const rows = list.children.filter(node => node.className === 'row');
+  assert.deepEqual(titles(rows[0]), ['CPA · Saved'], 'the selected row stays in the main list');
+  const fold = list.children.find(node => node.tag === 'details');
+  assert.ok(fold, 'deselected official models move under the fold');
+  assert.deepEqual(titles(fold), ['Claude Haiku 5.5'], 'the fold carries the rest of the official models');
+  assert.match(fold.children[0].textContent, /更多官方模型（1）/);
+  assert.doesNotMatch(renderPanel({ nonce: 'safe', cspSource: 'test:' }), /id="role-group"/,
+    'the role picker no longer lives in settings');
 });
 
 test('the add-model dialog renders the 131072-token output default and keeps saved values', () => {

@@ -7,7 +7,7 @@ const { createPanelController } = require('../src/panel/controller.cjs');
 test('the control panel has a Goal tab marked Beta that explains the /goal commands', () => {
   const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
   const tabs = [...html.matchAll(/id="tab-([a-z]+)"/g)].map(match => match[1]);
-  assert.deepEqual(tabs, ['presets', 'models', 'usage', 'goal', 'fastcontext', 'settings']);
+  assert.deepEqual(tabs, ['models', 'fusion', 'usage', 'goal', 'fastcontext', 'settings']);
   assert.match(html, /data-tab="goal">Goal <span class="badge beta">Beta<\/span><\/button>/);
   const section = html.slice(html.indexOf('id="view-goal"'), html.indexOf('id="view-fastcontext"'));
   assert.ok(section.includes('hidden>'));
@@ -16,7 +16,7 @@ test('the control panel has a Goal tab marked Beta that explains the /goal comma
   }
   assert.match(section, /id="open-goal"/);
   assert.match(section, /测试版/);
-  assert.match(html, /TAB_IDS = \['presets', 'models', 'usage', 'goal', 'fastcontext', 'settings'\]/);
+  assert.match(html, /TAB_IDS = \['models', 'fusion', 'usage', 'goal', 'fastcontext', 'settings'\]/);
 });
 
 test('the Goal tab button opens the goal progress view without reaching the config manager', async () => {

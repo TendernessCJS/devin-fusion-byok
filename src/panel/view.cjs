@@ -10,7 +10,7 @@ function escapeAttribute(value) {
   return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 }
 
-const TABS = [['presets', '预设'], ['models', '模型'], ['usage', '用量'], ['goal', 'Goal', 'Beta'], ['fastcontext', 'Fast Context'], ['settings', '设置']];
+const TABS = [['models', '模型'], ['fusion', 'Fusion'], ['usage', '用量'], ['goal', 'Goal', 'Beta'], ['fastcontext', 'Fast Context'], ['settings', '设置']];
 
 function goalMarkup() {
   const code = text => `<code class="cmd">${text}</code>`;
@@ -85,8 +85,6 @@ function renderPanel({ nonce, cspSource }) {
     .goal-doc ul { padding-left: 20px; margin: 6px 0; }
     .goal-doc li { margin: 4px 0; }
     code.cmd { font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; padding: 1px 5px; border-radius: 4px; background: var(--vscode-textCodeBlock-background, #2b2b2b); overflow-wrap: anywhere; }
-    .preset.current { box-shadow: inset 3px 0 0 var(--accent); }
-    .plus { color: var(--muted); margin: 0 6px; }
     .empty { padding: 32px 16px; text-align: center; color: var(--muted); }
     .empty button { margin-top: 12px; }
     .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
@@ -158,20 +156,23 @@ function renderPanel({ nonce, cspSource }) {
       <div class="topbar-row"><h1>Fusion BYOK</h1><div class="actions"><button id="reload-window" class="secondary" type="button" title="应用插件改动或刷新模型选择器时使用。会中断当前窗口正在进行的对话，但不关闭应用、不影响其他窗口，比重启 Devin 快。">重载窗口</button><button id="restart-devin" class="secondary" type="button" title="重载窗口仍无效时使用。会关闭所有窗口并中断正在进行的对话，之后自动重新打开（通常几秒，失败会自动重试）。">重启 Devin</button><label class="toggle"><span class="muted">启用</span><input id="plugin-enabled" class="switch" type="checkbox" role="switch" aria-label="启用插件" disabled></label></div></div>
       <nav class="tabs" role="tablist" aria-label="面板分区">${tabs}</nav>
     </header>
-    <div id="disabled-banner" class="banner" hidden><span>插件已停用，导入的模型和预设不会出现在新对话里。</span><button id="enable-now" type="button">启用</button></div>
-    <section id="view-presets" role="tabpanel" aria-labelledby="tab-presets"><div id="fusion"><div class="empty">正在读取配置…</div></div></section>
-    <section id="view-models" role="tabpanel" aria-labelledby="tab-models" hidden>
+    <div id="disabled-banner" class="banner" hidden><span>插件已停用：导入的模型不会出现在新对话里，官方 Fusion 卡片里也不会有本插件的条目。</span><button id="enable-now" type="button">启用</button></div>
+    <section id="view-models" role="tabpanel" aria-labelledby="tab-models">
       <div class="models-layout">
         <div><div class="section-head"><h2>供应商</h2><button id="add-provider" class="quiet" type="button" disabled>添加</button></div><nav id="providers" class="provider-nav" aria-label="供应商列表"></nav></div>
         <div id="models"></div>
       </div>
+    </section>
+    <section id="view-fusion" role="tabpanel" aria-labelledby="tab-fusion" hidden>
+      <div class="section-head"><h2>Fusion 可选模型</h2><span id="role-count" class="hint"></span></div>
+      <p class="hint mb">这里打开的模型就是 Devin 官方 Fusion 卡片里 Lead / Sidekick 下拉的候选；Lead 按系列（Effort 档位）成组，官方默认项本来就是可用的，不必再手动添加。关掉的模型会从下拉里移除，由它组成的组合也不再提供；如果你正用着其中一条，请在 Fusion 卡片里重新选一次。</p>
+      <div class="role-grid"><div id="role-lead"></div><div id="role-sidekick"></div></div>
     </section>
     <section id="view-usage" role="tabpanel" aria-labelledby="tab-usage" hidden>${monitorMarkup()}</section>
     <section id="view-goal" role="tabpanel" aria-labelledby="tab-goal" hidden>${goalMarkup()}</section>
     <section id="view-fastcontext" role="tabpanel" aria-labelledby="tab-fastcontext" hidden>${fastContextMarkup()}</section>
     <section id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
       <div id="settings-general"></div>
-      <details id="role-group" class="group"><summary>预设可选模型<span id="role-count" class="hint"></span></summary><div class="group-body"><p class="hint mb">新建预设时，下拉框只列出这里打开的模型。</p><div class="role-grid"><div id="role-lead"></div><div id="role-sidekick"></div></div></div></details>
       <details id="native-group" class="group"><summary>官方模型显示<span id="native-count" class="hint"></span></summary><div class="group-body" id="native-models"></div></details>
       ${updateMarkup()}
     </section>
@@ -188,12 +189,12 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
   const byId = id => document.getElementById(id);
   const pending = new Map();
   const saved = vscode.getState() || {};
-  const TAB_IDS = ['presets', 'models', 'usage', 'goal', 'fastcontext', 'settings'];
+  const TAB_IDS = ['models', 'fusion', 'usage', 'goal', 'fastcontext', 'settings'];
   let serial = 0;
   let state;
   let busy = false;
   let providerId = saved.providerId || '';
-  let tab = saved.tab || 'presets';
+  let tab = saved.tab || 'models';
   let modelSearch = '';
   let nativeSearch = '';
   let toastTimer;
@@ -292,7 +293,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
   const hostOf = url => { try { return new URL(url).host; } catch { return url; } };
 
   function showTab(next) {
-    tab = TAB_IDS.includes(next) ? next : 'presets';
+    tab = TAB_IDS.includes(next) ? next : 'models';
     remember();
     for (const node of document.querySelectorAll('.tab')) node.setAttribute('aria-selected', String(node.dataset.tab === tab));
     for (const id of TAB_IDS) byId('view-' + id).hidden = id !== tab;
@@ -308,7 +309,6 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     byId('plugin-enabled').disabled = false;
     byId('add-provider').disabled = false;
     byId('disabled-banner').hidden = !off();
-    renderFusion();
     renderProviders();
     renderModels();
     renderGeneral();
@@ -320,41 +320,6 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
         node.disabled = true;
       }
     }
-  }
-
-  function renderFusion() {
-    const container = byId('fusion');
-    container.replaceChildren();
-    const presets = state.fusionPresets || [];
-    const create = button('新建预设', () => presetDialog(), '');
-    create.disabled = off();
-    container.append(element('div', { class: 'section-head' }, element('h2', { text: '我的预设' }), presets.length ? create : null));
-    if (state.migrationPending) container.append(element('p', { class: 'warn mb', text: '原默认组合暂时无法还原，请稍后刷新或新建预设。' }));
-    if (!presets.length) {
-      const hasModels = state.providers.some(provider => provider.models.length) || (state.nativeModels || []).length > 0;
-      container.append(element('div', { class: 'list' }, element('div', { class: 'empty' },
-        element('p', { text: hasModels ? '还没有预设。选一个 Lead 和一个 Sidekick，起个名字就好。' : '先添加供应商并导入模型，再来创建预设。' }),
-        hasModels ? create : button('添加供应商', () => { showTab('models'); providerDialog(); }, ''))));
-      return;
-    }
-    const list = element('div', { class: 'list' });
-    for (const preset of presets) {
-      const current = preset.uid === state.selectedFusionUid;
-      const describe = (role, label) => label || preset[role]?.nativeUid || [preset[role]?.model, preset[role]?.effort].filter(Boolean).join(' · ') || '—';
-      let action = null;
-      if (current) action = element('span', { class: 'badge', text: '默认' });
-      else if (preset.available) {
-        action = button('设为默认', () => run(() => request('selectFusion', { uid: preset.uid }), '正在切换…', '已设为新对话的默认模型。'));
-        action.disabled = off();
-      }
-      list.append(element('div', { class: 'row preset' + (current ? ' current' : '') },
-        element('div', { class: 'row-main' },
-          element('button', { type: 'button', class: 'link-title', text: preset.name, 'aria-label': '编辑预设 ' + preset.name, onclick: () => presetDialog(preset) }),
-          element('span', { class: 'row-sub' }, describe('lead', preset.leadLabel), element('span', { class: 'plus', text: '+' }), describe('sidekick', preset.sidekickLabel)),
-          preset.available ? null : element('span', { class: 'warn' + (preset.pending ? ' pending' : ''), text: preset.reason || '当前不可用' })),
-        element('div', { class: 'actions' }, action, button('编辑', () => presetDialog(preset), 'quiet'))));
-    }
-    container.append(list);
   }
 
   function renderProviders() {
@@ -519,7 +484,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     const search = element('input', { type: 'search', placeholder: '搜索官方模型', 'aria-label': '搜索官方模型',
       oninput: event => { nativeSearch = event.target.value; renderNativeRows(); } });
     search.value = nativeSearch;
-    container.append(element('p', { class: 'hint mb', text: '关掉的模型只在本机列表里隐藏，不影响账号。' }),
+    container.append(element('p', { class: 'hint mb', text: '关掉的模型会从 Devin 的模型列表里隐藏，同时也不再是「Fusion」页的候选；只是本机隐藏，不影响账号。' }),
       element('div', { class: 'toolbar' }, search, button('刷新', () => run(() => request('refreshNativeModels'), '正在同步官方模型…', '已同步。'))),
       element('div', { id: 'native-list', class: 'list scroll', 'aria-label': '官方模型列表' }));
     renderNativeRows();
@@ -537,7 +502,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
       return;
     }
     for (const model of models) {
-      const note = model.disabled ? '官方暂不可用' : model.eligible === true ? '' : '不能用于预设';
+      const note = model.disabled ? '官方暂不可用' : model.eligible === true ? '' : '不能作为 Fusion 的 Lead 或 Sidekick';
       container.append(element('div', { class: 'row' },
         element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: model.label || model.uid }),
           element('span', { class: 'row-sub mono', text: model.uid + (note ? ' · ' + note : '') })),
@@ -654,33 +619,6 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     renderRows();
   }
 
-  function presetDialog(preset) {
-    const { dialog, form } = openDialog(preset ? '编辑预设' : '新建预设');
-    const name = input(preset?.name || '', { required: true, maxlength: 80, placeholder: '例如：日常开发' });
-    form.append(field('名称', name));
-    const selections = {};
-    const key = ref => JSON.stringify([ref?.nativeUid || '', ref?.providerId || '', ref?.model || '', ref?.effort ?? null]);
-    let missing = false;
-    for (const role of ['lead', 'sidekick']) {
-      const candidates = [...(state.presetCandidates?.[role] || [])];
-      if (!candidates.length) missing = true;
-      if (preset?.[role] && !candidates.some(item => key(item.ref) === key(preset[role]))) candidates.push({ ref: preset[role], label: '当前不可用：' + (preset[role].nativeUid || preset[role].model), unavailable: true });
-      const title = role === 'lead' ? 'Lead 模型' : 'Sidekick 模型';
-      const select = element('select', { required: true, 'aria-label': title });
-      select.append(element('option', { value: '', text: '请选择' }));
-      candidates.forEach((item, index) => select.append(element('option', { value: String(index), text: (item.ref.nativeUid ? '官方 · ' : '') + item.label, disabled: item.unavailable === true })));
-      if (preset?.[role]) select.value = String(candidates.findIndex(item => key(item.ref) === key(preset[role])));
-      form.append(field(title, select));
-      selections[role] = () => select.value === '' ? null : candidates[Number(select.value)]?.ref;
-    }
-    if (missing) form.append(element('p', { class: 'hint', text: '下拉框是空的？先在「模型」里导入并启用模型。' }));
-    const remove = preset ? deleteButton(dialog, '删除预设？', '只删除“' + preset.name + '”，不影响模型。',
-      () => request('deleteFusionPreset', { id: preset.id })) : null;
-    finishDialog(dialog, form, '保存', () => request('saveFusionPreset', {
-      ...(preset ? { id: preset.id } : {}), name: name.value, lead: selections.lead(), sidekick: selections.sidekick(),
-    }), remove);
-  }
-
   function providerDialog(provider) {
     const { dialog, form } = openDialog(provider ? '编辑供应商' : '添加供应商');
     const name = input(provider?.name, { required: true, maxlength: 80, placeholder: '例如：OpenRouter' });
@@ -707,7 +645,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     apiFormat.addEventListener('change', refreshPreview);
     refreshPreview();
     form.append(field('名称', name), urlField, field('API 类型', apiFormat), field('API Key', apiKey));
-    const remove = provider ? deleteButton(dialog, '删除供应商？', '会一并移除“' + provider.name + '”导入的模型和用到它的预设。',
+    const remove = provider ? deleteButton(dialog, '删除供应商？', '会一并移除“' + provider.name + '”导入的模型；用到它们的 Fusion 组合会失效。',
       () => request('deleteProvider', { id: provider.id })) : null;
     finishDialog(dialog, form, '保存', () => {
       const payload = { name: name.value.trim(), baseUrl: baseUrl.value.trim(), apiFormat: apiFormat.value };

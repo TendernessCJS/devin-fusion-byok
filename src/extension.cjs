@@ -395,8 +395,8 @@ async function activate(context) {
   };
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.selectFusion', run(async () => {
     const choices = catalog().models.filter(model => model.kind === 'fusion').map(model => ({ label: model.label || model.uid, uid: model.uid }));
-    if (!choices.length) { management?.open(); vscode.window.showInformationMessage('请先在控制面板新建并命名 Fusion 预设。'); return; }
-    const choice = await vscode.window.showQuickPick(choices, { title: '选择 Fusion 预设', matchOnDescription: true }); if (!choice) return;
+    if (!choices.length) { management?.open(); vscode.window.showInformationMessage('Fusion 组合在 Devin 的模型选择器里选（打开 Fusion 卡片）；控制面板的「Fusion」页用来决定哪些模型能出现在那张卡片的下拉里。'); return; }
+    const choice = await vscode.window.showQuickPick(choices, { title: '选择 Fusion 组合', matchOnDescription: true }); if (!choice) return;
     await saveFusionChoice(choice.uid);
     vscode.window.showInformationMessage('Fusion 模型已保存，请新建 Devin Local 会话。');
   })));
@@ -447,7 +447,7 @@ async function activate(context) {
   }
   let nativeSyncSize = -1;
   const updateStatusBar = () => {
-    try { if (statusBar) statusBar.tooltip = `Fusion BYOK：目录 ${catalog().models.length} 条目（Fusion 预设 ${catalog().models.filter(model => model.kind === 'fusion').length} / 官方卡片镜像 ${catalog().matrixUids?.size ?? 0}）· 原生已观测 ${nativeModels.size}`; } catch {}
+    try { if (statusBar) statusBar.tooltip = `Fusion BYOK：目录 ${catalog().models.length} 条目（官方 Fusion 卡片镜像 ${catalog().matrixUids?.size ?? 0}）· 原生已观测 ${nativeModels.size}`; } catch {}
   };
   const pickerRefresh = createPickerRefresh({ log,
     // devin.reloadAcpConnections drops every ACP connection on execution —

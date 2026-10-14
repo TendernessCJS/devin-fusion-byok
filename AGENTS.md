@@ -167,11 +167,13 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 | `src/runtime/backend.cjs`、`test/backend.test.cjs` | 关闭前同时等待响应与处理器结束，再刷监控队列、最后释放端口；源码身份包含 `proxy.cjs` 与 `monitor-stats.cjs` |
 | `src/runtime/bridge.cjs`、`test/bridge.test.cjs` | 转发增加连接 10 秒、响应头 120 秒、流空闲 120 秒超时；无流总时长限制，取消/错误清理计时 |
 | `src/panel/controller.cjs` | state 成功投递后才去重；发送串行化，ready 强制同步，旧面板不得污染新缓存 |
-| `src/panel/view.cjs` | 会话选择器单行省略、日期控件、监控分页与诊断分行布局 |
+| `src/panel/view.cjs` | tab 顺序「模型 / Fusion / 用量 / Goal / Fast Context / 设置」；Fusion 页即官方 Fusion 卡片的角色配置（Lead/Sidekick 勾选），默认 tab 为「模型」；会话选择器单行省略、日期控件、监控分页与诊断分行布局 |
 
 ## 待办与死角
 
 - 旧 `config.sidekicks` 输入管线已拆除（v0.3.18 起角色选择由 `fusionPresets` + `roleExclusions`/`roleInclusions` 接管）：字段只剩被忽略的惰性配置残留，旧配置里留着的 `sidekicks` 键无害。注意 `catalog.sidekicks` **输出**与 `state.sidekicks` 仍是活的——它们是角色选择解析后的候选池，legacy `fusion-dfbyok-native-` 默认 uid 迁移和面板状态都在用，不要当成死代码删掉。角色选择走 `setRoleModel`，预设走 `saveFusionPreset`。
+- **具名预设的 UI 已下线**（`fusionMatrix` 语义下官方 Fusion 卡片就是唯一选择入口）：面板不再有「新建/编辑预设」与预设列表，角色勾选从「设置 → 预设可选模型」整体移到「Fusion」页。但 `config.fusionPresets`、`catalog.presetStates`/`presetCandidates`、`saveFusionPreset`/`deleteFusionPreset`/`selectFusion` 消息、`publicState` 的 `fusionPresets`/`presetCandidates`/`migrationPending`/`selectedFusionUid`/`fusionChoices` 字段**全部保留**——存量预设必须继续可路由（`roleRefs` 把预设 ref 计入 `saved`，预设的 lead/sidekick 因此始终算已选中，这是预设仍能解析的前提），且多处测试与 `devinFusionByok.selectFusion` 命令行入口依赖它们。要拆就得整条管线一起拆（含 `defaultFusionUid` 迁移与选择回滚），不要只删状态字段。
+- 关掉一个官方模型的显示（`config.hiddenNativeModelUids`）会**同时**把它踢出角色候选池——`discoverOfficialRoles`/`discoverNamedPresetRoles` 都吃 `hiddenSet`，而 `nativeHarnessUids`/`nativeLeadHarnessUids` 只由入选者构建；因此正在使用的组合会失去 harness 而无法解析（`resolveAssignment` 返回 null，不会自动回退）。同理，`roleExclusions` 排除 Lead/Sidekick 也会让存量组合失效。面板文案不得承诺「不影响已保存的组合」。
 - ACP 通道的实际机制是 env 注入（`devin.acp.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL`，进程 spawn 时生效、覆盖 CLI 全部网络路径），**不是**握手 `_meta.api_server_url` 改写——后者的模块已在审查后删除（`acp-injection.cjs` 自 fork 初始提交起从未接线，env 通道作用域严格覆盖它）。排障 ACP 流量先看 settings.json 的 agentEnv 与 backend 日志，不要去复活握手改写。
 
 ## 测试注意

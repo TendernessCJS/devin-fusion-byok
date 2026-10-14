@@ -53,7 +53,7 @@
       },
       {
         "command": "devinFusionByok.selectFusion",
-        "title": "Fusion BYOK：选择 Fusion 预设"
+        "title": "Fusion BYOK：选择 Fusion 组合"
       },
       {
         "command": "devinFusionByok.contextDetails",
