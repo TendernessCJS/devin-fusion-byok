@@ -171,6 +171,19 @@ test('failed state posts are retried and a ready message forces a resend', async
   assert.deepEqual(posts.at(-1), { type: 'result', id: 'r1', ok: true });
 });
 
+test('identical panel state is posted once, so unchanged data cannot re-render the panel', async () => {
+  const posts = [];
+  const panel = fakePanel(posts, async data => { posts.push(data); return true; });
+  const report = { at: '2026-10-15T00:00:00.000Z', checked: 4, refreshed: [], skipped: [], errors: [] };
+  const state = () => ({ enabled: true, providers: [], cliCache: report });
+  const controller = createPanelController({ vscode: { ViewColumn: { Active: 1 }, window: { createWebviewPanel: () => panel } },
+    context: { subscriptions: [] }, manager: { state, dispatch: async () => state() },
+    safeError: () => ({ message: 'e' }), readMonitor: async () => ({ status: 'ready', snapshot: null }) });
+  controller.open();
+  await controller.publish(); await controller.publish();
+  assert.equal(posts.filter(message => message.type === 'state').length, 1, 'the second publish must be suppressed by the state comparison');
+});
+
 test('concurrent publishes are serialized and the later state wins', async () => {
   const posts = [], pending = [];
   const panel = fakePanel(posts, message => {

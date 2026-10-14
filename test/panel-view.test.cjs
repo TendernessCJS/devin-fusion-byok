@@ -7,7 +7,8 @@ const { renderPanel } = require('../src/panel/view.cjs');
 class Element {
   constructor(tag) { this.tag = tag; this.children = []; this.attributes = {}; this.listeners = {}; this.dataset = {};
     this.classList = { add() {} }; this.style = {}; this.value = ''; this.textContent = ''; this.className = '';
-    this.checked = false; this.disabled = false; this.open = false; }
+    this.checked = false; this.disabled = false; this.open = false; this.scrollTop = 0;
+    this.selectionStart = 0; this.selectionEnd = 0; this.ownerDocument = null; }
   append(...children) { for (const child of children) if (child != null) this.children.push(child); }
   replaceChildren(...children) { this.children = children; }
   setAttribute(key, value) { this.attributes[key] = value; }
@@ -18,6 +19,8 @@ class Element {
   querySelector() { return null; }
   close() { this.open = false; }
   showModal() { this.open = true; }
+  focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+  setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
   reportValidity() { return true; }
 }
 
@@ -37,20 +40,25 @@ function collect(node, tag, predicate = () => true) {
 
 function panel(controlTags = {}) {
   const elements = new Map(), posts = [], listeners = [];
-  const byId = id => { if (!elements.has(id)) elements.set(id, new Element(controlTags[id] || 'div')); return elements.get(id); };
-  const createElement = tag => {
-    const node = new Element(tag);
-    node.setAttribute = (key, value) => { node.attributes[key] = value; if (key === 'id' && !elements.has(value)) elements.set(value, node); };
-    return node;
-  };
-  const document = { getElementById: byId, createElement, createTextNode: text => ({ textContent: text }),
+  let focused = true;
+  const byId = id => { if (!elements.has(id)) { const node = new Element(controlTags[id] || 'div'); node.ownerDocument = document; elements.set(id, node); } return elements.get(id); };
+  const document = { getElementById: byId, createTextNode: text => ({ textContent: text }),
+    activeElement: null, scrollingElement: { scrollTop: 0 }, hasFocus: () => focused,
     querySelectorAll: selector => selector.includes('main')
       ? [...elements.values()].filter(node => ['button', 'input', 'select'].includes(node.tag) && node.attributes.class !== 'tab')
       : [] };
+  document.createElement = tag => {
+    const node = new Element(tag);
+    node.ownerDocument = document;
+    node.setAttribute = (key, value) => { node.attributes[key] = value; if (key === 'id' && !elements.has(value)) elements.set(value, node); };
+    return node;
+  };
   vm.runInNewContext(renderPanel({ nonce: 'safe', cspSource: 'test:' }).match(/<script[^>]*>([\s\S]*?)<\/script>/)[1],
     { acquireVsCodeApi: () => ({ getState: () => ({}), setState() {}, postMessage: message => posts.push(message) }), document,
       window: { addEventListener: (name, listener) => { if (name === 'message') listeners.push(listener); } }, setTimeout: () => 0, clearTimeout() {} });
-  return { byId, posts, receive: data => { for (const listener of listeners) listener(data); } };
+  return { byId, posts, receive: data => { for (const listener of listeners) listener(data); },
+    activeElement: () => document.activeElement, scrollingElement: () => document.scrollingElement,
+    setHasFocus: value => { focused = value; } };
 }
 
 const state = () => ({ enabled: true, providers: [{ id: 'cpa', name: 'CPA', baseUrl: 'https://cpa.invalid/v1', apiFormat: 'openai',
@@ -183,6 +191,35 @@ test('a state render mid-request keeps the busy lock but must not stick it', asy
   await Promise.resolve();
   assert.equal(byId('refresh-cache').disabled, false, 'unlock restores the original false, not a recorded true');
   assert.equal(byId('reload-window').disabled, false);
+});
+
+test('a state push keeps the focused search box, its caret and the scroll positions', () => {
+  const ui = panel();
+  ui.receive({ data: { type: 'state', state: state() } });
+  const current = (container, tag, match) => collect(ui.byId(container), tag, match)[0];
+  const search = current('models', 'input', node => node.getAttribute('aria-label') === '搜索导入的模型');
+  const listNow = () => current('models', 'div', node => node.getAttribute('id') === 'model-list');
+  search.focus(); search.value = 'dee'; search.setSelectionRange(2, 2);
+  listNow().scrollTop = 120;
+  ui.scrollingElement().scrollTop = 300;
+  ui.receive({ data: { type: 'state', state: state() } });
+  const next = current('models', 'input', node => node.getAttribute('aria-label') === '搜索导入的模型');
+  assert.notStrictEqual(next, search, 'the state push really did rebuild the search box');
+  assert.strictEqual(ui.activeElement(), next, 'focus follows the rebuilt node');
+  assert.equal(next.selectionStart, 2, 'the caret survives the rebuild');
+  assert.equal(listNow().scrollTop, 120, 'the list keeps its scroll offset');
+  assert.equal(ui.scrollingElement().scrollTop, 300, 'the page keeps its scroll offset');
+});
+
+test('a state push never pulls focus back into a hidden panel', () => {
+  const ui = panel();
+  ui.receive({ data: { type: 'state', state: state() } });
+  const search = collect(ui.byId('models'), 'input', node => node.getAttribute('aria-label') === '搜索导入的模型')[0];
+  search.focus();
+  ui.setHasFocus(false);
+  ui.receive({ data: { type: 'state', state: state() } });
+  const next = collect(ui.byId('models'), 'input', node => node.getAttribute('aria-label') === '搜索导入的模型')[0];
+  assert.notStrictEqual(ui.activeElement(), next, 'a hidden webview must not steal focus back from the editor');
 });
 
 test('a cache report without rewrites says so instead of staying blank', () => {

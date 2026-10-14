@@ -191,6 +191,10 @@ function renderPanel({ nonce, cspSource }) {
 function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
   'use strict';
   const byId = id => document.getElementById(id);
+  // Nodes recreated by render() cannot be found through the document after the
+  // rebuild, so remember the live nodes here: typing must survive a state push.
+  const focusTargets = new Map();
+  const scrollTargets = new Map();
   const pending = new Map();
   const saved = vscode.getState() || {};
   const TAB_IDS = ['models', 'fusion', 'usage', 'goal', 'fastcontext', 'settings'];
@@ -320,6 +324,12 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     if (!state) return;
     if (!state.providers.some(provider => provider.id === providerId)) providerId = state.providers[0]?.id || '';
     remember();
+    const active = document.activeElement;
+    let focusedKey = '';
+    for (const [key, node] of focusTargets) if (node === active) focusedKey = key;
+    const caret = focusedKey && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
+    const scrolls = new Map([...scrollTargets].map(([key, node]) => [key, node.scrollTop]));
+    const pageTop = document.scrollingElement ? document.scrollingElement.scrollTop : null;
     byId('plugin-enabled').checked = !off();
     byId('plugin-enabled').disabled = false;
     byId('add-provider').disabled = false;
@@ -330,7 +340,18 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     renderRoles();
     renderNative();
     renderCache();
+    for (const [key, top] of scrolls) { const node = scrollTargets.get(key); if (node) node.scrollTop = top; }
+    if (pageTop !== null) document.scrollingElement.scrollTop = pageTop;
     if (busy) lockControls();
+    if (!focusedKey) return;
+    // Never pull focus back into a webview the user has left (the panel can stay
+    // alive while hidden — retainContextWhenHidden — and stealing focus from the
+    // editor would be worse than losing it here).
+    if (document.hasFocus && document.hasFocus() === false) return;
+    const node = focusTargets.get(focusedKey);
+    if (!node || node.disabled) return;
+    node.focus();
+    if (caret) try { node.setSelectionRange(caret[0], caret[1]); } catch {}
   }
 
   function renderProviders() {
@@ -380,13 +401,16 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     const search = element('input', { type: 'search', placeholder: '搜索模型', 'aria-label': '搜索导入的模型',
       oninput: event => { modelSearch = event.target.value; renderModelRows(); } });
     search.value = modelSearch;
+    focusTargets.set('model-search', search);
     const importButton = button('导入模型', () => run(async () => {
       await request('refreshModels', { providerId: provider.id });
       importDialog(provider.id);
     }, '正在获取模型列表…', '请勾选要导入的模型。'), '');
     container.append(element('div', { class: 'toolbar' }, provider.models.length ? search : element('span', { class: 'spacer' }),
       importButton, button('手动添加', () => modelDialog(provider))));
-    container.append(element('div', { id: 'model-list', class: 'list scroll', 'aria-label': '模型列表' }));
+    const list = element('div', { id: 'model-list', class: 'list scroll', 'aria-label': '模型列表' });
+    scrollTargets.set('model-list', list);
+    container.append(list);
     renderModelRows();
   }
 
@@ -455,8 +479,10 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
       const search = element('input', { type: 'search', placeholder: '搜索', 'aria-label': '搜索 ' + name + ' 模型',
         oninput: event => { roleSearch[role] = event.target.value; renderRoleRows(role); } });
       search.value = roleSearch[role];
-      container.append(element('h3', { text: name }), element('div', { class: 'toolbar' }, search),
-        element('div', { id: role + '-role-list', class: 'list scroll', 'aria-label': name + ' 模型列表' }));
+      focusTargets.set('role-search-' + role, search);
+      const list = element('div', { id: role + '-role-list', class: 'list scroll', 'aria-label': name + ' 模型列表' });
+      scrollTargets.set(role + '-role-list', list);
+      container.append(element('h3', { text: name }), element('div', { class: 'toolbar' }, search), list);
       renderRoleRows(role);
     }
   }
@@ -510,9 +536,12 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     const search = element('input', { type: 'search', placeholder: '搜索官方模型', 'aria-label': '搜索官方模型',
       oninput: event => { nativeSearch = event.target.value; renderNativeRows(); } });
     search.value = nativeSearch;
+    focusTargets.set('native-search', search);
+    const list = element('div', { id: 'native-list', class: 'list scroll', 'aria-label': '官方模型列表' });
+    scrollTargets.set('native-list', list);
     container.append(element('p', { class: 'hint mb', text: '关掉的模型会从 Devin 的模型列表里隐藏，同时也不再是「Fusion」页的候选；只是本机隐藏，不影响账号。' }),
       element('div', { class: 'toolbar' }, search, button('刷新', () => run(() => request('refreshNativeModels'), '正在同步官方模型…', '已同步。'))),
-      element('div', { id: 'native-list', class: 'list scroll', 'aria-label': '官方模型列表' }));
+      list);
     renderNativeRows();
   }
 

@@ -242,6 +242,25 @@ test('cli cache checks are confined to the stubbed directory and see every own u
   assert.deepEqual(calls[0].expectedUids, ['dfbyok-own', 'fusion-dfbyok-selected', 'fusion-dfbyok-another'],
     'expectedUids is the full model list, unfiltered');
 });
+test('an idle native sync keeps the same CLI cache report', async t => {
+  const f = fixture(t); await f.activate(f.context);
+  const options = f.managerOptions();
+  await options.refreshNativeModels();
+  const first = options.cliCacheStatus();
+  assert.ok(first && typeof first.at === 'string', 'the first check records a report');
+  await options.refreshNativeModels();
+  assert.strictEqual(options.cliCacheStatus(), first,
+    'an unchanged check must keep the same report object: a fresh `at` made every 3s tick look like a state change and re-rendered the panel forever');
+  assert.ok(f.cacheChecks().length >= 2, 'the cache check still runs on every tick');
+});
+test('a manual cache refresh always restamps the report', async t => {
+  const f = fixture(t); await f.activate(f.context);
+  const options = f.managerOptions();
+  await options.refreshNativeModels();
+  const first = options.cliCacheStatus();
+  await options.refreshCliCaches();
+  assert.notStrictEqual(options.cliCacheStatus(), first, 'the 刷新缓存 button must show a fresh timestamp');
+});
 test('a stale matrix fusion selection rolls back while a live one is kept', async t => {
   const f = fixture(t);
   await f.activate(f.context);

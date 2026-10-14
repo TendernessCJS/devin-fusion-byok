@@ -561,8 +561,17 @@ async function activate(context) {
       const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force,
         staleProbe: payload => staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded }),
         augment: (payload, rpc) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current }) });
-      cliCacheReport = { at: new Date().toISOString(), checked: result.checked,
-        refreshed: result.refreshed, skipped: result.skipped || [], errors: result.errors || [] };
+      // The report is part of panel state, and panel state is deduplicated by
+      // its JSON. Restamping `at` on every automatic check made each 3s sync
+      // look like a change, so the panel re-rendered forever — killing the
+      // focused search box and resetting every list scroll. Record the moment
+      // the outcome was established instead, and keep the previous object when
+      // the outcome is unchanged (only a manual, forced check always restamps).
+      const summary = { checked: result.checked, refreshed: result.refreshed,
+        skipped: result.skipped || [], errors: result.errors || [] };
+      const previous = cliCacheReport && JSON.stringify({ checked: cliCacheReport.checked,
+        refreshed: cliCacheReport.refreshed, skipped: cliCacheReport.skipped, errors: cliCacheReport.errors });
+      if (force || previous !== JSON.stringify(summary)) cliCacheReport = { at: new Date().toISOString(), ...summary };
       if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed, force });
       for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });
       for (const error of result.errors || []) log('cli-cache-write-error', { name: error.name, code: error.code });
