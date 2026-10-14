@@ -182,6 +182,33 @@ test('restart failures are reported without leaking details', async () => {
   assert.equal(result.error, '无法自动重启 Devin，请手动退出后重新打开。');
 });
 
+test('window reload runs workbench.action.reloadWindow only after the modal is confirmed', async () => {
+  let reloads = 0; const commands = [];
+  const make = choice => {
+    let handler; const posted = [];
+    const panel = { visible: true, reveal() {}, dispose() {}, onDidDispose: () => ({ dispose() {} }),
+      webview: { html: '', cspSource: '', postMessage: async message => { posted.push(message); return true; },
+        onDidReceiveMessage: fn => { handler = fn; return { dispose() {} }; } } };
+    const warnings = [];
+    const vscode = { ViewColumn: { Active: 1 },
+      window: { createWebviewPanel: () => panel, showWarningMessage: async (...args) => { warnings.push(args); return choice; } },
+      commands: { executeCommand: async command => { commands.push(command); reloads++; } } };
+    createPanelController({ vscode, context: { subscriptions: [] },
+      manager: { state: () => ({}), dispatch: async () => { throw new Error('reload must not reach the manager'); } },
+      safeError: () => ({ message: 'x' }) }).open();
+    return { send: message => handler(message), posted, warnings };
+  };
+  const confirmed = make('重载');
+  await confirmed.send({ id: 'r1', type: 'window.reload' });
+  assert.deepEqual(commands, ['workbench.action.reloadWindow']);
+  assert.equal(confirmed.warnings[0][1].modal, true);
+  assert.deepEqual(confirmed.posted.find(m => m.type === 'result'), { type: 'result', id: 'r1', ok: true, cancelled: false });
+  const cancelled = make(undefined);
+  await cancelled.send({ id: 'r2', type: 'window.reload' });
+  assert.equal(reloads, 1, 'a dismissed modal never reloads the window');
+  assert.equal(cancelled.posted.find(m => m.type === 'result').cancelled, true);
+});
+
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // A symlink to node stands in for the app executable: `ps -o comm` reports the

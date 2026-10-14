@@ -63,6 +63,15 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
       if (message.type === 'monitor.refresh') { await refreshMonitor(); return; }
       if (message.type.startsWith('fastContext.')) { await handleFastContext(current, message); return; }
       try {
+        if (message.type === 'window.reload') {
+          const choice = await vscode.window.showWarningMessage('重载窗口会中断当前窗口正在进行的对话，但不会关闭应用、也不影响其他窗口。确定现在重载吗？', { modal: true }, '重载');
+          if (choice === '重载') {
+            try { await vscode.commands.executeCommand('workbench.action.reloadWindow'); }
+            catch { throw new PanelInputError('无法重载窗口，请从命令面板执行 Developer: Reload Window。'); }
+          }
+          await current.webview.postMessage({ type: 'result', id: message.id, ok: true, cancelled: choice !== '重载' });
+          return;
+        }
         if (message.type === 'app.restart') {
           if (typeof restartApp !== 'function') throw new PanelInputError('当前环境不支持重启 Devin。');
           const choice = await vscode.window.showWarningMessage('重启 Devin 会关闭所有窗口并中断正在进行的对话，之后会自动重新打开（通常几秒，失败会自动重试）。确定现在重启吗？', { modal: true }, '重启');
