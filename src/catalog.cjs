@@ -924,7 +924,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
   // effort variant of the family and all of them become selectable values.
   const sidekickReps = [...sidekickPools.values()].flatMap(variants =>
     variants[0].native ? [variants[0]] : variants);
-  const pairs = [], customLeadNames = new Set(), customSideNames = new Set();
+  const pairs = [], customLeadNames = new Set(), customSideSlots = new Map();
   for (const lead of candidates.lead) {
     for (const sidekick of sidekickReps) {
       // Only emit pairs with at least one added member (a BYOK model or a
@@ -948,7 +948,12 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
         : sidekick.native ? sidekick.label
         : sidekick.familyLabel + (sidekick.effort ? ` ${effortMetadata(sidekick.effort).name}` : '');
       if (!(lead.native && lead.leadDimension)) customLeadNames.add(leadDim);
-      if (!(sidekick.native && sidekick.dimension)) customSideNames.add(sideDim);
+      if (!(sidekick.native && sidekick.dimension)) {
+        customSideSlots.set(sideDim, {
+          base: sidekick.native ? `native:${sidekick.uid}` : `byok:${sidekick.key}`,
+          slot: effortMetadata(sidekick.effort).order,
+        });
+      }
       pairs.push({ lead, sidekick, leadDim, sideDim, uid });
     }
   }
@@ -956,9 +961,27 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
   // range. Sequential orders would shift whenever the selected set changes,
   // and stale entries kept in the CLI cache carry their old order — two
   // different names landing on the same order make the picker drop one
-  // silently (it dedupes dimension values by order).
+  // silently (it dedupes dimension values by order). Sidekick values hash per
+  // FAMILY and take consecutive slots inside it (sorted by effort tier), so a
+  // model's variants stay adjacent in the dropdown instead of scattering.
   const leadOrders = stableOrders(customLeadNames, roleSelection.reservedLeadOrders);
-  const sideOrders = stableOrders(customSideNames, roleSelection.reservedSidekickOrders);
+  const sideBaseOrders = stableOrders([...customSideSlots.values()].map(v => v.base),
+    roleSelection.reservedSidekickOrders);
+  const sideGroups = new Map();
+  for (const [name, v] of customSideSlots) {
+    if (!sideGroups.has(v.base)) sideGroups.set(v.base, []);
+    sideGroups.get(v.base).push({ name, slot: v.slot });
+  }
+  const sideOrders = new Map(), usedSideOrders = new Set(roleSelection.reservedSidekickOrders);
+  for (const [base, group] of sideGroups) {
+    group.sort((a, b) => a.slot - b.slot || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    let order = sideBaseOrders.get(base);
+    for (const { name } of group) {
+      while (usedSideOrders.has(order)) order++;
+      usedSideOrders.add(order);
+      sideOrders.set(name, order);
+    }
+  }
   for (const { lead, sidekick, leadDim, sideDim, uid } of pairs) {
     matrixUids.add(uid);
     const leadLabel = lead.native ? lead.label
