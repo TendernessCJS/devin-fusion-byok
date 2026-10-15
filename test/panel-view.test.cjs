@@ -321,3 +321,29 @@ test('the official-model search matches family labels and member uids', () => {
   assert.equal(rows.length, 1, 'only the matching family row remains');
   assert.match(textOf(rows[0]), /GLM-5\.2/);
 });
+
+test('model rows carry tier and context info, and a missing key warns on import', () => {
+  const { byId, receive } = panel();
+  const next = state();
+  next.providers[0].models = [
+    { id: 'multi', label: 'Multi', enabled: true, efforts: ['high', 'max'], contextWindow: 1048576, maxOutputTokens: 32768 },
+    { id: 'plain', label: 'Plain', enabled: true, efforts: [], contextWindow: 32000, maxOutputTokens: 8192 }];
+  receive({ data: { type: 'state', state: next } });
+  const rows = collect(byId('model-list'), 'div', node => node.className === 'row');
+  const texts = rows.map(textOf);
+  assert.ok(texts.some(text => /Multi/.test(text) && /multi · 2 档 · 1M Context/.test(text)),
+    'a multi-variant row shows the id, tier count and context window');
+  assert.ok(texts.some(text => /plain · 32K Context/.test(text) && !/档/.test(text)),
+    'a single-variant row omits the tier count');
+
+  const second = panel();
+  const keyless = state();
+  keyless.providers[0].keyConfigured = false;
+  second.receive({ data: { type: 'state', state: keyless } });
+  const importButton = collect(second.byId('models'), 'button', node => node.textContent === '导入模型')[0];
+  assert.match(importButton.title || '', /未配置 API 密钥/, 'import warns when no key is configured');
+  importButton.listeners.click();
+  assert.ok(!second.posts.some(message => message.type === 'refreshModels'),
+    'import never reaches the backend without a key');
+  assert.match(textOf(second.byId('status')), /未配置 API 密钥/, 'the click explains why import is unavailable');
+});

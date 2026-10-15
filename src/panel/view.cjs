@@ -1,5 +1,5 @@
 'use strict';
-const { modelSupportsImages } = require('../model-capabilities.cjs');
+const { modelSupportsImages, modelEfforts } = require('../model-capabilities.cjs');
 const { normalizeBaseUrlPath } = require('./base-url.cjs');
 const { monitorMarkup, monitorScript } = require('./monitor-view.cjs');
 const { updateMarkup, updateScript } = require('./update-view.cjs');
@@ -187,12 +187,12 @@ function renderPanel({ nonce, cspSource }) {
   </main>
   <div id="status" class="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="editor-dialog" aria-labelledby="dialog-title"></dialog>
-  <script nonce="${safeNonce}">const vscode = acquireVsCodeApi(); (${panelClient.toString()})(${modelSupportsImages.toString()}, vscode, ${normalizeBaseUrlPath.toString()}); ${monitorScript()} ${updateScript()} ${fastContextScript()}</script>
+  <script nonce="${safeNonce}">const vscode = acquireVsCodeApi(); (${panelClient.toString()})(${modelSupportsImages.toString()}, vscode, ${normalizeBaseUrlPath.toString()}, ${modelEfforts.toString()}); ${monitorScript()} ${updateScript()} ${fastContextScript()}</script>
 </body>
 </html>`;
 }
 
-function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
+function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEfforts) {
   'use strict';
   const byId = id => document.getElementById(id);
   // Nodes recreated by render() cannot be found through the document after the
@@ -406,10 +406,13 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
       oninput: event => { modelSearch = event.target.value; renderModelRows(); } });
     search.value = modelSearch;
     focusTargets.set('model-search', search);
-    const importButton = button('导入模型', () => run(async () => {
-      await request('refreshModels', { providerId: provider.id });
-      importDialog(provider.id);
-    }, '正在获取模型列表…', '请勾选要导入的模型。'), '');
+    const importButton = button('导入模型', () => provider.keyConfigured
+      ? run(async () => {
+        await request('refreshModels', { providerId: provider.id });
+        importDialog(provider.id);
+      }, '正在获取模型列表…', '请勾选要导入的模型。')
+      : notice('该供应商未配置 API 密钥，请先添加密钥再导入模型。', 'error'), '');
+    if (!provider.keyConfigured) importButton.title = '未配置 API 密钥';
     container.append(element('div', { class: 'toolbar' }, provider.models.length ? search : element('span', { class: 'spacer' }),
       importButton, button('手动添加', () => modelDialog(provider))));
     const list = element('div', { id: 'model-list', class: 'list scroll', 'aria-label': '模型列表' });
@@ -442,12 +445,19 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
         element('span', { class: 'row-main hint', text: models.filter(model => model.enabled !== false).length + ' / ' + models.length + ' 已启用' }),
         button('全部启用', () => bulk(true), 'quiet'), button('全部停用', () => bulk(false), 'quiet')));
     }
+    const fmtTokens = value => value >= 1000000 ? (Math.round(value / 100000) / 10) + 'M'
+      : value >= 1000 ? Math.round(value / 1000) + 'K' : String(value);
     for (const model of models) {
       const name = model.label || model.id;
+      const caps = [];
+      const variants = modelEfforts(model).length;
+      if (variants > 1) caps.push(variants + ' 档');
+      if (model.contextWindow) caps.push(fmtTokens(model.contextWindow) + ' Context');
+      const sub = [name !== model.id ? model.id : '', ...caps].filter(Boolean).join(' · ');
       container.append(element('div', { class: 'row' },
         element('div', { class: 'row-main' },
           element('button', { type: 'button', class: 'link-title', text: name, 'aria-label': '编辑模型 ' + name, onclick: () => modelDialog(provider, model) }),
-          name !== model.id ? element('span', { class: 'row-sub mono', text: model.id }) : null),
+          sub ? element('span', { class: 'row-sub mono', text: sub }) : null),
         switchInput(model.enabled !== false, '启用模型 ' + name,
           value => run(() => request('updateModels', { providerId: provider.id, changes: [{ id: model.id, enabled: value }] })))));
     }
