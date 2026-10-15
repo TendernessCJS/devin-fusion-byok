@@ -16,10 +16,15 @@ function normalizeNativeEntry(entry) {
     ...(dimension && typeof dimension === 'object'
       ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } } : {}),
     ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
+    ...(Number.isSafeInteger(entry.kind) ? { kind: entry.kind } : {}),
+    ...(entry.listed === true ? { listed: true } : {}),
+    ...(typeof entry.pickerListed === 'boolean' ? { pickerListed: entry.pickerListed } : {}),
     ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
     ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
     ...(entry.supportsImages ? { supportsImages: true } : {}),
-    ...(typeof entry.familyUid === 'string' && entry.familyUid && entry.familyUid.length <= 128 ? { familyUid: entry.familyUid } : {}) };
+    ...(typeof entry.familyUid === 'string' && entry.familyUid && entry.familyUid.length <= 128 ? { familyUid: entry.familyUid } : {}),
+    ...(Array.isArray(entry.sources)
+      ? { sources: entry.sources.filter(value => typeof value === 'string' && value.length <= 32).slice(0, 8) } : {}) };
 }
 
 function normalizedList(entries) {
@@ -51,26 +56,52 @@ function mergeNativeEntry(prior, incoming) {
   if (prior.fusionMetadata && !incoming.fusionMetadata) carried.fusionMetadata = prior.fusionMetadata;
   if (prior.harnessUids?.length && !incoming.harnessUids?.length) carried.harnessUids = prior.harnessUids;
   if (prior.familyUid && !incoming.familyUid) carried.familyUid = prior.familyUid;
-  return Object.keys(carried).length ? { ...incoming, ...carried } : incoming;
+  if (prior.kind !== undefined && incoming.kind === undefined) carried.kind = prior.kind;
+  if (prior.listed === true && incoming.listed !== true) carried.listed = prior.listed;
+  // A sorts-carrying observation delivers a fresh verdict (listed or not); a
+  // flat-catalog observation leaves the prior verdict untouched.
+  if (prior.pickerListed !== undefined && incoming.pickerListed === undefined) carried.pickerListed = prior.pickerListed;
+  const merged = Object.keys(carried).length ? { ...incoming, ...carried } : { ...incoming };
+  // Observation sources accumulate: a uid seen through any catalog keeps every
+  // surface it was ever observed on, so picker classification stays truthful.
+  const sources = new Set([...(prior.sources || []), ...(incoming.sources || [])]);
+  if (sources.size) merged.sources = [...sources].slice(0, 8);
+  return merged;
+}
+
+// The team settings allowlist is a complete-set verdict: whichever response
+// arrived last defines what the account may select. Replacing wholesale (never
+// union) keeps retired uids retired.
+function normalizeAllowedUids(uids) {
+  if (!Array.isArray(uids)) return [];
+  const seen = new Set();
+  for (const uid of uids) {
+    if (typeof uid !== 'string' || !uid || uid.length > 256 || /^(?:fusion-)?dfbyok-/.test(uid)) continue;
+    seen.add(uid);
+  }
+  return [...seen].sort();
 }
 
 function loadNativeCache(file, { now = Date.now, ttlMs = DEFAULT_TTL_MS, readFile = fs.readFileSync } = {}) {
+  const empty = { models: [], allowedUids: [] };
   try {
     const parsed = JSON.parse(readFile(file, 'utf8'));
-    if (parsed?.version !== CACHE_VERSION || !Array.isArray(parsed.models)) return [];
+    if (parsed?.version !== CACHE_VERSION || !Array.isArray(parsed.models)) return empty;
     const savedAt = Date.parse(parsed.savedAt);
-    if (!Number.isFinite(savedAt)) return [];
+    if (!Number.isFinite(savedAt)) return empty;
     const age = now() - savedAt;
-    if (age > ttlMs || age < -MAX_FUTURE_SKEW_MS) return [];
-    return normalizedList(parsed.models);
-  } catch { return []; }
+    if (age > ttlMs || age < -MAX_FUTURE_SKEW_MS) return empty;
+    return { models: normalizedList(parsed.models), allowedUids: normalizeAllowedUids(parsed.allowedUids) };
+  } catch { return empty; }
 }
 
-function saveNativeCache(file, entries, { now = Date.now,
+function saveNativeCache(file, entries, { now = Date.now, allowedUids,
   writeFile = fs.writeFileSync, rename = fs.renameSync, unlink = fs.rmSync } = {}) {
   const tmp = file + '.tmp';
   try {
     const payload = { version: CACHE_VERSION, savedAt: new Date(now()).toISOString(), models: normalizedList(entries) };
+    const allowed = normalizeAllowedUids(allowedUids);
+    if (allowed.length) payload.allowedUids = allowed;
     writeFile(tmp, JSON.stringify(payload), { mode: 0o600 });
     rename(tmp, file);
     return true;
@@ -80,4 +111,4 @@ function saveNativeCache(file, entries, { now = Date.now,
   }
 }
 
-module.exports = { CACHE_VERSION, DEFAULT_TTL_MS, MAX_ENTRIES, normalizeNativeEntry, mergeNativeEntry, loadNativeCache, saveNativeCache };
+module.exports = { CACHE_VERSION, DEFAULT_TTL_MS, MAX_ENTRIES, normalizeNativeEntry, normalizeAllowedUids, mergeNativeEntry, loadNativeCache, saveNativeCache };

@@ -60,9 +60,19 @@ async function readOnce({ root, port, signal, request }) {
     if (Number.isSafeInteger(entry.maxOutputTokens) && entry.maxOutputTokens > 0) next.maxOutputTokens = entry.maxOutputTokens;
     if (entry.supportsImages === true) next.supportsImages = true;
     if (typeof entry.familyUid === 'string' && entry.familyUid && entry.familyUid.length <= 128) next.familyUid = entry.familyUid;
+    if (Number.isSafeInteger(entry.kind)) next.kind = entry.kind;
+    if (entry.listed === true) next.listed = true;
+    if (typeof entry.pickerListed === 'boolean') next.pickerListed = entry.pickerListed;
+    if (Array.isArray(entry.sources)) {
+      const sources = entry.sources.filter(value => typeof value === 'string' && value.length <= 32).slice(0, 8);
+      if (sources.length) next.sources = sources;
+    }
     return next;
   });
-  return { status: models.length ? 'ready' : 'empty', models };
+  const allowedUids = Array.isArray(data.allowedUids)
+    ? [...new Set(data.allowedUids.filter(uid => isUpstreamUid(uid)))]
+    : [];
+  return { status: models.length ? 'ready' : 'empty', models, allowedUids };
 }
 async function readNativeModels({ root, port = PORT, signal, request = fetch }) {
   return withConnectionRetry(() => readOnce({ root, port, signal, request }), { signal });
@@ -76,7 +86,7 @@ async function readNativeModels({ root, port = PORT, signal, request = fetch }) 
 // loses every native Sidekick pairing until the host rewrites the cache.
 // Best-effort by design: the caller treats any failure as "not pushed" and keeps
 // relying on its own view, which is already the richer one.
-async function pushNativeModels({ root, models, port = PORT, signal, request = fetch }) {
+async function pushNativeModels({ root, models, allowedUids, port = PORT, signal, request = fetch }) {
   if (!Array.isArray(models) || !models.length) return { pushed: 0, reason: 'empty' };
   const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000);
   const base = 'http://127.0.0.1:' + port;
@@ -100,7 +110,8 @@ async function pushNativeModels({ root, models, port = PORT, signal, request = f
     const response = await request(base + '/_runtime/native-models', {
       method: 'POST', signal: timeout, redirect: 'error',
       headers: { authorization: 'Bearer ' + control.token, 'content-type': 'application/json' },
-      body: JSON.stringify({ models: payload }),
+      body: JSON.stringify({ models: payload,
+        ...(Array.isArray(allowedUids) && allowedUids.length ? { allowedUids: allowedUids.filter(uid => isUpstreamUid(uid)) } : {}) }),
     });
     if (!response.ok) return { pushed: 0, reason: 'rejected' };
     const result = await response.json();

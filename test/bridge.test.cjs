@@ -152,8 +152,8 @@ test('catalog RPCs report sanitized native models to the observer and keep hidde
   assert.deepEqual(json.clientModelConfigs.map(model => model.modelUid), [...catalog.models.map(model => model.uid), 'official-shown']);
   assert.equal(reports.length, 1);
   assert.deepEqual(reports[0], [
-    { uid: 'official-hidden', label: 'Hidden Official', disabled: true, harnessUids: [], isModelRouter: false },
-    { uid: 'official-shown', label: 'Shown Official', disabled: false, harnessUids: [], isModelRouter: false },
+    { uid: 'official-hidden', label: 'Hidden Official', disabled: true, harnessUids: [], isModelRouter: false, sources: ['cli'] },
+    { uid: 'official-shown', label: 'Shown Official', disabled: false, harnessUids: [], isModelRouter: false, sources: ['cli'] },
   ]);
   assert.ok(!JSON.stringify(reports).includes('secret.invalid'));
 });

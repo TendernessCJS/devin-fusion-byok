@@ -212,6 +212,9 @@ async function activate(context) {
   const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...nativeModels.values()]); };
   let management, manager;
   const nativeModels = new Map(), localNativeModels = new Map();
+  // Complete-set verdict from team settings: whichever observation arrived
+  // last decides which official uids the account may actually select.
+  let nativeAllowedUids = new Set();
   // Named presets are retired; run the one-shot config migration before
   // anything reads the config. The pre-migration bytes are kept beside it so a
   // preset list the user authored is never lost without a copy.
@@ -252,7 +255,7 @@ async function activate(context) {
   // judged "unchanged" and skipped — the push silently never happened (only the
   // previous successful push, whose timing differed, hid it).
   const pushPayload = () => [...nativeModels.values()].filter(entry => isUpstreamUid(entry?.uid));
-  const pushKey = () => localNativeModels.size + ':' + pushPayload().length + ':' +
+  const pushKey = () => localNativeModels.size + ':' + pushPayload().length + ':' + nativeAllowedUids.size + ':' +
     pushPayload().filter(entry => entry.sidekickDimension || entry.fusionMetadata).length;
   const pushToBackend = () => {
     if (activationDisposed || config().enabled === false || pushTimer !== undefined) return;
@@ -267,7 +270,7 @@ async function activate(context) {
       if (activationDisposed || config().enabled === false) return;
       lastPushAt = Date.now();
       lastPushKey = key;
-      pushNativeModels({ root, models: pushPayload() })
+      pushNativeModels({ root, models: pushPayload(), allowedUids: [...nativeAllowedUids] })
         .then(result => {
           if (result?.pushed) log('native-push', { pushed: result.pushed, count: result.count, improved: result.improved === true });
           else if (result?.reason && result.reason !== 'empty') log('native-push-skip', { reason: result.reason });
@@ -295,6 +298,7 @@ async function activate(context) {
       // Sidekick unresolvable and the mirrored combinations vanish.
       for (const entry of localNativeModels.values()) nativeModels.set(entry.uid, entry);
       for (const entry of result.models) nativeModels.set(entry.uid, mergeNativeEntry(nativeModels.get(entry.uid), entry));
+      if (Array.isArray(result.allowedUids) && result.allowedUids.length) nativeAllowedUids = new Set(result.allowedUids);
       try { await management?.publish(); } catch {}
       updateStatusBar();
       if (nativeModels.size !== nativeSyncSize) { nativeSyncSize = nativeModels.size; log('native-sync', { count: nativeSyncSize }); }
@@ -325,7 +329,12 @@ async function activate(context) {
         ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
         ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
         ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
-        ...(entry.supportsImages ? { supportsImages: true } : {}) };
+        ...(entry.supportsImages ? { supportsImages: true } : {}),
+        ...(Number.isSafeInteger(entry.kind) ? { kind: entry.kind } : {}),
+        ...(entry.listed === true ? { listed: true } : {}),
+        ...(typeof entry.pickerListed === 'boolean' ? { pickerListed: entry.pickerListed } : {}),
+        ...(Array.isArray(entry.sources)
+          ? { sources: entry.sources.filter(value => typeof value === 'string' && value.length <= 32).slice(0, 8) } : {}) };
       const previous = nativeModels.get(next.uid);
       const merged = mergeNativeEntry(previous, next);
       if (!previous || JSON.stringify(previous) !== JSON.stringify(merged)) {
@@ -394,7 +403,14 @@ async function activate(context) {
     const native = vscode.extensions.getExtension('codeium.windsurf');
     if (!native) throw new Error('未找到 Devin 原生扩展');
     const injected = await installLsInjection({ nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main),
-      createBridge: port => createLsBridge(port, { getCatalog: catalog, log, onNativeModels: observeNativeModels }), log });
+      createBridge: port => createLsBridge(port, { getCatalog: catalog, log, onNativeModels: observeNativeModels,
+        onAllowedUids: uids => {
+          const next = new Set(Array.isArray(uids) ? uids.filter(uid => typeof uid === 'string' && uid) : []);
+          if (!next.size || (next.size === nativeAllowedUids.size && [...next].every(uid => nativeAllowedUids.has(uid)))) return;
+          nativeAllowedUids = next;
+          void management?.publish()?.catch(() => {});
+          pushToBackend();
+        } }), log });
     if (generation !== activationGeneration || config().enabled === false || activationDisposed) {
       try { await injected.dispose(); } catch {}
       return;
@@ -591,7 +607,7 @@ async function activate(context) {
   };
   checkCliCaches();
   manager = createManager({ read: config, write: current => writeConfig(configFile, current),
-    nativeModels: () => [...nativeModels.values()], refreshNativeModels, nativeCatalogStatus: () => nativeCatalogStatus,
+    nativeModels: () => [...nativeModels.values()], nativeAllowedUids: () => nativeAllowedUids, refreshNativeModels, nativeCatalogStatus: () => nativeCatalogStatus,
     autoContinueStatus: () => autoContinue ? (autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
     refreshCliCaches, cliCacheStatus: () => cliCacheReport,
     selectFusion: saveFusionChoice,

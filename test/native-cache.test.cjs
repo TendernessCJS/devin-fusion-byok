@@ -39,26 +39,30 @@ test('normalizeNativeEntry keeps only the documented capability fields', () => {
   assert.equal(normalizeNativeEntry(entry()).supportsImages, undefined);
 });
 
+const EMPTY = { models: [], allowedUids: [] };
+
 test('loadNativeCache returns nothing for missing, malformed or mismatched files', () => {
   const missing = () => { throw new Error('ENOENT'); };
-  assert.deepEqual(loadNativeCache('/no/file', { readFile: missing }), []);
-  assert.deepEqual(loadNativeCache('/f', { readFile: () => '{not json' }), []);
-  assert.deepEqual(loadNativeCache('/f', { readFile: () => JSON.stringify({ version: 2, savedAt: new Date().toISOString(), models: [] }) }), []);
-  assert.deepEqual(loadNativeCache('/f', { readFile: () => JSON.stringify({ version: CACHE_VERSION, savedAt: new Date().toISOString(), models: 'x' }) }), []);
-  assert.deepEqual(loadNativeCache('/f', { readFile: () => JSON.stringify({ version: CACHE_VERSION, models: [] }) }), []);
-  assert.deepEqual(loadNativeCache('/f', { readFile: () => JSON.stringify({ version: CACHE_VERSION, savedAt: 'garbage', models: [] }) }), []);
+  assert.deepEqual(loadNativeCache('/no/file', { readFile: missing }), EMPTY);
+  assert.deepEqual(loadNativeCache('/f', { readFile: () => '{not json' }), EMPTY);
+  assert.deepEqual(loadNativeCache('/f', { readFile: () => JSON.stringify({ version: 2, savedAt: new Date().toISOString(), models: [] }) }), EMPTY);
+  assert.deepEqual(loadNativeCache('/f', { readFile: () => JSON.stringify({ version: CACHE_VERSION, savedAt: new Date().toISOString(), models: 'x' }) }), EMPTY);
+  assert.deepEqual(loadNativeCache('/f', { readFile: () => JSON.stringify({ version: CACHE_VERSION, models: [] }) }), EMPTY);
+  assert.deepEqual(loadNativeCache('/f', { readFile: () => JSON.stringify({ version: CACHE_VERSION, savedAt: 'garbage', models: [] }) }), EMPTY);
 });
 
 test('loadNativeCache enforces the TTL in both directions and dedupes by uid', () => {
   const now = 10_000_000_000;
   const file = data => () => JSON.stringify(data);
   const payload = savedAt => ({ version: CACHE_VERSION, savedAt: new Date(savedAt).toISOString(), models: [entry()] });
-  assert.deepEqual(loadNativeCache('/f', { now: () => now, readFile: file(payload(now - DEFAULT_TTL_MS - 1)) }), [], 'expired entries are dropped');
-  assert.deepEqual(loadNativeCache('/f', { now: () => now, readFile: file(payload(now + 2 * 60 * 60 * 1000)) }), [], 'far-future clocks are rejected');
+  assert.deepEqual(loadNativeCache('/f', { now: () => now, readFile: file(payload(now - DEFAULT_TTL_MS - 1)) }), EMPTY, 'expired entries are dropped');
+  assert.deepEqual(loadNativeCache('/f', { now: () => now, readFile: file(payload(now + 2 * 60 * 60 * 1000)) }), EMPTY, 'far-future clocks are rejected');
   const fresh = payload(now - 1000);
   fresh.models = [entry(), entry({ label: 'dup' }), { uid: '' }, null, entry({ uid: 'other' })];
+  fresh.allowedUids = ['MODEL_B', 'dfbyok-injected', 'MODEL_A', 'MODEL_B'];
   const loaded = loadNativeCache('/f', { now: () => now, readFile: file(fresh) });
-  assert.deepEqual(loaded.map(value => value.uid), ['swe-2-medium', 'other'], 'first occurrence wins and invalid entries are dropped');
+  assert.deepEqual(loaded.models.map(value => value.uid), ['swe-2-medium', 'other'], 'first occurrence wins and invalid entries are dropped');
+  assert.deepEqual(loaded.allowedUids, ['MODEL_A', 'MODEL_B'], 'the allowlist is deduped, sorted, and strips our own marker uids');
 });
 
 test('saveNativeCache writes atomically through tmp + rename with private permissions', () => {
@@ -66,7 +70,8 @@ test('saveNativeCache writes atomically through tmp + rename with private permis
   const writeFile = (file, data, options) => calls.push(['write', file, data, options]);
   const rename = (from, to) => calls.push(['rename', from, to]);
   let clock = 5000;
-  const ok = saveNativeCache('/root/native-cache.json', [entry(), entry({ uid: 'second' })], { now: () => clock, writeFile, rename });
+  const ok = saveNativeCache('/root/native-cache.json', [entry(), entry({ uid: 'second' })],
+    { now: () => clock, writeFile, rename, allowedUids: ['MODEL_B', 'fusion-dfbyok-own', 'MODEL_A', 'MODEL_B'] });
   assert.equal(ok, true);
   assert.equal(calls[0][0], 'write');
   assert.equal(calls[0][1], '/root/native-cache.json.tmp');
@@ -76,6 +81,7 @@ test('saveNativeCache writes atomically through tmp + rename with private permis
   assert.equal(saved.version, CACHE_VERSION);
   assert.equal(saved.savedAt, new Date(clock).toISOString());
   assert.deepEqual(saved.models.map(value => value.uid), ['swe-2-medium', 'second']);
+  assert.deepEqual(saved.allowedUids, ['MODEL_A', 'MODEL_B']);
 });
 
 test('saveNativeCache never throws and cleans up the temporary file on failure', () => {
@@ -107,8 +113,9 @@ test('the real filesystem round-trip writes a private readable file', t => {
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(fs.existsSync(file + '.tmp'), false);
   const loaded = loadNativeCache(file);
-  assert.equal(loaded.length, 1);
-  assert.equal(loaded[0].uid, 'swe-2-medium');
+  assert.equal(loaded.models.length, 1);
+  assert.equal(loaded.models[0].uid, 'swe-2-medium');
+  assert.deepEqual(loaded.allowedUids, []);
 });
 
 test('mergeNativeEntry keeps the richer form when a poorer copy arrives later', () => {

@@ -556,8 +556,29 @@ function roleSelected(ref, refs, defaultSelected) {
   return defaultSelected || refs.inclusions.has(key);
 }
 
+// Hidden semantics are family-level: a hidden uid takes down every sibling
+// sharing its familyUid, so a variant first observed after the blacklist was
+// written cannot leak back into the picker. Entries without a family stay
+// uid-scoped. `entries` supplies uid/family pairs via the given accessors.
+function expandHiddenByFamily(hiddenSet, entries, uidOf, familyOf) {
+  if (!hiddenSet.size) return hiddenSet;
+  const families = new Map();
+  for (const entry of entries) {
+    const uid = uidOf(entry), family = familyOf(entry);
+    if (uid && family) families.set(uid, family);
+  }
+  const hiddenFamilies = new Set();
+  for (const uid of hiddenSet) { const family = families.get(uid); if (family) hiddenFamilies.add(family); }
+  if (!hiddenFamilies.size) return hiddenSet;
+  const expanded = new Set(hiddenSet);
+  for (const [uid, family] of families) if (hiddenFamilies.has(family)) expanded.add(uid);
+  return expanded;
+}
+
 function buildRoleLists(config = {}, nativeModels = []) {
-  const hiddenSet = new Set(Array.isArray(config.hiddenNativeModelUids) ? config.hiddenNativeModelUids : []);
+  const hiddenSet = expandHiddenByFamily(
+    new Set(Array.isArray(config.hiddenNativeModelUids) ? config.hiddenNativeModelUids : []),
+    nativeModels, entry => entry && entry.uid, entry => (entry && entry.familyUid) || '');
   const officialRoles = discoverOfficialRoles(nativeModels, hiddenSet, config);
   const { eligibleNativeLeads, eligibleNativeSidekicks } = discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles);
   const strictSidekickUids = new Set(officialRoles.eligibleNativeSidekicks.keys());
@@ -941,13 +962,17 @@ function buildCatalog(config = {}, nativeModels = []) {
     lastFusionSelection: typeof config.lastFusionSelection === 'string' ? config.lastFusionSelection : undefined };
 }
 
+// Which surface an entry was observed through decides whether it can appear in
+// a model picker at all: the configs RPCs are selectable catalogs, user_status
+// is the account entitlement list (a superset containing legacy/internal rows).
+const OBSERVE_SOURCE = { GetCliModelConfigs: 'cli', GetCascadeModelConfigs: 'cascade', GetCommandModelConfigs: 'command', GetUserStatus: 'entitlement' };
 function rpcShape(rpc) {
   let value = typeof rpc === 'string' ? rpc : rpc?.path || rpc?.name || '';
   try { if (value.includes('://')) value = new URL(value).pathname; } catch { return null; }
   value = value.split('?')[0];
   const method = value.slice(value.lastIndexOf('/') + 1);
-  if (method === 'GetUserStatus') return { status: true, field: 1, sorts: true };
-  if (['GetCliModelConfigs', 'GetCascadeModelConfigs', 'GetCommandModelConfigs'].includes(method)) return { status: false, sorts: method === 'GetCascadeModelConfigs' };
+  if (method === 'GetUserStatus') return { status: true, field: 1, sorts: true, source: OBSERVE_SOURCE[method] };
+  if (['GetCliModelConfigs', 'GetCascadeModelConfigs', 'GetCommandModelConfigs'].includes(method)) return { status: false, sorts: method === 'GetCascadeModelConfigs', source: OBSERVE_SOURCE[method] };
   return null;
 }
 
@@ -980,6 +1005,22 @@ function protoUid(entry) {
   const uids = parseFields(entry).filter(field => field.number === 22);
   if (uids.length !== 1 || uids[0].wire !== 2) return '';
   return uids[0].value.toString('utf8');
+}
+
+// Inner field 23 is the server's family identifier — entries sharing it are
+// one model with a tier selector and toggles (glm-5.2 groups all six uids).
+// Absent or malformed just means "no family", never an invalid entry.
+function metaFamilyUid(inner) {
+  const fams = inner.filter(field => field.number === 23);
+  if (fams.length !== 1 || fams[0].wire !== 2) return '';
+  const value = fams[0].value.toString('utf8').trim();
+  return value && value.length <= 128 ? value : '';
+}
+
+function protoFamilyUid(entry) {
+  const infos = parseFields(entry).filter(field => field.number === 23);
+  if (infos.length !== 1 || infos[0].wire !== 2) return '';
+  try { return metaFamilyUid(parseFields(infos[0].value)); } catch { return ''; }
 }
 
 function protoDisabled(entry) {
@@ -1017,14 +1058,16 @@ function protoMetadata(entry) {
         supportsImages = true;
       }
     }
-    // Inner field 23 is the server's family identifier — entries sharing it are
-    // one model with a tier selector and toggles (glm-5.2 groups all six uids).
-    // Absent or malformed just means "no family", never an invalid entry.
-    const familyFields = inner.filter(field => field.number === 23);
-    let familyUid = '';
-    if (familyFields.length === 1 && familyFields[0].wire === 2) {
-      const value = familyFields[0].value.toString('utf8').trim();
-      if (value && value.length <= 128) familyUid = value;
+    const familyUid = metaFamilyUid(inner);
+    // Inner field 22 is a kind enum: absent = plain model, 3 = adaptive/fusion
+    // combination, 4 = purpose-built entry (review/check), 6 = routing
+    // pseudo-entry, 8 = dimension-bearing fusion participant. Kinds 4 and 6
+    // never appear as picker models even when present in a catalog payload.
+    const kinds = inner.filter(field => field.number === 22);
+    let kind;
+    if (kinds.length === 1 && kinds[0].wire === 0) {
+      const value = Number(kinds[0].value);
+      if (Number.isSafeInteger(value)) kind = value;
     }
     return {
       harnessUids: harnesses.map(field => field.value.toString('utf8')),
@@ -1033,6 +1076,7 @@ function protoMetadata(entry) {
       ...(maxOutputTokens ? { maxOutputTokens } : {}),
       ...(supportsImages ? { supportsImages: true } : {}),
       ...(familyUid ? { familyUid } : {}),
+      ...(kind !== undefined ? { kind } : {}),
     };
   } catch { return { harnessUids: [], isModelRouter: false }; }
 }
@@ -1160,10 +1204,10 @@ function jsonSidekick(entry) {
   return extractSidekickDimension(jsonFusionMetadata(entry));
 }
 
-function nativeEntries(entries, isJson) {
+function nativeEntries(entries, isJson, source, pickerLabels) {
   const seen = [];
   for (const entry of entries) {
-    let uid, label, disabled, meta, dimension, fusionMeta;
+    let uid, label, disabled, meta, dimension, fusionMeta, listed;
     if (isJson) {
       uid = nativeUid(entry);
       label = typeof entry?.label === 'string' ? entry.label : '';
@@ -1178,24 +1222,32 @@ function nativeEntries(entries, isJson) {
       meta = protoMetadata(entry);
       fusionMeta = protoFusionMetadata(entry);
       dimension = extractSidekickDimension(fusionMeta);
+      // Top-level field 6 marks legacy entitlement rows the picker still lists
+      // (GPT-4.1/GPT-4o); its absence on an otherwise identical row (o3) is how
+      // the picker drops retired models.
+      listed = num(entry, 6) === 1;
     }
     if (typeof uid !== 'string' || !uid || uid.length > 256 || ownUid(uid)) continue;
     seen.push({
       uid, label, disabled, harnessUids: meta.harnessUids, isModelRouter: meta.isModelRouter,
       ...(dimension ? { sidekickDimension: dimension } : {}),
       ...(fusionMeta ? { fusionMetadata: fusionMeta } : {}),
+      ...(meta.kind !== undefined ? { kind: meta.kind } : {}),
+      ...(listed ? { listed: true } : {}),
       ...(meta.maxTokens ? { maxTokens: meta.maxTokens } : {}),
       ...(meta.maxOutputTokens ? { maxOutputTokens: meta.maxOutputTokens } : {}),
       ...(meta.supportsImages ? { supportsImages: true } : {}),
       ...(meta.familyUid ? { familyUid: meta.familyUid } : {}),
+      ...(source ? { sources: [source] } : {}),
+      ...(pickerLabels ? { pickerListed: pickerLabels.has(label) } : {}),
     });
   }
   return seen;
 }
 
-function reportNativeModels(entries, isJson, report) {
+function reportNativeModels(entries, isJson, report, source) {
   if (typeof report !== 'function') return;
-  try { const seen = nativeEntries(entries, isJson); if (seen.length) report(seen); } catch {}
+  try { const seen = nativeEntries(entries, isJson, source); if (seen.length) report(seen); } catch {}
 }
 
 function defaultFusion(catalog) {
@@ -1205,13 +1257,13 @@ function defaultFusion(catalog) {
   return fusion?.sidekickNative === false && fusion?.leadNative !== true && has(catalog?.routes, fusion.leadUid) && has(catalog?.routes, fusion.sidekickUid) ? fusion : null;
 }
 
-function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNativeModels) {
+function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNativeModels, source) {
   const models = Array.isArray(catalog.models) ? catalog.models : [];
   const parsed = parseFields(data), existingLabels = new Set(models.map(model => model.label));
   const entries = parsed.filter(field => field.number === 1 && field.wire === 2).map(field => field.value);
   reportFusionStatus(entries, false, onFusionStatus);
-  reportNativeModels(entries, false, onNativeModels);
-  const hiddenNative = new Set(catalog.hiddenNativeModelUids || []);
+  reportNativeModels(entries, false, onNativeModels, source);
+  const hiddenNative = expandHiddenByFamily(new Set(catalog.hiddenNativeModelUids || []), entries, protoUid, protoFamilyUid);
   const hiddenFusion = new Set(catalog.hiddenFusionUids || []);
   const matrixUids = catalog.matrixUids instanceof Set ? catalog.matrixUids : new Set(catalog.matrixUids || []);
   const retainedLabels = new Set(models.map(model => model.label));
@@ -1271,7 +1323,7 @@ function nativeUid(entry) {
   const uid = camel ?? snake;
   return typeof uid === 'string' ? uid : '';
 }
-function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativeModels) {
+function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativeModels, source) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid catalog JSON');
   const models = Array.isArray(catalog.models) ? catalog.models : [];
   const modelsKey = jsonKey(data, 'clientModelConfigs', 'client_model_configs');
@@ -1279,8 +1331,9 @@ function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativ
   const existing = data[modelsKey] || [], sorts = data[sortsKey] || [];
   if (!Array.isArray(existing) || !Array.isArray(sorts)) throw new Error('Invalid catalog list');
   reportFusionStatus(existing, true, onFusionStatus);
-  reportNativeModels(existing, true, onNativeModels);
-  const hiddenNative = new Set(catalog.hiddenNativeModelUids || []);
+  reportNativeModels(existing, true, onNativeModels, source);
+  const hiddenNative = expandHiddenByFamily(new Set(catalog.hiddenNativeModelUids || []), existing, nativeUid,
+    model => jsonMetadata(model).familyUid || '');
   const hiddenFusion = new Set(catalog.hiddenFusionUids || []);
   const matrixUids = catalog.matrixUids instanceof Set ? catalog.matrixUids : new Set(catalog.matrixUids || []);
   const labels = models.map(model => model.label), existingLabels = new Set(labels);
@@ -1320,15 +1373,15 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
       typeof onFusionStatus !== 'function' && typeof onNativeModels !== 'function') return data;
   try {
     if (format.json === true) {
-      if (!shape.status) return augmentJsonList(data, catalog, shape.sorts, onFusionStatus, onNativeModels);
+      if (!shape.status) return augmentJsonList(data, catalog, shape.sorts, onFusionStatus, onNativeModels, shape.source);
       const statusKey = jsonKey(data, 'userStatus', 'user_status'), status = data?.[statusKey];
       if (!status || typeof status !== 'object' || Array.isArray(status)) return data;
       const configKey = jsonKey(status, 'cascadeModelConfigData', 'cascade_model_config_data');
-      return { ...data, [statusKey]: { ...status, [configKey]: augmentJsonList(status[configKey] || {}, catalog, true, onFusionStatus, onNativeModels) } };
+      return { ...data, [statusKey]: { ...status, [configKey]: augmentJsonList(status[configKey] || {}, catalog, true, onFusionStatus, onNativeModels, shape.source) } };
     }
     if (!Buffer.isBuffer(data)) return data;
-    if (!shape.status) return augmentProtoList(data, catalog, shape.sorts, onFusionStatus, onNativeModels);
-    return rewriteMessage(data, shape.field, status => rewriteMessage(status, 33, list => augmentProtoList(list, catalog, true, onFusionStatus, onNativeModels), true));
+    if (!shape.status) return augmentProtoList(data, catalog, shape.sorts, onFusionStatus, onNativeModels, shape.source);
+    return rewriteMessage(data, shape.field, status => rewriteMessage(status, 33, list => augmentProtoList(list, catalog, true, onFusionStatus, onNativeModels, shape.source), true));
   } catch { return data; }
 }
 
@@ -1392,6 +1445,40 @@ function staleFusionUids(data, options) {
   return stale;
 }
 
+// Sort sections (field 2 in a catalog list message) carry the picker's actual
+// layout: named groups of model *labels*. A label present there renders as a
+// picker row when its uid is also allowlisted; catalog entries whose label
+// never appears (SWE-check, review rows) are unreachable through the picker.
+function protoPickerLabels(fields) {
+  const labels = new Set();
+  for (const section of fields.filter(field => field.number === 2 && field.wire === 2)) {
+    try {
+      for (const group of parseFields(section.value).filter(part => part.number === 2 && part.wire === 2)) {
+        for (const label of parseFields(group.value).filter(part => part.number === 2 && part.wire === 2)) {
+          labels.add(label.value.toString('utf8'));
+        }
+      }
+    } catch {}
+  }
+  return labels.size ? labels : null;
+}
+
+function jsonPickerLabels(payload) {
+  const sorts = payload[jsonKey(payload, 'clientModelSorts', 'client_model_sorts')];
+  if (!Array.isArray(sorts)) return null;
+  const labels = new Set();
+  for (const sort of sorts) {
+    const groups = sort?.groups;
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      const list = group?.modelLabels ?? group?.model_labels;
+      if (!Array.isArray(list)) continue;
+      for (const label of list) if (typeof label === 'string') labels.add(label);
+    }
+  }
+  return labels.size ? labels : null;
+}
+
 function collectNativeModels(data, { rpc, format = {} } = {}) {
   const shape = rpcShape(rpc);
   if (!shape) return [];
@@ -1406,16 +1493,52 @@ function collectNativeModels(data, { rpc, format = {} } = {}) {
       }
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
       const list = payload[jsonKey(payload, 'clientModelConfigs', 'client_model_configs')];
-      return Array.isArray(list) ? nativeEntries(list, true) : [];
+      const picker = shape.sorts ? jsonPickerLabels(payload) : null;
+      return Array.isArray(list) ? nativeEntries(list, true, shape.source, picker) : [];
     }
     if (!Buffer.isBuffer(data)) return [];
-    if (!shape.status) return nativeEntries(parseFields(data).filter(field => field.number === 1 && field.wire === 2).map(field => field.value), false);
+    if (!shape.status) {
+      const parsed = parseFields(data);
+      const picker = shape.sorts ? protoPickerLabels(parsed) : null;
+      return nativeEntries(parsed.filter(field => field.number === 1 && field.wire === 2).map(field => field.value), false, shape.source, picker);
+    }
     const statuses = parseFields(data).filter(field => field.number === 1);
     if (statuses.length !== 1 || statuses[0].wire !== 2) return [];
     const lists = parseFields(statuses[0].value).filter(field => field.number === 33);
     if (lists.length !== 1 || lists[0].wire !== 2) return [];
-    return nativeEntries(parseFields(lists[0].value).filter(field => field.number === 1 && field.wire === 2).map(field => field.value), false);
+    const inner = parseFields(lists[0].value);
+    return nativeEntries(inner.filter(field => field.number === 1 && field.wire === 2).map(field => field.value), false, shape.source, protoPickerLabels(inner));
   } catch { return []; }
+}
+
+// GetCliTeamSettings carries the account's allowed model uid list (proto field
+// 7, JSON allowedModelUids) — the authoritative gate for whether an official
+// model appears in a picker at all. Catalog payloads keep retired models and
+// even reference them from sort groups, so catalog presence alone cannot tell
+// a picker row from a dangling entitlement leftover. Returns null when the
+// payload carries no restriction: an absent or empty list means unrestricted.
+function collectAllowedUids(data, { rpc, format = {} } = {}) {
+  let value = typeof rpc === 'string' ? rpc : rpc?.path || rpc?.name || '';
+  try { if (value.includes('://')) value = new URL(value).pathname; } catch { return null; }
+  if (value.split('?')[0] !== '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings') return null;
+  try {
+    if (format.json === true) {
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+      const key = jsonKey(data, 'allowedModelUids', 'allowed_model_uids');
+      const list = data[key];
+      if (!Array.isArray(list) || !list.length) return null;
+      const uids = list.filter(uid => typeof uid === 'string' && uid && uid.length <= 256);
+      return uids.length === list.length ? uids : null;
+    }
+    if (!Buffer.isBuffer(data)) return null;
+    const uids = [];
+    for (const field of parseFields(data)) {
+      if (field.number !== 7) continue;
+      if (field.wire !== 2) return null;
+      uids.push(field.value.toString('utf8'));
+    }
+    return uids.length ? uids : null;
+  } catch { return null; }
 }
 
 // The CLI intersects the model catalog with its configured choices. Register
@@ -1519,4 +1642,4 @@ function resolveAssignment(data, format = {}, catalog, lockedFusionUids) {
   } catch { return null; }
 }
 
-module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, buildRoleLists, refKey, presetUid, migrateFusionConfig, staleFusionUids };
+module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, collectAllowedUids, buildRoleLists, refKey, presetUid, migrateFusionConfig, staleFusionUids };

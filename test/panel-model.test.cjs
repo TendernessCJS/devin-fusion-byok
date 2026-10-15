@@ -456,9 +456,9 @@ test('native model hide and restore persist a validated exclusion list with obse
   const f = memory({ nativeModels: () => observed });
   let state = await f.manager.dispatch('ready');
   assert.deepEqual(nativeMembers(state), [
-    { uid: 'swe-2-max', label: 'Official SWE', disabled: false, hidden: false, eligible: false },
     { uid: 'claude-x', label: 'Claude X', disabled: true, hidden: false, eligible: false },
-  ]);
+    { uid: 'swe-2-max', label: 'Official SWE', disabled: false, hidden: false, eligible: false },
+  ], 'families are emitted in vendor order, not observation order');
   state = await f.manager.dispatch('setNativeModelHidden', { uid: 'swe-2-max', hidden: true });
   assert.deepEqual(f.read().hiddenNativeModelUids, ['swe-2-max']);
   assert.equal(nativeMember(state, 'swe-2-max').hidden, true);
@@ -660,8 +660,7 @@ test('publicState groups observed natives into server families without fusion en
   assert.equal(glm5.variants, 6);
   assert.deepEqual(glm5.efforts, ['No Thinking', 'High', 'Max'], 'efforts are deduped and sorted by order');
   assert.deepEqual(glm5.toggles, ['1M Context']);
-  assert.equal(glm5.hidden, false);
-  assert.equal(glm5.mixed, true, 'a partially hidden family reports mixed');
+  assert.equal(glm5.hidden, true, 'one hidden member marks the whole family hidden');
   assert.deepEqual(glm5.members.find(member => member.uid === 'glm-5-2-max').hidden, true);
 
   const opus = state.nativeFamilies.find(family => family.id === 'claude-opus-4.6');
@@ -678,11 +677,59 @@ test('publicState groups observed natives into server families without fusion en
   const labels = state.nativeFamilies.map(family => family.label);
   assert.equal(new Set(labels).size, labels.length, 'family labels stay unique');
 
+  assert.equal(glm5.vendor, 'Zhipu AI');
+  assert.equal(opus.vendor, 'Anthropic');
+  assert.equal(fastSwe.vendor, 'Devin');
+  assert.equal(solo.vendor, '其他', 'an unrecognized uid falls into the catch-all vendor');
+  const vendorRank = id => ['Anthropic', 'OpenAI', 'Google', 'xAI', 'DeepSeek', 'Moonshot', 'Zhipu AI',
+    'NVIDIA', 'Mistral', 'Meta', 'Alibaba', 'MiniMax', 'Devin', '其他'].indexOf(state.nativeFamilies.find(family => family.id === id).vendor);
+  const ranks = state.nativeFamilies.map(family => vendorRank(family.id));
+  assert.deepEqual([...ranks].sort((a, b) => a - b), ranks, 'families are sorted by vendor order');
+
   const allHidden = state.nativeFamilies.find(family => family.id === 'uid:solo-a').hidden;
   assert.equal(allHidden, false);
 });
 
-test('a fully hidden family reports hidden while a partially hidden one reports mixed', async () => {
+test('families no picker can select are classified as internal entries', async () => {
+  const observed = [
+    { uid: 'swe-2-high', label: 'SWE-2 High', disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'swe-2' },
+    { uid: 'adaptive', label: 'Adaptive', disabled: false, isModelRouter: true, harnessUids: [] },
+    { uid: 'astra-high', label: 'Astra High', disabled: false, isModelRouter: false, harnessUids: [], familyUid: 'astra',
+      fusionMetadata: [{ key: 'Effort', order: 1, name: 'High' }] },
+    { uid: 'opus-review', label: 'Opus Review', disabled: false, isModelRouter: false, harnessUids: [] },
+    { uid: 'private-1', label: 'Private One', disabled: false, isModelRouter: false, harnessUids: [] },
+  ];
+  const state = publicState(fixture(), observed);
+  const byId = id => state.nativeFamilies.find(family => family.id === id);
+  assert.equal(byId('swe-2').internal, false, 'a harnessed model is picker-selectable');
+  assert.equal(byId('uid:adaptive').internal, true, 'router cards fold into internal — they are routing surfaces, not models');
+  assert.equal(byId('astra').internal, false, 'declared fusion dimensions make a sourceless harnessless model selectable');
+  assert.equal(byId('uid:opus-review').internal, true, 'no harness, dimensions or router flag means internal');
+  assert.equal(byId('uid:private-1').internal, true);
+});
+
+test('picker visibility uses kind enum, observation source and the listed flag', async () => {
+  const observed = [
+    { uid: 'review-a', label: 'Review A', disabled: false, isModelRouter: false, harnessUids: ['h'], kind: 4, sources: ['cli'] },
+    { uid: 'route-a', label: 'Route A', disabled: false, isModelRouter: true, harnessUids: [], kind: 6, sources: ['cli'] },
+    { uid: 'legacy-listed', label: 'Legacy Listed', disabled: false, isModelRouter: false, harnessUids: [], listed: true, sources: ['entitlement'] },
+    { uid: 'legacy-retired', label: 'Legacy Retired', disabled: false, isModelRouter: false, harnessUids: [],
+      fusionMetadata: [{ key: 'Effort', order: 1, name: 'High' }], sources: ['entitlement'] },
+    { uid: 'command-only', label: 'Command Only', disabled: false, isModelRouter: false, harnessUids: ['h'], sources: ['command'] },
+    { uid: 'cli-dim', label: 'Cli Dim', disabled: false, isModelRouter: false, harnessUids: [],
+      fusionMetadata: [{ key: 'Effort', order: 1, name: 'High' }], sources: ['cli', 'entitlement'] },
+  ];
+  const state = publicState(fixture(), observed);
+  const byId = id => state.nativeFamilies.find(family => family.id === 'uid:' + id);
+  assert.equal(byId('review-a').internal, true, 'kind 4 review rows stay internal even inside a catalog');
+  assert.equal(byId('route-a').internal, true, 'kind 6 routing pseudo-entries stay internal');
+  assert.equal(byId('legacy-listed').internal, false, 'the listed flag keeps an entitlement-only row visible');
+  assert.equal(byId('legacy-retired').internal, true, 'dimensions observed only via entitlement do not make a picker row');
+  assert.equal(byId('command-only').internal, true, 'command-catalog-only entries are not in the model picker');
+  assert.equal(byId('cli-dim').internal, false, 'a selectable-catalog observation makes a harnessless dimension member visible');
+});
+
+test('hiding is family-level: any hidden member marks the whole family hidden', async () => {
   const observed = [
     { uid: 'x-high', label: 'X High', disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'x' },
     { uid: 'x-max', label: 'X Max', disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'x' },
@@ -693,12 +740,10 @@ test('a fully hidden family reports hidden while a partially hidden one reports 
   assert.deepEqual(f.read().hiddenNativeModelUids, ['x-high', 'x-max']);
   const family = state.nativeFamilies.find(item => item.id === 'x');
   assert.equal(family.hidden, true);
-  assert.equal(family.mixed, false);
   state = await f.manager.dispatch('setNativeModelHidden', { uid: 'x-high', hidden: false });
   assert.deepEqual(f.read().hiddenNativeModelUids, ['x-max']);
   const partial = state.nativeFamilies.find(item => item.id === 'x');
-  assert.equal(partial.hidden, false);
-  assert.equal(partial.mixed, true);
+  assert.equal(partial.hidden, true, 'a leftover hidden uid still hides the family');
   state = await f.manager.dispatch('setNativeModelHidden', { uids: ['x-high', 'x-max'], hidden: false });
   assert.deepEqual(f.read().hiddenNativeModelUids, []);
   assert.equal(state.nativeFamilies.find(item => item.id === 'x').hidden, false);

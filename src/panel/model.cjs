@@ -59,9 +59,39 @@ function modelPatch(input, previous) {
   if (model.maxOutputTokens > model.contextWindow) fail('最大输出长度不能超过上下文长度。');
   return model;
 }
-function publicState(config, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready', cliCache) {
+// The settings list mirrors the official picker's provider sections. The wire
+// carries no vendor field, so the family id's prefix decides; codenamed uids
+// (MODEL_PRIVATE_*) fall back to the label, which carries the real model name.
+// Truly unrecognized entries land in 其他 rather than inventing a name.
+const NATIVE_VENDORS = [
+  ['Anthropic', /^(?:claude|opus|MODEL_CLAUDE)\b/i],
+  ['OpenAI', /^(?:gpt|o[0-9]|codex|chatgpt|MODEL_(?:CHAT_)?GPT|MODEL_CHAT_O)\b/i],
+  ['Google', /^(?:gemini|MODEL_GOOGLE)\b/i],
+  ['xAI', /^(?:grok|xai|MODEL_XAI)\b/i],
+  ['DeepSeek', /^deepseek\b/i],
+  ['Moonshot', /^kimi\b/i],
+  ['Zhipu AI', /^(?:glm|zhipu|zai)\b/i],
+  ['NVIDIA', /^(?:nemotron|nvidia)\b/i],
+  ['Mistral', /^(?:mistral|magistral|devstral|codestral|pixtral|voxtral)\b/i],
+  ['Meta', /^llama\b/i],
+  ['Alibaba', /^qwen\b/i],
+  ['MiniMax', /^minimax\b/i],
+  ['Devin', /^(?:swe\b|fusion$|adaptive$|arena|subagent|memory-migration|MODEL_DEVIN|devin)\b/i],
+];
+const OTHER_VENDOR = '其他';
+function nativeVendor(id, label = '') {
+  const key = id.startsWith('uid:') ? id.slice(4) : id;
+  for (const candidate of [key, label]) {
+    const rank = NATIVE_VENDORS.findIndex(([, pattern]) => pattern.test(candidate));
+    if (rank >= 0) return { name: NATIVE_VENDORS[rank][0], rank };
+  }
+  return { name: OTHER_VENDOR, rank: NATIVE_VENDORS.length };
+}
+function publicState(config, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready', cliCache, allowedUids) {
   const catalog = buildCatalog({ ...config, enabled: true }, nativeModels);
   const hidden = new Set(catalog.hiddenNativeModelUids || []);
+  const allowed = allowedUids instanceof Set ? (allowedUids.size ? allowedUids : null)
+    : (Array.isArray(allowedUids) && allowedUids.length ? new Set(allowedUids) : null);
   const roleLists = buildRoleLists(config, nativeModels);
   const eligibleLeads = new Set(roleLists.lead.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
   const eligibleSidekicks = new Set(roleLists.sidekick.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
@@ -69,7 +99,10 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
   // one upstream "model" is a tier selector plus toggles. fusion-* combination
   // entries are governed on the Fusion tab and never appear here.
   const FAMILY_INFO_DIMS = new Set(['Lead', 'Effort', 'Reasoning Effort', 'Sidekick', 'Recommended Sidekick']);
-  const FAMILY_MARKED_UID = /-(none|minimal|low|medium|high|xhigh|max|ultra|fast|priority|thinking|\d+m)$/i;
+  // `-lightning` marks a fast-mode variant uid (swe-2-medium-lightning), but
+  // "Lightning" is deliberately absent from the label suffix: SWE-1.7
+  // Lightning is its own family whose name must survive stripping.
+  const FAMILY_MARKED_UID = /-(none|minimal|low|medium|high|xhigh|max|ultra|fast|lightning|priority|thinking|\d+m)$/i;
   const FAMILY_LABEL_SUFFIX = /(?:\s+(?:No Thinking|None|Minimal|Low|Medium|High|XHigh|Max|Ultra|Thinking|Fast|Context|\d+M))+$/i;
   const familiesById = new Map();
   for (const entry of nativeModels) {
@@ -109,11 +142,44 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
         } else if (!FAMILY_INFO_DIMS.has(dim.key) && dim.order !== 0) toggles.add(dim.key);
       }
     }
-    const hiddenCount = members.filter(member => member.hidden).length;
-    return { id: family.id, label, variants: members.length,
+    // Hidden is family-level: any member uid in the blacklist hides the whole
+    // family (the augment side expands by familyUid the same way), so the
+    // "partially hidden" state cannot occur — the switch is all-or-nothing.
+    const anyHidden = members.some(member => member.hidden);
+    // Picker visibility, ordered by what we can prove: review/check rows
+    // (kind 4), routing pseudo-entries (kind 6) and router cards never appear
+    // even inside a selectable catalog — Adaptive/Fusion render in the
+    // official picker but are routing surfaces, not real models, so the user
+    // wants them folded into internal. The team settings allowlist is the
+    // authoritative gate once observed — a catalog row whose uid is absent
+    // from it (o3, Opus Review, Codex Spark) is a retired leftover no picker
+    // renders. A `pickerListed === false` verdict (the label is absent from
+    // every sort group of a sorts-carrying payload) likewise means no picker
+    // row, which also covers allowlisted-but-unlisted rows like SWE-check
+    // when the allowlist itself has not landed yet. Before the first
+    // allowlist, fall back to observation-source and capability heuristics:
+    // `listed` keeps retired-but-offered rows visible (GPT-4.1 vs o3),
+    // entitlement/command-only entries are hidden, and harness/metadata mark
+    // real picker rows for sourceless legacy observations.
+    const internal = family.members.every(member => {
+      const entry = member.entry || {};
+      if (entry.kind === 4 || entry.kind === 6 || entry.isModelRouter === true) return true;
+      if (allowed && !allowed.has(member.uid)) return true;
+      if (entry.pickerListed === false) return true;
+      if (allowed) return false;
+      if (entry.listed === true) return false;
+      if (Array.isArray(entry.sources) && entry.sources.length
+        && !entry.sources.some(source => source === 'cli' || source === 'cascade')) return true;
+      if (Array.isArray(entry.harnessUids) && entry.harnessUids.length) return false;
+      if (!Array.isArray(entry.sources) || !entry.sources.length) {
+        return !(Array.isArray(entry.fusionMetadata) && entry.fusionMetadata.length);
+      }
+      return false;
+    });
+    return { id: family.id, label, variants: members.length, internal,
       efforts: [...effortOrders.entries()].sort((a, b) => a[1] - b[1]).map(([name]) => name),
       toggles: [...toggles].sort(),
-      hidden: hiddenCount === members.length, mixed: hiddenCount > 0 && hiddenCount < members.length,
+      hidden: anyHidden,
       members };
   });
   // A hidden uid whose model left the observed catalog still gets a single-
@@ -124,9 +190,13 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     const id = `uid:${uid}`;
     const label = uid;
     nativeFamilies.push({ id, label, variants: 1, efforts: [], toggles: [],
-      hidden: true, mixed: false,
+      hidden: true, internal: false,
       members: [{ uid, label, disabled: false, eligible: false, hidden: true }] });
   }
+  // Vendor grouping mirrors the official picker's provider sections; stable
+  // sort keeps observation order inside each vendor.
+  for (const family of nativeFamilies) family.vendor = nativeVendor(family.id, family.label).name;
+  nativeFamilies.sort((a, b) => nativeVendor(a.id, a.label).rank - nativeVendor(b.id, b.label).rank);
   // The Fusion card selection this extension last observed. It is a memory
   // (`lastFusionSelection`), so picking a plain model afterwards leaves it
   // pointing at the previous combination — the panel therefore labels it as
@@ -164,13 +234,13 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     updateProxy: maskProxy(config.updateProxy),
   };
 }
-function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable' }) {
+function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable' }) {
   let queue = Promise.resolve();
   let pendingImport;
   const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey]);
   const state = () => {
     const config = read(), status = nativeCatalogStatus();
-    const result = publicState(config, nativeModels(), autoContinueStatus(), status, cliCacheStatus());
+    const result = publicState(config, nativeModels(), autoContinueStatus(), status, cliCacheStatus(), nativeAllowedUids());
     result.nativeCatalogStatus = status;
     const provider = config.providers.find(p => p.id === pendingImport?.providerId);
     result.importCandidates = provider && signature(provider) === pendingImport.signature ? {

@@ -245,12 +245,12 @@ test('a cache report without rewrites says so instead of staying blank', () => {
 
 const FAMILY_FIXTURE = [
   { id: 'glm-5.2', label: 'GLM-5.2', variants: 3, efforts: ['No Thinking', 'High', 'Max'], toggles: ['1M Context'],
-    hidden: false, mixed: true,
+    hidden: true,
     members: [
       { uid: 'glm-5-2', label: 'GLM-5.2 High', disabled: false, eligible: true, hidden: false },
       { uid: 'glm-5-2-max', label: 'GLM-5.2 Max', disabled: false, eligible: true, hidden: true },
       { uid: 'glm-5-2-1m', label: 'GLM-5.2 High 1M', disabled: false, eligible: false, hidden: false }] },
-  { id: 'swe-1.6', label: 'SWE-1.6', variants: 1, efforts: [], toggles: [], hidden: true, mixed: false,
+  { id: 'swe-1.6', label: 'SWE-1.6', variants: 1, efforts: [], toggles: [], hidden: true,
     members: [{ uid: 'swe-1-6', label: 'SWE-1.6', disabled: false, eligible: false, hidden: true }] },
 ];
 
@@ -258,7 +258,7 @@ test('official models render as one row per family with a single family switch',
   const { byId, posts, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FAMILY_FIXTURE } } });
   const list = byId('native-list');
-  assert.equal(byId('native-count').textContent, '1 / 2 个模型 · 已隐藏 2 个变体');
+  assert.equal(byId('native-count').textContent, '0 / 2 个模型 · 已隐藏 2');
 
   const rows = collect(list, 'div', node => node.className === 'row');
   assert.equal(collect(list, 'details', node => node.className === 'fold').length, 0,
@@ -266,19 +266,19 @@ test('official models render as one row per family with a single family switch',
   assert.equal(rows.length, 2, 'one row per family, no member rows');
   assert.match(textOf(rows[0]), /GLM-5\.2/);
   assert.match(textOf(rows[0]), /3 个变体 · Effort No Thinking \/ High \/ Max · 1M Context/);
-  assert.match(textOf(rows[0]), /部分隐藏/, 'a partially hidden family says so');
+  assert.doesNotMatch(textOf(rows[0]), /部分隐藏/, 'hiding is all-or-nothing at family level');
   assert.doesNotMatch(textOf(rows[0]), /不能作为 Fusion/, 'eligible members mean no capability note');
   assert.match(textOf(rows[1]), /不能作为 Fusion 的 Lead 或 Sidekick/, 'no eligible member adds the note');
 
   const flush = () => Promise.resolve().then(() => {});
   const familySwitch = collect(rows[0], 'input', node => node.className === 'switch')[0];
   assert.equal(familySwitch.attributes['aria-label'], '在列表中显示 GLM-5.2 的 3 个变体');
-  assert.equal(familySwitch.checked, true);
-  familySwitch.listeners.change({ target: { checked: false } });
-  const hideAll = posts.find(message => message.type === 'setNativeModelHidden');
-  assert.deepEqual(JSON.parse(JSON.stringify(hideAll.payload)),
-    { uids: ['glm-5-2', 'glm-5-2-max', 'glm-5-2-1m'], hidden: true }, 'the family switch hides every member');
-  receive({ data: { type: 'result', id: hideAll.id, ok: true } });
+  assert.equal(familySwitch.checked, false, 'one hidden member renders the family switch off');
+  familySwitch.listeners.change({ target: { checked: true } });
+  const showAll = posts.find(message => message.type === 'setNativeModelHidden');
+  assert.deepEqual(JSON.parse(JSON.stringify(showAll.payload)),
+    { uids: ['glm-5-2', 'glm-5-2-max', 'glm-5-2-1m'], hidden: false }, 'the family switch clears every member');
+  receive({ data: { type: 'result', id: showAll.id, ok: true } });
   await flush();
 
   // A rebuild must keep the switch truthful: hidden families stay off, and
@@ -287,7 +287,7 @@ test('official models render as one row per family with a single family switch',
   const rowsAfter = collect(byId('native-list'), 'div', node => node.className === 'row');
   assert.equal(collect(byId('native-list'), 'details', node => node.className === 'fold').length, 0);
   assert.equal(rowsAfter.length, 2);
-  assert.equal(collect(rowsAfter[0], 'input', node => node.className === 'switch')[0].checked, true);
+  assert.equal(collect(rowsAfter[0], 'input', node => node.className === 'switch')[0].checked, false);
   assert.equal(collect(rowsAfter[1], 'input', node => node.className === 'switch')[0].checked, false,
     'the hidden family renders off after a full rebuild');
 });

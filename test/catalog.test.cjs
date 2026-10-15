@@ -463,8 +463,8 @@ test('hidden official uids are removed from proto lists while observation still 
   const entries = configs(output);
   assert.deepEqual(entries.map(entry => str(entry, 22)), [...catalog.models.map(model => model.uid), 'swe-2-high', 'fusion-official-open']);
   assert.deepEqual(nativeReport.map(entry => entry.uid), ['fusion-official-locked', 'swe-2-max', 'swe-2-high', 'fusion-official-open']);
-  assert.deepEqual(nativeReport[0], { uid: 'fusion-official-locked', label: 'Fusion (Locked)', disabled: true, harnessUids: [], isModelRouter: false });
-  assert.deepEqual(nativeReport[2], { uid: 'swe-2-high', label: 'Shared Label', disabled: false, harnessUids: [], isModelRouter: false });
+  assert.deepEqual(nativeReport[0], { uid: 'fusion-official-locked', label: 'Fusion (Locked)', disabled: true, harnessUids: [], isModelRouter: false, sources: ['cascade'] });
+  assert.deepEqual(nativeReport[2], { uid: 'swe-2-high', label: 'Shared Label', disabled: false, harnessUids: [], isModelRouter: false, sources: ['cascade'] });
   assert.deepEqual(fusionReport, { lockedUids: ['fusion-official-locked'], seen: ['fusion-official-locked', 'fusion-official-open'] });
   const groups = fields(getNested(output, 2), 2);
   assert.equal(groups.length, 2, 'our own group plus the preserved official one');
@@ -485,7 +485,7 @@ test('hidden official uids are removed from JSON lists including snake_case alia
   const output = augmentCatalog(input, { rpc: 'GetCascadeModelConfigs', format: json, catalog: withHidden, onNativeModels: entries => { report = entries; } });
   assert.deepEqual(output.client_model_configs.map(entry => entry.modelUid ?? entry.model_uid), [...catalog.models.map(model => model.uid), 'swe-2-high', 'fusion-official-open']);
   assert.deepEqual(report.map(entry => entry.uid), ['fusion-official-locked', 'swe-2-max', 'swe-2-high', 'fusion-official-open']);
-  assert.deepEqual(report[0], { uid: 'fusion-official-locked', label: 'Fusion (Locked)', disabled: true, harnessUids: [], isModelRouter: false });
+  assert.deepEqual(report[0], { uid: 'fusion-official-locked', label: 'Fusion (Locked)', disabled: true, harnessUids: [], isModelRouter: false, sources: ['cascade'] });
   const groups = output.client_model_sorts[0].groups;
   assert.equal(groups.length, 2, 'our own group plus the preserved official one');
   assert.equal(groups[0].groupName, 'Devin Fusion BYOK');
@@ -502,8 +502,8 @@ test('hidden filtering and native observation work with an empty own catalog', (
   let report;
   const output = augmentCatalog(input, { rpc: 'GetCascadeModelConfigs', format: proto, catalog: bare, onNativeModels: entries => { report = entries; } });
   assert.deepEqual(configs(output).map(entry => str(entry, 22)), ['official-other']);
-  assert.deepEqual(report, [{ uid: 'swe-2-max', label: 'Official SWE', disabled: true, harnessUids: [], isModelRouter: false },
-    { uid: 'official-other', label: 'Other', disabled: false, harnessUids: [], isModelRouter: false }]);
+  assert.deepEqual(report, [{ uid: 'swe-2-max', label: 'Official SWE', disabled: true, harnessUids: [], isModelRouter: false, sources: ['cascade'] },
+    { uid: 'official-other', label: 'Other', disabled: false, harnessUids: [], isModelRouter: false, sources: ['cascade'] }]);
   const groups = fields(getNested(output, 2), 2);
   assert.equal(groups.length, 1, 'no empty own group is emitted for a pure native catalog');
   assert.equal(str(groups[0].value, 1), 'Official Group');
@@ -519,7 +519,7 @@ test('observation still reports with zero own models and no hidden list', () => 
   const output = augmentCatalog(cat(m(1, native)), { rpc: 'GetCliModelConfigs', format: proto,
     catalog: buildCatalog(), onNativeModels: entries => { report = entries; } });
   assert.deepEqual(configs(output).map(entry => str(entry, 22)), ['swe-2-max']);
-  assert.deepEqual(report, [{ uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6', 'swe-1p5'], isModelRouter: false }]);
+  assert.deepEqual(report, [{ uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6', 'swe-1p5'], isModelRouter: false, sources: ['cli'] }]);
 });
 
 test('a hidden uid absent from upstream is never injected and a restored uid needs fresh upstream data', () => {
@@ -535,6 +535,22 @@ test('a hidden uid absent from upstream is never injected and a restored uid nee
   assert.deepEqual(configs(upstreamWithoutIt), [], 'configured uids never appear without fresh upstream data');
 });
 
+test('hiding one uid hides every sibling sharing its familyUid', () => {
+  const bare = { models: [], routes: {}, fusions: {}, sidekicks: [], hiddenNativeModelUids: ['swe-2-max'] };
+  const member = (uid, label, family) => cat(s(1, label), s(22, uid), m(23, cat(s(23, family))));
+  const input = cat(m(1, member('swe-2-max', 'SWE-2 Max', 'swe-2')), m(1, member('swe-2-high', 'SWE-2 High', 'swe-2')),
+    m(1, member('solo-x', 'Solo X', '')), m(1, cat(s(1, 'No Family'), s(22, 'orphan'))));
+  const output = augmentCatalog(input, { rpc: 'GetCliModelConfigs', format: proto, catalog: bare });
+  assert.deepEqual(configs(output).map(entry => str(entry, 22)), ['solo-x', 'orphan'],
+    'the hidden uid and its family sibling are both dropped; unrelated entries stay');
+  const jsonOut = augmentCatalog({ clientModelConfigs: [
+    { modelUid: 'swe-2-max', label: 'SWE-2 Max', modelInfo: { modelFamilyUid: 'swe-2' } },
+    { modelUid: 'swe-2-high', label: 'SWE-2 High', modelInfo: { modelFamilyUid: 'swe-2' } },
+    { modelUid: 'orphan', label: 'No Family' }] },
+    { rpc: 'GetCliModelConfigs', format: json, catalog: bare });
+  assert.deepEqual(jsonOut.clientModelConfigs.map(model => model.modelUid), ['orphan']);
+});
+
 test('ambiguous, malformed and own entries are skipped by observation but preserved in output', () => {
   const ambiguous = cat(s(22, 'uid-a'), s(22, 'uid-b'));
   const noUid = cat(s(1, 'No UID'));
@@ -543,13 +559,13 @@ test('ambiguous, malformed and own entries are skipped by observation but preser
   let report;
   const output = augmentCatalog(cat(m(1, ambiguous), m(1, noUid), m(1, ownEntry), m(1, native)),
     { rpc: 'GetCliModelConfigs', format: proto, catalog: buildCatalog(), onNativeModels: entries => { report = entries; } });
-  assert.deepEqual(report, [{ uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6', 'swe-1p5'], isModelRouter: false }]);
+  assert.deepEqual(report, [{ uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6', 'swe-1p5'], isModelRouter: false, sources: ['cli'] }]);
   const uids = configs(output).map(entry => fields(entry, 22).map(field => field.value.toString()));
   assert.deepEqual(uids, [['uid-a', 'uid-b'], [], ['swe-2-max']], 'ambiguous and uid-less natives pass through; own leftovers are replaced');
   const jsonReport = [];
   const jsonOutput = augmentCatalog({ clientModelConfigs: [{ label: 'ambiguous', modelUid: 'a', model_uid: 'b' }, { label: 'no uid' }, { modelUid: 'ok-native', label: 'OK' }] },
     { rpc: 'GetCliModelConfigs', format: json, catalog: buildCatalog(), onNativeModels: entries => jsonReport.push(...entries) });
-  assert.deepEqual(jsonReport, [{ uid: 'ok-native', label: 'OK', disabled: false, harnessUids: [], isModelRouter: false }]);
+  assert.deepEqual(jsonReport, [{ uid: 'ok-native', label: 'OK', disabled: false, harnessUids: [], isModelRouter: false, sources: ['cli'] }]);
   assert.equal(jsonOutput.clientModelConfigs.length, 3);
 });
 
@@ -605,19 +621,19 @@ for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} c
         : { modelInfo: { harnessUids: ['swe-1p5'], isModelRouter: false } };
       const list = { clientModelConfigs: [{ label: 'A', modelUid: 'swe-a', disabled: false, ...info }] };
       assert.deepEqual(collectNativeModels(list, { rpc: 'GetCliModelConfigs', format: json }),
-        [{ uid: 'swe-a', label: 'A', disabled: false, harnessUids: ['swe-1p5'], isModelRouter: false }]);
+        [{ uid: 'swe-a', label: 'A', disabled: false, harnessUids: ['swe-1p5'], isModelRouter: false, sources: ['cli'] }]);
     }
     const nested = { userStatus: { cascadeModelConfigData: { clientModelConfigs: [
       { label: 'R', modelUid: 'swe-router', modelInfo: { harnessUids: ['swe-1p6'], isModelRouter: true } }] } } };
     assert.deepEqual(collectNativeModels(nested, { rpc: lsStatus, format: json }),
-      [{ uid: 'swe-router', label: 'R', disabled: false, harnessUids: ['swe-1p6'], isModelRouter: true }]);
+      [{ uid: 'swe-router', label: 'R', disabled: false, harnessUids: ['swe-1p6'], isModelRouter: true, sources: ['entitlement'] }]);
   } else {
     const fixture = statusFixture();
     assert.deepEqual(collectNativeModels(fixture.body, { rpc: lsStatus, format: proto }),
-      [{ uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6', 'swe-1p5'], isModelRouter: false }]);
+      [{ uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6', 'swe-1p5'], isModelRouter: false, sources: ['entitlement'], pickerListed: true }]);
     const direct = cat(m(1, cat(s(1, 'Router'), s(22, 'swe-router'), m(23, cat(s(20, 'swe-1p6'), v(25, 1))))));
     assert.deepEqual(collectNativeModels(direct, { rpc: 'GetCliModelConfigs', format: proto }),
-      [{ uid: 'swe-router', label: 'Router', disabled: false, harnessUids: ['swe-1p6'], isModelRouter: true }]);
+      [{ uid: 'swe-router', label: 'Router', disabled: false, harnessUids: ['swe-1p6'], isModelRouter: true, sources: ['cli'] }]);
     assert.equal(collectNativeModels(cat(m(1, cat(s(1, 'Missing status'), s(22, 'swe-x')))), { rpc: lsStatus, format: proto }).length, 0,
       'a flat proto list is not a nested user status payload');
   }

@@ -2,7 +2,7 @@
 const http = require('node:http');
 const https = require('node:https');
 const wire = require('../protocol/wire.cjs');
-const { augmentCatalog, collectNativeModels } = require('../catalog.cjs');
+const { augmentCatalog, collectNativeModels, collectAllowedUids } = require('../catalog.cjs');
 function countOwn(value, depth = 0) {
   if (depth > 7) return 0;
   if (Buffer.isBuffer(value)) {
@@ -24,7 +24,7 @@ async function collect(stream, limit = 64 * 1024 * 1024) {
   for await (const chunk of stream) { length += chunk.length; if (length > limit) throw new Error('Message too large'); chunks.push(chunk); }
   return Buffer.concat(chunks, length);
 }
-function forward(request, response, target, { body, getCatalog, log = () => {}, onFusionStatus, onNativeModels, timeouts = {} } = {}) {
+function forward(request, response, target, { body, getCatalog, log = () => {}, onFusionStatus, onNativeModels, onAllowedUids, timeouts = {} } = {}) {
   const limits = { connect: 10000, headers: 120000, body: 120000 };
   for (const [key, name] of [[timeouts.connectMs, 'connect'], [timeouts.firstResponseMs, 'headers'], [timeouts.idleMs, 'body']]) {
     if (Number.isInteger(key) && key > 0 && key <= 2147483647) limits[name] = key;
@@ -83,6 +83,8 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         const format = wire.decode(original, upstream.headers);
         const observed = collectNativeModels(format.data, { rpc: target.pathname, format });
         if (observed.length) try { onNativeModels?.(observed); } catch {}
+        const allowedUids = collectAllowedUids(format.data, { rpc: target.pathname, format });
+        if (allowedUids) try { onAllowedUids?.(allowedUids); } catch {}
         const catalog = getCatalog();
         const augmented = augmentCatalog(format.data, { rpc: target.pathname, format, catalog, onFusionStatus });
         outgoing = wire.encode(augmented, { ...format, gzip: false, compressed: false });

@@ -74,6 +74,9 @@ function renderPanel({ nonce, cspSource }) {
     .row.compact { min-height: 0; padding: 6px 14px; }
     label.row { cursor: pointer; }
     .row + .row, .row + details, details > .row { border-top: 1px solid var(--border); }
+    .vendor-head { padding: 10px 14px 4px; font-size: 11px; font-weight: 600; color: var(--muted); }
+    .vendor-head + .row { border-top: none; }
+    .vendor-head:not(:first-child) { border-top: 1px solid var(--border); }
     .row-main { flex: 1; min-width: 0; }
     .row-title { display: block; overflow-wrap: anywhere; }
     .row-sub { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
@@ -545,10 +548,11 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     const container = byId('native-models');
     container.replaceChildren();
     const all = state.nativeFamilies || [];
-    const visible = all.filter(family => !family.hidden).length;
-    const hiddenVariants = all.reduce((count, family) => count + family.members.filter(member => member.hidden).length, 0);
+    const visible = all.filter(family => !family.hidden && !family.internal).length;
+    const hiddenCount = all.filter(family => family.hidden).length;
+    const internalCount = all.filter(family => family.internal).length;
     byId('native-count').textContent = all.length
-      ? visible + ' / ' + all.length + ' 个模型' + (hiddenVariants ? ' · 已隐藏 ' + hiddenVariants + ' 个变体' : '') : '';
+      ? visible + ' / ' + all.length + ' 个模型' + (hiddenCount ? ' · 已隐藏 ' + hiddenCount : '') + (internalCount ? ' · 内部 ' + internalCount : '') : '';
     const search = element('input', { type: 'search', placeholder: '搜索官方模型', 'aria-label': '搜索官方模型',
       oninput: event => { nativeSearch = event.target.value; renderNativeRows(); } });
     search.value = nativeSearch;
@@ -568,22 +572,42 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     const all = state.nativeFamilies || [];
     const query = nativeSearch.trim().toLocaleLowerCase();
     const families = all.filter(family => !query ||
-      (family.label + ' ' + family.members.map(member => member.uid + ' ' + member.label).join(' ')).toLocaleLowerCase().includes(query));
+      (family.label + ' ' + (family.vendor || '') + ' ' + family.members.map(member => member.uid + ' ' + member.label).join(' ')).toLocaleLowerCase().includes(query));
     if (!families.length) {
       container.append(element('div', { class: 'empty', text: all.length ? '没有匹配的模型。' : ({ loading: '正在同步官方模型…', unsupported: '当前后台版本暂不支持同步。', unavailable: '无法连接本地后台，请点刷新重试。', empty: '还没收到官方模型，打开一次 Devin 的模型选择器后再刷新。' }[state.nativeCatalogStatus] || '还没收到官方模型，请点刷新重试。') }));
       return;
     }
-    for (const family of families) {
-      const sub = [family.variants + ' 个变体'];
+    function nativeRow(family) {
+      const sub = family.variants > 1 ? [family.variants + ' 个变体'] : [];
       if (family.efforts.length) sub.push('Effort ' + family.efforts.join(' / '));
       if (family.toggles.length) sub.push(...family.toggles);
       if (!family.members.some(member => member.eligible)) sub.push('不能作为 Fusion 的 Lead 或 Sidekick');
-      if (family.mixed) sub.push('部分隐藏');
-      container.append(element('div', { class: 'row' },
+      return element('div', { class: 'row' },
         element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: family.label }),
           element('span', { class: 'row-sub', text: sub.join(' · ') })),
-        switchInput(!family.hidden, '在列表中显示 ' + family.label + ' 的 ' + family.variants + ' 个变体',
-          show => run(() => request('setNativeModelHidden', { uids: family.members.map(member => member.uid), hidden: !show })), off())));
+        switchInput(!family.hidden, family.variants > 1 ? '在列表中显示 ' + family.label + ' 的 ' + family.variants + ' 个变体' : '在列表中显示 ' + family.label,
+          show => run(() => request('setNativeModelHidden', { uids: family.members.map(member => member.uid), hidden: !show })), off() || family.internal === true));
+    }
+    const groups = new Map();
+    for (const family of families) {
+      if (family.internal) continue;
+      const vendor = family.vendor || '其他';
+      if (!groups.has(vendor)) groups.set(vendor, []);
+      groups.get(vendor).push(family);
+    }
+    for (const [vendor, group] of groups) {
+      container.append(element('div', { class: 'vendor-head', text: vendor + ' · ' + group.length }));
+      for (const family of group) container.append(nativeRow(family));
+    }
+    // Retired leftovers, review/check rows and router cards (Adaptive/Fusion
+    // render in the picker but are routing surfaces, not models) are folded
+    // into a collapsed internal section under the picker groups.
+    const internal = families.filter(family => family.internal);
+    if (internal.length) {
+      const details = element('details', { class: 'fold', open: !!query },
+        element('summary', { text: '内部条目 · ' + internal.length + ' · 退役条目与路由/内部用途' }));
+      for (const family of internal) details.append(nativeRow(family));
+      container.append(details);
     }
   }
 

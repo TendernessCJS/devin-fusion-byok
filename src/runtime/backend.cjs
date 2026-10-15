@@ -9,7 +9,7 @@ const wire = require('../protocol/wire.cjs');
 const { parseChat } = require('../protocol/chat.cjs');
 const { serveChat } = require('../protocol/responses.cjs');
 const { forward, collect } = require('./bridge.cjs');
-const { normalizeNativeEntry, mergeNativeEntry, loadNativeCache, saveNativeCache } = require('./native-cache.cjs');
+const { normalizeNativeEntry, mergeNativeEntry, loadNativeCache, saveNativeCache, normalizeAllowedUids } = require('./native-cache.cjs');
 const PORT = 39842;
 const VERSION = require('../../package.json').version;
 const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
@@ -59,17 +59,19 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
   const configFile = path.join(root, 'config.json');
   const config = () => readConfig(configFile);
   const observedNatives = new Map();
+  const allowedUids = new Set();
   const nativeCacheFile = path.join(root, 'native-cache.json');
   let observedSize = 0;
   try {
     const seeded = loadNativeCache(nativeCacheFile);
-    for (const entry of seeded) observedNatives.set(entry.uid, entry);
-    if (seeded.length) { observedSize = observedNatives.size; log('native-cache-load', { count: observedSize }); }
+    for (const entry of seeded.models) observedNatives.set(entry.uid, entry);
+    for (const uid of seeded.allowedUids) allowedUids.add(uid);
+    if (seeded.models.length) { observedSize = observedNatives.size; log('native-cache-load', { count: observedSize, allowed: allowedUids.size }); }
   } catch {}
   let cacheTimer;
   function flushNativeCache() {
     if (cacheTimer !== undefined) { clearTimeout(cacheTimer); cacheTimer = undefined; }
-    try { saveNativeCache(nativeCacheFile, [...observedNatives.values()]); } catch {}
+    try { saveNativeCache(nativeCacheFile, [...observedNatives.values()], { allowedUids: [...allowedUids] }); } catch {}
   }
   // Waiting for a drain is not the same as being able to wait forever. A
   // half-read SSE stream can leave a request that never settles — the response
@@ -129,6 +131,18 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     const grew = observedNatives.size !== observedSize;
     if (grew) { observedSize = observedNatives.size; log('native-observed', { count: observedSize }); }
     if (grew || improved) scheduleNativeCacheSave();
+  };
+  // Team settings publish the account's selectable uid set. It is a complete
+  // list, so each observation replaces the previous one outright — a retired
+  // model (o3 next to GPT-4.1) must drop out rather than linger in a union.
+  const onAllowedUids = uids => {
+    const next = normalizeAllowedUids(uids);
+    if (!next.length) return;
+    if (next.length === allowedUids.size && next.every(uid => allowedUids.has(uid))) return;
+    allowedUids.clear();
+    for (const uid of next) allowedUids.add(uid);
+    log('native-allowed', { count: allowedUids.size });
+    scheduleNativeCacheSave();
   };
   const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()]); };
   // Official Fusion uids observed as disabled in catalog responses. Entries
@@ -193,7 +207,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     const rpc = incoming.pathname;
     const target = new URL(rpc + incoming.search, 'https://server.codeium.com');
     if (request.method !== 'POST' || ![API_PREFIX + 'AssignModel', API_PREFIX + 'GetChatMessage'].includes(rpc)) {
-      forward(request, response, target, { getCatalog, log, onFusionStatus, onNativeModels }); return;
+      forward(request, response, target, { getCatalog, log, onFusionStatus, onNativeModels, onAllowedUids }); return;
     }
     let body;
     try {
@@ -229,7 +243,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
       if (response.headersSent) { response.end(); return; }
       // Malformed data must never select a default provider.
     }
-    if (body) forward(request, response, target, { body, getCatalog, log, onFusionStatus, onNativeModels });
+    if (body) forward(request, response, target, { body, getCatalog, log, onFusionStatus, onNativeModels, onAllowedUids });
     else { response.writeHead(502); response.end(); }
   };
   const server = http.createServer((request, response) => {
@@ -250,7 +264,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     if (request.method === 'GET' && request.url === '/_runtime/native-models') {
       if (!authorized(request)) { response.writeHead(403); response.end(); return; }
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify({ instanceId, models: [...observedNatives.values()] })); return;
+      response.end(JSON.stringify({ instanceId, models: [...observedNatives.values()], allowedUids: [...allowedUids].sort() })); return;
     }
     if (request.method === 'POST' && request.url === '/_runtime/native-models') {
       if (!authorized(request)) { response.writeHead(403); response.end(); return; }
@@ -258,6 +272,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
         if (body.length > 4 * 1024 * 1024) throw new Error('too_large');
         const payload = JSON.parse(body.toString('utf8'));
         const result = ingest(payload?.models);
+        if (result && Array.isArray(payload?.allowedUids)) onAllowedUids(payload.allowedUids);
         if (!result) throw new Error('invalid');
         response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         response.end(JSON.stringify({ instanceId, ...result }));
