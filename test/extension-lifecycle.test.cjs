@@ -465,7 +465,8 @@ test('native model observations from the bridge reach the panel and hide persist
   const manager = realRequire('./panel/model.cjs').createManager(f.managerOptions());
   const state = await manager.dispatch('setNativeModelHidden', { uid: 'swe-2-max', hidden: true });
   assert.deepEqual(JSON.parse(fs.readFileSync(f.configFile)).hiddenNativeModelUids, ['swe-2-max']);
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-2-max').hidden, true);
+  const sweMember = state.nativeFamilies.flatMap(family => family.members).find(member => member.uid === 'swe-2-max');
+  assert.equal(sweMember.hidden, true);
 });
 
 test('unloading while LS injection is deferred disposes the late connection instead of resurrecting it', async t => {
@@ -495,11 +496,11 @@ test('backend sync hydrates the actual extension manager without LS observations
   const manager = realRequire('./panel/model.cjs').createManager(f.managerOptions());
   const state = await manager.dispatch('ready');
   assert.equal(state.nativeCatalogStatus, 'ready');
-  const sweRow = state.nativeModels.find(m => m.uid === record.uid);
+  const sweRow = state.nativeFamilies.flatMap(family => family.members).find(m => m.uid === record.uid);
   assert.ok(sweRow);
   assert.equal(sweRow.eligible, true);
   f.setNativeRead(async () => ({ status: 'empty', models: [] }));
-  assert.equal((await manager.dispatch('refreshNativeModels')).nativeModels.length, 0);
+  assert.equal((await manager.dispatch('refreshNativeModels')).nativeFamilies.length, 0);
 });
 
 test('late backend sync cannot publish after unload', async t => {

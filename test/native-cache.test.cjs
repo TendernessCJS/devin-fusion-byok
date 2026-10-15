@@ -134,3 +134,17 @@ test('mergeNativeEntry keeps the richer form when a poorer copy arrives later', 
   const noHarness = normalizeNativeEntry({ uid: 'swe-2-high', disabled: false, isModelRouter: false });
   assert.deepEqual(mergeNativeEntry({ ...rich, harnessUids: ['swe-1p6'] }, noHarness).harnessUids, ['swe-1p6']);
 });
+
+test('normalizeNativeEntry and mergeNativeEntry carry the server family uid', () => {
+  const { mergeNativeEntry } = require('../src/runtime/native-cache.cjs');
+  assert.equal(normalizeNativeEntry(entry({ familyUid: 'glm-5.2' })).familyUid, 'glm-5.2');
+  for (const bad of [42, '', 'x'.repeat(200), {}]) {
+    assert.equal(normalizeNativeEntry(entry({ familyUid: bad })).familyUid, undefined, JSON.stringify(bad));
+  }
+  const withFamily = normalizeNativeEntry(entry({ familyUid: 'glm-5.2' }));
+  const without = normalizeNativeEntry(entry());
+  assert.equal(mergeNativeEntry(withFamily, without).familyUid, 'glm-5.2',
+    'a later poorer copy must not drop the family id');
+  assert.equal(mergeNativeEntry(without, withFamily).familyUid, 'glm-5.2');
+  assert.equal(mergeNativeEntry(without, without).familyUid, undefined);
+});

@@ -65,17 +65,68 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
   const roleLists = buildRoleLists(config, nativeModels);
   const eligibleLeads = new Set(roleLists.lead.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
   const eligibleSidekicks = new Set(roleLists.sidekick.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
-  const observed = new Set();
-  const natives = [];
+  // The settings list groups native entries by the server's family identity:
+  // one upstream "model" is a tier selector plus toggles. fusion-* combination
+  // entries are governed on the Fusion tab and never appear here.
+  const FAMILY_INFO_DIMS = new Set(['Lead', 'Effort', 'Reasoning Effort', 'Sidekick', 'Recommended Sidekick']);
+  const FAMILY_MARKED_UID = /-(none|minimal|low|medium|high|xhigh|max|ultra|fast|priority|thinking|\d+m)$/i;
+  const FAMILY_LABEL_SUFFIX = /(?:\s+(?:No Thinking|None|Minimal|Low|Medium|High|XHigh|Max|Ultra|Thinking|Fast|Context|\d+M))+$/i;
+  const familiesById = new Map();
   for (const entry of nativeModels) {
-    if (!entry || typeof entry.uid !== 'string' || !entry.uid) continue;
-    observed.add(entry.uid);
-    natives.push({ uid: entry.uid, label: typeof entry.label === 'string' && entry.label ? entry.label : entry.uid,
-      disabled: entry.disabled === true, hidden: hidden.has(entry.uid),
-      eligibleLead: eligibleLeads.has(entry.uid), eligibleSidekick: eligibleSidekicks.has(entry.uid),
-      eligible: eligibleLeads.has(entry.uid) || eligibleSidekicks.has(entry.uid) });
+    const uid = typeof entry?.uid === 'string' ? entry.uid : '';
+    if (!uid || uid.startsWith('fusion-') || uid.startsWith('dfbyok-')) continue;
+    const familyUid = typeof entry.familyUid === 'string' ? entry.familyUid.trim() : '';
+    const id = familyUid ? familyUid : `uid:${uid}`;
+    let family = familiesById.get(id);
+    if (!family) familiesById.set(id, family = { id, members: [] });
+    family.members.push({ entry, uid,
+      label: typeof entry.label === 'string' && entry.label ? entry.label : uid,
+      disabled: entry.disabled === true, hidden: hidden.has(uid),
+      eligible: eligibleLeads.has(uid) || eligibleSidekicks.has(uid) });
   }
-  for (const uid of hidden) if (!observed.has(uid)) natives.push({ uid, label: uid, disabled: false, hidden: true, eligibleLead: false, eligibleSidekick: false, eligible: false });
+  const usedFamilyLabels = new Set();
+  const nativeFamilies = [...familiesById.values()].map(family => {
+    const members = family.members.map(({ entry, ...member }) => member);
+    // The display name comes from the unmarked member (bare uid); without one,
+    // the smallest uid. Trailing tier/toggle words are stripped; a collision
+    // disambiguates with the family id so no two rows share a label.
+    const base = members.length === 1 ? members[0]
+      : (members.find(member => !FAMILY_MARKED_UID.test(member.uid)) ||
+         members.reduce((a, b) => a.uid < b.uid ? a : b));
+    let label = base.label || base.uid;
+    if (members.length > 1) {
+      const stripped = label.replace(FAMILY_LABEL_SUFFIX, '').trim();
+      if (stripped) label = stripped;
+    }
+    if (usedFamilyLabels.has(label)) label = `${label} (${family.id})`;
+    usedFamilyLabels.add(label);
+    const effortOrders = new Map(), toggles = new Set();
+    for (const { entry } of family.members) {
+      for (const dim of Array.isArray(entry.fusionMetadata) ? entry.fusionMetadata : []) {
+        if (!dim || typeof dim.key !== 'string') continue;
+        if (dim.key === 'Effort' || dim.key === 'Reasoning Effort') {
+          if (dim.name && (!effortOrders.has(dim.name) || dim.order < effortOrders.get(dim.name))) effortOrders.set(dim.name, dim.order);
+        } else if (!FAMILY_INFO_DIMS.has(dim.key) && dim.order !== 0) toggles.add(dim.key);
+      }
+    }
+    const hiddenCount = members.filter(member => member.hidden).length;
+    return { id: family.id, label, variants: members.length,
+      efforts: [...effortOrders.entries()].sort((a, b) => a[1] - b[1]).map(([name]) => name),
+      toggles: [...toggles].sort(),
+      hidden: hiddenCount === members.length, mixed: hiddenCount > 0 && hiddenCount < members.length,
+      members };
+  });
+  // A hidden uid whose model left the observed catalog still gets a single-
+  // member family so it can be unhidden again.
+  const observedUids = new Set([...familiesById.values()].flatMap(family => family.members.map(member => member.uid)));
+  for (const uid of hidden) {
+    if (observedUids.has(uid)) continue;
+    const id = `uid:${uid}`;
+    const label = uid;
+    nativeFamilies.push({ id, label, variants: 1, efforts: [], toggles: [],
+      hidden: true, mixed: false,
+      members: [{ uid, label, disabled: false, eligible: false, hidden: true }] });
+  }
   // The Fusion card selection this extension last observed. It is a memory
   // (`lastFusionSelection`), so picking a plain model afterwards leaves it
   // pointing at the previous combination — the panel therefore labels it as
@@ -102,7 +153,7 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     sidekicks: catalog.sidekicks.map(sidekick => sidekick.native
       ? { nativeUid: sidekick.uid, label: sidekick.label } : { providerId: sidekick.providerId, model: sidekick.model }),
     roleLists,
-    nativeModels: natives,
+    nativeFamilies,
     modelCount: Object.keys(catalog.routes).length,
     fusionCount: catalog.matrixUids.size,
     lastFusion,
@@ -206,17 +257,21 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         break;
       }
       case 'setNativeModelHidden': {
-        const uid = payload.uid;
-        if (typeof uid !== 'string' || !uid || uid.length > 256 || /^(?:fusion-)?dfbyok-/.test(uid)) fail('模型标识无效。');
+        const raw = Array.isArray(payload.uids) ? payload.uids : [payload.uid];
+        if (!raw.length || raw.length > 256) fail('模型标识无效。');
         const hidden = boolean(payload.hidden, '显示状态');
-        if (hidden && !nativeModels().some(entry => entry?.uid === uid)) fail('该官方模型当前未出现在列表中，请刷新后重试。');
-        const seen = new Set(), list = [];
+        const observedUids = new Set(nativeModels().map(entry => entry?.uid));
+        for (const uid of raw) {
+          if (typeof uid !== 'string' || !uid || uid.length > 256 || /^(?:fusion-)?dfbyok-/.test(uid)) fail('模型标识无效。');
+          if (hidden && !observedUids.has(uid)) fail('该官方模型当前未出现在列表中，请刷新后重试。');
+        }
+        const targets = new Set(raw), seen = new Set(), list = [];
         for (const value of Array.isArray(config.hiddenNativeModelUids) ? config.hiddenNativeModelUids : []) {
           if (typeof value !== 'string' || !value || value.length > 256 || /^(?:fusion-)?dfbyok-/.test(value) || seen.has(value)) continue;
           seen.add(value); list.push(value);
         }
-        if (hidden) { if (!seen.has(uid)) list.push(uid); config.hiddenNativeModelUids = list; }
-        else config.hiddenNativeModelUids = list.filter(value => value !== uid);
+        if (hidden) { for (const uid of raw) if (!seen.has(uid)) { seen.add(uid); list.push(uid); } config.hiddenNativeModelUids = list; }
+        else config.hiddenNativeModelUids = list.filter(value => !targets.has(value));
         break;
       }
       case 'setRoleModel': {

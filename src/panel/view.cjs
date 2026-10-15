@@ -209,6 +209,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
   let toastTimer;
   const roleSearch = { lead: '', sidekick: '' };
   const roleMoreOpen = { lead: false, sidekick: false };
+  const nativeOpen = new Map();
 
   function element(tag, attributes, ...children) {
     const node = document.createElement(tag);
@@ -544,8 +545,11 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
   function renderNative() {
     const container = byId('native-models');
     container.replaceChildren();
-    const all = state.nativeModels || [];
-    byId('native-count').textContent = all.length ? all.filter(model => !model.hidden).length + ' / ' + all.length + ' 显示中' : '';
+    const all = state.nativeFamilies || [];
+    const visible = all.filter(family => !family.hidden).length;
+    const hiddenVariants = all.reduce((count, family) => count + family.members.filter(member => member.hidden).length, 0);
+    byId('native-count').textContent = all.length
+      ? visible + ' / ' + all.length + ' 个模型' + (hiddenVariants ? ' · 已隐藏 ' + hiddenVariants + ' 个变体' : '') : '';
     const search = element('input', { type: 'search', placeholder: '搜索官方模型', 'aria-label': '搜索官方模型',
       oninput: event => { nativeSearch = event.target.value; renderNativeRows(); } });
     search.value = nativeSearch;
@@ -562,20 +566,37 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     const container = byId('native-list');
     if (!container) return;
     container.replaceChildren();
-    const all = state.nativeModels || [];
+    const all = state.nativeFamilies || [];
     const query = nativeSearch.trim().toLocaleLowerCase();
-    const models = all.filter(model => !query || (model.uid + ' ' + (model.label || '')).toLocaleLowerCase().includes(query));
-    if (!models.length) {
+    const families = all.filter(family => !query ||
+      (family.label + ' ' + family.members.map(member => member.uid + ' ' + member.label).join(' ')).toLocaleLowerCase().includes(query));
+    if (!families.length) {
       container.append(element('div', { class: 'empty', text: all.length ? '没有匹配的模型。' : ({ loading: '正在同步官方模型…', unsupported: '当前后台版本暂不支持同步。', unavailable: '无法连接本地后台，请点刷新重试。', empty: '还没收到官方模型，打开一次 Devin 的模型选择器后再刷新。' }[state.nativeCatalogStatus] || '还没收到官方模型，请点刷新重试。') }));
       return;
     }
-    for (const model of models) {
-      const note = model.disabled ? '官方暂不可用' : model.eligible === true ? '' : '不能作为 Fusion 的 Lead 或 Sidekick';
+    for (const family of families) {
+      const sub = [family.variants + ' 个变体'];
+      if (family.efforts.length) sub.push('Effort ' + family.efforts.join(' / '));
+      if (family.toggles.length) sub.push(...family.toggles);
+      if (!family.members.some(member => member.eligible)) sub.push('不能作为 Fusion 的 Lead 或 Sidekick');
+      if (family.mixed) sub.push('部分隐藏');
       container.append(element('div', { class: 'row' },
-        element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: model.label || model.uid }),
-          element('span', { class: 'row-sub mono', text: model.uid + (note ? ' · ' + note : '') })),
-        switchInput(model.hidden !== true, '在列表中显示官方模型 ' + model.uid,
-          show => run(() => request('setNativeModelHidden', { uid: model.uid, hidden: !show })), off())));
+        element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: family.label }),
+          element('span', { class: 'row-sub', text: sub.join(' · ') })),
+        switchInput(!family.hidden, '在列表中显示 ' + family.label + ' 的 ' + family.variants + ' 个变体',
+          show => run(() => request('setNativeModelHidden', { uids: family.members.map(member => member.uid), hidden: !show })), off())));
+      const details = element('details', { class: 'fold', open: nativeOpen.get(family.id) === true },
+        element('summary', { text: '展开 ' + family.variants + ' 个变体' }));
+      details.addEventListener('toggle', () => { nativeOpen.set(family.id, details.open); });
+      for (const member of family.members) {
+        const note = member.disabled ? '官方暂不可用' : member.eligible === true ? '' : '不能作为 Fusion 的 Lead 或 Sidekick';
+        details.append(element('div', { class: 'row' },
+          element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: member.label || member.uid }),
+            element('span', { class: 'row-sub mono', text: member.uid + (note ? ' · ' + note : '') })),
+          switchInput(member.hidden !== true, '在列表中显示官方模型 ' + member.uid,
+            show => run(() => request('setNativeModelHidden', { uid: member.uid, hidden: !show })), off())));
+      }
+      container.append(details);
     }
   }
 

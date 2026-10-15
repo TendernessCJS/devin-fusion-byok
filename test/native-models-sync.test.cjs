@@ -145,15 +145,17 @@ test('createManager.ready hydrates panel state from a synced backend with zero L
   });
   const state = await manager.dispatch('ready');
   assert.equal(state.nativeCatalogStatus, 'ready');
+  const members = (state.nativeFamilies || []).flatMap(family => family.members);
+  const member = uid => members.find(entry => entry.uid === uid);
   const expected = { 'swe-2-medium': true, 'swe-2-high': true,
     'gpt-5-6-luna-high': true, 'gpt-5-6-sol-high': true, 'glm-5-2': true };
   for (const [uid] of Object.entries(expected)) {
-    const row = state.nativeModels.find(entry => entry.uid === uid);
+    const row = member(uid);
     assert.ok(row, uid + ' must appear in the panel official list');
     assert.equal(row.eligible, true, uid + ' must be eligible via backend observations');
   }
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-2-max')?.eligible, true);
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'gpt-5-6-luna-high-priority')?.eligible, true);
+  assert.equal(member('swe-2-max')?.eligible, true);
+  assert.equal(member('gpt-5-6-luna-high-priority')?.eligible, true);
   const built = buildCatalog(saved, backendModels);
   const luna = Object.values(built.fusions).find(fusion => fusion.sidekickUid === 'gpt-5-6-luna-high');
   assert.ok(luna, 'the synced native Sidekick is mirrored once its harness is known');
@@ -206,4 +208,20 @@ test('readNativeModels never retries identity rejections', async t => {
   const request = (url, options) => { calls += 1; return fetch(url, options); };
   await assert.rejects(readNativeModels({ root: f.root + '-other', port: f.backend.port, request }), /native_catalog_identity/);
   assert.equal(calls, 1, 'identity failures are not connection failures and must not be retried');
+});
+
+test('readNativeModels passes a valid family uid through and ignores malformed ones', async t => {
+  const f = await backendFixture(t, { natives: { clientModelConfigs: [
+    { modelUid: 'glm-5-2', label: 'GLM', disabled: false, modelInfo: { harnessUids: ['h'], isModelRouter: false, modelFamilyUid: 'glm-5.2' } },
+    { modelUid: 'glm-5-2-1m', label: 'GLM 1M', disabled: false, modelInfo: { harnessUids: ['h'], isModelRouter: false, modelFamilyUid: 'x'.repeat(200) } },
+    { modelUid: 'swe-x', label: 'SWE', disabled: false, modelInfo: { harnessUids: ['h'], isModelRouter: false, modelFamilyUid: 42 } },
+  ] } });
+  await fetch(f.base + API + 'GetCliModelConfigs', { method: 'POST', body: 'trigger' });
+  const result = await readNativeModels({ root: f.root, port: f.backend.port });
+  assert.equal(result.status, 'ready');
+  assert.equal(result.models.find(e => e.uid === 'glm-5-2')?.familyUid, 'glm-5.2');
+  assert.equal(result.models.find(e => e.uid === 'glm-5-2-1m')?.familyUid, undefined,
+    'overlong family ids are dropped, not thrown');
+  assert.equal(result.models.find(e => e.uid === 'swe-x')?.familyUid, undefined,
+    'non-string family ids are dropped, not thrown');
 });

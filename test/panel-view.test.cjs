@@ -242,3 +242,75 @@ test('a cache report without rewrites says so instead of staying blank', () => {
   receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 0, refreshed: [], skipped: [], errors: [] } } } });
   assert.match(textOf(byId('cache-report')), /没有找到本插件写入的缓存文件/);
 });
+
+const FAMILY_FIXTURE = [
+  { id: 'glm-5.2', label: 'GLM-5.2', variants: 3, efforts: ['No Thinking', 'High', 'Max'], toggles: ['1M Context'],
+    hidden: false, mixed: true,
+    members: [
+      { uid: 'glm-5-2', label: 'GLM-5.2 High', disabled: false, eligible: true, hidden: false },
+      { uid: 'glm-5-2-max', label: 'GLM-5.2 Max', disabled: false, eligible: true, hidden: true },
+      { uid: 'glm-5-2-1m', label: 'GLM-5.2 High 1M', disabled: false, eligible: false, hidden: false }] },
+  { id: 'swe-1.6', label: 'SWE-1.6', variants: 1, efforts: [], toggles: [], hidden: true, mixed: false,
+    members: [{ uid: 'swe-1-6', label: 'SWE-1.6', disabled: false, eligible: false, hidden: true }] },
+];
+
+test('official models render as expandable family rows that stay open across re-renders', async () => {
+  const { byId, posts, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FAMILY_FIXTURE } } });
+  const list = byId('native-list');
+  assert.equal(byId('native-count').textContent, '1 / 2 个模型 · 已隐藏 2 个变体');
+
+  const rows = collect(list, 'div', node => node.className === 'row');
+  const folds = collect(list, 'details', node => node.className === 'fold');
+  assert.equal(folds.length, 2, 'each family carries a members fold');
+  assert.match(textOf(rows[0]), /GLM-5\.2/);
+  assert.match(textOf(rows[0]), /3 个变体 · Effort No Thinking \/ High \/ Max · 1M Context/);
+  assert.match(textOf(rows[0]), /部分隐藏/, 'a partially hidden family says so');
+  assert.doesNotMatch(textOf(rows[0]), /不能作为 Fusion/, 'eligible members mean no capability note');
+  assert.match(textOf(rows[4]), /不能作为 Fusion 的 Lead 或 Sidekick/, 'no eligible member adds the note');
+  assert.equal(textOf(folds[0].children[0]), '展开 3 个变体');
+  assert.equal(collect(folds[0], 'div', node => node.className === 'row').length, 3, 'the fold lists every member');
+
+  const flush = () => Promise.resolve().then(() => {});
+  const familySwitch = collect(rows[0], 'input', node => node.className === 'switch')[0];
+  assert.equal(familySwitch.attributes['aria-label'], '在列表中显示 GLM-5.2 的 3 个变体');
+  assert.equal(familySwitch.checked, true);
+  familySwitch.listeners.change({ target: { checked: false } });
+  const hideAll = posts.find(message => message.type === 'setNativeModelHidden');
+  assert.deepEqual(JSON.parse(JSON.stringify(hideAll.payload)),
+    { uids: ['glm-5-2', 'glm-5-2-max', 'glm-5-2-1m'], hidden: true }, 'the family switch hides every member');
+  receive({ data: { type: 'result', id: hideAll.id, ok: true } });
+  await flush();
+
+  const memberSwitches = collect(folds[0], 'input', node => node.className === 'switch');
+  assert.equal(memberSwitches[1].checked, false, 'a hidden member renders off');
+  memberSwitches[0].listeners.change({ target: { checked: false } });
+  const hideOne = posts.filter(message => message.type === 'setNativeModelHidden').at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(hideOne.payload)), { uid: 'glm-5-2', hidden: true },
+    'a member switch addresses its single uid — unchecked means hide');
+  receive({ data: { type: 'result', id: hideOne.id, ok: true } });
+  await flush();
+  memberSwitches[1].listeners.change({ target: { checked: true } });
+  const unhideOne = posts.filter(message => message.type === 'setNativeModelHidden').at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(unhideOne.payload)), { uid: 'glm-5-2-max', hidden: false });
+  receive({ data: { type: 'result', id: unhideOne.id, ok: true } });
+  await flush();
+
+  folds[0].open = true;
+  folds[0].listeners.toggle();
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FAMILY_FIXTURE } } });
+  const foldsAfter = collect(byId('native-list'), 'details', node => node.className === 'fold');
+  assert.equal(foldsAfter[0].open, true, 'the expansion survives a re-render');
+  assert.equal(foldsAfter[1].open, false, 'an untouched family stays closed');
+});
+
+test('the official-model search matches family labels and member uids', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FAMILY_FIXTURE } } });
+  const search = collect(byId('native-models'), 'input', node => node.attributes.type === 'search')[0];
+  search.value = 'glm-5-2-max';
+  search.listeners.input({ target: search });
+  const rows = collect(byId('native-list'), 'div', node => node.className === 'row');
+  assert.equal(rows.length, 4, 'only the matching family row plus its members remain');
+  assert.match(textOf(rows[0]), /GLM-5\.2/);
+});

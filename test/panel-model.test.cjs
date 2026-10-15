@@ -445,6 +445,9 @@ for (const field of ['apiKey', 'baseUrl', 'apiFormat']) test(`import rejects a p
   assert.equal(f.writes.length, 0);
 });
 
+const nativeMember = (state, uid) => (state.nativeFamilies || []).flatMap(family => family.members).find(member => member.uid === uid);
+const nativeMembers = state => (state.nativeFamilies || []).flatMap(family => family.members);
+
 test('native model hide and restore persist a validated exclusion list with observed status', async () => {
   const observed = [
     { uid: 'swe-2-max', label: 'Official SWE', disabled: false },
@@ -452,18 +455,18 @@ test('native model hide and restore persist a validated exclusion list with obse
   ];
   const f = memory({ nativeModels: () => observed });
   let state = await f.manager.dispatch('ready');
-  assert.deepEqual(state.nativeModels, [
-    { uid: 'swe-2-max', label: 'Official SWE', disabled: false, hidden: false, eligibleLead: false, eligibleSidekick: false, eligible: false },
-    { uid: 'claude-x', label: 'Claude X', disabled: true, hidden: false, eligibleLead: false, eligibleSidekick: false, eligible: false },
+  assert.deepEqual(nativeMembers(state), [
+    { uid: 'swe-2-max', label: 'Official SWE', disabled: false, hidden: false, eligible: false },
+    { uid: 'claude-x', label: 'Claude X', disabled: true, hidden: false, eligible: false },
   ]);
   state = await f.manager.dispatch('setNativeModelHidden', { uid: 'swe-2-max', hidden: true });
   assert.deepEqual(f.read().hiddenNativeModelUids, ['swe-2-max']);
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-2-max').hidden, true);
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'claude-x').hidden, false);
+  assert.equal(nativeMember(state, 'swe-2-max').hidden, true);
+  assert.equal(nativeMember(state, 'claude-x').hidden, false);
   assert.deepEqual(f.changes, ['setNativeModelHidden']);
   state = await f.manager.dispatch('setNativeModelHidden', { uid: 'swe-2-max', hidden: false });
   assert.deepEqual(f.read().hiddenNativeModelUids, []);
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-2-max').hidden, false);
+  assert.equal(nativeMember(state, 'swe-2-max').hidden, false);
 });
 
 test('native visibility rejects unobserved, own and malformed uids and non-boolean flags without writes', async () => {
@@ -493,13 +496,13 @@ test('previously hidden uids stay listed for restore and dedupe or drop invalid 
   input.hiddenNativeModelUids = ['gone-native', 'gone-native', 42, 'dfbyok-own', '', 'gone-native-2'];
   const f = memory({ config: input, nativeModels: () => observed });
   const state = await f.manager.dispatch('ready');
-  assert.deepEqual(state.nativeModels.filter(entry => entry.hidden).map(entry => entry.uid), ['gone-native', 'gone-native-2']);
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'gone-native').label, 'gone-native');
-  assert.ok(!state.nativeModels.some(entry => entry.uid === 'dfbyok-own'));
+  assert.deepEqual(nativeMembers(state).filter(entry => entry.hidden).map(entry => entry.uid), ['gone-native', 'gone-native-2']);
+  assert.equal(nativeMember(state, 'gone-native').label, 'gone-native');
+  assert.ok(!nativeMembers(state).some(entry => entry.uid === 'dfbyok-own'));
   const next = await f.manager.dispatch('setNativeModelHidden', { uid: 'gone-native', hidden: false });
   assert.deepEqual(f.read().hiddenNativeModelUids, ['gone-native-2']);
-  assert.equal(next.nativeModels.find(entry => entry.uid === 'gone-native'), undefined);
-  assert.equal(next.nativeModels.find(entry => entry.uid === 'gone-native-2').hidden, true);
+  assert.equal(nativeMember(next, 'gone-native'), undefined);
+  assert.equal(nativeMember(next, 'gone-native-2').hidden, true);
 });
 
 test('hiding a native model never touches provider data', async () => {
@@ -524,8 +527,8 @@ test('observed native Sidekick eligibility drives state flags, combinations and 
   ];
   const f = memory({ nativeModels: () => observed });
   const state = await f.manager.dispatch('ready');
-  assert.deepEqual(state.nativeModels.filter(entry => entry.eligible).map(entry => entry.uid).sort(), ['swe-2-max', 'swe-2-medium', 'swe-other-harness']);
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-naked').eligible, false);
+  assert.deepEqual(nativeMembers(state).filter(entry => entry.eligible).map(entry => entry.uid).sort(), ['swe-2-max', 'swe-2-medium', 'swe-other-harness']);
+  assert.equal(nativeMember(state, 'swe-naked').eligible, false);
   const catalog = assertValidGraph(f.read(), observed);
   assert.ok(Object.keys(catalog.fusions).length > 0, 'selected roles are mirrored');
   const excluded = await f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: false, model: { nativeUid: 'swe-2-medium' } });
@@ -543,12 +546,12 @@ test('a hidden observed native is excluded from Sidekick eligibility and selecti
   input.hiddenNativeModelUids = ['swe-2-max'];
   const f = memory({ config: input, nativeModels: () => OBSERVED_SWE });
   const state = await f.manager.dispatch('ready');
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-2-max').eligible, false);
+  assert.equal(nativeMember(state, 'swe-2-max').eligible, false);
   const catalog = buildCatalog(f.read(), OBSERVED_SWE);
   assert.equal(Object.values(catalog.fusions).filter(fusion => fusion.sidekickNative).length, 0);
   await f.manager.dispatch('setNativeModelHidden', { uid: 'swe-2-max', hidden: false });
   const restored = await f.manager.dispatch('ready');
-  assert.equal(restored.nativeModels.find(entry => entry.uid === 'swe-2-max').eligible, true);
+  assert.equal(nativeMember(restored, 'swe-2-max').eligible, true);
 });
 
 test('officially paired and standalone unlocked natives are offered as Sidekick candidates', async () => {
@@ -560,12 +563,12 @@ test('officially paired and standalone unlocked natives are offered as Sidekick 
   ];
   const f = memory({ nativeModels: () => observed });
   const state = publicState(fixture(), observed);
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'gpt-5-6-luna-high').eligible, true);
-  assert.equal(state.nativeModels.find(entry => entry.uid === 'swe-odd').eligible, true,
+  assert.equal(nativeMember(state, 'gpt-5-6-luna-high').eligible, true);
+  assert.equal(nativeMember(state, 'swe-odd').eligible, true,
     'an unlocked standalone native is eligible for named presets');
   assert.ok(state.sidekicks.some(item => item.nativeUid === 'gpt-5-6-luna-high'));
   const disabled = observed.map(item => item.uid === 'swe-odd' ? { ...item, disabled: true } : item);
-  assert.equal(publicState(fixture(), disabled).nativeModels.find(entry => entry.uid === 'swe-odd').eligible, false);
+  assert.equal(nativeMember(publicState(fixture(), disabled), 'swe-odd').eligible, false);
   const saved = await f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: true, model: { nativeUid: 'gpt-5-6-luna-high' } });
   assert.ok(saved.roleLists.sidekick.some(item => item.ref.nativeUid === 'gpt-5-6-luna-high' && item.selected));
   assert.ok(Object.values(buildCatalog(f.read(), observed).fusions).some(fusion => fusion.sidekickUid === 'gpt-5-6-luna-high'));
@@ -617,4 +620,104 @@ test('a CLI cache refresh is refused while disabled or unsupported', async () =>
   await assert.rejects(memory().manager.dispatch('refreshCliCaches'), PanelInputError, 'no refresher is wired in');
   const disabled = memory({ config: { ...fixture(), enabled: false }, refreshCliCaches: async () => ({ checked: 1, refreshed: [], skipped: [], errors: [] }) });
   await assert.rejects(disabled.manager.dispatch('refreshCliCaches'), PanelInputError);
+});
+
+test('publicState groups observed natives into server families without fusion entries', () => {
+  const effort = (order, name) => ({ key: 'Effort', order, name, controlType: 1 });
+  const ctx1m = { key: '1M Context', order: 1, name: '', controlType: 2 };
+  const thinking = { key: 'Thinking', order: 1, name: '', controlType: 2 };
+  const fast = { key: 'Fast Mode', order: 1, name: '', controlType: 2 };
+  const glm = [
+    { uid: 'glm-5-2', label: 'GLM-5.2 High', fusionMetadata: [effort(1, 'High')] },
+    { uid: 'glm-5-2-max', label: 'GLM-5.2 Max', fusionMetadata: [effort(2, 'Max')] },
+    { uid: 'glm-5-2-none', label: 'GLM-5.2 No Thinking', fusionMetadata: [effort(0, 'No Thinking')] },
+    { uid: 'glm-5-2-1m', label: 'GLM-5.2 High 1M', fusionMetadata: [effort(1, 'High'), ctx1m] },
+    { uid: 'glm-5-2-max-1m', label: 'GLM-5.2 Max 1M', fusionMetadata: [effort(2, 'Max'), ctx1m] },
+    { uid: 'glm-5-2-none-1m', label: 'GLM-5.2 No Thinking 1M', fusionMetadata: [effort(0, 'No Thinking'), ctx1m] },
+  ].map(entry => ({ ...entry, disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'glm-5.2' }));
+  const claude = [
+    { uid: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+    { uid: 'claude-opus-4-6-thinking', label: 'Claude Opus 4.6 Thinking', fusionMetadata: [thinking] },
+    { uid: 'claude-opus-4-6-1m', label: 'Claude Opus 4.6 1M', fusionMetadata: [ctx1m] },
+    { uid: 'claude-opus-4-6-thinking-1m', label: 'Claude Opus 4.6 Thinking 1M', fusionMetadata: [thinking, ctx1m] },
+  ].map(entry => ({ ...entry, disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'claude-opus-4.6' }));
+  const observed = [...glm, ...claude,
+    { uid: 'swe-1-6-fast', label: 'SWE-1.6 Fast', disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'swe-1.6-fast' },
+    { uid: 'claude-x', label: 'Claude X', disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: '  padded-family  ' },
+    { uid: 'solo-a', label: 'Solo A', disabled: false, isModelRouter: false, harnessUids: ['h'] },
+    { uid: 'fusion-official-x', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], familyUid: 'fusion-family' },
+    { uid: 'dfbyok-provider-a-model', label: 'Own', disabled: false, isModelRouter: false, harnessUids: [] }];
+  const input = fixture();
+  input.hiddenNativeModelUids = ['glm-5-2-max'];
+  const state = publicState(input, observed);
+  assert.ok(state.nativeFamilies, 'the panel state exposes families');
+  assert.equal(state.nativeModels, undefined, 'the flat list is replaced by the family list');
+  assert.ok(!nativeMembers(state).some(member => member.uid.startsWith('fusion-') || member.uid.startsWith('dfbyok-')),
+    'combination and own entries never appear in the settings list');
+
+  const glm5 = state.nativeFamilies.find(family => family.id === 'glm-5.2');
+  assert.equal(glm5.label, 'GLM-5.2');
+  assert.equal(glm5.variants, 6);
+  assert.deepEqual(glm5.efforts, ['No Thinking', 'High', 'Max'], 'efforts are deduped and sorted by order');
+  assert.deepEqual(glm5.toggles, ['1M Context']);
+  assert.equal(glm5.hidden, false);
+  assert.equal(glm5.mixed, true, 'a partially hidden family reports mixed');
+  assert.deepEqual(glm5.members.find(member => member.uid === 'glm-5-2-max').hidden, true);
+
+  const opus = state.nativeFamilies.find(family => family.id === 'claude-opus-4.6');
+  assert.equal(opus.label, 'Claude Opus 4.6');
+  assert.equal(opus.variants, 4);
+  assert.deepEqual(opus.toggles, ['1M Context', 'Thinking'], 'toggles are deduped and name-sorted');
+
+  const fastSwe = state.nativeFamilies.find(family => family.id === 'swe-1.6-fast');
+  assert.equal(fastSwe.label, 'SWE-1.6 Fast', 'a single-member family keeps its own label unstripped');
+  const solo = state.nativeFamilies.find(family => family.id === 'uid:solo-a');
+  assert.equal(solo.label, 'Solo A', 'a missing family uid falls back to a one-member family');
+  const padded = state.nativeFamilies.find(family => family.id === 'padded-family');
+  assert.equal(padded.label, 'Claude X', 'the observed family uid is used as trimmed');
+  const labels = state.nativeFamilies.map(family => family.label);
+  assert.equal(new Set(labels).size, labels.length, 'family labels stay unique');
+
+  const allHidden = state.nativeFamilies.find(family => family.id === 'uid:solo-a').hidden;
+  assert.equal(allHidden, false);
+});
+
+test('a fully hidden family reports hidden while a partially hidden one reports mixed', async () => {
+  const observed = [
+    { uid: 'x-high', label: 'X High', disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'x' },
+    { uid: 'x-max', label: 'X Max', disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'x' },
+    { uid: 'y', label: 'Y', disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'y' },
+  ];
+  const f = memory({ nativeModels: () => observed });
+  let state = await f.manager.dispatch('setNativeModelHidden', { uids: ['x-high', 'x-max'], hidden: true });
+  assert.deepEqual(f.read().hiddenNativeModelUids, ['x-high', 'x-max']);
+  const family = state.nativeFamilies.find(item => item.id === 'x');
+  assert.equal(family.hidden, true);
+  assert.equal(family.mixed, false);
+  state = await f.manager.dispatch('setNativeModelHidden', { uid: 'x-high', hidden: false });
+  assert.deepEqual(f.read().hiddenNativeModelUids, ['x-max']);
+  const partial = state.nativeFamilies.find(item => item.id === 'x');
+  assert.equal(partial.hidden, false);
+  assert.equal(partial.mixed, true);
+  state = await f.manager.dispatch('setNativeModelHidden', { uids: ['x-high', 'x-max'], hidden: false });
+  assert.deepEqual(f.read().hiddenNativeModelUids, []);
+  assert.equal(state.nativeFamilies.find(item => item.id === 'x').hidden, false);
+});
+
+test('setNativeModelHidden rejects malformed uid lists without writes', async () => {
+  const observed = [{ uid: 'swe-2-max', label: 'SWE', disabled: false }];
+  const f = memory({ nativeModels: () => observed });
+  const before = f.read();
+  for (const payload of [
+    { uids: [], hidden: true },
+    { uids: Array.from({ length: 257 }, (_, i) => 'u' + i), hidden: true },
+    { uids: ['swe-2-max', 'dfbyok-own'], hidden: true },
+    { uids: ['swe-2-max', 'not-observed'], hidden: true },
+    { uids: [42], hidden: true },
+    { uids: ['swe-2-max'], hidden: 'yes' },
+  ]) {
+    await assert.rejects(f.manager.dispatch('setNativeModelHidden', payload), PanelInputError, JSON.stringify(payload).slice(0, 80));
+  }
+  assert.deepEqual(f.read(), before);
+  assert.equal(f.writes.length, 0);
 });

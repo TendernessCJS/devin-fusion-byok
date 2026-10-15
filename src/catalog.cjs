@@ -1004,12 +1004,22 @@ function protoMetadata(entry) {
         supportsImages = true;
       }
     }
+    // Inner field 23 is the server's family identifier — entries sharing it are
+    // one model with a tier selector and toggles (glm-5.2 groups all six uids).
+    // Absent or malformed just means "no family", never an invalid entry.
+    const familyFields = inner.filter(field => field.number === 23);
+    let familyUid = '';
+    if (familyFields.length === 1 && familyFields[0].wire === 2) {
+      const value = familyFields[0].value.toString('utf8').trim();
+      if (value && value.length <= 128) familyUid = value;
+    }
     return {
       harnessUids: harnesses.map(field => field.value.toString('utf8')),
       isModelRouter: routers.length === 1 && Number(routers[0].value) !== 0,
       ...(maxTokens ? { maxTokens } : {}),
       ...(maxOutputTokens ? { maxOutputTokens } : {}),
       ...(supportsImages ? { supportsImages: true } : {}),
+      ...(familyUid ? { familyUid } : {}),
     };
   } catch { return { harnessUids: [], isModelRouter: false }; }
 }
@@ -1030,7 +1040,10 @@ function protoFusionMetadata(entry) {
       const keyFields = item.filter(part => part.number === 1);
       if (keyFields.length !== 1 || keyFields[0].wire !== 2) return null;
       const key = keyFields[0].value.toString('utf8');
-      if (!CANONICAL_FAMILY_KEYS.has(key)) continue;
+      // Non-canonical control dimensions (Reasoning Effort, 1M Context,
+      // Thinking, Prompt Cache Retention, Speed) are kept: the settings page
+      // reads them to describe the family, and role/emission logic only ever
+      // reads the canonical names so extra keys cannot leak into it.
       if (keys.has(key)) return null;
       keys.add(key);
       const valFields = item.filter(part => part.number === 2);
@@ -1049,7 +1062,7 @@ function protoFusionMetadata(entry) {
       const controlType = controls.length ? Number(controls[0].value) : 0;
       if (!Number.isSafeInteger(order) || order < 0 || order > 0x7fffffff) return null;
       if (!Number.isSafeInteger(controlType) || controlType < 0 || controlType > 0x7fffffff) return null;
-      if (key !== 'Fast Mode' && !name) return null;
+      if (CANONICAL_FAMILY_KEYS.has(key) && key !== 'Fast Mode' && !name) return null;
       entries.push({ key, order, name, controlType });
     }
     return entries.length ? entries : null;
@@ -1091,12 +1104,16 @@ function jsonMetadata(entry) {
     const img = jsonAliasValue(features.value, 'supportsImages', 'supports_images');
     if (!img.conflict && img.present && img.value === true) supportsImages = true;
   }
+  const family = jsonAliasValue(info.value, 'modelFamilyUid', 'model_family_uid');
+  const familyUid = !family.conflict && family.present && typeof family.value === 'string'
+    ? family.value.trim() : '';
   return {
     harnessUids: harness.present ? harness.value : [],
     isModelRouter: router.value === true,
     ...(!maxTokens.conflict && maxTokens.present && Number.isSafeInteger(maxTokens.value) && maxTokens.value > 0 ? { maxTokens: maxTokens.value } : {}),
     ...(!maxOutputTokens.conflict && maxOutputTokens.present && Number.isSafeInteger(maxOutputTokens.value) && maxOutputTokens.value > 0 ? { maxOutputTokens: maxOutputTokens.value } : {}),
     ...(supportsImages ? { supportsImages: true } : {}),
+    ...(familyUid && familyUid.length <= 128 ? { familyUid } : {}),
   };
 }
 
@@ -1110,7 +1127,6 @@ function jsonFusionMetadata(entry) {
   for (const item of list) {
     if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.key !== 'string') return null;
     const key = item.key;
-    if (!CANONICAL_FAMILY_KEYS.has(key)) continue;
     if (keys.has(key)) return null;
     keys.add(key);
     const value = item.value;
@@ -1121,7 +1137,7 @@ function jsonFusionMetadata(entry) {
     if (value.name !== undefined && typeof value.name !== 'string') return null;
     const name = typeof value.name === 'string' ? value.name : '';
     const controlType = control.present ? control.value : 0;
-    if (key !== 'Fast Mode' && !name) return null;
+    if (CANONICAL_FAMILY_KEYS.has(key) && key !== 'Fast Mode' && !name) return null;
     entries.push({ key, order: value.order ?? 0, name, controlType });
   }
   return entries.length ? entries : null;
@@ -1158,6 +1174,7 @@ function nativeEntries(entries, isJson) {
       ...(meta.maxTokens ? { maxTokens: meta.maxTokens } : {}),
       ...(meta.maxOutputTokens ? { maxOutputTokens: meta.maxOutputTokens } : {}),
       ...(meta.supportsImages ? { supportsImages: true } : {}),
+      ...(meta.familyUid ? { familyUid: meta.familyUid } : {}),
     });
   }
   return seen;

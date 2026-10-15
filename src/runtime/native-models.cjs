@@ -59,6 +59,7 @@ async function readOnce({ root, port, signal, request }) {
     if (Number.isSafeInteger(entry.maxTokens) && entry.maxTokens > 0) next.maxTokens = entry.maxTokens;
     if (Number.isSafeInteger(entry.maxOutputTokens) && entry.maxOutputTokens > 0) next.maxOutputTokens = entry.maxOutputTokens;
     if (entry.supportsImages === true) next.supportsImages = true;
+    if (typeof entry.familyUid === 'string' && entry.familyUid && entry.familyUid.length <= 128) next.familyUid = entry.familyUid;
     return next;
   });
   return { status: models.length ? 'ready' : 'empty', models };

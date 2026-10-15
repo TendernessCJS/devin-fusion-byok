@@ -1484,3 +1484,64 @@ test('lead row labels are globally unique after family aggregation', () => {
   assert.equal(new Set(labels).size, labels.length,
     'two rows sharing a label would collapse into one picker row: ' + JSON.stringify(labels.sort()));
 });
+
+for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} collectNativeModels reads the server family uid`, () => {
+  if (format.json) {
+    for (const snake of [false, true]) {
+      const info = snake
+        ? { model_info: { harness_uids: ['swe-1p5'], is_model_router: false, model_family_uid: 'glm-5.2' } }
+        : { modelInfo: { harnessUids: ['swe-1p5'], isModelRouter: false, modelFamilyUid: 'glm-5.2' } };
+      const [record] = collectNativeModels({ clientModelConfigs: [{ label: 'GLM', modelUid: 'glm-5-2', ...info }] },
+        { rpc: 'GetCliModelConfigs', format: json });
+      assert.equal(record.familyUid, 'glm-5.2');
+    }
+    for (const bad of [{ modelFamilyUid: 42 }, { modelFamilyUid: '' }, { modelFamilyUid: 'x'.repeat(200) }]) {
+      const [record] = collectNativeModels({ clientModelConfigs: [{ label: 'GLM', modelUid: 'glm-5-2',
+        modelInfo: { harnessUids: ['h'], isModelRouter: false, ...bad } }] }, { rpc: 'GetCliModelConfigs', format: json });
+      assert.equal(record.familyUid, undefined, 'malformed family ids are ignored: ' + JSON.stringify(bad));
+      assert.deepEqual(record.harnessUids, ['h'], 'a bad family id never invalidates the rest of the entry');
+    }
+  } else {
+    const protoWith = extra => cat(s(1, 'GLM'), s(22, 'glm-5-2'), m(23, cat(s(20, 'swe-1p5'), ...extra)));
+    const [withFamily] = collectNativeModels(cat(m(1, protoWith([s(23, 'glm-5.2')]))),
+      { rpc: 'GetCliModelConfigs', format: proto });
+    assert.equal(withFamily.familyUid, 'glm-5.2');
+    const [whitespace] = collectNativeModels(cat(m(1, protoWith([s(23, '  glm-5.2  ')]))),
+      { rpc: 'GetCliModelConfigs', format: proto });
+    assert.equal(whitespace.familyUid, 'glm-5.2', 'the family id is trimmed');
+    for (const bad of [s(23, ''), v(23, 4), s(23, 'x'.repeat(200))]) {
+      const [record] = collectNativeModels(cat(m(1, protoWith([bad]))), { rpc: 'GetCliModelConfigs', format: proto });
+      assert.equal(record.familyUid, undefined);
+      assert.deepEqual(record.harnessUids, ['swe-1p5'], 'a bad family id never invalidates the rest of the entry');
+    }
+  }
+});
+
+for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} collectNativeModels keeps non-canonical control dimensions`, () => {
+  if (format.json) {
+    const [record] = collectNativeModels({ clientModelConfigs: [{ label: 'GLM', modelUid: 'glm-5-2-1m',
+      modelInfo: { harnessUids: ['h'], isModelRouter: false },
+      modelFamilyMetadata: { entries: [
+        { key: 'Effort', value: { order: 1, name: 'High', controlType: 1 } },
+        { key: '1M Context', value: { order: 1, controlType: 2 } },
+        { key: 'Speed', value: {} },
+      ] } }] }, { rpc: 'GetCliModelConfigs', format: json });
+    assert.deepEqual(record.fusionMetadata, [
+      { key: 'Effort', order: 1, name: 'High', controlType: 1 },
+      { key: '1M Context', order: 1, name: '', controlType: 2 },
+      { key: 'Speed', order: 0, name: '', controlType: 0 }],
+      'a nameless non-canonical key like Speed must not void the whole metadata');
+  } else {
+    const dim = (key, ...valueParts) => m(2, cat(s(1, key), m(2, cat(...valueParts))));
+    const entry = cat(s(1, 'GLM'), s(22, 'glm-5-2-1m'), m(23, cat(s(20, 'h'))),
+      m(30, cat(s(1, 'Fusion'),
+        dim('Effort', v(1, 1), s(2, 'High'), v(3, 1)),
+        dim('1M Context', v(1, 1), v(3, 2)),
+        dim('Speed', v(3, 2)))));
+    const [record] = collectNativeModels(cat(m(1, entry)), { rpc: 'GetCliModelConfigs', format: proto });
+    assert.deepEqual(record.fusionMetadata, [
+      { key: 'Effort', order: 1, name: 'High', controlType: 1 },
+      { key: '1M Context', order: 1, name: '', controlType: 2 },
+      { key: 'Speed', order: 0, name: '', controlType: 2 }]);
+  }
+});

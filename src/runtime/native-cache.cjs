@@ -18,7 +18,8 @@ function normalizeNativeEntry(entry) {
     ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
     ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
     ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
-    ...(entry.supportsImages ? { supportsImages: true } : {}) };
+    ...(entry.supportsImages ? { supportsImages: true } : {}),
+    ...(typeof entry.familyUid === 'string' && entry.familyUid && entry.familyUid.length <= 128 ? { familyUid: entry.familyUid } : {}) };
 }
 
 function normalizedList(entries) {
@@ -49,6 +50,7 @@ function mergeNativeEntry(prior, incoming) {
   if (prior.sidekickDimension && !incoming.sidekickDimension) carried.sidekickDimension = prior.sidekickDimension;
   if (prior.fusionMetadata && !incoming.fusionMetadata) carried.fusionMetadata = prior.fusionMetadata;
   if (prior.harnessUids?.length && !incoming.harnessUids?.length) carried.harnessUids = prior.harnessUids;
+  if (prior.familyUid && !incoming.familyUid) carried.familyUid = prior.familyUid;
   return Object.keys(carried).length ? { ...incoming, ...carried } : incoming;
 }
 
