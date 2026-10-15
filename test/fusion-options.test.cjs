@@ -45,10 +45,9 @@ test('every enabled import is a Sidekick without a second configuration step', (
   const catalog = buildCatalog(input, OBSERVED_SWE);
   assert.deepEqual(new Set(catalog.sidekicks.filter(s => !s.native).map(s => s.providerId + '/' + s.model)),
     new Set(['load/gpt-6-astra', 'load/swe-2-high', 'load/swe-2-max', 'load/swe-2-medium', 'other/extra']));
-  const perLead = new Set(Object.values(catalog.routes).map(route =>
-    Object.values(catalog.fusions).filter(fusion => fusion.leadUid === route.uid).length));
-  assert.equal(perLead.size, 1, 'every Lead is mirrored with the same Sidekick set');
-  assert.ok([...perLead][0] >= 5, 'each Lead pairs with every Sidekick family representative');
+  const perLead = Object.values(catalog.routes).map(route =>
+    Object.values(catalog.fusions).filter(fusion => fusion.leadUid === route.uid).length);
+  assert.ok(Math.min(...perLead) >= 5, 'each Lead pairs with every Sidekick value outside its own family');
   assert.ok(catalog.rolePool.sidekick.length >= 6);
   assert.equal(input.sidekicks.length, 2, 'catalog generation does not rewrite user settings');
 });

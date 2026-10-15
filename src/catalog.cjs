@@ -855,12 +855,17 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
     leadFamilies.get(lead.key).push(lead);
   }
   for (const [key, candidates] of leadFamilies) {
-    const lead = candidates.find(item => !item.effort) || candidates.find(item => item.effort === 'high') || candidates[0];
-    if (!lead) continue;
-    const ref = { providerId: lead.providerId, model: lead.model };
-    if (!seenSidekicks.has(key) && selectedSidekickKeys.has(refKey(ref))) {
-      seenSidekicks.add(key);
-      sidekicks.push({ uid: lead.uid, label: lead.familyLabel, native: false, providerId: lead.providerId, model: lead.model });
+    // Official Sidekick values are variant-level (the effort is baked into the
+    // value's name, e.g. "Claude Sonnet 5.5 Medium"), so a selected BYOK family
+    // emits every variant — the sidekick's effort becomes a real choice instead
+    // of silently resolving to the provider default.
+    const ref = { providerId: candidates[0]?.providerId, model: candidates[0]?.model };
+    if (!selectedSidekickKeys.has(refKey(ref))) continue;
+    for (const lead of candidates) {
+      if (seenSidekicks.has(lead.uid)) continue;
+      seenSidekicks.add(lead.uid);
+      sidekicks.push({ uid: lead.uid, native: false, providerId: lead.providerId, model: lead.model,
+        label: lead.familyLabel + (lead.effort ? ` ${effortMetadata(lead.effort).name}` : '') });
     }
   }
   for (const native of [...eligibleNativeSidekicks.values()].sort((a, b) => a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0)) {
@@ -915,8 +920,10 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
     if (!sidekickPools.has(key)) sidekickPools.set(key, []);
     sidekickPools.get(key).push(item);
   }
-  const sidekickReps = [...sidekickPools.values()].map(variants =>
-    variants.find(item => !item.effort) || variants.find(item => item.effort === 'high') || variants[0]);
+  // Native pools are single-member (one uid per key); BYOK pools hold every
+  // effort variant of the family and all of them become selectable values.
+  const sidekickReps = [...sidekickPools.values()].flatMap(variants =>
+    variants[0].native ? [variants[0]] : variants);
   const pairs = [], customLeadNames = new Set(), customSideNames = new Set();
   for (const lead of candidates.lead) {
     for (const sidekick of sidekickReps) {
@@ -938,7 +945,8 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
       const leadDim = lead.native ? (lead.leadDimension ? lead.leadDimension.name : lead.leadBaseLabel || lead.label)
         : lead.familyLabel;
       const sideDim = sidekick.native && sidekick.dimension ? sidekick.dimension.name
-        : sidekick.native ? sidekick.label : sidekick.familyLabel;
+        : sidekick.native ? sidekick.label
+        : sidekick.familyLabel + (sidekick.effort ? ` ${effortMetadata(sidekick.effort).name}` : '');
       if (!(lead.native && lead.leadDimension)) customLeadNames.add(leadDim);
       if (!(sidekick.native && sidekick.dimension)) customSideNames.add(sideDim);
       pairs.push({ lead, sidekick, leadDim, sideDim, uid });

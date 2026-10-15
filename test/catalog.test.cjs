@@ -35,12 +35,14 @@ const configs = buffer => fields(buffer, 1).filter(field => field.wire === 2).ma
 
 test('every provider Lead variant pairs with every selected Sidekick representative', () => {
   assert.equal(Object.keys(catalog.routes).length, 4);
-  assert.equal(Object.keys(catalog.fusions).length, 12);
-  assert.equal(catalog.models.length, 16);
-  assert.equal(catalog.matrixUids.size, 12, 'the cross product minus same-model pairs is mirrored into the official card');
+  assert.equal(Object.keys(catalog.fusions).length, 14);
+  assert.equal(catalog.models.length, 18);
+  assert.equal(catalog.matrixUids.size, 14, 'the cross product minus same-family pairs is mirrored into the official card');
   for (const route of Object.values(catalog.routes)) {
     const combinations = Object.values(catalog.fusions).filter(fusion => fusion.leadUid === route.uid);
-    assert.equal(combinations.length, 3);
+    // grok-4.6 offers two effort variants as Sidekick values, so its own leads
+    // lose two same-family values while the other leads lose just one.
+    assert.equal(combinations.length, route.model === 'grok-4.6' ? 3 : 4);
     assert.deepEqual(new Set(combinations.map(fusion => fusion.sidekickNative)), new Set([false, true]));
     for (const fusion of combinations) {
       assert.equal(fusion.uid, `fusion-${fusion.leadUid}-sidekick-${fusion.sidekickUid}`);
@@ -173,7 +175,7 @@ for (const rpc of [lsStatus, seatStatus]) test(`${rpc} appends namespace entries
   const status = getNested(output, 1), list = getNested(status, 33);
   assert.deepEqual(configs(list).slice(0, catalog.models.length), catalog.models.map(model => model.raw));
   assert.deepEqual(configs(list).at(-1), fixture.native);
-  assert.equal(configs(list).length, 17);
+  assert.equal(configs(list).length, 19);
   assert.equal(str(status, 1), 'opaque-user-value');
   assert.deepEqual(fields(status, 98)[0].raw, fields(fixture.status, 98)[0].raw);
   assert.equal(num(status, 27), 33);
@@ -194,7 +196,7 @@ test('GetCliModelConfigs preserves defaults, subagent model and unknown field 2 
   const native = statusFixture().native;
   const input = cat(m(1, native), s(2, 'future-field-two'), m(3, native), s(4, 'swe-2-max'), v(99, 9));
   const output = augmentCatalog(input, { rpc: '/exa.api_server_pb.ApiServerService/GetCliModelConfigs', format: proto, catalog });
-  assert.equal(configs(output).length, 17);
+  assert.equal(configs(output).length, 19);
   assert.deepEqual(configs(output).at(-1), native);
   assert.deepEqual(configs(output).slice(0, catalog.models.length), catalog.models.map(model => model.raw));
   for (const number of [2, 3, 4, 99]) assert.deepEqual(fields(output, number)[0].raw, fields(input, number)[0].raw);
@@ -233,7 +235,7 @@ for (const snake of [false, true]) test(`JSON ${snake ? 'snake' : 'camel'} statu
   const list = output[statusKey][listKey];
   assert.deepEqual(list[modelsKey].slice(0, catalog.models.length), catalog.models.map(model => model.json));
   assert.deepEqual(list[modelsKey].at(-1), native);
-  assert.equal(list[modelsKey].length, 17);
+  assert.equal(list[modelsKey].length, 19);
   assert.equal(list[sortsKey][0].groups.length, 2);
   assert.equal(list[sortsKey][0].groups[0].groupName, 'Devin Fusion BYOK');
   assert.equal(list[sortsKey][0].extra, 1);
@@ -266,7 +268,7 @@ test('unknown RPCs, empty catalogs, missing user status and malformed responses 
 test('a valid user status without catalog gains only catalog data', () => {
   const output = augmentCatalog(m(1, v(42, 9)), { rpc: lsStatus, format: proto, catalog });
   assert.equal(num(getNested(output, 1), 42), 9);
-  assert.equal(configs(getNested(output, 1, 33)).length, 16);
+  assert.equal(configs(getNested(output, 1, 33)).length, 18);
   assert.equal(fields(getNested(output, 1, 33), 2).length, 1);
 });
 
@@ -1047,8 +1049,11 @@ test('the matrix emits the full lead-by-sidekick cross product so dropdowns stay
   assert.deepEqual(leadUids, probe.rolePool.lead.map(item => item.uid).sort(),
     'every selected Lead variant is a Lead in the matrix');
   const perLead = leadUids.map(lead => matrix.filter(model => probe.fusions[model.uid].leadUid === lead));
-  assert.equal(new Set(perLead.map(items => items.length)).size, 1,
-    'every Lead offers the same number of Sidekicks, or its dropdown locks');
+  // Per-lead counts differ by family: each lead loses its own family's Sidekick
+  // values (grok-4.6 loses two variants, others lose one), like official holes.
+  for (const items of perLead) {
+    assert.ok(items.length >= 2, 'every Lead keeps at least two Sidekicks, or its dropdown locks');
+  }
   assert.equal(probe.matrixUids.size, matrix.length);
   for (const items of perLead) {
     const sides = items.map(model => probe.fusions[model.uid].sidekickUid);
