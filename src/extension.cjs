@@ -238,7 +238,7 @@ async function activate(context) {
     } catch { log('config-prune-failed'); }
   };
   pruneConfig();
-  let nativeCatalogStatus = 'loading', syncPending, syncAbort, syncTimer;
+  let nativeCatalogStatus = 'loading', backendStatus = 'stopped', syncPending, syncAbort, syncTimer;
   let acpObservationSeq = 0, acpOwnModels = 0;
   // Push the merged view to the backend so it serves (and whitelists) the same
   // catalog this host does. The backend only sees the CLI's traffic, whose
@@ -359,16 +359,20 @@ async function activate(context) {
     const generation = ++activationGeneration;
     runtimeWaitAbort?.abort();
     const waiting = new AbortController(); runtimeWaitAbort = waiting;
+    backendStatus = 'starting';
     let compatible;
     const compatibleReady = new Promise(resolve => { compatible = resolve; });
     const upgrade = ensureBackend({ root, extensionPath: context.extensionPath, signal: waiting.signal, log,
       onCompatibleRuntime: health => {
         if (waiting.signal.aborted) return;
         log('runtime-update-pending', { version: health.version });
+        backendStatus = 'running'; void management?.publish()?.catch(() => {});
         compatible(health);
       } });
     void upgrade.finally(() => { if (runtimeWaitAbort === waiting) runtimeWaitAbort = undefined; })
       .catch(error => { const code = safeError(error).code; if (code !== 'cancelled') log('runtime-upgrade-error', { code }); });
+    upgrade.then(() => { backendStatus = 'running'; void management?.publish()?.catch(() => {}); },
+      error => { const code = safeError(error).code; if (code !== 'cancelled') { backendStatus = code; void management?.publish()?.catch(() => {}); } });
     await Promise.race([upgrade, compatibleReady]);
     if (generation !== activationGeneration || config().enabled === false) return;
     reconcileHalted = false;
@@ -490,6 +494,7 @@ async function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.status', () => { log('status', { runtime: connection?.status, models: config().providers.map(p => ({ name: p.name, models: p.models.length })) }); output.show(true); }));
   const disable = async () => {
     try { goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); }
+    backendStatus = 'stopped';
     const current = config(); current.enabled = false; writeConfig(configFile, current);
     await teardown();
     const settings = vscode.workspace.getConfiguration('devin.acp');
@@ -620,6 +625,7 @@ async function activate(context) {
   checkCliCaches();
   manager = createManager({ read: config, write: current => writeConfig(configFile, current),
     nativeModels: () => [...nativeModels.values()], nativeAllowedUids: () => nativeAllowedUids, refreshNativeModels, nativeCatalogStatus: () => nativeCatalogStatus,
+    backendStatus: () => backendStatus,
     autoContinueStatus: () => autoContinue ? (autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
     refreshCliCaches, cliCacheStatus: () => cliCacheReport,
     selectFusion: saveFusionChoice,

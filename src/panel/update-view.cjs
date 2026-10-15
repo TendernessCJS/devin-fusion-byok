@@ -9,6 +9,7 @@ function updateScript() {
     for (const action of ['check','install','ignore','release']) byId(action).addEventListener('click', () => send(action));
     byId('auto').addEventListener('change', () => send('auto', { enabled: byId('auto').checked }));
     byId('proxy-save').addEventListener('click', () => send('proxy', { value: byId('proxy').value.trim() }));
+    byId('proxy').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); byId('proxy-save').click(); } });
     window.addEventListener('message', event => {
       if (event.data?.type !== 'update-state') return;
       const s = event.data.state;

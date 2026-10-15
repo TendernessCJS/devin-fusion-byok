@@ -340,7 +340,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
     byId('disabled-banner').hidden = !off();
     renderProviders();
     renderModels();
-    renderGeneral();
+    renderSettings();
     renderRoles();
     renderNative();
     renderCache();
@@ -466,9 +466,14 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
     }
   }
 
-  function renderGeneral() {
+  function renderSettings() {
     const container = byId('settings-general');
     container.replaceChildren();
+    const backendText = { starting: '启动中', running: '运行中', stopped: '已停止' }[state.backendStatus]
+      || `异常（${state.backendStatus || '未知'}）`;
+    const catalogText = { ready: '已同步', loading: '同步中', empty: '未同步' }[state.nativeCatalogStatus]
+      || `异常（${state.nativeCatalogStatus || '未知'}）`;
+    container.append(element('p', { class: 'hint', text: `运行状态：后台服务 ${backendText} · 官方目录 ${catalogText}` }));
     const setting = (title, sub, control) => element('div', { class: 'setting' },
       element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: title }), sub ? element('span', { class: 'row-sub', text: sub }) : null), control);
     const status = state.autoContinueStatus === 'attached' ? null
@@ -553,7 +558,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
   function renderCache() {
     const report = state.cliCache;
     const hint = byId('cache-hint'), detail = byId('cache-report');
-    hint.textContent = report && report.at ? '最近 ' + new Date(report.at).toLocaleTimeString('zh-CN', { hour12: false }) : '';
+    hint.textContent = report && report.at ? '最近检查 ' + new Date(report.at).toLocaleTimeString('zh-CN', { hour12: false }) : '';
     detail.replaceChildren();
     if (!report) { detail.append(document.createTextNode('还没有记录，点一次「刷新缓存」即可。')); return; }
     const parts = [];

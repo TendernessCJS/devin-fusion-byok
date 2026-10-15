@@ -190,9 +190,17 @@ test('the settings tab exposes the CLI cache refresh and reports the last run', 
     refreshed: ['model_configs_v5.abcd1234.bin'], skipped: [{ name: 'team_settings.abcd1234.bin', reason: 'no-improvement' }], errors: [] } } } });
   assert.match(textOf(byId('cache-report')), /已重写 model_configs_v5/);
   assert.match(textOf(byId('cache-report')), /team_settings 无需重写/);
-  assert.match(textOf(byId('cache-hint')), /\d{2}:\d{2}/);
+  assert.match(textOf(byId('cache-hint')), /最近检查 \d{2}:\d{2}/);
   byId('refresh-cache').listeners.click();
   assert.ok(posts.some(message => message.type === 'refreshCliCaches'), 'the button asks the host to refresh');
+});
+
+test('the settings tab summarizes backend and catalog status', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), backendStatus: 'running', nativeCatalogStatus: 'ready' } } });
+  assert.match(textOf(byId('settings-general')), /后台服务 运行中 · 官方目录 已同步/);
+  receive({ data: { type: 'state', state: { ...state(), backendStatus: 'port_in_use', nativeCatalogStatus: 'empty' } } });
+  assert.match(textOf(byId('settings-general')), /后台服务 异常（port_in_use） · 官方目录 未同步/);
 });
 
 test('a state render mid-request keeps the busy lock but must not stick it', async () => {

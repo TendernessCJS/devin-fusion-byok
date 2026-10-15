@@ -143,6 +143,20 @@ test('update view is plain text and does not expose release payload as HTML', ()
   assert.doesNotThrow(() => new Function('vscode', updateScript()));
 });
 
+test('pressing Enter in the proxy field saves it like the button', () => {
+  const { updateScript } = require('../src/panel/update-view.cjs');
+  const posts = [], elements = new Map();
+  const stub = () => ({ listeners: {}, value: ' http://127.0.0.1:7897 ', checked: false, hidden: false,
+    disabled: false, textContent: '', addEventListener(name, listener) { this.listeners[name] = listener; },
+    click() { this.listeners.click?.(); } });
+  const document = { getElementById: id => { if (!elements.has(id)) elements.set(id, stub()); return elements.get(id); },
+    activeElement: null };
+  new Function('vscode', 'document', 'window', updateScript())(
+    { postMessage: message => posts.push(message) }, document, { addEventListener() {} });
+  elements.get('update-proxy').listeners.keydown({ key: 'Enter', preventDefault() {} });
+  assert.deepEqual(posts.find(message => message.type === 'update.proxy').payload, { value: 'http://127.0.0.1:7897' });
+});
+
 test('requestBytes defaults to directFetch without touching the ambient fetch', async () => {
   const fs = require('node:fs');
   const path = require('node:path');
