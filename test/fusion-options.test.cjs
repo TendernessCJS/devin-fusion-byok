@@ -87,10 +87,13 @@ test('actual installed Fusion picker enables every GPT effort and imported Sidek
 });
 
 test('selective import immediately exposes the new model in both roles and effort settings are editable', async () => {
-  let current = { providers: [{ id: 'load', name: 'load', models: [] }], sidekicks: [{ nativeUid: 'swe-2-max' }],
+  const observed = [...OBSERVED_SWE,
+    { uid: 'nova-1-high', label: 'Nova High', disabled: false, isModelRouter: false, harnessUids: ['nova-harness'] },
+    { uid: 'fusion-lead-a-sidekick-nova-1-high', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], sidekickDimension: { order: 4, name: 'Nova High' } }];
+  let current = { providers: [{ id: 'load', name: 'load', models: [] }], sidekicks: [{ nativeUid: 'nova-1-high' }],
     roleInclusions: { lead: [{ nativeUid: 'swe-2-max' }], sidekick: [] } };
   const manager = createManager({ read: () => structuredClone(current), write: c => { current = c; },
-    discover: async p => { p.models = [{ id: 'gpt-6-astra', efforts: [] }] }, nativeModels: () => OBSERVED_SWE });
+    discover: async p => { p.models = [{ id: 'gpt-6-astra', efforts: [] }] }, nativeModels: () => observed });
   const preview = await manager.dispatch('refreshModels', { providerId: 'load' });
   // Before any import the only selectable Lead is the explicitly included
   // native one, so it mirrors exactly one combination.
@@ -99,7 +102,7 @@ test('selective import immediately exposes the new model in both roles and effor
   assert.ok(imported.fusionCount > 0, 'importing a model mirrors its combinations');
   // The per-variant pool lives on the catalog (the panel only sees family-level
   // role rows), so it is read from the persisted config the manager wrote.
-  const pool = role => buildCatalog(current, OBSERVED_SWE).rolePool[role];
+  const pool = role => buildCatalog(current, observed).rolePool[role];
   assert.equal(pool('lead').filter(item => !item.ref.nativeUid).length, 6);
   assert.ok(pool('lead').some(item => item.ref.nativeUid === 'swe-2-max'));
   assert.ok(pool('lead').some(item => item.ref.model === 'gpt-6-astra' && item.ref.effort === 'max'));

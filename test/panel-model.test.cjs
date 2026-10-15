@@ -541,6 +541,20 @@ test('observed native Sidekick eligibility drives state flags, combinations and 
   assert.ok(included.roleLists.sidekick.some(item => item.ref.nativeUid === 'swe-other-harness' && item.selected));
 });
 
+test('forgetRoleRef clears a dead native ref only once the catalog is ready', async () => {
+  const input = fixture();
+  input.roleExclusions = { lead: [], sidekick: [{ nativeUid: 'gone-uid' }] };
+  input.roleInclusions = { lead: [{ nativeUid: 'gone-uid' }], sidekick: [] };
+  const pending = memory({ config: input, nativeModels: () => OBSERVED_SWE });
+  await assert.rejects(pending.manager.dispatch('forgetRoleRef', { role: 'sidekick', model: { nativeUid: 'gone-uid' } }), PanelInputError);
+  const f = memory({ config: input, nativeModels: () => OBSERVED_SWE, nativeCatalogStatus: () => 'ready' });
+  const state = await f.manager.dispatch('forgetRoleRef', { role: 'sidekick', model: { nativeUid: 'gone-uid' } });
+  assert.ok(!state.roleLists.sidekick.some(item => item.ref.nativeUid === 'gone-uid'));
+  assert.equal(f.read().roleExclusions, undefined, 'both now-empty exclusion lists are pruned');
+  assert.deepEqual(f.read().roleInclusions, { lead: [{ nativeUid: 'gone-uid' }] },
+    'the forgotten ref leaves the other role and the inclusion list untouched');
+});
+
 test('a hidden observed native is excluded from Sidekick eligibility and selection', async () => {
   const input = fixture();
   input.hiddenNativeModelUids = ['swe-2-max'];

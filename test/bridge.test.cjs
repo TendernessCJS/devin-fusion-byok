@@ -257,8 +257,8 @@ test('forward abandons a connection that never completes the handshake', async t
 
 test('the catalog log reports the mirrored combination count', async t => {
   const events = [];
-  const matrixCatalog = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [{ id: 'a' }] }] });
-  assert.equal(matrixCatalog.matrixUids.size, 1);
+  const matrixCatalog = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [{ id: 'a' }, { id: 'b' }] }] });
+  assert.equal(matrixCatalog.matrixUids.size, 2, 'two models emit the two cross pairs');
   const native = await listen((req, res) => { res.writeHead(200, { 'content-type': 'application/proto' }); res.end(wire.s(7, 'swe-2-medium')); });
   t.after(() => native.close());
   const bridge = await createLsBridge(native.port, { getCatalog: () => matrixCatalog, log: (event, data) => events.push([event, data]) });
@@ -267,7 +267,7 @@ test('the catalog log reports the mirrored combination count', async t => {
   assert.equal(response.status, 200);
   const entry = events.find(([event]) => event === 'catalog');
   assert.ok(entry, 'a catalog RPC emits the catalog log event');
-  assert.equal(entry[1].matrix, 1, 'mirrored combinations are counted');
+  assert.equal(entry[1].matrix, 2, 'mirrored combinations are counted');
   assert.equal(Object.hasOwn(entry[1], 'presets'), false, 'the retired preset counter is gone from the log');
 });
 

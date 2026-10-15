@@ -613,23 +613,24 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null) {
       const prefix = provider.name || provider.id, sourceLabel = model.label || model.id;
       const label = sourceLabel.startsWith(prefix + ' · ') ? sourceLabel : `${prefix} · ${sourceLabel}`;
       const available = providerEnabled && model.enabled !== false;
+      const variantCount = Array.isArray(model.efforts) && model.efforts.length ? model.efforts.length : 1;
 
       if (!seenLeadKeys.has(key)) {
         seenLeadKeys.add(key);
         leadList.push({
-          ref, label, native: false,
+          ref, label, native: false, variantCount,
           available, selected: available && roleSelected(ref, leadRefs, true),
           defaultSelected: available,
-          ...(available ? {} : { disabled: true, reason: '已在供应商中停用' }),
+          ...(available ? {} : { disabled: true, reason: providerEnabled ? '已在模型列表中停用' : '供应商已停用' }),
         });
       }
       if (!seenSidekickKeys.has(key)) {
         seenSidekickKeys.add(key);
         sidekickList.push({
-          ref, label, native: false,
+          ref, label, native: false, variantCount,
           available, selected: available && roleSelected(ref, sidekickRefs, true),
           defaultSelected: available,
-          ...(available ? {} : { disabled: true, reason: '已在供应商中停用' }),
+          ...(available ? {} : { disabled: true, reason: providerEnabled ? '已在模型列表中停用' : '供应商已停用' }),
         });
       }
     }
@@ -924,6 +925,14 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
       // official sidekick stays the native catalog's authority — emitting
       // combinations it does not offer would invent unsupported pairs.
       if (lead.native && lead.leadDimension && sidekick.native && sidekick.dimension) continue;
+      // Official combinations never pair a model with itself: the observed
+      // grid leaves every same-family tuple empty (Sonnet 5.5 leads lack a
+      // Sonnet 5.5 sidekick; GPT-5.6 Sol lacks GPT-5.6 Sol High). Match at
+      // family level — same provider/model key for BYOK, same uid family
+      // base for natives — so cross-effort self-pairs are filtered too.
+      if (lead.native === sidekick.native &&
+          (lead.native ? leadFamilyBase(lead.uid) === leadFamilyBase(sidekick.uid)
+                       : lead.key === sidekick.key)) continue;
       const uid = `fusion-${lead.uid}-sidekick-${sidekick.uid}`;
       if (matrixUids.has(uid) || officialFusionUids.has(uid)) continue;
       const leadDim = lead.native ? (lead.leadDimension ? lead.leadDimension.name : lead.leadBaseLabel || lead.label)

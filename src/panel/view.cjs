@@ -511,12 +511,20 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     const list = state.roleLists?.[role] || [];
     const rows = list.filter(item => !query || item.label.toLocaleLowerCase().includes(query));
     container.replaceChildren();
-    const row = item => element('div', { class: 'row' },
-      element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: item.label }),
-        item.native ? element('span', { class: 'row-sub', text: '官方' }) : null),
-      item.available ? switchInput(item.selected === true, '在 ' + name + ' 中启用 ' + item.label,
-        value => run(() => request('setRoleModel', { role, model: item.ref, enabled: value })), off())
-        : element('span', { class: 'hint', text: item.reason || '不可用' }));
+    const row = item => {
+      const confirmed = !item.native || state.nativeCatalogStatus === 'ready';
+      return element('div', { class: 'row' },
+        element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: item.label }),
+          item.native ? element('span', { class: 'row-sub',
+            text: '官方' + ((item.memberUids || []).length > 1 ? ' · ' + item.memberUids.length + ' 个变体' : '') })
+            : element('span', { class: 'row-sub',
+              text: 'BYOK' + ((item.variantCount || 0) > 1 ? ' · ' + item.variantCount + ' 档' : '') })),
+        item.available ? switchInput(item.selected === true, '在 ' + name + ' 中启用 ' + item.label,
+          value => run(() => request('setRoleModel', { role, model: item.ref, enabled: value })), off())
+          : element('div', { class: 'actions nowrap' },
+            element('span', { class: 'hint', text: confirmed ? item.reason || '不可用' : '官方目录未同步，暂无法确认' }),
+            confirmed ? button('移除', () => run(() => request('forgetRoleRef', { role, model: item.ref }), '正在移除…', '已移除。'), 'quiet') : null));
+    };
     const main = query ? rows : rows.filter(item => !item.native || item.defaultSelected || item.selected || item.explicitIncluded);
     const extra = query ? [] : rows.filter(item => item.native && !item.defaultSelected && !item.selected && !item.explicitIncluded);
     for (const item of main) container.append(row(item));
@@ -537,7 +545,8 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     if (!report) { detail.append(document.createTextNode('还没有记录，点一次「刷新缓存」即可。')); return; }
     const parts = [];
     if (report.refreshed?.length) parts.push('已重写 ' + report.refreshed.map(name => name.split('.')[0]).join('、'));
-    for (const skip of report.skipped || []) parts.push(skip.name.split('.')[0] + ' 无需重写（' + skip.reason + '）');
+    const SKIP_REASONS = { 'no-improvement': '已是最新', unsupported: '格式不支持', 'read-failed': '读取失败', 'augment-failed': '重写失败' };
+    for (const skip of report.skipped || []) parts.push(skip.name.split('.')[0] + ' 无需重写（' + (SKIP_REASONS[skip.reason] || skip.reason) + '）');
     for (const error of report.errors || []) parts.push(error.name.split('.')[0] + ' 写入失败（' + error.code + '）');
     if (!report.checked) parts.push('没有找到本插件写入的缓存文件');
     else if (!parts.length) parts.push('检查了 ' + report.checked + ' 个文件，内容已是最新');

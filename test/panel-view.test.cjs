@@ -95,7 +95,7 @@ test('the tab strip puts models first and Fusion second', () => {
 test('the Fusion tab hosts the role grids that drive the official Fusion card', () => {
   const { byId, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), roleLists: {
-    lead: [{ ref: { providerId: 'cpa', model: 'saved' }, label: 'CPA · Saved', native: false, available: true, selected: true },
+    lead: [{ ref: { providerId: 'cpa', model: 'saved' }, label: 'CPA · Saved', native: false, available: true, selected: true, variantCount: 2 },
       { ref: { nativeUid: 'claude-haiku-5-5-high' }, label: 'Claude Haiku 5.5', native: true, available: true,
         selected: false, defaultSelected: false, explicitIncluded: false, memberUids: ['claude-haiku-5-5-high'] }],
     sidekick: [] } } } });
@@ -104,12 +104,31 @@ test('the Fusion tab hosts the role grids that drive the official Fusion card', 
   const titles = child => collect(child, 'span', node => node.className === 'row-title').map(node => node.textContent);
   const rows = list.children.filter(node => node.className === 'row');
   assert.deepEqual(titles(rows[0]), ['CPA · Saved'], 'the selected row stays in the main list');
+  assert.match(textOf(rows[0]), /BYOK · 2 档/, 'a BYOK row shows its source and effort tier count');
   const fold = list.children.find(node => node.tag === 'details');
   assert.ok(fold, 'deselected official models move under the fold');
   assert.deepEqual(titles(fold), ['Claude Haiku 5.5'], 'the fold carries the rest of the official models');
   assert.match(fold.children[0].textContent, /更多官方模型（1）/);
   assert.doesNotMatch(renderPanel({ nonce: 'safe', cspSource: 'test:' }), /id="role-group"/,
     'the role picker no longer lives in settings');
+});
+
+test('a dead role row offers removal only once the native catalog is ready', () => {
+  const { byId, receive } = panel();
+  const deadNative = { ref: { nativeUid: 'gone-uid' }, label: 'Gone', native: true,
+    available: false, selected: false, defaultSelected: false, disabled: true, reason: '当前未在可用列表中' };
+  receive({ data: { type: 'state', state: { ...state(), roleLists: { lead: [deadNative], sidekick: [] } } } });
+  let rows = collect(byId('lead-role-list'), 'div', node => node.className === 'row');
+  assert.equal(collect(rows[0], 'button', node => node.textContent === '移除').length, 0,
+    'an unconfirmed dead row cannot be dropped while the catalog is unsynced');
+  assert.match(textOf(rows[0]), /官方目录未同步，暂无法确认/);
+  receive({ data: { type: 'state', state: { ...state(), nativeCatalogStatus: 'ready',
+    roleLists: { lead: [deadNative], sidekick: [] } } } });
+  rows = collect(byId('lead-role-list'), 'div', node => node.className === 'row');
+  const remove = collect(rows[0], 'button', node => node.textContent === '移除')[0];
+  assert.ok(remove, 'a confirmed dead row offers removal');
+  assert.match(textOf(rows[0]), /当前未在可用列表中/);
+  remove.listeners.click();
 });
 
 test('the add-model dialog renders the 131072-token output default and keeps saved values', () => {

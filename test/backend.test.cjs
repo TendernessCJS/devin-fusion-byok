@@ -206,7 +206,7 @@ test('an own plain model is listed, allowed and callable standalone against a th
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-standalone-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const config = { providers: [{ id: 'third', name: 'Third', baseUrl: `http://127.0.0.1:${provider.address().port}/v1`,
-    apiFormat: 'openai', apiKey: 'fixture-provider-key', models: [{ id: 'standalone-model', label: 'Standalone' }] }],
+    apiFormat: 'openai', apiKey: 'fixture-provider-key', models: [{ id: 'standalone-model', label: 'Standalone' }, { id: 'peer-model', label: 'Peer' }] }],
     sidekicks: [{ providerId: 'third', model: 'standalone-model' }] };
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
   const backend = await actualBackend.startBackend({ root, port: 0 });
@@ -220,13 +220,16 @@ test('an own plain model is listed, allowed and callable standalone against a th
   assert.equal(uids[0], 'native-gpt');
   assert.ok(uids.includes(own));
   const mirrored = Object.values(catalog.fusions);
-  assert.equal(mirrored.length, 1, 'the BYOK pair is mirrored even without any native observation');
-  assert.equal(mirrored[0].leadUid, own);
+  assert.equal(mirrored.length, 2, 'the two BYOK cross pairs are mirrored even without any native observation');
+  assert.ok(mirrored.every(fusion => fusion.leadUid !== fusion.sidekickUid), 'same-family pairs are never emitted');
+  const ownFusion = mirrored.find(fusion => fusion.leadUid === own);
+  assert.ok(ownFusion);
   const lockedNative = Buffer.concat([wire.s(1, 'Fusion (Locked)'), wire.s(22, 'fusion-official-locked'), wire.v(4, 1), wire.m(32, wire.v(1, 1))]);
   const listed = augmentCatalog(wire.m(1, lockedNative), { rpc: API + 'GetCliModelConfigs', format: proto, catalog });
   const entries = wire.parseFields(listed).filter(field => field.number === 1 && field.wire === 2).map(field => field.value);
-  assert.equal(wire.str(entries[0], 22), mirrored[0].uid, 'mirrored combinations lead the list');
-  assert.equal(wire.str(entries[1], 22), own);
+  const mirroredUids = new Set(mirrored.map(fusion => fusion.uid));
+  assert.deepEqual(entries.slice(0, 2).map(entry => wire.str(entry, 22)).sort(), [...mirroredUids].sort(), 'mirrored combinations lead the list');
+  assert.equal(wire.str(entries[2], 22), own);
   assert.equal(wire.str(entries.at(-1), 22), 'fusion-official-locked');
   assert.equal(wire.num(entries.at(-1), 4), 1);
   const response = await fetch('http://127.0.0.1:' + backend.port + API + 'GetChatMessage', {

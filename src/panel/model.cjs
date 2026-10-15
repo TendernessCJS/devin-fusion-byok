@@ -392,6 +392,26 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         }
         break;
       }
+      case 'forgetRoleRef': {
+        const role = payload.role;
+        if (role !== 'lead' && role !== 'sidekick') fail('角色类型无效。');
+        const model = payload.model;
+        if (!model || typeof model !== 'object' || Array.isArray(model)) fail('模型参数无效。');
+        const hasNative = typeof model.nativeUid === 'string' && !!model.nativeUid;
+        const hasProvider = typeof model.providerId === 'string' && typeof model.model === 'string' && !!model.providerId && !!model.model;
+        if ((hasNative && hasProvider) || (!hasNative && !hasProvider)) fail('模型身份无效。');
+        const key = refKey(model);
+        if (!key) fail('模型标识无效。');
+        // A native ref is only safe to forget once the catalog has actually
+        // been observed — during a pending sync an absent uid may mean "not
+        // synced yet", and removing it would silently lose a real pick.
+        if (hasNative && nativeCatalogStatus() !== 'ready') fail('官方目录尚未同步，请刷新后再移除。');
+        for (const list of ['roleInclusions', 'roleExclusions']) {
+          const refs = config[list]?.[role];
+          if (Array.isArray(refs)) config[list][role] = refs.filter(ref => refKey(ref) !== key);
+        }
+        break;
+      }
       case 'setEnabled': config.enabled = boolean(payload.enabled, '启用状态'); break;
       case 'setAutoContinue': config.autoContinueOnProviderError = boolean(payload.enabled, '自动继续'); break;
       case 'setAutoContinueUntilPlanComplete': config.autoContinueUntilPlanComplete = boolean(payload.enabled, '完成待办时自动继续'); break;
