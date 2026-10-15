@@ -1451,6 +1451,54 @@ test('non-fast official leads still emit alongside the fast-lead filter', () => 
     'the priority sibling never emits as a lead');
 });
 
+test('officially declared harnessless leads qualify; fast siblings aggregate but never emit', () => {
+  // The gpt-6-astra-* shape: the official Fusion card declares them as leads
+  // while the native entries carry harnessUids=[] — under Fusion the lead runs
+  // on the combination's harness=["fusion"], so a missing own harness cannot
+  // disqualify it (a real catalog carries 40 such combos). Sidekick eligibility
+  // still requires a harness, and a harnessless uid with no official claim and
+  // no official family base stays out of both pools.
+  const astra = (uid, label, fusionMetadata = []) =>
+    ({ uid, label, disabled: false, isModelRouter: false, harnessUids: [], fusionMetadata });
+  const natives = [OFFICIAL_SIDEKICK,
+    astra('gpt-6-astra-low', 'GPT-6 Astra Low', [{ key: 'Effort', order: 1, name: 'Low', controlType: 1 }, { key: 'Fast Mode', order: 0 }]),
+    astra('gpt-6-astra-high', 'GPT-6 Astra High', [{ key: 'Effort', order: 3, name: 'High', controlType: 1 }, { key: 'Fast Mode', order: 0 }]),
+    astra('gpt-6-astra-low-priority', 'GPT-6 Astra Low Fast', [{ key: 'Effort', order: 1, name: 'Low', controlType: 1 }, { key: 'Fast Mode', order: 1 }]),
+    astra('gpt-6-astra-high-priority', 'GPT-6 Astra High Fast', [{ key: 'Effort', order: 3, name: 'High', controlType: 1 }, { key: 'Fast Mode', order: 1 }]),
+    astra('orphan-high', 'Orphan High'),
+    officialCombo('gpt-6-astra-low', 9, 'GPT-6 Astra', OFFICIAL_EFFORT_ORDERS.low),
+    officialCombo('gpt-6-astra-high', 9, 'GPT-6 Astra', OFFICIAL_EFFORT_ORDERS.high)];
+  const roles = buildRoleLists(config(), natives);
+  const astraRow = roles.lead.find(item => item.native && item.label === 'GPT-6 Astra');
+  assert.ok(astraRow, 'a harnessless native with an official Lead declaration is eligible');
+  assert.equal(astraRow.official, true);
+  assert.equal(astraRow.selected, true, 'an official family stays selected by default');
+  assert.deepEqual([...astraRow.memberUids].sort(),
+    ['gpt-6-astra-high', 'gpt-6-astra-high-priority', 'gpt-6-astra-low', 'gpt-6-astra-low-priority'],
+    'the harnessless -priority siblings aggregate into the same official family row');
+  assert.equal(roles.lead.some(item => (item.memberUids || []).includes('orphan-high')), false,
+    'a harnessless uid with neither a declaration nor an official family base is no lead');
+  const memberUidsOf = item => item.memberUids || [item.ref.nativeUid];
+  assert.equal(roles.sidekick.some(item => memberUidsOf(item).includes('orphan-high')), false);
+  assert.equal(roles.sidekick.some(item => memberUidsOf(item).some(uid => typeof uid === 'string' && uid.startsWith('gpt-6-astra'))), false,
+    'harnessless members never become sidekicks');
+
+  const catalog = buildCatalog(config(), natives);
+  const emitted = [...catalog.matrixUids].filter(uid => uid.startsWith('fusion-gpt-6-astra'));
+  const leadOf = uid => catalog.fusions[uid].leadUid;
+  assert.deepEqual(new Set(emitted.map(leadOf)), new Set(['gpt-6-astra-low', 'gpt-6-astra-high']),
+    'both declared tiers emit combinations');
+  assert.equal(emitted.filter(uid => uid.includes('-priority-sidekick-')).length, 0,
+    'the aggregated fast siblings never emit as leads');
+  for (const uid of emitted) {
+    assert.deepEqual(catalog.fusions[uid].leadHarnessUids, ['fusion'],
+      'the lead harness comes from the combination entry, not the member');
+    const assign = resolveAssignment({ modelRouterUid: uid }, json, catalog);
+    assert.equal(assign.assignment.modelUid, leadOf(uid));
+    assert.deepEqual(assign.assignment.harnessUids, ['fusion']);
+  }
+});
+
 test('no two emitted matrix entries share the exact same dimension tuple', () => {
   const catalog = buildCatalog(config(), [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
     ...fastSiblings('claude-x', 'Claude X', ['low', 'medium', 'high', 'xhigh', 'max'])]);

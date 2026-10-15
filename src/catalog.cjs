@@ -295,7 +295,11 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}) {
 
     if (!leadKnown || !sideKnown) continue;
     const leadNative = nativeModelsMap.get(leadCandidate);
-    if (leadNative.disabled !== false || leadNative.isModelRouter !== false || !leadNative.harnessUids?.length || hiddenSet.has(leadCandidate)) continue;
+    // A Fusion lead runs under the combination's own harness=["fusion"], so
+    // the member's harnessUids only decide standalone availability — declared
+    // leads with none (gpt-6-astra-*) still qualify. The sidekick below keeps
+    // the harness requirement: a subagent runs on its own harness.
+    if (leadNative.disabled !== false || leadNative.isModelRouter !== false || hiddenSet.has(leadCandidate)) continue;
     if (sideNative.disabled !== false || sideNative.isModelRouter !== false || !sideNative.harnessUids?.length || hiddenSet.has(sideCandidate)) continue;
 
     if (leadDim && Number.isSafeInteger(leadDim.order) && leadDim.name &&
@@ -483,50 +487,59 @@ function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles) {
     }
   }
   for (const native of records.values()) {
-    if (!native.eligible) continue;
     const officialLead = officialRoles.eligibleNativeLeads.get(native.uid);
     const officialSidekick = officialRoles.eligibleNativeSidekicks.get(native.uid);
-    if (officialLead) {
-      leads.set(native.uid, { ...officialLead, familyKey: `base:${leadFamilyBase(native.uid)}` });
-    } else {
-      // Every native lead groups by the uid's family base. Members emit the
-      // family label as their shared Lead name, so one selected row offers
-      // the whole series — a tier token or the observed Effort dimension
-      // supplies each member's own Effort value.
-      const record = { ...native, leadHarnessUids: [...new Set(['fusion', ...native.harnessUids])] };
-      const baseUid = leadFamilyBase(native.uid);
-      const officialDim = officialLeadBases.get(baseUid);
-      const token = leadFamilyTier(native.uid);
-      const eff = (Array.isArray(native.fusionMetadata) ? native.fusionMetadata : [])
-        .find(dim => dim?.key === 'Effort' && Number.isSafeInteger(dim.order) && typeof dim.name === 'string' && dim.name);
-      // The Effort name comes from the uid token (else the observed Effort
-      // name); the order always comes from the official Effort space, with a
-      // reserved-collision-free hash order for names the official card lacks
-      // — an observed order lives in another space (GLM High=1 vs official
-      // High=3) and would split same-named values in the picker.
-      const effortName = token ? NATIVE_EFFORT_NAMES[token] : (eff ? eff.name : '');
-      if (effortName) {
-        let effortOrder = officialEffortOrders.get(effortName);
-        if (!Number.isSafeInteger(effortOrder)) {
-          effortOrder = stableOrders(new Set([effortName]), new Set(officialEffortOrders.values())).get(effortName);
-        }
-        record.effortDimension = { order: effortOrder, name: effortName, controlType: 1 };
-      }
-      // An official family admits any member whose uid carries a tier token —
-      // officially declared uids, Fast siblings (-fast/-priority) and extra
-      // tiers the card never declared (-none). A tokenless outsider cannot be
-      // slotted into an Effort value and stays a single-member row.
-      if (officialDim && token) {
-        record.leadDimension = officialDim;
-        record.familyKey = `base:${baseUid}`;
+    const baseUid = leadFamilyBase(native.uid);
+    const officialDim = officialLeadBases.get(baseUid);
+    const token = leadFamilyTier(native.uid);
+    // Lead candidates: harnessed entries, officially declared leads, and
+    // tier-token siblings of an official family — a Fusion lead runs under
+    // the combination's harness=["fusion"], so the member's own harness only
+    // decides standalone availability. Sidekick candidates keep the harness
+    // requirement: a subagent always runs on its own harness.
+    const leadCandidate = native.eligible || officialLead || (officialDim && token);
+    const sideCandidate = native.eligible || officialSidekick;
+    if (!leadCandidate && !sideCandidate) continue;
+    if (leadCandidate) {
+      if (officialLead) {
+        leads.set(native.uid, { ...officialLead, familyKey: `base:${baseUid}` });
       } else {
-        record.familyKey = officialDim ? `uid:${native.uid}` : `base:${baseUid}`;
+        // Every native lead groups by the uid's family base. Members emit the
+        // family label as their shared Lead name, so one selected row offers
+        // the whole series — a tier token or the observed Effort dimension
+        // supplies each member's own Effort value.
+        const record = { ...native, leadHarnessUids: [...new Set(['fusion', ...(native.harnessUids || [])])] };
+        const eff = (Array.isArray(native.fusionMetadata) ? native.fusionMetadata : [])
+          .find(dim => dim?.key === 'Effort' && Number.isSafeInteger(dim.order) && typeof dim.name === 'string' && dim.name);
+        // The Effort name comes from the uid token (else the observed Effort
+        // name); the order always comes from the official Effort space, with a
+        // reserved-collision-free hash order for names the official card lacks
+        // — an observed order lives in another space (GLM High=1 vs official
+        // High=3) and would split same-named values in the picker.
+        const effortName = token ? NATIVE_EFFORT_NAMES[token] : (eff ? eff.name : '');
+        if (effortName) {
+          let effortOrder = officialEffortOrders.get(effortName);
+          if (!Number.isSafeInteger(effortOrder)) {
+            effortOrder = stableOrders(new Set([effortName]), new Set(officialEffortOrders.values())).get(effortName);
+          }
+          record.effortDimension = { order: effortOrder, name: effortName, controlType: 1 };
+        }
+        // An official family admits any member whose uid carries a tier token —
+        // officially declared uids, Fast siblings (-fast/-priority) and extra
+        // tiers the card never declared (-none). A tokenless outsider cannot be
+        // slotted into an Effort value and stays a single-member row.
+        if (officialDim && token) {
+          record.leadDimension = officialDim;
+          record.familyKey = `base:${baseUid}`;
+        } else {
+          record.familyKey = officialDim ? `uid:${native.uid}` : `base:${baseUid}`;
+        }
+        record.leadBaseLabel = leadFamilyLabel(native.label);
+        record.familyLabelBase = record.leadBaseLabel;
+        leads.set(native.uid, record);
       }
-      record.leadBaseLabel = leadFamilyLabel(native.label);
-      record.familyLabelBase = record.leadBaseLabel;
-      leads.set(native.uid, record);
     }
-    sidekicks.set(native.uid, officialSidekick || { ...native, dimension: undefined });
+    if (sideCandidate) sidekicks.set(native.uid, officialSidekick || { ...native, dimension: undefined });
   }
   return { eligibleNativeLeads: leads, eligibleNativeSidekicks: sidekicks };
 }
