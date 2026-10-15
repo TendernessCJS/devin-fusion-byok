@@ -32,7 +32,7 @@ test('monitor browser script compiles, uses text nodes, and preserves zero versu
   assert.equal(secondsCells[11].textContent, '0.025'); assert.equal(secondsCells[14].textContent, '4.567');
   assert.equal(secondsCells[5].textContent, '1,234');
   const tiles = new Map(byId('monitor-summary').children.map(tile => [tile.children[1].textContent, tile.children[0].textContent]));
-  assert.equal(tiles.get('平均首数据事件 s'), '1.234');
+  assert.equal(tiles.get('平均首响应数据 s'), '1.234');
   assert.equal(tiles.has('平均首输出 s'), false, 'secondary metrics stay hidden until the detail toggle is on');
   byId('monitor-detail').checked = true; byId('usage-monitor').classList = { toggle() {} };
   byId('monitor-detail').listeners.change();
@@ -74,7 +74,7 @@ test('session options show titles and relative times instead of internal slugs',
   assert.deepEqual(options[4], ['__unassigned__', '未归属／有歧义']);
   for (const [, text] of options) assert.ok(!text.includes('ID 确认'), 'noise suffix removed: ' + text);
   const ambiguousCell = byId('monitor-requests').children[0].children.at(-1);
-  assert.equal(ambiguousCell.textContent, '存在歧义', 'record-level ambiguity still renders in the 会话关联 column');
+  assert.equal(ambiguousCell.textContent, '存在歧义', 'record-level ambiguity still renders in the 会话归属 column');
   for (const option of byId('monitor-session').children) assert.equal(option.title, option.textContent, 'every option carries its full text as tooltip');
   byId('monitor-session').value = 'puddle-airmail';
   byId('monitor-session').listeners.change();
@@ -447,7 +447,7 @@ test('rows show attribution reasons in Chinese and keep the legacy fallback', ()
   assert.equal(cell(1), '无可用工具 ID');
   assert.equal(cell(2), '归属查询不可用');
   assert.equal(cell(3), '工具状态未匹配');
-  assert.equal(cell(4), '本次工具 ID 确认');
+  assert.equal(cell(4), '工具 ID 确认');
   assert.equal(cell(5), '存在歧义');
 });
 
@@ -463,20 +463,20 @@ test('the diagnostics line summarizes the window, attribution, exclusions and th
   assert.match(diag, /统计窗口：最近 5000 条（当前 3 条）/);
   assert.match(diag, /已确认 1 · 无可用工具 ID 1 · 工具状态未匹配 1 · 歧义 0 · 查询不可用 0/);
   assert.match(diag, /已从用量与吞吐汇总排除 1 条异常记录（仍计入请求数和时间指标）/);
-  assert.match(diag, /消息 UUID 补查默认关闭/);
+  assert.match(diag, /消息归属补查默认关闭/);
 
   f.receive({ data: { type: 'monitor-state', result: { snapshot: {
     summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, records: [record('x')], sessions: [], sessionStatus: 'ready' } } } });
   const legacy = f.byId('monitor-diagnostics').textContent;
   assert.match(legacy, /当前保留 1 条/, 'an old backend without retentionLimit still gets the window line');
   assert.doesNotMatch(legacy, /归属：已确认/, 'missing attributionSummary never fabricates zeros');
-  assert.doesNotMatch(legacy, /消息 UUID 补查|诊断消息补查/, 'missing lookupStatus never fabricates a branch state');
+  assert.doesNotMatch(legacy, /消息归属补查/, 'missing lookupStatus never fabricates a branch state');
 
   f.receive({ data: { type: 'monitor-state', result: { snapshot: {
     summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, retentionLimit: 5000,
     lookupStatus: { tools: 'ready', messages: 'unavailable', labels: 'ready' },
     records: [record('x')], sessions: [], sessionStatus: 'ready' } } } });
-  assert.match(f.byId('monitor-diagnostics').textContent, /诊断消息补查失败（未影响工具归属）/);
+  assert.match(f.byId('monitor-diagnostics').textContent, /消息归属补查失败（未影响工具归属）/);
 });
 
 test('status combines storage tool and label warnings without leaking internals', () => {
@@ -490,12 +490,12 @@ test('status combines storage tool and label warnings without leaking internals'
     lookupStatus: { tools: 'unavailable', messages: 'unavailable', labels: 'unavailable' },
     records: [], sessions: [] } } } });
   const status = f.byId('monitor-status').textContent;
-  assert.match(status, /监控记录追加失败，部分数据可能仅在内存中/);
+  assert.match(status, /用量记录追加失败，部分数据可能仅在内存中/);
   assert.match(status, /写入失败 3 次/);
   assert.match(status, /待写 2 次/);
   assert.match(status, /工具归属查询暂不可用，统计用量仍可查看/);
   assert.match(status, /会话标题读取失败，暂显示会话 ID/);
-  assert.match(f.byId('monitor-diagnostics').textContent, /诊断消息补查失败/);
+  assert.match(f.byId('monitor-diagnostics').textContent, /消息归属补查失败/);
   assert.ok(!status.includes('SECRET') && !status.includes('/secret'), 'raw errors and paths never surface');
 });
 
@@ -514,7 +514,7 @@ test('diagnostics update without rebuilding unchanged rows or tiles', () => {
   assert.equal(f.byId('monitor-summary').children[0], tile, 'identical tiles keep their node identity');
   const secondDiag = f.byId('monitor-diagnostics').textContent;
   assert.notEqual(secondDiag, firstDiag, 'a diagnostics-only change still refreshes the hint text');
-  assert.match(secondDiag, /诊断消息补查失败/);
+  assert.match(secondDiag, /消息归属补查失败/);
 });
 
 test('metric labels tooltips and cell titles carry the authored semantics', () => {
@@ -528,19 +528,19 @@ test('metric labels tooltips and cell titles carry the authored semantics', () =
     sessions: [], sessionStatus: 'ready' } } } });
   f.byId('monitor-detail').listeners.change();
   const tiles = new Map(f.byId('monitor-summary').children.map(tile => [tile.children[1].textContent, tile]));
-  assert.ok(tiles.has('平均首数据事件 s'), 'firstResponseMs carries the SSE-event label');
-  assert.ok(tiles.has('首数据后吞吐 TPS'));
+  assert.ok(tiles.has('平均首响应数据 s'), 'firstResponseMs carries the SSE-event label');
+  assert.ok(tiles.has('首响应后吞吐 TPS'));
   assert.ok(tiles.has('最近有效正文 TPS'));
   assert.ok(tiles.has('请求吞吐 TPS（含等待）'));
   assert.ok(!tiles.has('平均首响应 s'), 'the stale header-time label is gone');
   assert.match(tiles.get('最近有效正文 TPS').title, /不是平均值/);
   assert.match(tiles.get('最近有效正文 TPS').title, /2 条有效样本/);
-  assert.match(tiles.get('平均首数据事件 s').title, /SSE 数据事件/);
+  assert.match(tiles.get('平均首响应数据 s').title, /SSE 数据事件/);
   assert.match(tiles.get('输入 token').title, /排除/);
   assert.match(tiles.get('缓存命中 token').title, /子集/);
   const cells = f.byId('monitor-requests').children[0].children;
   assert.match(cells[4].title, /SSE 数据事件/, 'the firstResponse column reuses the tile semantics');
-  assert.match(cells[5].title, /首数据事件/);
+  assert.match(cells[5].title, /首响应数据/);
   assert.match(cells[13].title, /总请求耗时/);
   assert.equal(cells[4].textContent, '0.1', 'numeric positions are unchanged');
   assert.equal(cells[5].textContent, '50');

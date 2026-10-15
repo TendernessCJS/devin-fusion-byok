@@ -258,7 +258,7 @@ test('official models render as one row per family with a single family switch',
   const { byId, posts, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FAMILY_FIXTURE } } });
   const list = byId('native-list');
-  assert.equal(byId('native-count').textContent, '0 / 2 个模型 · 已隐藏 2');
+  assert.equal(byId('native-count').textContent, '0 / 2 个系列 · 已隐藏 2');
 
   const rows = collect(list, 'div', node => node.className === 'row');
   assert.equal(collect(list, 'details', node => node.className === 'fold').length, 0,
@@ -268,7 +268,7 @@ test('official models render as one row per family with a single family switch',
   assert.match(textOf(rows[0]), /3 个变体 · Effort No Thinking \/ High \/ Max · 1M Context/);
   assert.doesNotMatch(textOf(rows[0]), /部分隐藏/, 'hiding is all-or-nothing at family level');
   assert.doesNotMatch(textOf(rows[0]), /不能作为 Fusion/, 'eligible members mean no capability note');
-  assert.match(textOf(rows[1]), /不能作为 Fusion 的 Lead 或 Sidekick/, 'no eligible member adds the note');
+  assert.match(textOf(rows[1]), /不可用作 Fusion Lead\/Sidekick/, 'no eligible member adds the note');
 
   const flush = () => Promise.resolve().then(() => {});
   const familySwitch = collect(rows[0], 'input', node => node.className === 'switch')[0];

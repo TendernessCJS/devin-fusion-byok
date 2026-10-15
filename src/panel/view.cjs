@@ -169,7 +169,7 @@ function renderPanel({ nonce, cspSource }) {
     <section id="view-fusion" role="tabpanel" aria-labelledby="tab-fusion" hidden>
       <div class="section-head"><h2>Fusion 可选模型</h2><span id="role-count" class="hint"></span></div>
       <p id="fusion-summary" class="hint mb"></p>
-      <p class="hint mb">这里打开的模型就是 Devin 官方 Fusion 卡片里 Lead / Sidekick 下拉的候选；Lead 按系列（Effort 档位）成组，官方默认项本来就是可用的，不必再手动添加。关掉的模型会从下拉里移除，由它组成的组合也不再提供；如果你正用着其中一条，请在 Fusion 卡片里重新选一次。</p>
+      <p class="hint mb">这里启用的模型会出现在 Devin 官方 Fusion 卡片的 Lead / Sidekick 下拉里；Lead 按系列（Effort 档位）成组，官方默认项已可用，无需手动添加。停用后模型从下拉移除，相关组合同时失效——正在使用的组合请在 Fusion 卡片里重新选择。</p>
       <div class="role-grid"><div id="role-lead"></div><div id="role-sidekick"></div></div>
     </section>
     <section id="view-usage" role="tabpanel" aria-labelledby="tab-usage" hidden>${monitorMarkup()}</section>
@@ -179,7 +179,7 @@ function renderPanel({ nonce, cspSource }) {
       <div id="settings-general"></div>
       <details id="native-group" class="group"><summary>官方模型显示<span id="native-count" class="hint"></span></summary><div class="group-body" id="native-models"></div></details>
       <details id="cache-group" class="group"><summary>CLI 缓存<span id="cache-hint" class="hint"></span></summary><div class="group-body">
-        <p class="hint mb">模型选择器读的是 Devin CLI 在 <code class="cmd">~/.cache/devin/cli</code> 下的按身份缓存。配置改过之后如果下拉里少条目或出现已删除的模型，手动刷新一次即可原地重写这些缓存文件（原文件会留成 <code class="cmd">.bak</code>，不会改名或删除）。</p>
+        <p class="hint mb">模型选择器读的是 Devin CLI 在 <code class="cmd">~/.cache/devin/cli</code> 下的缓存文件（按账号身份区分）。配置改过后如果下拉里少条目或出现已删除的模型，点「刷新缓存」原地重写——原文件保留为 <code class="cmd">.bak</code>，不删除。</p>
         <div class="actions"><button id="refresh-cache" type="button">刷新缓存</button><span id="cache-report" class="hint"></span></div>
       </div></details>
       ${updateMarkup()}
@@ -460,7 +460,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
       element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: title }), sub ? element('span', { class: 'row-sub', text: sub }) : null), control);
     const status = state.autoContinueStatus === 'attached' ? null
       : state.autoContinueStatus === 'waiting' ? '还没连上会话：重新加载窗口并新建对话后生效。'
-      : '自动继续当前不可用，请查看插件输出日志。';
+      : '自动继续当前不可用，请在「输出」面板的 Devin Fusion BYOK 通道查看日志。';
     container.append(element('div', { class: 'section-head' }, element('h2', { text: '自动继续' })),
       element('div', { class: 'list' },
         setting('服务商出错时自动重试', '临时错误打断回复时自动发送 continue。按量计费的服务商可能多扣费。',
@@ -472,7 +472,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
       element('p', { class: 'warn mt', text: status || '', hidden: !status }));
   }
 
-  const FUSION_SOURCES = { mirrored: '插件镜像', official: '官方', unresolved: '不在当前目录' };
+  const FUSION_SOURCES = { mirrored: '插件镜像', official: '官方', unresolved: '已不在可用列表' };
   // Live status for the Fusion tab: how many combinations this extension
   // mirrors into the official card, plus the last combination the card was
   // seen holding. Read-only — the card itself stays the source of truth.
@@ -552,14 +552,14 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     const hiddenCount = all.filter(family => family.hidden).length;
     const internalCount = all.filter(family => family.internal).length;
     byId('native-count').textContent = all.length
-      ? visible + ' / ' + all.length + ' 个模型' + (hiddenCount ? ' · 已隐藏 ' + hiddenCount : '') + (internalCount ? ' · 内部 ' + internalCount : '') : '';
+      ? visible + ' / ' + all.length + ' 个系列' + (hiddenCount ? ' · 已隐藏 ' + hiddenCount : '') + (internalCount ? ' · 内部 ' + internalCount : '') : '';
     const search = element('input', { type: 'search', placeholder: '搜索官方模型', 'aria-label': '搜索官方模型',
       oninput: event => { nativeSearch = event.target.value; renderNativeRows(); } });
     search.value = nativeSearch;
     focusTargets.set('native-search', search);
     const list = element('div', { id: 'native-list', class: 'list scroll', 'aria-label': '官方模型列表' });
     scrollTargets.set('native-list', list);
-    container.append(element('p', { class: 'hint mb', text: '关掉的模型会从 Devin 的模型列表里隐藏，同时也不再是「Fusion」页的候选；只是本机隐藏，不影响账号。' }),
+    container.append(element('p', { class: 'hint mb', text: '停用的系列会从 Devin 模型列表隐藏，也不再出现在「Fusion」页候选中；仅本机生效，不影响账号。' }),
       element('div', { class: 'toolbar' }, search, button('刷新', () => run(() => request('refreshNativeModels'), '正在同步官方模型…', '已同步。'))),
       list);
     renderNativeRows();
@@ -574,14 +574,14 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     const families = all.filter(family => !query ||
       (family.label + ' ' + (family.vendor || '') + ' ' + family.members.map(member => member.uid + ' ' + member.label).join(' ')).toLocaleLowerCase().includes(query));
     if (!families.length) {
-      container.append(element('div', { class: 'empty', text: all.length ? '没有匹配的模型。' : ({ loading: '正在同步官方模型…', unsupported: '当前后台版本暂不支持同步。', unavailable: '无法连接本地后台，请点刷新重试。', empty: '还没收到官方模型，打开一次 Devin 的模型选择器后再刷新。' }[state.nativeCatalogStatus] || '还没收到官方模型，请点刷新重试。') }));
+      container.append(element('div', { class: 'empty', text: all.length ? '没有匹配的模型。' : ({ loading: '正在同步官方模型…', unsupported: '当前后台版本暂不支持同步。', unavailable: '无法连接插件本地服务，请点刷新重试。', empty: '还没收到官方模型，打开一次 Devin 的模型选择器后再刷新。' }[state.nativeCatalogStatus] || '还没收到官方模型，请点刷新重试。') }));
       return;
     }
     function nativeRow(family) {
       const sub = family.variants > 1 ? [family.variants + ' 个变体'] : [];
       if (family.efforts.length) sub.push('Effort ' + family.efforts.join(' / '));
       if (family.toggles.length) sub.push(...family.toggles);
-      if (!family.members.some(member => member.eligible)) sub.push('不能作为 Fusion 的 Lead 或 Sidekick');
+      if (!family.members.some(member => member.eligible)) sub.push('不可用作 Fusion Lead/Sidekick');
       return element('div', { class: 'row' },
         element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: family.label }),
           element('span', { class: 'row-sub', text: sub.join(' · ') })),
@@ -596,7 +596,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
       groups.get(vendor).push(family);
     }
     for (const [vendor, group] of groups) {
-      container.append(element('div', { class: 'vendor-head', text: vendor + ' · ' + group.length }));
+      container.append(element('div', { class: 'vendor-head', text: vendor + ' · ' + group.length + ' 个系列' }));
       for (const family of group) container.append(nativeRow(family));
     }
     // Retired leftovers, review/check rows and router cards (Adaptive/Fusion
@@ -605,7 +605,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     const internal = families.filter(family => family.internal);
     if (internal.length) {
       const details = element('details', { class: 'fold', open: !!query },
-        element('summary', { text: '内部条目 · ' + internal.length + ' · 退役条目与路由/内部用途' }));
+        element('summary', { text: '内部条目 · ' + internal.length + ' · 退役与路由/内部用途' }));
       for (const family of internal) details.append(nativeRow(family));
       container.append(details);
     }
@@ -744,7 +744,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
     baseUrl.addEventListener('input', refreshPreview);
     apiFormat.addEventListener('change', refreshPreview);
     refreshPreview();
-    form.append(field('名称', name), urlField, field('API 类型', apiFormat), field('API Key', apiKey));
+    form.append(field('名称', name), urlField, field('API 类型', apiFormat), field('API 密钥', apiKey));
     const remove = provider ? deleteButton(dialog, '删除供应商？', '会一并移除“' + provider.name + '”导入的模型；用到它们的 Fusion 组合会失效。',
       () => request('deleteProvider', { id: provider.id })) : null;
     finishDialog(dialog, form, '保存', () => {

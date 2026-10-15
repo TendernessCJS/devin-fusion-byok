@@ -534,7 +534,19 @@ async function activate(context) {
   }
   let nativeSyncSize = -1;
   const updateStatusBar = () => {
-    try { if (statusBar) statusBar.tooltip = `Fusion BYOK：目录 ${catalog().models.length} 条目（官方 Fusion 卡片镜像 ${catalog().matrixUids?.size ?? 0}）· 原生已观测 ${nativeModels.size}`; } catch {}
+    try {
+      if (!statusBar) return;
+      if (config().enabled === false) { statusBar.tooltip = 'Fusion BYOK：已停用，点击打开面板启用'; return; }
+      if (!nativeModels.size) {
+        statusBar.tooltip = 'Fusion BYOK：还没收到官方模型——打开一次模型选择器后会自动同步，或点击打开面板手动刷新';
+        return;
+      }
+      if (cliCacheReport?.errors?.length) {
+        statusBar.tooltip = `Fusion BYOK：${cliCacheReport.errors.length} 个 CLI 缓存文件写入失败，点击打开面板查看详情`;
+        return;
+      }
+      statusBar.tooltip = `Fusion BYOK：运行中 · 已镜像 Fusion 组合 ${catalog().matrixUids?.size ?? 0} 条，点击打开面板`;
+    } catch {}
   };
   const pickerRefresh = createPickerRefresh({ log,
     // devin.reloadAcpConnections drops every ACP connection on execution —

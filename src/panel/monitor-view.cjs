@@ -1,8 +1,8 @@
 'use strict';
 const { createMonitorStats } = require('../runtime/monitor-stats.cjs');
 // Columns marked "extra" stay in the DOM but are hidden until "显示全部指标" is checked.
-const COLUMNS = [['开始时间（本机）'], ['模型／档位'], ['状态'], ['用量', true], ['首数据事件 s'], ['首数据后 TPS'], ['输入'], ['输出'], ['缓存命中', true], ['推理', true],
-  ['首输出 s', true], ['正文首字 s', true], ['正文 TPS', true], ['请求吞吐 TPS', true], ['总耗时 s'], ['会话关联', true]];
+const COLUMNS = [['开始时间（本机）'], ['模型／档位'], ['状态'], ['用量', true], ['首响应数据 s'], ['首响应后 TPS'], ['输入'], ['输出'], ['缓存命中', true], ['推理', true],
+  ['首输出 s', true], ['正文首字 s', true], ['正文 TPS', true], ['请求吞吐 TPS', true], ['总耗时 s'], ['会话归属', true]];
 function monitorMarkup() {
   const head = COLUMNS.map(([label, extra]) => `<th${extra ? ' class="extra"' : ''}>${label}</th>`).join('');
   return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><select id="monitor-time-range" aria-label="时间区间"><option value="this-month">当月</option><option value="last-month">上月</option><option value="last-7-days">最近 7 天</option><option value="all">全部保留记录</option><option value="custom">自定义</option></select><span id="monitor-date-controls" hidden><label for="monitor-date-start">开始日期 <input id="monitor-date-start" type="date" min="0001-01-01" max="9999-12-31"></label><label for="monitor-date-end">结束日期 <input id="monitor-date-end" type="date" min="0001-01-01" max="9999-12-31"></label></span><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><p id="monitor-diagnostics" class="hint mb" role="status" aria-live="polite" hidden></p><p id="monitor-range-error" class="warn mb" role="alert" hidden></p><p id="monitor-range-info" class="hint mb" role="status" hidden></p><div id="monitor-summary" class="tiles"></div><div id="monitor-table-wrap" class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
@@ -49,7 +49,7 @@ function monitorScript() {
     const EXTRA = ${JSON.stringify(COLUMNS.map(([, extra]) => !!extra))};
     const format = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
     const metricFormat = (key, value) => key.endsWith('Ms') && typeof value === 'number' && Number.isFinite(value) ? (value / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) : format(value);
-    const attribution = value => ({ 'response-id': '输出 ID 确认', 'tool-id': '本次工具 ID 确认', ambiguous: '存在歧义', unassigned: '未归属' }[value] || '未知');
+    const attribution = value => ({ 'response-id': '输出 ID 确认', 'tool-id': '工具 ID 确认', ambiguous: '存在歧义', unassigned: '未归属' }[value] || '未知');
     const attributionReason = value => ({ 'ambiguous-match': '存在歧义', 'no-tool-ids': '无可用工具 ID', 'lookup-unavailable': '归属查询不可用', 'tool-id-unmatched': '工具状态未匹配' }[value]);
     const stateName = value => ({ success: '成功', error: '失败', cancelled: '已取消' }[value] || '未知');
     const usageName = value => ({ complete: '完整', partial: '不完整', missing: '未上报', inconsistent: '数据异常' }[value] || '—');
@@ -63,11 +63,11 @@ function monitorScript() {
     };
     const syncSelectorTitle = () => { const option = [...selector.options].find(o => o.value === selector.value); selector.title = option ? option.textContent : ''; };
     // [key, label, shown without detail]
-    const METRICS = [['firstResponseMs','平均首数据事件 s',true],['gatewayTps','首数据后吞吐 TPS',true],['inputTokens','输入 token',true],['outputTokens','输出 token',true],['cachedTokens','缓存命中 token',true],['reasoningTokens','推理 token',false],['ttftMs','平均首输出 s',false],['textTtftMs','平均正文首字 s',false],['tps','最近有效正文 TPS',false],['throughputTps','请求吞吐 TPS（含等待）',false]];
+    const METRICS = [['firstResponseMs','平均首响应数据 s',true],['gatewayTps','首响应后吞吐 TPS',true],['inputTokens','输入 token',true],['outputTokens','输出 token',true],['cachedTokens','缓存命中 token',true],['reasoningTokens','推理 token',false],['ttftMs','平均首输出 s',false],['textTtftMs','平均正文首字 s',false],['tps','最近有效正文 TPS',false],['throughputTps','请求吞吐 TPS（含等待）',false]];
     const FIELDS = ['firstResponseMs','gatewayTps','inputTokens','outputTokens','cachedTokens','reasoningTokens','firstOutputMs','firstTextMs','tps','throughputTps','durationMs'];
     const METRIC_TITLES = {
       firstResponseMs: '从请求开始到首个进入监控的 SSE 数据事件，不是 HTTP 响应头时间；包含成功、失败与取消请求的有效时间样本。',
-      gatewayTps: '全部有效输出 token ÷ 首数据事件到请求结束的时间；包含推理和工具，并包含失败/取消的有效已上报用量。',
+      gatewayTps: '全部有效输出 token ÷ 首响应数据到请求结束的时间；包含推理和工具，并包含失败/取消的有效已上报用量。',
       throughputTps: '全部有效输出 token ÷ 总请求耗时，包含等待；包含失败/取消的有效已上报用量。'
     };
     const metricTitle = (key, metric, requests) => {
@@ -140,8 +140,8 @@ function monitorScript() {
         }
         if (s.excludedUsageRecords > 0) lines.push('已从用量与吞吐汇总排除 ' + s.excludedUsageRecords + ' 条异常记录（仍计入请求数和时间指标）');
         const messages = snapshot.lookupStatus?.messages;
-        if (messages === 'disabled') lines.push('消息 UUID 补查默认关闭');
-        else if (messages === 'unavailable') lines.push('诊断消息补查失败（未影响工具归属）');
+        if (messages === 'disabled') lines.push('消息归属补查默认关闭');
+        else if (messages === 'unavailable') lines.push('消息归属补查失败（未影响工具归属）');
       }
       const diagnosticsText = lines.join('\\n');
       if (diagnostics.textContent !== diagnosticsText) diagnostics.textContent = diagnosticsText;
@@ -172,11 +172,11 @@ function monitorScript() {
       else {
         if (snapshot.storageError) {
           const codes = {
-            'load-too-large': '监控日志超过读取上限，原日志保留，本轮未继续落盘。请先备份再人工处理。',
-            'load-invalid-record': '监控日志含无法解析的记录，已保留原日志并停止自动压缩。',
-            'load-unavailable': '监控日志读取失败，原日志保留，本轮未继续落盘。请检查文件访问权限。',
-            'append-failed': '监控记录追加失败，部分数据可能仅在内存中。请检查磁盘空间和权限。',
-            'compact-failed': '监控日志压缩失败，原日志保留。请检查磁盘空间和权限。'
+            'load-too-large': '用量日志超过读取上限，原日志保留，本轮未继续落盘。请先备份再人工处理。',
+            'load-invalid-record': '用量日志含无法解析的记录，已保留原日志并停止自动压缩。',
+            'load-unavailable': '用量日志读取失败，原日志保留，本轮未继续落盘。请检查文件访问权限。',
+            'append-failed': '用量记录追加失败，部分数据可能仅在内存中。请检查磁盘空间和权限。',
+            'compact-failed': '用量日志压缩失败，原日志保留。请检查磁盘空间和权限。'
           };
           warnings.push(codes[snapshot.storageDiagnostics?.code] || '统计存储异常。');
           const diagnosticsCounts = snapshot.storageDiagnostics;
