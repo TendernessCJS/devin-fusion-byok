@@ -209,7 +209,6 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
   let toastTimer;
   const roleSearch = { lead: '', sidekick: '' };
   const roleMoreOpen = { lead: false, sidekick: false };
-  const nativeOpen = new Map();
 
   function element(tag, attributes, ...children) {
     const node = document.createElement(tag);
@@ -585,18 +584,6 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath) {
           element('span', { class: 'row-sub', text: sub.join(' · ') })),
         switchInput(!family.hidden, '在列表中显示 ' + family.label + ' 的 ' + family.variants + ' 个变体',
           show => run(() => request('setNativeModelHidden', { uids: family.members.map(member => member.uid), hidden: !show })), off())));
-      const details = element('details', { class: 'fold', open: nativeOpen.get(family.id) === true },
-        element('summary', { text: '展开 ' + family.variants + ' 个变体' }));
-      details.addEventListener('toggle', () => { nativeOpen.set(family.id, details.open); });
-      for (const member of family.members) {
-        const note = member.disabled ? '官方暂不可用' : member.eligible === true ? '' : '不能作为 Fusion 的 Lead 或 Sidekick';
-        details.append(element('div', { class: 'row' },
-          element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: member.label || member.uid }),
-            element('span', { class: 'row-sub mono', text: member.uid + (note ? ' · ' + note : '') })),
-          switchInput(member.hidden !== true, '在列表中显示官方模型 ' + member.uid,
-            show => run(() => request('setNativeModelHidden', { uid: member.uid, hidden: !show })), off())));
-      }
-      container.append(details);
     }
   }
 
