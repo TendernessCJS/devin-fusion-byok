@@ -12,6 +12,7 @@ function contextDetails(session, monitor, catalog) {
   if (fusion) rows.push({ key: 'lead', label: '配置主模型', value: label(fusion.leadUid) }, { key: 'sidekick', label: '配置副模型', value: label(fusion.sidekickUid) });
   for (const subagent of session?.subagents || []) rows.push({ key: 'subagent:' + JSON.stringify([subagent.parentAgentId, subagent.runId]), label: '子代理', value: usage(subagent), title: `${subagent.parentAgentId} / ${subagent.runId ?? '—'}` });
   const matching = session ? monitor?.sessions?.filter(item => item.sessionId === session.sessionId) || [] : [];
+  const sessionTitle = matching.length === 1 ? matching[0].title || null : null;
   const records = matching.length === 1 ? matching[0].records || [] : [];
   const latest = records.reduce((best, record) => Number.isFinite(Date.parse(record.startedAt)) && (!best || Date.parse(record.startedAt) > Date.parse(best.startedAt)) ? record : best, null);
   const state = { success: '成功', error: '失败', cancelled: '已取消' };
@@ -19,7 +20,8 @@ function contextDetails(session, monitor, catalog) {
   for (const [key, label] of [['durationMs', '请求耗时'], ['firstResponseMs', '首响应数据'], ['firstTextMs', '正文首字'], ['firstOutputMs', '首输出'], ['gatewayTps', '首响应后吞吐 TPS'], ['tps', '正文 TPS（不含工具）'], ['inputTokens', '输入 token'], ['outputTokens', '输出 token'], ['cachedTokens', '缓存 token'], ['reasoningTokens', '推理 token']]) request.push({ key, label, value: key.endsWith('Ms') ? seconds(latest?.[key]) : number(latest?.[key]) });
   const lines = [...rows, ...request].map(row => `${row.label}：${row.value}`);
   const tooltip = [rows[0], rows[1], ...request.slice(0, 7)].map(row => `${row.label}：${row.value}`).join('\n');
-  return { percent: session?.lead ? Math.max(0, Math.min(100, session.lead.used / session.lead.size * 100)) : null, rows, request, lines, tooltip };
+  const ratio = session?.lead?.size > 0 ? session.lead.used / session.lead.size : null;
+  return { percent: ratio === null ? null : Math.max(0, Math.min(100, ratio * 100)), rows, request, lines, tooltip, sessionTitle };
 }
 function contextHtml(nonce) {
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';"><style nonce="${nonce}">${baseStyles()}
@@ -60,7 +62,8 @@ function createContextUi({ vscode, context, snapshot, readMonitor, catalog, isEn
     const values = sessions.map(session => {
       if (!sessionLabels.has(session.sessionId)) sessionLabels.set(session.sessionId, ++nextSessionLabel);
       const details = contextDetails(session, monitor, currentCatalog);
-      return { sessionId: session.sessionId, label: `会话 ${sessionLabels.get(session.sessionId)} · ${details.rows[0].value}`, ...details };
+      const title = details.sessionTitle || `会话 ${sessionLabels.get(session.sessionId)}`;
+      return { sessionId: session.sessionId, label: `${title} · ${details.rows[0].value}`, ...details };
     });
     if (!values.some(value => value.sessionId === selectedSessionId)) selectedSessionId = values[0]?.sessionId ?? null;
     const latest = values.find(value => value.sessionId === selectedSessionId) || contextDetails(null);

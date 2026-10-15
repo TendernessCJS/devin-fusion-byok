@@ -142,6 +142,12 @@ test('details use exact session match, distinguish missing from zero, and clamp 
   result = contextDetails(session, monitor);
   assert.ok(result.lines.includes('首响应后吞吐 TPS：0'));
   assert.ok(result.lines.includes('正文首字：—'));
+  assert.equal(result.sessionTitle, null, 'no title on the matched session leaves the fallback to the caller');
+  monitor.sessions[0].title = '审查全局规则';
+  assert.equal(contextDetails(session, monitor).sessionTitle, '审查全局规则',
+    'a matched session exposes its stored title for the selector label');
+  const zeroSized = contextDetails({ sessionId: 'a', lead: { used: 5, size: 0, timestampMs: 1 }, subagents: [] });
+  assert.equal(zeroSized.percent, null, 'a zero-sized context renders as missing, never NaN%');
 });
 test('context webview handles hostile strings as text and zero as real usage', () => {
   class Element {
