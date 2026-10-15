@@ -5,16 +5,19 @@ const COLUMNS = [['开始时间（本机）'], ['模型／档位'], ['状态'], 
   ['首输出 s', true], ['正文首字 s', true], ['正文 TPS', true], ['请求吞吐 TPS', true], ['总耗时 s'], ['会话归属', true]];
 function monitorMarkup() {
   const head = COLUMNS.map(([label, extra]) => `<th${extra ? ' class="extra"' : ''}>${label}</th>`).join('');
-  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><select id="monitor-time-range" aria-label="时间区间"><option value="this-month">当月</option><option value="last-month">上月</option><option value="last-7-days">最近 7 天</option><option value="all">全部保留记录</option><option value="custom">自定义</option></select><span id="monitor-date-controls" hidden><label for="monitor-date-start">开始日期 <input id="monitor-date-start" type="date" min="0001-01-01" max="9999-12-31"></label><label for="monitor-date-end">结束日期 <input id="monitor-date-end" type="date" min="0001-01-01" max="9999-12-31"></label></span><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><p id="monitor-diagnostics" class="hint mb" role="status" aria-live="polite" hidden></p><p id="monitor-range-error" class="warn mb" role="alert" hidden></p><p id="monitor-range-info" class="hint mb" role="status" hidden></p><div id="monitor-summary" class="tiles"></div><div id="monitor-table-wrap" class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
+  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><select id="monitor-provider" aria-label="选择供应商"><option value="all">全部供应商</option></select><select id="monitor-model" aria-label="选择模型"><option value="all">全部模型</option></select><select id="monitor-time-range" aria-label="时间区间"><option value="today">今天</option><option value="this-month">当月</option><option value="last-month">上月</option><option value="last-7-days">最近 7 天</option><option value="all">全部保留记录</option><option value="custom">自定义</option></select><span id="monitor-date-controls" hidden><label for="monitor-date-start">开始日期 <input id="monitor-date-start" type="date" min="0001-01-01" max="9999-12-31"></label><label for="monitor-date-end">结束日期 <input id="monitor-date-end" type="date" min="0001-01-01" max="9999-12-31"></label></span><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><p id="monitor-diagnostics" class="hint mb" role="status" aria-live="polite" hidden></p><p id="monitor-range-error" class="warn mb" role="alert" hidden></p><p id="monitor-range-info" class="hint mb" role="status" hidden></p><div id="monitor-summary" class="tiles"></div><div id="monitor-table-wrap" class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
 }
 function monitorScript() {
   return `
   (() => {
     const { monitorDateRange, filteredMonitorView } = (${createMonitorStats.toString()})();
     const PAGE_SIZE = 100;
-    let snapshot = null, page = 0, rowsSignature = '', summarySignature = '', rangeKey = '', selectorSignature;
+    let snapshot = null, page = 0, rowsSignature = '', summarySignature = '', rangeKey = '', selectorSignature, providerSignature, modelSignature;
+    let providerNames = new Map();
     const root = document.getElementById('usage-monitor');
     const selector = document.getElementById('monitor-session');
+    const providerSel = document.getElementById('monitor-provider');
+    const modelSel = document.getElementById('monitor-model');
     const status = document.getElementById('monitor-status');
     const diagnostics = document.getElementById('monitor-diagnostics');
     const timeRange = document.getElementById('monitor-time-range');
@@ -83,12 +86,33 @@ function monitorScript() {
       const l = document.createElement('span'); l.className = 'tile-label'; l.textContent = label;
       node.append(v); node.append(l); return node;
     }
+    const syncOptions = (select, entries, allLabel) => {
+      const previous = select.value;
+      select.replaceChildren();
+      const all = document.createElement('option'); all.value = 'all'; all.textContent = allLabel; all.title = allLabel; select.append(all);
+      for (const [value, label] of entries) { const option = document.createElement('option'); option.value = value; option.textContent = label; option.title = label; select.append(option); }
+      select.value = entries.some(([value]) => value === previous) ? previous : 'all';
+    };
+    const providerLabel = id => id === '__none__' ? '未知供应商' : (providerNames.get(id) || id);
+    const syncProviderOptions = () => {
+      const ids = [...new Set((snapshot?.records || []).map(r => r.providerId || '__none__'))];
+      ids.sort((a, b) => providerLabel(a).localeCompare(providerLabel(b), 'zh'));
+      const key = ids.map(id => id + '|' + providerLabel(id)).join('~');
+      if (key !== providerSignature) { providerSignature = key; syncOptions(providerSel, ids.map(id => [id, providerLabel(id)]), '全部供应商'); }
+    };
+    const syncModelOptions = () => {
+      const ids = [...new Set((snapshot?.records || [])
+        .filter(r => providerSel.value === 'all' || (r.providerId || '__none__') === providerSel.value)
+        .map(r => r.model).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh'));
+      const key = providerSel.value + '|' + ids.join('~');
+      if (key !== modelSignature) { modelSignature = key; syncOptions(modelSel, ids.map(id => [id, id]), '全部模型'); }
+    };
     function render() {
       syncSelectorTitle();
       const zone = localZone();
       const formatStarted = startTimeFormatter(zone);
       const range = currentRange();
-      const selected = snapshot ? filteredMonitorView(snapshot, selector.value, range) : null;
+      const selected = snapshot ? filteredMonitorView(snapshot, selector.value, range, { providerId: providerSel.value, model: modelSel.value }) : null;
       const s = selected?.summary;
       const summaryKey = s ? detail.checked + '|' + JSON.stringify(s) : '';
       if (summaryKey !== summarySignature) {
@@ -156,6 +180,8 @@ function monitorScript() {
       rangeInfo.hidden = !infoText;
     }
     selector.addEventListener('change', () => { page = 0; render(); });
+    providerSel.addEventListener('change', () => { page = 0; syncModelOptions(); render(); });
+    modelSel.addEventListener('change', () => { page = 0; render(); });
     timeRange.addEventListener('change', () => { dateControls.hidden = timeRange.value !== 'custom'; render(); });
     dateStart.addEventListener('change', render);
     dateEnd.addEventListener('change', render);
@@ -167,6 +193,7 @@ function monitorScript() {
       if (event.data?.type !== 'monitor-state') return;
       const result = event.data.result;
       snapshot = result?.snapshot || null;
+      providerNames = new Map((result?.providers || []).map(p => [p?.id, p?.name]).filter(([id]) => typeof id === 'string' && id));
       const warnings = [];
       if (!snapshot) warnings.push(result?.status === 'unsupported' ? '用量统计未启用。' : '用量统计暂不可用。');
       else {
@@ -208,6 +235,8 @@ function monitorScript() {
         if ([...selector.options].some(o => o.value === previous)) selector.value = previous;
       }
       syncSelectorTitle();
+      syncProviderOptions();
+      syncModelOptions();
       render();
     });
   })();`;

@@ -18,6 +18,11 @@ test('date presets use local calendar days and month boundaries', () => {
   assert.equal(last7.to, new Date(2026, 9, 14).getTime());
   assert.equal(last7.startDate, '2026-10-07');
   assert.equal(last7.endDate, '2026-10-13');
+  const today = monitorDateRange('today', { now });
+  assert.equal(today.from, new Date(2026, 9, 13).getTime());
+  assert.equal(today.to, new Date(2026, 9, 14).getTime());
+  assert.equal(today.startDate, '2026-10-13');
+  assert.equal(today.endDate, '2026-10-13');
   assert.equal(monitorDateRange('all', { now }).error, null);
   assert.equal(monitorDateRange('nonsense', { now }).error !== null, true);
 });
@@ -82,6 +87,22 @@ test('filteredMonitorView recomputes summary and attribution inside the range on
   assert.equal(view.summary.tps.value, 25, 'a newer out-of-range sample cannot outrank the in-range latest');
   assert.deepEqual(view.attributionSummary, { assigned: 0, ambiguous: 0, noToolIds: 4, unmatchedToolIds: 0, lookupUnavailable: 0 });
   assert.deepEqual(snapshot, clone, 'the source snapshot is never mutated');
+});
+
+test('provider and model filters narrow the view before summarizing', () => {
+  const iso = ms => new Date(ms).toISOString();
+  const base = new Date(2026, 9, 15, 12).getTime();
+  const record = extra => ({ schemaVersion: 3, model: 'm', providerId: 'ds', status: 'success', attribution: 'unassigned', attributionReason: 'no-tool-ids', startedAt: iso(base), outputTokens: 10, durationMs: 1000, ...extra });
+  const snapshot = { version: 1, status: 'ready', retentionLimit: 5000, sessions: [], summary: {},
+    records: [record({ id: 'a' }), record({ id: 'b', model: 'other' }), record({ id: 'c', providerId: 'ms' }), record({ id: 'd', providerId: '' })] };
+  const all = monitorDateRange('all');
+  assert.equal(filteredMonitorView(snapshot, 'all', all).records.length, 4);
+  assert.deepEqual(filteredMonitorView(snapshot, 'all', all, { providerId: 'ms' }).records.map(r => r.id), ['c']);
+  assert.deepEqual(filteredMonitorView(snapshot, 'all', all, { providerId: '__none__' }).records.map(r => r.id), ['d'],
+    'records with no provider land in the unknown bucket');
+  assert.deepEqual(filteredMonitorView(snapshot, 'all', all, { model: 'other' }).records.map(r => r.id), ['b']);
+  assert.deepEqual(filteredMonitorView(snapshot, 'all', all, { providerId: 'ds', model: 'm' }).records.map(r => r.id), ['a'],
+    'provider and model combine');
 });
 
 test('createMonitorStats returns the same pure helpers for browser injection', () => {

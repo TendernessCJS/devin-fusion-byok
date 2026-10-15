@@ -761,3 +761,42 @@ test('bounded scopes drop an incomplete attribution breakdown while all keeps a 
   f.selectTime('custom'); f.setDates('2026-10-01', '2026-10-31'); send();
   assert.doesNotMatch(f.byId('monitor-diagnostics').textContent, /归属：已确认/, 'an incomplete computed breakdown stays hidden instead of fabricating zeros');
 });
+
+test('provider and model selects populate from records and narrow the table', () => {
+  const { byId, receive } = panelDom();
+  const record = (id, providerId, model) => ({ id, startedAt: 't', model, providerId, effort: null, status: 'success', usageState: 'missing', attribution: 'unassigned' });
+  receive({ data: { type: 'monitor-state', result: { status: 'ready',
+    providers: [{ id: 'ds', name: 'DeepSeek' }],
+    snapshot: { summary: { requests: 3, success: 3, error: 0, cancelled: 0 }, sessionStatus: 'ready', sessions: [],
+      records: [record('a', 'ds', 'deepseek-flash'), record('b', 'ds', 'deepseek-pro'), record('c', 'ms', 'kimi-k3')] } } } });
+
+  const providerOptions = byId('monitor-provider').children.map(o => [o.value, o.textContent]);
+  assert.deepEqual(providerOptions, [['all', '全部供应商'], ['ds', 'DeepSeek'], ['ms', 'ms']],
+    'providers come from records, named via the enriched provider list');
+  assert.deepEqual(byId('monitor-model').children.map(o => o.value), ['all', 'deepseek-flash', 'deepseek-pro', 'kimi-k3']);
+  assert.equal(byId('monitor-requests').children.length, 3);
+
+  byId('monitor-provider').value = 'ds';
+  byId('monitor-provider').listeners.change();
+  assert.deepEqual(byId('monitor-model').children.map(o => o.value), ['all', 'deepseek-flash', 'deepseek-pro'],
+    'the model list narrows to the chosen provider');
+  assert.equal(byId('monitor-requests').children.length, 2, 'the table drops other providers');
+
+  byId('monitor-model').value = 'deepseek-pro';
+  byId('monitor-model').listeners.change();
+  assert.equal(byId('monitor-requests').children.length, 1);
+  assert.equal(byId('monitor-requests').children[0].title, '请求 ID：b');
+  assert.equal(byId('monitor-summary').children[0].children[0].textContent, '1', 'the summary re-aggregates inside the filter');
+
+  byId('monitor-provider').value = 'ms';
+  byId('monitor-provider').listeners.change();
+  assert.equal(byId('monitor-model').value, 'all', 'a stale model choice falls back to 全部');
+  assert.equal(byId('monitor-requests').children.length, 1);
+});
+
+test('the markup offers 今天 and the two filter selects', () => {
+  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  assert.match(html, /<option value="today">今天<\/option>/);
+  assert.match(html, /id="monitor-provider"/);
+  assert.match(html, /id="monitor-model"/);
+});

@@ -70,7 +70,8 @@ function createMonitorStats() {
       const date = new Date(now);
       if (!Number.isFinite(date.getTime()) || date.getFullYear() < 1 || date.getFullYear() > 9999) return invalid('当前时间不可用，请检查系统时间。');
       const year = date.getFullYear(), month = date.getMonth(), day = date.getDate();
-      if (mode === 'this-month') { from = localDate(year, month, 1); to = localDate(year, month + 1, 1); }
+      if (mode === 'today') { from = localDate(year, month, day); to = localDate(year, month, day + 1); }
+      else if (mode === 'this-month') { from = localDate(year, month, 1); to = localDate(year, month + 1, 1); }
       else if (mode === 'last-month') { from = localDate(year, month - 1, 1); to = localDate(year, month, 1); }
       else if (mode === 'last-7-days') { from = localDate(year, month, day - 6); to = localDate(year, month, day + 1); }
       else return invalid('请选择有效的时间区间。');
@@ -87,11 +88,14 @@ function createMonitorStats() {
       return Number.isFinite(startedAt) && startedAt >= range.from && startedAt < range.to;
     });
   }
-  function filteredMonitorView(snapshot, sessionId, range) {
+  function filteredMonitorView(snapshot, sessionId, range, { providerId = 'all', model = 'all' } = {}) {
     if (!snapshot || range.error) return null;
     const source = sessionId === 'all' ? snapshot : snapshot.sessions.find(session => (session.sessionId || '__unassigned__') === sessionId);
     if (!source) return null;
-    const records = filterMonitorRecords(source.records, range);
+    const scoped = source.records.filter(record =>
+      (providerId === 'all' || (record.providerId || '__none__') === providerId) &&
+      (model === 'all' || record.model === model));
+    const records = filterMonitorRecords(scoped, range);
     const all = range.from === null && range.to === null;
     const counts = attributionStats(records);
     const complete = Object.values(counts).reduce((sum, count) => sum + count, 0) === records.length;

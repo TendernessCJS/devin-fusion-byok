@@ -12,6 +12,7 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
     try {
       let result;
       try { result = await readMonitor(); } catch { result = { status: 'unavailable', snapshot: null }; }
+      if (result?.snapshot) result = { ...result, providers: (manager.state().providers || []).map(({ id, name }) => ({ id, name })) };
       if (panel === target) await target.webview.postMessage({ type: 'monitor-state', result });
     } finally { monitorPending = false; }
   };
