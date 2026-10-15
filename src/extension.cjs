@@ -649,6 +649,7 @@ async function activate(context) {
     }
     require('./panel/context-view.cjs').createContextUi({ vscode, context,
       snapshot: () => contextObserver?.snapshot() || [], catalog,
+      focused: () => contextObserver?.focused?.() || null,
       isEnabled: () => !activationDisposed && config().enabled !== false,
       readMonitor: () => require('./runtime/monitor-client.cjs').readMonitor({ root }) });
   } catch { log('context-observer-unavailable'); }

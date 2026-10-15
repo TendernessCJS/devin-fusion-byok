@@ -259,3 +259,44 @@ test('statusbar uses untrusted plain text, coalesces metrics reads and disposes 
   assert.equal(typeof item.tooltip, 'string'); assert.doesNotMatch(item.tooltip, /不保证是当前聊天|本轮耗时/);
   handle.dispose(); resolve({ snapshot: null }); await tick();
 });
+
+test('observer exposes the focused session from intent methods, not passive updates', async () => {
+  const f = fixture();
+  assert.equal(f.handle.focused(), null, 'nothing focused until an intent method fires');
+  f.connector.sendRequest({ method: 'session/prompt', params: { sessionId: 'a' } });
+  assert.equal(f.handle.focused().sessionId, 'a');
+  f.connector.sendRequest({ method: 'session/load', params: { sessionId: 'b' } });
+  assert.equal(f.handle.focused().sessionId, 'b');
+  f.connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 'c', update: update() } });
+  assert.equal(f.handle.focused().sessionId, 'b', 'background session updates never steal focus');
+  f.setResponse(Promise.resolve({ sessionId: 'fresh' }));
+  f.connector.sendRequest({ method: 'session/new', params: {} });
+  await tick();
+  assert.equal(f.handle.focused().sessionId, 'fresh', 'session/new takes the response-assigned id');
+  f.handle.dispose();
+});
+
+test('the panel follows new focus events once, then manual picks hold', () => {
+  let focus = { sessionId: 'b', at: 100 };
+  const sessions = ['a', 'b'].map((sessionId, index) => ({ sessionId, modelUid: 'm', subagents: [], lead: { used: index * 50, size: 100, timestampMs: 1 } }));
+  const messages = [], item = { show() {}, hide() {}, dispose() {} };
+  const panel = { visible: true, webview: { postMessage(value) { messages.push(value); }, onDidReceiveMessage(fn) { receive = fn; return { dispose() {} }; } }, onDidDispose() { return { dispose() {} }; }, dispose() {} };
+  let receive, open;
+  const handle = createContextUi({ vscode: { ViewColumn: { Active: 1 }, window: { createStatusBarItem: () => item, createWebviewPanel: () => panel }, commands: { registerCommand(_, fn) { open = fn; return { dispose() {} }; } } }, context: { subscriptions: [] },
+    snapshot: () => sessions, catalog: () => ({ models: [{ uid: 'm', label: 'M' }] }), readMonitor: async () => null, focused: () => focus });
+  try {
+    open(); receive({ type: 'ready' });
+    assert.equal(messages.at(-1).selectedSessionId, 'b', 'a pending focus event selects the focused session');
+    handle.refresh(); handle.refresh();
+    assert.equal(messages.at(-1).selectedSessionId, 'b');
+    receive?.({ type: 'selectSession', sessionId: 'a' });
+    handle.refresh();
+    assert.equal(messages.at(-1).selectedSessionId, 'a', 'a manual pick is not reverted by the consumed focus event');
+    focus = { sessionId: 'b', at: 200 };
+    handle.refresh();
+    assert.equal(messages.at(-1).selectedSessionId, 'b', 'the next Devin focus event wins again');
+    focus = { sessionId: 'missing', at: 300 };
+    handle.refresh();
+    assert.equal(messages.at(-1).selectedSessionId, 'b', 'an unobservable session cannot steal the selection');
+  } finally { handle.dispose(); }
+});

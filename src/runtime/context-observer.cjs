@@ -9,6 +9,11 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
   const original = api.registerConnection, descriptor = Object.getOwnPropertyDescriptor(api, 'registerConnection');
   const connections = new Map();
   let disposed = false, registrations = 0, sessionUpdates = 0, usageUpdates = 0, acceptedUsageUpdates = 0, rejectedUsageUpdates = 0;
+  let focusedSessionId = null, focusedAt = 0;
+  // Methods that only fire while the user is looking at that session; session
+  // updates stream in the background and must not count as focus.
+  const FOCUS_METHODS = new Set(['session/prompt', 'session/load', 'session/resume', 'session/set_config_option']);
+  const focus = id => { if (id && enabled()) { focusedSessionId = id; focusedAt = Date.now(); } };
   const usageRejections = { 'invalid-session-id': 0, 'invalid-used': 0, 'invalid-size': 0, 'invalid-parent-id': 0, 'invalid-run-id': 0 };
   const status = () => ({ state: disposed ? 'disposed' : isEnabled() ? 'observing' : 'disabled', connections: connections.size, registrations, sessionUpdates, usageUpdates, acceptedUsageUpdates, rejectedUsageUpdates, usageRejections: { ...usageRejections } });
   function restore(object, key, wrapper, previous) {
@@ -42,6 +47,7 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
           if (!['session/prompt', 'session/new', 'session/load', 'session/resume', 'session/cancel', 'session/close', 'session/delete', 'session/archive', 'session/set_config_option'].includes(method)) return;
           sessionId = args[0]?.params?.sessionId;
           if (method === 'session/prompt') generation = state.start(sessionId);
+          if (FOCUS_METHODS.has(method)) focus(sessionId);
           if (['session/load', 'session/resume', 'session/close', 'session/delete', 'session/archive'].includes(method)) state.reset(sessionId);
         });
         let result;
@@ -51,6 +57,7 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
           if (method === 'session/prompt' && !(connector.protocolVersion >= 2)) state.finish(sessionId, generation);
           if (method === 'session/cancel') state.finish(sessionId, undefined, 'cancelled');
           if (['session/new', 'session/load', 'session/resume', 'session/set_config_option'].includes(method)) state.selectModel(value?.sessionId || sessionId, value?.configOptions);
+          if (method === 'session/new') focus(value?.sessionId || sessionId);
         });
         const failure = () => safe(() => { if (method === 'session/prompt') state.finish(sessionId, generation, 'error'); });
         if (result && typeof result.then === 'function') result.then(success, failure); else success(result);
@@ -91,6 +98,7 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
   }
   const handle = {
     status,
+    focused: () => focusedSessionId && enabled() ? { sessionId: focusedSessionId, at: focusedAt } : null,
     snapshot() {
       if (!enabled()) { for (const entry of connections.values()) entry.state.clear(); return []; }
       const all = [...connections.values()].flatMap(entry => entry.state.snapshot());

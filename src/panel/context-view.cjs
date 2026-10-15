@@ -43,8 +43,8 @@ if(empty)return;
 grid('context',item.rows||[]);grid('request',item.request||[]);}
 selector.addEventListener('change',()=>{render();vscode.postMessage({type:'selectSession',sessionId:selector.value});});window.addEventListener('message',event=>{if(event.data?.type!=='context')return;const previous=selector.value;pluginEnabled=event.data.enabled!==false;items=event.data.items;const keys=JSON.stringify(items.map(x=>x.sessionId).sort());if(keys!==sessionKeys){sessionKeys=keys;selector.replaceChildren();for(const item of items){const option=document.createElement('option');option.value=item.sessionId;option.title=item.sessionId;selector.append(option);}if(items.some(x=>x.sessionId===previous))selector.value=previous;}for(const option of selector.children){const item=items.find(x=>x.sessionId===option.value);text(option,item?.label||'暂无会话');}if(items.some(x=>x.sessionId===event.data.selectedSessionId))selector.value=event.data.selectedSessionId;render();});vscode.postMessage({type:'ready'});`;
 }
-function createContextUi({ vscode, context, snapshot, readMonitor, catalog, isEnabled = () => true }) {
-  let panel, disposed = false, pending = null, monitor = null, lastRead = -Infinity, shown = false, lastPayload = null, selectedSessionId = null, nextSessionLabel = 0;
+function createContextUi({ vscode, context, snapshot, readMonitor, catalog, isEnabled = () => true, focused = () => null }) {
+  let panel, disposed = false, pending = null, monitor = null, lastRead = -Infinity, shown = false, lastPayload = null, selectedSessionId = null, nextSessionLabel = 0, followedAt = 0;
   const sessionLabels = new Map();
   const item = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 19);
   if (item) item.command = 'devinFusionByok.contextDetails';
@@ -65,6 +65,13 @@ function createContextUi({ vscode, context, snapshot, readMonitor, catalog, isEn
       const title = details.sessionTitle || `会话 ${sessionLabels.get(session.sessionId)}`;
       return { sessionId: session.sessionId, label: `${title} · ${details.rows[0].value}`, ...details };
     });
+    // Follow the app-focused session: a new focus event wins once, then the
+    // user's manual pick holds until Devin focuses something else again.
+    const focus = focused();
+    if (focus && focus.at > followedAt && values.some(value => value.sessionId === focus.sessionId)) {
+      followedAt = focus.at;
+      selectedSessionId = focus.sessionId;
+    }
     if (!values.some(value => value.sessionId === selectedSessionId)) selectedSessionId = values[0]?.sessionId ?? null;
     const latest = values.find(value => value.sessionId === selectedSessionId) || contextDetails(null);
     if (!values.length) values.push({ sessionId: '', ...latest });
