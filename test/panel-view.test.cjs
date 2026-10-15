@@ -347,3 +347,27 @@ test('model rows carry tier and context info, and a missing key warns on import'
     'import never reaches the backend without a key');
   assert.match(textOf(second.byId('status')), /未配置 API 密钥/, 'the click explains why import is unavailable');
 });
+
+test('bulk toggles act on the search-filtered set and say so', () => {
+  const { byId, posts, receive } = panel();
+  const next = state();
+  next.providers[0].models = [
+    { id: 'flash-a', label: 'Flash A', enabled: true, efforts: [], contextWindow: 272000 },
+    { id: 'flash-b', label: 'Flash B', enabled: true, efforts: [], contextWindow: 272000 },
+    { id: 'pro-c', label: 'Pro C', enabled: true, efforts: [], contextWindow: 272000 }];
+  receive({ data: { type: 'state', state: next } });
+
+  const search = collect(byId('models'), 'input', node => node.attributes.type === 'search')[0];
+  search.value = 'flash';
+  search.listeners.input({ target: search });
+
+  const bulkRow = collect(byId('model-list'), 'div', node => node.className === 'row compact')[0];
+  assert.match(textOf(bulkRow), /筛选出 2 个 · 2 \/ 2 已启用/, 'the count is scoped to the filtered set');
+  const stopButton = collect(bulkRow, 'button', node => node.textContent === '停用这些')[0];
+  assert.ok(stopButton, 'filtered bulk buttons drop the 「全部」 wording');
+  stopButton.listeners.click();
+  const update = posts.find(message => message.type === 'updateModels');
+  assert.deepEqual(JSON.parse(JSON.stringify(update.payload.changes)),
+    [{ id: 'flash-a', enabled: false }, { id: 'flash-b', enabled: false }],
+    'only filtered models are touched');
+});

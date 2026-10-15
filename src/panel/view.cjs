@@ -441,9 +441,12 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
         const changes = models.filter(model => (model.enabled !== false) !== value).map(model => ({ id: model.id, enabled: value }));
         if (changes.length) run(() => request('updateModels', { providerId: provider.id, changes }));
       };
+      const filtered = models.length < provider.models.length;
       container.append(element('div', { class: 'row compact' },
-        element('span', { class: 'row-main hint', text: models.filter(model => model.enabled !== false).length + ' / ' + models.length + ' 已启用' }),
-        button('全部启用', () => bulk(true), 'quiet'), button('全部停用', () => bulk(false), 'quiet')));
+        element('span', { class: 'row-main hint', text: (filtered ? '筛选出 ' + models.length + ' 个 · ' : '')
+          + models.filter(model => model.enabled !== false).length + ' / ' + models.length + ' 已启用' }),
+        button(filtered ? '启用这些' : '全部启用', () => bulk(true), 'quiet'),
+        button(filtered ? '停用这些' : '全部停用', () => bulk(false), 'quiet')));
     }
     const fmtTokens = value => value >= 1000000 ? (Math.round(value / 100000) / 10) + 'M'
       : value >= 1000 ? Math.round(value / 1000) + 'K' : String(value);
