@@ -209,7 +209,7 @@ async function activate(context) {
     try { goalContinue?.dispose(); } catch {}
     goalContinue = undefined;
   };
-  const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...nativeModels.values()]); };
+  const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...nativeModels.values()], nativeAllowedUids); };
   let management, manager;
   const nativeModels = new Map(), localNativeModels = new Map();
   // Complete-set verdict from team settings: whichever observation arrived

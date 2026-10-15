@@ -144,7 +144,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     log('native-allowed', { count: allowedUids.size });
     scheduleNativeCacheSave();
   };
-  const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()]); };
+  const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedUids); };
   // Official Fusion uids observed as disabled in catalog responses. Entries
   // that later appear enabled are removed so Pro accounts keep native Fusion.
   // Persisted so a saved locked preference still redirects when a fresh
@@ -213,7 +213,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     try {
       body = await collect(request);
       const format = wire.decode(body, request.headers);
-      const current = config(), catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()]);
+      const current = config(), catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedUids);
       if (rpc.endsWith('/AssignModel')) {
         const resolved = resolveAssignment(format.data, format, catalog, lockedFusion);
         if (resolved) {

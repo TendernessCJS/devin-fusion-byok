@@ -221,7 +221,7 @@ function configFor({ uid, label, family, familyUid, contextWindow, maxOutputToke
   return { uid, label, effort, kind: kind || (fusion ? 'fusion' : 'model'), json, raw: encodeConfig(json) };
 }
 
-function discoverOfficialRoles(nativeModels, hiddenSet, config = {}) {
+function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = null) {
   const observed = Array.isArray(nativeModels) ? nativeModels : [];
   const observedUids = new Set();
   const nativeModelsMap = new Map();
@@ -280,7 +280,8 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}) {
     if (!Array.isArray(entry.harnessUids) || !entry.harnessUids.includes('fusion')) continue;
 
     const sideNative = sideKnown ? nativeModelsMap.get(sideCandidate) : null;
-    if (sideKnown && sideNative.disabled === false && sideNative.isModelRouter === false && sideNative.harnessUids?.length && !hiddenSet.has(sideCandidate)) {
+    if (sideKnown && sideNative.disabled === false && sideNative.isModelRouter === false && sideNative.harnessUids?.length && !hiddenSet.has(sideCandidate)
+        && (!allowed || allowed.has(sideCandidate))) {
       if (sidekickDim && Number.isSafeInteger(sidekickDim.order) && sidekickDim.name) {
         if (!sidekickClaimsByUid.has(sideCandidate)) {
           sidekickClaimsByUid.set(sideCandidate, { orders: new Set(), names: new Set() });
@@ -299,8 +300,10 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}) {
     // the member's harnessUids only decide standalone availability — declared
     // leads with none (gpt-6-astra-*) still qualify. The sidekick below keeps
     // the harness requirement: a subagent runs on its own harness.
-    if (leadNative.disabled !== false || leadNative.isModelRouter !== false || hiddenSet.has(leadCandidate)) continue;
-    if (sideNative.disabled !== false || sideNative.isModelRouter !== false || !sideNative.harnessUids?.length || hiddenSet.has(sideCandidate)) continue;
+    if (leadNative.disabled !== false || leadNative.isModelRouter !== false || hiddenSet.has(leadCandidate)
+        || (allowed && !allowed.has(leadCandidate))) continue;
+    if (sideNative.disabled !== false || sideNative.isModelRouter !== false || !sideNative.harnessUids?.length || hiddenSet.has(sideCandidate)
+        || (allowed && !allowed.has(sideCandidate))) continue;
 
     if (leadDim && Number.isSafeInteger(leadDim.order) && leadDim.name &&
         effortDim && Number.isSafeInteger(effortDim.order) && effortDim.name) {
@@ -452,12 +455,13 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}) {
 // with a usable harness is a candidate Lead or Sidekick, so the picker can be
 // extended with official models the vendor's own Fusion card does not offer
 // yet. Not preset-related despite its former name.
-function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles) {
+function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles, allowed = null) {
   const records = new Map();
   const conflicts = new Set();
   for (const entry of Array.isArray(nativeModels) ? nativeModels : []) {
     const uid = typeof entry?.uid === 'string' ? entry.uid : '';
-    if (!uid || uid.length > 256 || ownUid(uid) || uid.startsWith('fusion-') || hiddenSet.has(uid)) continue;
+    if (!uid || uid.length > 256 || ownUid(uid) || uid.startsWith('fusion-') || hiddenSet.has(uid)
+        || (allowed && !allowed.has(uid))) continue;
     const harnessUids = entry.harnessUids;
     const eligible = entry.disabled === false && entry.isModelRouter === false && Array.isArray(harnessUids) &&
       harnessUids.length > 0 && harnessUids.every(value => typeof value === 'string' && value.trim().length > 0);
@@ -575,12 +579,22 @@ function expandHiddenByFamily(hiddenSet, entries, uidOf, familyOf) {
   return expanded;
 }
 
-function buildRoleLists(config = {}, nativeModels = []) {
+// A non-empty allowlist (team settings f7, pre-injection) is authoritative:
+// a native uid outside it is a retired/entitlement leftover — selectable
+// neither standalone nor inside a Fusion combination, since the emitted
+// combo registers only when its native side is already in f7. Absent or
+// empty means "not observed yet" and restricts nothing.
+function normalizeAllowedUids(allowedUids) {
+  if (allowedUids instanceof Set) return allowedUids.size ? allowedUids : null;
+  return Array.isArray(allowedUids) && allowedUids.length ? new Set(allowedUids) : null;
+}
+function buildRoleLists(config = {}, nativeModels = [], allowedUids = null) {
+  const allowed = normalizeAllowedUids(allowedUids);
   const hiddenSet = expandHiddenByFamily(
     new Set(Array.isArray(config.hiddenNativeModelUids) ? config.hiddenNativeModelUids : []),
     nativeModels, entry => entry && entry.uid, entry => (entry && entry.familyUid) || '');
-  const officialRoles = discoverOfficialRoles(nativeModels, hiddenSet, config);
-  const { eligibleNativeLeads, eligibleNativeSidekicks } = discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles);
+  const officialRoles = discoverOfficialRoles(nativeModels, hiddenSet, config, allowed);
+  const { eligibleNativeLeads, eligibleNativeSidekicks } = discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles, allowed);
   const strictSidekickUids = new Set(officialRoles.eligibleNativeSidekicks.keys());
   const leadRefs = roleRefs(config, 'lead');
   const sidekickRefs = roleRefs(config, 'sidekick');
@@ -735,7 +749,7 @@ function buildRoleLists(config = {}, nativeModels = []) {
 }
 
 /** Build a secret-free catalog. Provider credentials stay solely in caller configuration. */
-function buildCatalog(config = {}, nativeModels = []) {
+function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
   if (config.enabled === false) {
     return { models: [], routes: {}, fusions: {}, sidekicks: [], hiddenNativeModelUids: [], hiddenFusionUids: [] };
   }
@@ -796,7 +810,7 @@ function buildCatalog(config = {}, nativeModels = []) {
       family: { modelFamilyLabel: lead.familyLabel, entries: [{ key: 'Effort', value: effort }] } }));
   }
 
-  const roleSelection = buildRoleLists(config, nativeModels);
+  const roleSelection = buildRoleLists(config, nativeModels, allowedUids);
   const selectedLeadKeys = new Set(roleSelection.lead.filter(item => item.selected).map(item => refKey(item.ref)));
   const selectedSidekickKeys = new Set(roleSelection.sidekick.filter(item => item.selected).map(item => refKey(item.ref)));
 
@@ -1059,10 +1073,12 @@ function protoMetadata(entry) {
       }
     }
     const familyUid = metaFamilyUid(inner);
-    // Inner field 22 is a kind enum: absent = plain model, 3 = adaptive/fusion
-    // combination, 4 = purpose-built entry (review/check), 6 = routing
-    // pseudo-entry, 8 = dimension-bearing fusion participant. Kinds 4 and 6
-    // never appear as picker models even when present in a catalog payload.
+    // Inner field 22 is the proto DisplayOption enum (verified against the
+    // official renderer): 0/absent UNSPECIFIED → standard picker, 1 ARENA,
+    // 2 BATTLE_GROUP_ONLY, 3 MODEL_ROUTER, 4 QUICK_REVIEW, 5 MIMIC,
+    // 6 HIDDEN_TOOL, 7 COMPACTOR, 8 MODERN_AGENT_CHAT → standard picker
+    // ("Devin Local only" outside it). Everything except 0/absent and 8
+    // routes to a non-picker surface or is invisible outright.
     const kinds = inner.filter(field => field.number === 22);
     let kind;
     if (kinds.length === 1 && kinds[0].wire === 0) {

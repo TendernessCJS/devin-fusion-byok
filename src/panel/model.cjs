@@ -88,11 +88,11 @@ function nativeVendor(id, label = '') {
   return { name: OTHER_VENDOR, rank: NATIVE_VENDORS.length };
 }
 function publicState(config, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready', cliCache, allowedUids) {
-  const catalog = buildCatalog({ ...config, enabled: true }, nativeModels);
-  const hidden = new Set(catalog.hiddenNativeModelUids || []);
   const allowed = allowedUids instanceof Set ? (allowedUids.size ? allowedUids : null)
     : (Array.isArray(allowedUids) && allowedUids.length ? new Set(allowedUids) : null);
-  const roleLists = buildRoleLists(config, nativeModels);
+  const catalog = buildCatalog({ ...config, enabled: true }, nativeModels, allowed);
+  const hidden = new Set(catalog.hiddenNativeModelUids || []);
+  const roleLists = buildRoleLists(config, nativeModels, allowed);
   const eligibleLeads = new Set(roleLists.lead.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
   const eligibleSidekicks = new Set(roleLists.sidekick.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
   // The settings list groups native entries by the server's family identity:
@@ -146,24 +146,29 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     // family (the augment side expands by familyUid the same way), so the
     // "partially hidden" state cannot occur — the switch is all-or-nothing.
     const anyHidden = members.some(member => member.hidden);
-    // Picker visibility, ordered by what we can prove: review/check rows
-    // (kind 4), routing pseudo-entries (kind 6) and router cards never appear
-    // even inside a selectable catalog — Adaptive/Fusion render in the
-    // official picker but are routing surfaces, not real models, so the user
-    // wants them folded into internal. The team settings allowlist is the
-    // authoritative gate once observed — a catalog row whose uid is absent
-    // from it (o3, Opus Review, Codex Spark) is a retired leftover no picker
-    // renders. A `pickerListed === false` verdict (the label is absent from
-    // every sort group of a sorts-carrying payload) likewise means no picker
-    // row, which also covers allowlisted-but-unlisted rows like SWE-check
-    // when the allowlist itself has not landed yet. Before the first
-    // allowlist, fall back to observation-source and capability heuristics:
-    // `listed` keeps retired-but-offered rows visible (GPT-4.1 vs o3),
-    // entitlement/command-only entries are hidden, and harness/metadata mark
-    // real picker rows for sourceless legacy observations.
+    // Picker visibility, ordered by what we can prove. `kind` is the proto
+    // DisplayOption enum (verified against the official renderer): 0/absent =
+    // standard picker, 8 = MODERN_AGENT_CHAT (standard picker, "Devin Local
+    // only" outside it), and every other value routes to a non-picker surface
+    // — 1 ARENA, 2 BATTLE_GROUP_ONLY, 3 MODEL_ROUTER, 4 QUICK_REVIEW,
+    // 5 MIMIC, 6 HIDDEN_TOOL, 7 COMPACTOR — or is outright invisible.
+    // Adaptive/Fusion render in the official picker (kind 3) but are routing
+    // surfaces, not real models, so the user wants them folded into internal.
+    // The team settings allowlist is the authoritative gate once observed — a
+    // catalog row whose uid is absent from it (o3, Opus Review, Codex Spark)
+    // is a retired leftover no picker renders. A `pickerListed === false`
+    // verdict (the label is absent from every sort group of a sorts-carrying
+    // payload) likewise means no picker row, which also covers allowlisted-
+    // but-unlisted rows like SWE-check when the allowlist itself has not
+    // landed yet. Before the first allowlist, fall back to observation-source
+    // and capability heuristics: `listed` keeps retired-but-offered rows
+    // visible (GPT-4.1 vs o3), entitlement/command-only entries are hidden,
+    // and harness/metadata mark real picker rows for sourceless legacy
+    // observations.
     const internal = family.members.every(member => {
       const entry = member.entry || {};
-      if (entry.kind === 4 || entry.kind === 6 || entry.isModelRouter === true) return true;
+      if (entry.isModelRouter === true) return true;
+      if (Number.isSafeInteger(entry.kind) && entry.kind >= 1 && entry.kind !== 8) return true;
       if (allowed && !allowed.has(member.uid)) return true;
       if (entry.pickerListed === false) return true;
       if (allowed) return false;
@@ -262,7 +267,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
     let config = read();
     if (type === 'selectFusion') {
       if (config.enabled === false) fail('请先启用 Fusion BYOK。');
-      if (!own(buildCatalog(config, nativeModels()).fusions, payload.uid)) fail('该 Fusion 组合已不可用，请重新选择。');
+      if (!own(buildCatalog(config, nativeModels(), nativeAllowedUids()).fusions, payload.uid)) fail('该 Fusion 组合已不可用，请重新选择。');
       await selectFusion(payload.uid); return state();
     }
     switch (type) {
@@ -356,7 +361,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         const key = refKey(model);
         if (!key) fail('模型标识无效。');
 
-        const currentRoles = buildRoleLists(config, nativeModels());
+        const currentRoles = buildRoleLists(config, nativeModels(), nativeAllowedUids());
         const candidateList = currentRoles[role] || [];
         const candidate = candidateList.find(item => refKey(item.ref) === key ||
           hasNative && (item.memberUids || []).some(uid => refKey({ nativeUid: uid }) === key));
@@ -405,7 +410,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       default: fail('不支持的操作。');
     }
     pruneDanglingRoleRefs(config);
-    buildCatalog(config, nativeModels()); // Validate the complete model graph before committing.
+    buildCatalog(config, nativeModels(), nativeAllowedUids()); // Validate the complete model graph before committing.
     write(config);
     if (type === 'importModels') pendingImport = undefined;
     await afterChange(type);

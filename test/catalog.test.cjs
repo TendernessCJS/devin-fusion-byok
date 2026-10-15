@@ -1351,6 +1351,30 @@ test('a non-fast non-official uid with a tier token joins the official family', 
   }
 });
 
+test('the observed team-settings allowlist gates native role candidates', () => {
+  const natives = [
+    nativeLead('spark-medium', 'Spark Medium'),
+    nativeLead('swe-2-max', 'SWE-2 Max')];
+  const nativeUids = list => new Set(list.flatMap(item =>
+    item.native ? (item.memberUids || [item.ref.nativeUid]) : []));
+
+  const open = buildRoleLists(config(), natives);
+  assert.ok(nativeUids(open.lead).has('spark-medium'), 'without an allowlist every harnessed uid is a candidate');
+
+  const gated = buildRoleLists(config(), natives, new Set(['swe-2-max']));
+  assert.ok(!nativeUids(gated.lead).has('spark-medium'),
+    'a uid outside the allowlist is a retired leftover — emitting its combos could never register in f7');
+  assert.ok(!nativeUids(gated.sidekick).has('spark-medium'));
+  assert.ok(nativeUids(gated.lead).has('swe-2-max'));
+
+  assert.ok(nativeUids(buildRoleLists(config(), natives, new Set()).lead).has('spark-medium'),
+    'an empty allowlist means "not observed yet" and restricts nothing');
+
+  const gatedCatalog = buildCatalog(config(), natives, new Set(['swe-2-max']));
+  assert.equal([...gatedCatalog.matrixUids].filter(uid => uid.includes('spark-medium')).length, 0);
+  assert.ok([...gatedCatalog.matrixUids].some(uid => uid.includes('swe-2-max')));
+});
+
 test('a scale qualifier joins the same tier family', () => {
   const roles = buildRoleLists(config(), [
     nativeLead('glm-x-high', 'GLM X High', [{ key: 'Effort', order: 1, name: 'High', controlType: 1 }]),
