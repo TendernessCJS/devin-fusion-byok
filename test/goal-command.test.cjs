@@ -6,12 +6,12 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
-const { createGoalController } = require('../src/runtime/goal/state.cjs');
-const store = require('../src/runtime/goal/store.cjs');
-const reportCli = require('../src/runtime/goal/report.cjs');
-const { parseGoalCommand, withGoalCommand } = require('../src/runtime/goal/continue.cjs');
+const { createGoalController } = require('../src/goal/state.cjs');
+const store = require('../src/goal/store.cjs');
+const reportCli = require('../src/goal/report.cjs');
+const { parseGoalCommand, withGoalCommand } = require('../src/goal/continue.cjs');
 
-const REPORT_CLI = path.resolve(__dirname, '../src/runtime/goal/report.cjs');
+const REPORT_CLI = path.resolve(__dirname, '../src/goal/report.cjs');
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const text = value => [{ type: 'text', text: value }];
@@ -21,7 +21,7 @@ const text = value => [{ type: 'text', text: value }];
 function transportFixture() {
   const api = { registerConnection() { return { dispose() {} }; } };
   const module = { exports: {} };
-  const source = fs.readFileSync(path.join(__dirname, '../src/runtime/goal/continue.cjs'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cjs'), 'utf8');
   vm.runInNewContext(source, {
     module, exports: module.exports, setTimeout, clearTimeout,
     require(name) {

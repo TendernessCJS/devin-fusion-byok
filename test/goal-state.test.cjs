@@ -5,11 +5,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { createGoalController } = require('../src/runtime/goal/state.cjs');
-const store = require('../src/runtime/goal/store.cjs');
-const reportCli = require('../src/runtime/goal/report.cjs');
+const { createGoalController } = require('../src/goal/state.cjs');
+const store = require('../src/goal/store.cjs');
+const reportCli = require('../src/goal/report.cjs');
 
-const REPORT_CLI = path.resolve(__dirname, '../src/runtime/goal/report.cjs');
+const REPORT_CLI = path.resolve(__dirname, '../src/goal/report.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function fakeScheduler() {

@@ -6,14 +6,14 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const vm = require('node:vm');
-const { createGoalController } = require('../src/runtime/goal/state.cjs');
-const { installGoalContinue } = require('../src/runtime/goal/continue.cjs');
-const store = require('../src/runtime/goal/store.cjs');
-const reportCli = require('../src/runtime/goal/report.cjs');
+const { createGoalController } = require('../src/goal/state.cjs');
+const { installGoalContinue } = require('../src/goal/continue.cjs');
+const store = require('../src/goal/store.cjs');
+const reportCli = require('../src/goal/report.cjs');
 
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
 const autoSource = fs.readFileSync(path.join(__dirname, '../src/runtime/auto-continue.cjs'), 'utf8');
-const goalSource = fs.readFileSync(path.join(__dirname, '../src/runtime/goal/continue.cjs'), 'utf8');
+const goalSource = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cjs'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function loadModule(source, filename, api) {
@@ -72,7 +72,7 @@ function integration(t, protocolVersion) {
   };
   const controller = createGoalController({
     root, transport, owner: crypto.randomBytes(16).toString('hex'), scheduler,
-    reportCliPath: path.resolve(__dirname, '../src/runtime/goal/report.cjs'), now: () => 1700000000000,
+    reportCliPath: path.resolve(__dirname, '../src/goal/report.cjs'), now: () => 1700000000000,
     nextRunDelayMs: 1500
   });
   t.after(() => { controller.dispose(); autoContinue.dispose(); goalContinue.dispose(); });

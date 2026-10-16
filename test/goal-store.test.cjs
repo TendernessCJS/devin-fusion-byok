@@ -6,10 +6,10 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const store = require('../src/runtime/goal/store.cjs');
-const report = require('../src/runtime/goal/report.cjs');
+const store = require('../src/goal/store.cjs');
+const report = require('../src/goal/report.cjs');
 
-const CLI = path.resolve(__dirname, '../src/runtime/goal/report.cjs');
+const CLI = path.resolve(__dirname, '../src/goal/report.cjs');
 function root(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'goal-store-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

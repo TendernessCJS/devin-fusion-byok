@@ -11,7 +11,7 @@ const { EventEmitter } = require('node:events');
 const filename = path.resolve(__dirname, '../src/extension.cjs');
 const realRequire = createRequire(filename);
 const actualBackend = require('../src/runtime/backend.cjs');
-const goalSource = fs.readFileSync(path.join(__dirname, '../src/runtime/goal/continue.cjs'), 'utf8');
+const goalSource = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cjs'), 'utf8');
 const autoSource = fs.readFileSync(path.join(__dirname, '../src/runtime/auto-continue.cjs'), 'utf8');
 const NATIVE_MAIN = '/native/main.js';
 const next = () => new Promise(resolve => setImmediate(resolve));
@@ -23,8 +23,8 @@ function loadWithStubbedVscode(source, name, api, extra = {}) {
     require(request) {
       if (request === 'node:crypto') return require('node:crypto');
       if (request === 'node:module') return { createRequire: () => () => ({ windsurfAcp: api, CancellationToken: { None: Symbol('None') } }) };
-      if (request === './store.cjs') return realRequire('../src/runtime/goal/store.cjs');
-      if (request === './prompts.cjs') return realRequire('../src/runtime/goal/prompts.cjs');
+      if (request === './store.cjs') return realRequire('../src/goal/store.cjs');
+      if (request === './prompts.cjs') return realRequire('../src/goal/prompts.cjs');
       if (Object.hasOwn(extra, request)) return extra[request];
       return realRequire(request);
     }
@@ -105,7 +105,7 @@ function fixture(t) {
     './runtime/cli-cache.cjs': { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
       inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
       refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } },
-    './runtime/goal/continue.cjs': loadWithStubbedVscode(goalSource, 'goal/continue.cjs', api),
+    './goal/continue.cjs': loadWithStubbedVscode(goalSource, 'goal/continue.cjs', api),
     './runtime/auto-continue.cjs': loadWithStubbedVscode(autoSource, 'auto-continue.cjs', api),
     './panel/manager.cjs': { ...realRequire('./panel/manager.cjs'), createManager: options => realRequire('./panel/manager.cjs').createManager(options) }
   };
@@ -197,7 +197,7 @@ test('disabling suspends an active goal and invalidates its run without sending 
   await f.receive({ type: 'goal.start', id: 'a', payload: { sessionId: 's1', objective: 'o', criteria: 'c' } });
   await f.commands.get('devinFusionByok.disable')();
   await f.settle();
-  const goalStore = realRequire('../src/runtime/goal/store.cjs');
+  const goalStore = realRequire('../src/goal/store.cjs');
   const record = goalStore.readGoal(f.root, 's1');
   assert.equal(record.status, 'paused');
   assert.equal(record.activeRun, null);
@@ -219,7 +219,7 @@ test('deactivation disposes the goal UI and releases goal ownership', async t =>
   await f.receive({ type: 'goal.start', id: 'a', payload: { sessionId: 's1', objective: 'o', criteria: 'c' } });
   await f.deactivate();
   await f.settle();
-  const goalStore = realRequire('../src/runtime/goal/store.cjs');
+  const goalStore = realRequire('../src/goal/store.cjs');
   assert.equal(goalStore.readOwnership(f.root, 's1'), null);
   const record = goalStore.readGoal(f.root, 's1');
   assert.equal(record.status, 'paused');
@@ -246,7 +246,7 @@ test('an untrusted workspace refuses to start a goal, reports the error, and dis
   assert.equal(snapshot.trusted, false);
   assert.equal(snapshot.goals.length, 0, 'no goal is created while untrusted');
   assert.equal(f.connector.sent.filter(request => request.method === 'session/prompt').length, 0, 'no prompt is sent while untrusted');
-  const goalStore = realRequire('../src/runtime/goal/store.cjs');
+  const goalStore = realRequire('../src/goal/store.cjs');
   assert.equal(goalStore.readGoal(f.root, 's1'), null);
   await f.deactivate();
 });

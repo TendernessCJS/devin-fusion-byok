@@ -13,11 +13,11 @@ const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } 
 const { readNativeModels, pushNativeModels, isUpstreamUid } = require('./runtime/native-models.cjs');
 const { mergeNativeEntry } = require('./runtime/native-cache.cjs');
 const { installAutoContinue } = require('./runtime/auto-continue.cjs');
-const { installGoalContinue } = require('./runtime/goal/continue.cjs');
+const { installGoalContinue } = require('./goal/continue.cjs');
 const { installAcpObserver } = require('./runtime/acp-observer.cjs');
 const { defaultDir: cliCacheDir, refreshStaleCliCaches } = require('./runtime/cli-cache.cjs');
 const { createPickerRefresh } = require('./runtime/picker-refresh.cjs');
-const { createGoalController } = require('./runtime/goal/state.cjs');
+const { createGoalController } = require('./goal/state.cjs');
 // Shared lifecycle state across activate/teardown/deactivate.
 const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
   cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
@@ -190,7 +190,7 @@ async function activate(context) {
           },
           isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false,
           isTrusted: () => vscode.workspace.isTrusted !== false,
-          reportCliPath: path.join(context.extensionPath, 'src/runtime/goal/report.cjs'),
+          reportCliPath: path.join(context.extensionPath, 'src/goal/report.cjs'),
           log
         });
       } catch { lifecycle.goalController = undefined; log('goal-controller-unavailable'); }

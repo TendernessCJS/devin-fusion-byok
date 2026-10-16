@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '../src/runtime/goal/continue.cjs'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cjs'), 'utf8');
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
 
 function fixture() {
