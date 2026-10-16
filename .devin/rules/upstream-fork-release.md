@@ -120,13 +120,13 @@ git log --oneline "$(git merge-base upstream/main HEAD)..HEAD" -- <file>
 git diff --name-only "$(git merge-base upstream/main HEAD)" HEAD -- src test
 ```
 
-截至 `1930f11`：**91 个条目**（src 49 / test 42），其中 **85 个现存**（src 46 / test 39）+ **6 个已删除**（src 3 / test 3）。
+截至 `6ed0a2b`：**97 个条目**（src 52 / test 45），其中 **91 个现存**（src 49 / test 42）+ **6 个已删除**（src 3 / test 3）。
 
-**src 现存（46）**：`catalog.cjs`、`catalog/{assignment,augment,build,identity,payload,roles}.cjs`、`config.cjs`、`extension.cjs`、`goal/{continue,prompts,report,state,store}.cjs`、`lifecycle/owned-settings.cjs`、`monitor-stats.cjs`、`panel/{context-view,controller,dom,fast-context-view,goal-view,manager,monitor-view,theme,update-view,view}.cjs`、`protocol/{responses,tracker}.cjs`、`proxy.cjs`、`runtime/{acp-observer,app-restart,auto-continue,backend,bridge,cli-cache,context-diagnostics,context-observer,context-state,ls-injection,monitor-client,monitor-store,native-cache,native-models,picker-refresh,retry}.cjs`、`update.cjs`
+**src 现存（49）**：`catalog.cjs`、`catalog/{assignment,augment,build,identity,payload,roles}.cjs`、`config.cjs`、`extension.cjs`、`goal/{continue,prompts,report,state,store}.cjs`、`lifecycle/owned-settings.cjs`、`monitor-stats.cjs`、`panel/{base-url,context-view,controller,dom,fast-context-view,goal-view,manager,monitor-view,theme,update-view,view}.cjs`、`protocol/{anthropic,chat,responses,tracker}.cjs`、`proxy.cjs`、`runtime/{acp-observer,app-restart,auto-continue,backend,bridge,cli-cache,context-diagnostics,context-observer,context-state,ls-injection,monitor-client,monitor-store,native-cache,native-models,picker-refresh,retry}.cjs`、`update.cjs`
 
 **src 已删除（3）**：`runtime/acp-injection.cjs`、`runtime/monitor.cjs`（→ `monitor-store.cjs`）、`panel/model.cjs`（→ `manager.cjs`）
 
-**test 现存（39）**：`app-restart`、`auto-continue`、`backend`、`bridge`、`catalog`、`cli-cache`、`config`、`context-diagnostics`、`context`、`extension-lifecycle`、`fast-context-panel`、`fast-context-view`、`fusion-options`、`goal-{command,extension,idle-regression,integration,state,store,tab,transport,view}`、`monitor-panel`、`monitor-stats`、`monitor`、`native-cache-sync`、`native-cache`、`native-models-sync`、`native-roles`、`panel-manager`、`panel-view`、`picker-refresh`、`proxy`、`retry`、`role-exclusions`、`runtime-manager`、`theme`、`update`、`vision-capabilities`
+**test 现存（42）**：`anthropic`、`app-restart`、`auto-continue`、`backend`、`base-url`、`bridge`、`catalog`、`cli-cache`、`config`、`context-diagnostics`、`context`、`extension-lifecycle`、`fast-context-panel`、`fast-context-view`、`fusion-options`、`goal-{command,extension,idle-regression,integration,state,store,tab,transport,view}`、`monitor-panel`、`monitor-stats`、`monitor`、`native-cache-sync`、`native-cache`、`native-models-sync`、`native-roles`、`panel-manager`、`panel-view`、`picker-refresh`、`protocol`、`proxy`、`retry`、`role-exclusions`、`runtime-manager`、`theme`、`update`、`vision-capabilities`
 
 **test 已删除（3）**：`acp-injection`、`fixtures/presets`、`fusion-presets`
 
