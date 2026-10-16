@@ -417,6 +417,155 @@ test('Chat usage carries cached tokens from details and the flat fallback', asyn
   assert.equal(num(flatUsage, 5), 25);
 });
 
+test('Chat legacy delta.function_call becomes a tool call with a stable id', async t => {
+  const metrics = [];
+  const proxy = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [{ delta: { function_call: { name: 'shell_command' } } }] }));
+    res.write(event({ choices: [{ delta: { function_call: { arguments: '{"cmd":' } } }] }));
+    res.write(event({ choices: [{ delta: { function_call: { arguments: '"ls"}' } } }] }));
+    res.write(event({ choices: [{ delta: {}, finish_reason: 'function_call' }] }));
+    res.end('data: [DONE]\n\n');
+  }, 'openai', {}, value => metrics.push(value));
+  const output = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+  const tools = output.messages.flatMap(m => fields(m, 6)).map(field => field.value);
+  assert.equal(tools.length, 1);
+  assert.equal(str(tools[0], 2), 'shell_command');
+  assert.equal(str(tools[0], 3), '{"cmd":"ls"}');
+  assert.ok(str(tools[0], 1).length > 0, 'legacy call gets a non-empty id');
+  assert.equal(num(output.messages.at(-1), 5), 10, 'finish_reason function_call ends as FUNCTION_CALL');
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].hasTools, true);
+  assert.ok(metrics[0].toolIds.includes(str(tools[0], 1)), 'panel toolIds carry the same minted id');
+  assert.equal(metrics[0].tps, null, 'tool calls never compute throughput');
+});
+
+test('Responses done snapshots emit refusal and reasoning blocks exactly once', async t => {
+  const cases = [
+    ['snapshot refusal', [{ type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'DECLINED' }] }] } }], 'DECLINED', ''],
+    ['item refusal', [{ type: 'response.output_item.done', output_index: 0, item: { type: 'message', content: [{ type: 'refusal', refusal: 'STOP' }] } }, { type: 'response.completed', response: { status: 'completed', output: [] } }], 'STOP', ''],
+    ['reasoning summary', [{ type: 'response.completed', response: { status: 'completed', output: [{ type: 'reasoning', summary: [{ type: 'summary_text', text: 'SUM' }] }] } }], '', 'SUM'],
+    ['reasoning content', [{ type: 'response.completed', response: { status: 'completed', output: [{ type: 'reasoning', content: [{ type: 'reasoning_text', text: 'RT' }] }] } }], '', 'RT'],
+    ['delta then done then completed', [
+      { type: 'response.refusal.delta', delta: 'A', output_index: 0, content_index: 0 },
+      { type: 'response.refusal.done', refusal: 'AB', output_index: 0, content_index: 0 },
+      { type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'AB' }] }] } },
+    ], 'AB', ''],
+  ];
+  for (const [name, values, wantText, wantThinking] of cases) await t.test(name, async st => {
+    const metrics = [];
+    const proxy = await bridge(st, async (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(values.map(event).join(''));
+    }, 'openai-responses', {}, value => metrics.push(value));
+    const output = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+    assert.equal(output.messages.map(m => str(m, 3)).join(''), wantText, 'visible text');
+    assert.equal(output.messages.map(m => str(m, 9)).join(''), wantThinking, 'thinking text');
+    assert.notEqual(metrics[0].firstOutputMs, null);
+    assert.equal(metrics[0].hasReasoning, wantThinking.length > 0);
+  });
+});
+
+test('Responses incomplete emits final output items and maps reasons', async t => {
+  for (const [detail, wantReason] of [['content_filter', 11], ['max_output_tokens', 3]]) await t.test(detail, async st => {
+    const proxy = await bridge(st, async (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end([
+        { type: 'response.output_text.delta', delta: 'part', output_index: 0, content_index: 0 },
+        { type: 'response.incomplete', response: { status: 'incomplete', incomplete_details: { reason: detail },
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'part' }] }] } },
+      ].map(event).join(''));
+    });
+    const output = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+    assert.equal(output.messages.map(m => str(m, 3)).join(''), 'part', 'final snapshot text is emitted once');
+    assert.equal(num(output.messages.at(-1), 5), wantReason, `reason ${detail} maps to ${wantReason}`);
+  });
+
+  await t.test('incomplete function_call is never emitted as a tool', async st => {
+    const proxy = await bridge(st, async (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end([
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'c1', name: 'sidekick' } },
+        { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"prompt":' },
+        { type: 'response.incomplete', response: { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' },
+          output: [{ type: 'function_call', call_id: 'c1', name: 'sidekick', arguments: '{"prompt":' }] } },
+      ].map(event).join(''));
+    });
+    const output = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+    assert.equal(output.messages.flatMap(m => fields(m, 6)).length, 0, 'truncated tool calls are dropped');
+    assert.equal(num(output.messages.at(-1), 5), 3);
+  });
+});
+
+test('parseChat preserves disableParallelToolCalls and tool strict across proto and JSON', () => {
+  const toolField = m(10, Buffer.concat([s(1, 'shell_command'), s(2, 'Run'), s(3, '{}'), v(12, 1)]));
+  const proto = parseChat(Buffer.concat([
+    s(21, 'local-model'), m(3, Buffer.concat([v(2, 1), s(3, 'hi')])), toolField, v(11, 1),
+  ]));
+  const camel = parseChat({ messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 'shell_command' }], disableParallelToolCalls: true });
+  const snake = parseChat({ messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 'shell_command' }], disable_parallel_tool_calls: true });
+  for (const [label, request] of [['proto', proto], ['camel', camel], ['snake', snake]]) {
+    assert.equal(request.disableParallelToolCalls, true, label);
+  }
+  assert.equal(proto.tools[0].strict, true, 'proto field 12');
+  const strictJson = parseChat({ messages: [], tools: [{ name: 'x', strict: true }] });
+  assert.equal(strictJson.tools[0].strict, true, 'JSON strict');
+  const defaults = parseChat({ messages: [], tools: [{ name: 'x' }] });
+  assert.equal(defaults.disableParallelToolCalls, false);
+  assert.equal(defaults.tools[0].strict, false);
+});
+
+test('disableParallelToolCalls and tool strict reach the OpenAI wire bodies only when set', () => {
+  const flagged = parseChat(Buffer.concat([
+    s(21, 'local-model'), m(3, Buffer.concat([v(2, 1), s(3, 'hi')])),
+    m(10, Buffer.concat([s(1, 'shell_command'), s(2, 'Run'), s(3, '{}'), v(12, 1)])), v(11, 1),
+  ]));
+  const chat = buildRequestBody(flagged, { model: 'm' }, { apiFormat: 'openai' });
+  assert.equal(chat.parallel_tool_calls, false);
+  assert.equal(chat.tools[0].function.strict, true);
+  const responses = buildRequestBody(flagged, { model: 'm' }, { apiFormat: 'openai-responses' });
+  assert.equal(responses.parallel_tool_calls, false);
+  assert.equal(responses.tools[0].strict, true);
+  const plain = buildRequestBody(parseChat({ messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 'shell_command' }] }), { model: 'm' }, { apiFormat: 'openai' });
+  assert.equal('parallel_tool_calls' in plain, false);
+  assert.equal(plain.tools[0].function.strict, false, 'native default false must be emitted verbatim');
+  const plainResponses = buildRequestBody(parseChat({ messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 'shell_command' }] }), { model: 'm' }, { apiFormat: 'openai-responses' });
+  assert.equal(plainResponses.tools[0].strict, false, 'responses emits the same default');
+});
+
+test('tool strict is forwarded verbatim to both OpenAI wire bodies', async t => {
+  const schema = { type: 'object', properties: { value: { type: 'string' } }, additionalProperties: false };
+  const requestFor = strict => {
+    const tool = [s(1, 'skill'), s(2, 'Pick'), s(3, JSON.stringify(schema))];
+    if (strict) tool.push(v(12, 1));
+    return Buffer.concat([s(21, 'local-model'), m(3, Buffer.concat([v(2, 1), s(3, 'hi')])), m(10, Buffer.concat(tool))]);
+  };
+  async function wireBody(apiFormat, request) {
+    const bodies = [];
+    const upstream = await server(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      bodies.push(JSON.parse(Buffer.concat(chunks)));
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('');
+    }, t);
+    const proxy = await server((req, res) => {
+      serveChat({ request: parseChat(request), route: { model: 'm', uid: 'u' }, provider: { baseUrl: `${upstream.url}/v1`, apiFormat }, res });
+    }, t);
+    await fetch(proxy.url);
+    return bodies[0];
+  }
+  for (const apiFormat of ['openai', 'openai-responses']) {
+    const toolAt = body => apiFormat === 'openai' ? body.tools[0].function : body.tools[0];
+    const unset = toolAt(await wireBody(apiFormat, requestFor(false)));
+    assert.equal(unset.strict, false, `${apiFormat} emits strict:false`);
+    assert.deepEqual(unset.parameters, schema, `${apiFormat} does not inject required`);
+    const flagged = toolAt(await wireBody(apiFormat, requestFor(true)));
+    assert.equal(flagged.strict, true, `${apiFormat} passes strict:true through`);
+    assert.deepEqual(flagged.parameters, schema);
+  }
+});
+
 test('incomplete, malformed and unterminated streams do not execute tools', async t => {
   for (const ending of ['incomplete', 'invalid-json', 'truncated']) await t.test(ending, async st => {
     const app = await bridge(st, async (req, res) => {

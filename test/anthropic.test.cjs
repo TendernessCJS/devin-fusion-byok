@@ -7,6 +7,7 @@ const { once } = require('node:events');
 const { s, v, m, str, num, fields } = require('../src/protocol/wire.cjs');
 const { parseChat } = require('../src/protocol/chat.cjs');
 const { serveChat, buildRequestBody } = require('../src/protocol/responses.cjs');
+const { createAnthropicAdapter } = require('../src/protocol/anthropic.cjs');
 const { modelEfforts } = require('../src/model-capabilities.cjs');
 
 const nativeMessage = (source, text, extra = []) => m(3, Buffer.concat([v(2, source), s(3, text), ...extra]));
@@ -79,8 +80,135 @@ test('Anthropic request body maps system, images, tool calls, merged tool result
     { type: 'tool_result', tool_use_id: 'call_b', content: 'second result', is_error: true }]);
   assert.deepEqual(next.slice(2).map(block => block.text), ['System message in the middle', 'User after tool']);
   assert.deepEqual(body.tools, [{ name: 'shell_command', description: 'Run a command', input_schema: { type: 'object', properties: { cmd: { type: 'string' } } } }]);
-  assert.deepEqual(body.tool_choice, { type: 'auto' });
+  assert.deepEqual(body.tool_choice, { type: 'tool', name: 'shell_command' });
   assert.equal(body.temperature, undefined);
+});
+
+test('Anthropic tool_choice follows the official SDK semantics', () => {
+  const tool = m(10, Buffer.concat([s(1, 'shell_command'), s(2, 'Run'), s(3, '{}')]));
+  const bodyWith = extra => buildRequestBody(parseChat(Buffer.concat([
+    s(21, 'local-claude'), nativeMessage(1, 'hi'), tool, ...(extra ? [extra] : []),
+  ])), { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  for (const type of ['auto', 'any', 'none'])
+    assert.deepEqual(bodyWith(m(12, s(1, type))).tool_choice, { type }, type);
+  assert.deepEqual(bodyWith(m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')]))).tool_choice,
+    { type: 'tool', name: 'shell_command' });
+  assert.equal(bodyWith(null).tool_choice, undefined, 'no choice omits tool_choice');
+});
+
+test('Anthropic strict tools and disable_parallel_tool_use reach the wire body only when set', () => {
+  const tool = m(10, Buffer.concat([s(1, 'shell_command'), s(2, 'Run'), s(3, '{}'), v(12, 1)]));
+  const requestWith = choice => parseChat(Buffer.concat([
+    s(21, 'local-claude'), nativeMessage(1, 'hi'), tool, v(11, 1), ...(choice ? [choice] : []),
+  ]));
+  const body = extra => buildRequestBody(extra, { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  assert.equal(body(requestWith(null)).tools[0].strict, true, 'strict tool passes through');
+  assert.deepEqual(body(requestWith(null)).tool_choice, { type: 'auto', disable_parallel_tool_use: true }, 'omitted choice gains the flag');
+  assert.deepEqual(body(requestWith(m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')])))).tool_choice,
+    { type: 'tool', name: 'shell_command', disable_parallel_tool_use: true });
+  assert.deepEqual(body(requestWith(m(12, s(1, 'none')))).tool_choice, { type: 'none' }, 'none stays clean');
+  const plain = body(parseChat(Buffer.concat([
+    s(21, 'local-claude'), nativeMessage(1, 'hi'),
+    m(10, Buffer.concat([s(1, 'shell_command'), s(2, 'Run'), s(3, '{}')])),
+  ])));
+  assert.equal('strict' in plain.tools[0], false, 'defaults add no vendor fields');
+  assert.equal(plain.tool_choice, undefined);
+});
+
+test('Anthropic forced tool_choice degrades only after a tool_choice refusal', async t => {
+  const tool = m(10, Buffer.concat([s(1, 'shell_command'), s(2, 'Run'), s(3, '{}')]));
+  const requestWith = choice => Buffer.concat([s(21, 'local-claude'), nativeMessage(1, 'hi'), tool, ...(choice ? [choice] : [])]);
+  const success = [
+    sse('message_start', { message: { usage: { input_tokens: 5, output_tokens: 1 } } }),
+    sse('content_block_start', { index: 0, content_block: { type: 'text', text: 'ok' } }),
+    sse('content_block_stop', { index: 0 }),
+    sse('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } }),
+    sse('message_stop', {}),
+  ];
+  async function runBoundary(request, failWith, succeedAfter) {
+    const requests = [], metrics = [];
+    const upstream = await server(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      requests.push(JSON.parse(Buffer.concat(chunks)));
+      if (succeedAfter && requests.length > 1) { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(success.join('')); return; }
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: failWith } }));
+    }, t);
+    const proxy = await server((req, res) => {
+      serveChat({ request: parseChat(request), route: { model: 'claude-opus-5-5', uid: 'local-claude' }, provider: { baseUrl: `${upstream}/v1`, apiKey: 'k', apiFormat: 'anthropic' }, res, onMetrics: value => metrics.push(value) });
+    }, t);
+    const messages = unpack(Buffer.from(await (await fetch(proxy)).arrayBuffer()));
+    return { requests, metrics, messages };
+  }
+
+  const refusal = 'tool_choice is not supported by this endpoint';
+  const forced = await runBoundary(requestWith(m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')]))), refusal, true);
+  assert.equal(forced.requests.length, 2, 'forced choice retries once after the refusal');
+  assert.deepEqual(forced.requests[1].tool_choice, { type: 'auto' });
+  assert.equal(forced.messages.map(message => str(message, 3)).join(''), 'ok');
+  assert.equal(forced.metrics[0].status, 'success');
+
+  for (const type of ['auto', 'none']) {
+    const passive = await runBoundary(requestWith(m(12, s(1, type))), refusal, true);
+    assert.equal(passive.requests.length, 1, `${type} is not forced and never retries`);
+    assert.equal(passive.metrics[0].code, 'upstream_http');
+  }
+
+  const other = await runBoundary(requestWith(m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')]))), 'context length exceeded', true);
+  assert.equal(other.requests.length, 1, 'a 400 unrelated to tool_choice never retries');
+  assert.equal(other.metrics[0].code, 'upstream_http');
+
+  const serialized = await runBoundary(Buffer.concat([
+    s(21, 'local-claude'), nativeMessage(1, 'hi'),
+    m(10, Buffer.concat([s(1, 'shell_command'), s(2, 'Run'), s(3, '{}')])),
+    m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')])), v(11, 1),
+  ]), refusal, true);
+  assert.equal(serialized.requests.length, 2);
+  assert.deepEqual(serialized.requests[1].tool_choice, { type: 'auto', disable_parallel_tool_use: true },
+    'the degrade-to-auto retry preserves disable_parallel_tool_use');
+});
+
+test('pause_turn is preserved as the raw finish reason without fabricating pause semantics', () => {
+  const adapter = createAnthropicAdapter();
+  const out = adapter({ type: 'message_delta', data: { delta: { stop_reason: 'pause_turn' } } });
+  const chunk = out.find(entry => entry.data?.choices?.[0]?.finish_reason);
+  assert.equal(chunk.data.choices[0].finish_reason, 'pause_turn');
+  assert.equal(chunk.data.choices[0].delta?.content, undefined, 'no fabricated pause text');
+});
+
+test('Anthropic pause_turn ends as stop 2 and is attributed through provider-stop', async t => {
+  const pause = [
+    sse('message_start', { message: { usage: { input_tokens: 5, output_tokens: 1 } } }),
+    sse('content_block_start', { index: 0, content_block: { type: 'text', text: 'partial' } }),
+    sse('content_block_stop', { index: 0 }),
+    sse('message_delta', { delta: { stop_reason: 'pause_turn' }, usage: { output_tokens: 2 } }),
+    sse('message_stop', {}),
+  ];
+  const logs = [];
+  async function runPause(events) {
+    const upstream = await server((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(events.join('')); }, t);
+    const proxy = await server((req, res) => {
+      serveChat({ request: parseChat(nativeRequest()), route: { model: 'claude-opus-5-5', uid: 'local-claude' },
+        provider: { baseUrl: `${upstream}/v1`, apiKey: 'k', apiFormat: 'anthropic' }, res,
+        log: event => logs.push(event) });
+    }, t);
+    const response = await fetch(proxy);
+    return { status: response.status, messages: unpack(Buffer.from(await response.arrayBuffer())) };
+  }
+  const paused = await runPause(pause);
+  assert.equal(paused.status, 200);
+  assert.equal(num(paused.messages.at(-1), 5), 2, 'ACP stop reason stays 2 — pause is not fabricated');
+  const entry = logs.find(event => event.event === 'provider-stop');
+  assert.ok(entry, 'provider-stop is recorded');
+  assert.equal(entry.reason, 'pause_turn');
+  assert.equal(entry.model, 'claude-opus-5-5');
+
+  logs.length = 0;
+  const normal = await runPause(pause.map(line => line.replace('"pause_turn"', '"end_turn"')));
+  assert.equal(normal.status, 200);
+  assert.equal(num(normal.messages.at(-1), 5), 2);
+  assert.equal(logs.find(event => event.event === 'provider-stop'), undefined, 'ordinary end_turn produces no noise');
 });
 
 test('Anthropic stream relays text, thinking and usage with x-api-key auth', async t => {

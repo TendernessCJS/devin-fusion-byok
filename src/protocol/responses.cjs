@@ -8,6 +8,7 @@ const { isAnthropicFormat, anthropicHeaders, buildAnthropicBody, createAnthropic
 const MAX_SSE_BUFFER = 64 * 1024 * 1024;
 
 function isChatFormat(format = '') { return /chat[-_\/]?completions|^(?:chat|openai)$/.test(format); }
+const STANDARD_CHAT_FINISH = new Set(['stop', 'length', 'tool_calls', 'content_filter', 'function_call']);
 function endpoint(provider) {
   const url = new URL(provider.baseUrl);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid provider URL');
@@ -25,7 +26,8 @@ function endpoint(provider) {
 function forcedToolChoice(body) {
   const choice = body?.tool_choice;
   if (choice === undefined || choice === null) return false;
-  return choice !== 'auto' && choice !== 'none';
+  const type = typeof choice === 'object' ? choice.type : choice;
+  return type !== undefined && type !== 'auto' && type !== 'none';
 }
 
 // Bounded read of an error response, used only to classify a refusal. The text
@@ -81,6 +83,7 @@ function buildRequestBody(request, route, provider) {
   }
   const body = { model: route.model, [chat ? 'messages' : 'input']: messages, stream: true };
   if (chat) body.stream_options = { include_usage: true };
+  if (request.disableParallelToolCalls === true) body.parallel_tool_calls = false;
   const maxTokens = request.maxTokens ?? route.maxOutputTokens ?? route.maxTokens ?? provider.maxOutputTokens ?? provider.maxTokens;
   if (Number.isSafeInteger(maxTokens) && maxTokens > 0) body[chat ? 'max_completion_tokens' : 'max_output_tokens'] = maxTokens;
   if (route.effort) {
@@ -88,7 +91,12 @@ function buildRequestBody(request, route, provider) {
     else body.reasoning = { effort: route.effort, ...(route.effort === 'none' ? {} : { summary: 'auto' }) };
   }
   if (request.tools?.length) {
-    body.tools = request.tools.map(tool => chat ? { type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } } : { type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters });
+    // Native strict is a plain proto3 bool, so an unset field and an explicit
+    // false are indistinguishable; always send the boolean, because omitting it
+    // lets a Responses server auto-enable strict validation on a compatible schema.
+    body.tools = request.tools.map(tool => chat
+      ? { type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters, strict: tool.strict === true } }
+      : { type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters, strict: tool.strict === true });
     const choice = request.toolChoice;
     if (choice?.name) body.tool_choice = chat ? { type: 'function', function: { name: choice.name } } : { type: 'function', name: choice.name };
     else if (choice) {
@@ -201,6 +209,14 @@ function processor(id, uid, chat, emit) {
     } else if (done && value.type === 'message') {
       for (const [contentIndex, part] of (value.content || []).entries()) {
         if (part.type === 'output_text') await text(`${index}:${contentIndex}`, part.text, true);
+        if (part.type === 'refusal') await text(`refusal:${index}:${contentIndex}`, part.refusal, true);
+      }
+    } else if (done && value.type === 'reasoning') {
+      for (const [summaryIndex, part] of (value.summary || []).entries()) {
+        if (part.type === 'summary_text') await text(`reasoning:${index}:${summaryIndex}`, part.text, true, true);
+      }
+      for (const [contentIndex, part] of (value.content || []).entries()) {
+        if (part.type === 'reasoning_text') await text(`reasoning_text:${index}:${contentIndex}`, part.text, true, true);
       }
     }
   };
@@ -231,6 +247,12 @@ function processor(id, uid, chat, emit) {
           // semantic output — they must not feed `texts` or the empty-output check.
           if (delta.signature) await emit(signatureChunk(id, delta.signature));
           if (delta.thinking_redacted) await emit(redactedThinkingChunk(id));
+          if (delta.function_call) {
+            const call = getCall('function_call');
+            call.id = call.id || `${id}:0`;
+            if (delta.function_call.name) call.name += delta.function_call.name;
+            if (typeof delta.function_call.arguments === 'string') call.arguments += delta.function_call.arguments;
+          }
           for (const tool of delta.tool_calls || []) {
             const call = getCall(tool.index ?? 0);
             if (tool.id) call.id += tool.id;
@@ -267,7 +289,11 @@ function processor(id, uid, chat, emit) {
           for (const [index, value] of (data.response?.output || []).entries()) await item(value, index, true);
           terminal = true;
           break;
-        case 'response.incomplete': terminal = true; reason = 3; break;
+        case 'response.incomplete':
+          for (const [index, value] of (data.response?.output || []).entries()) await item(value, index, true);
+          terminal = true;
+          reason = data.response?.incomplete_details?.reason === 'content_filter' ? 11 : 3;
+          break;
         case 'response.failed':
         case 'error': {
           const err = new Error('Upstream response failed');
@@ -383,7 +409,9 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     if (!upstream.ok && upstream.status === 400 && forcedToolChoice(body)) {
       const detail = await readErrorDetail(upstream);
       if (/tool_choice/i.test(detail)) {
-        body = { ...body, tool_choice: 'auto' };
+        body = { ...body, tool_choice: anthropic
+          ? { type: 'auto', ...(body.tool_choice?.disable_parallel_tool_use ? { disable_parallel_tool_use: true } : {}) }
+          : 'auto' };
         upstream = await send(body);
       }
     }
@@ -455,6 +483,8 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       throw err;
     }
 
+    const providerStop = metrics.providerStopReason?.();
+    if (providerStop && !STANDARD_CHAT_FINISH.has(providerStop)) record({ event: 'provider-stop', model: route.model, reason: providerStop });
     res.end(frame(Buffer.from('{}'), 2));
     outcome = 'success';
     record({ event: 'chat-complete', model: route.model, status, toolNames, requestId: id });

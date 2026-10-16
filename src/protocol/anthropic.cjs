@@ -66,17 +66,23 @@ function buildAnthropicBody(request, route, provider) {
   if (EFFORTS.has(effort)) body.output_config = { effort };
   if (request.tools?.length) {
     body.tools = request.tools.map(tool => ({ name: tool.name, description: tool.description,
-      input_schema: tool.parameters && typeof tool.parameters === 'object' ? tool.parameters : { type: 'object', properties: {} } }));
-    // Current Claude models reject forced tool_choice (any/tool), so forced choices degrade to auto.
+      input_schema: tool.parameters && typeof tool.parameters === 'object' ? tool.parameters : { type: 'object', properties: {} },
+      ...(tool.strict === true ? { strict: true } : {}) }));
+    // Forced choices only degrade to auto after the provider refuses them (400 on tool_choice).
     const choice = request.toolChoice;
     const type = typeof choice === 'string' ? choice : choice?.type;
-    if (type === 'none') body.tool_choice = { type: 'none' };
+    if (['auto', 'any', 'none'].includes(type)) body.tool_choice = { type };
+    else if (choice?.name) body.tool_choice = { type: 'tool', name: choice.name };
     else if (choice) body.tool_choice = { type: 'auto' };
+    if (request.disableParallelToolCalls === true && body.tool_choice?.type !== 'none')
+      body.tool_choice = { ...(body.tool_choice || { type: 'auto' }), disable_parallel_tool_use: true };
   }
   return body;
 }
 
-const FINISH = { max_tokens: 'length', model_context_window_exceeded: 'length', refusal: 'content_filter' };
+// ACP has no pause semantics, so pause_turn still ends as a normal stop, but
+// the original reason is preserved for attribution through provider-stop logs.
+const FINISH = { max_tokens: 'length', model_context_window_exceeded: 'length', refusal: 'content_filter', pause_turn: 'pause_turn' };
 
 function createAnthropicAdapter() {
   const blocks = new Map();

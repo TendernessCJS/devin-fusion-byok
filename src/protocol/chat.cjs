@@ -54,8 +54,9 @@ function parseChat(data) {
       modelEnum: camel(data, 'internalChatModel', 'internal_chat_model') ?? data.model ?? 0,
       systemPrompt: data.prompt ?? camel(data, 'systemPrompt', 'system_prompt') ?? '',
       messages: (camel(data, 'chatMessagePrompts', 'chat_message_prompts') ?? data.messages ?? data.prompts ?? []).map(jsonMessage),
-      tools: (data.tools || []).map(tool => ({ name: tool.name, description: tool.description || '', parameters: schema(camel(tool, 'jsonSchemaString', 'json_schema_string') ?? camel(tool, 'parametersJson', 'parameters_json') ?? camel(tool, 'inputSchema', 'input_schema') ?? tool.parameters) })),
+      tools: (data.tools || []).map(tool => ({ name: tool.name, description: tool.description || '', parameters: schema(camel(tool, 'jsonSchemaString', 'json_schema_string') ?? camel(tool, 'parametersJson', 'parameters_json') ?? camel(tool, 'inputSchema', 'input_schema') ?? tool.parameters), strict: Boolean(tool.strict) })),
       toolChoice: jsonToolChoice(camel(data, 'toolChoice', 'tool_choice')),
+      disableParallelToolCalls: Boolean(camel(data, 'disableParallelToolCalls', 'disable_parallel_tool_calls')),
       maxTokens: camel(data, 'maxTokens', 'max_tokens'),
     };
   }
@@ -63,8 +64,9 @@ function parseChat(data) {
   return {
     modelUid: str(data, 21), modelEnum: num(data, 6), systemPrompt: str(data, 2),
     messages: fields(data, 3).map(field => protoMessage(field.value)),
-    tools: fields(data, 10).map(({ value }) => ({ name: str(value, 1), description: str(value, 2), parameters: schema(str(value, 3)) })),
+    tools: fields(data, 10).map(({ value }) => ({ name: str(value, 1), description: str(value, 2), parameters: schema(str(value, 3)), strict: Boolean(num(value, 12)) })),
     toolChoice: choice ? { type: str(choice, 1), name: str(choice, 2) } : undefined,
+    disableParallelToolCalls: Boolean(num(data, 11)),
     maxTokens: undefined,
   };
 }

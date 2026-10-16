@@ -25,7 +25,7 @@ tail -c +<偏移> <bundle> | head -c 600
 
 ## 出站：`exa.api_server_pb.GetChatMessageResponse`（chunk 全集）
 
-下表是**逐字段读出的完整 23 个字段**（2026-10-16 由 `sessions.desktop.main.js` 偏移 5980624 处的 `newFieldList` 原文核出），不是只列我们用到的那几个——只列子集曾让人以为「字段号不连续」。
+下表是**逐字段读出的完整 28 个字段**（由 `sessions.desktop.main.js` 的 `newFieldList` 原文核出；早期读数 23，当前安装版 schema 已扩到 28），不是只列我们用到的那几个——只列子集曾让人以为「字段号不连续」。
 
 | 号 | 字段 | 类型 | 本仓用法 |
 | --- | --- | --- | --- |
@@ -52,6 +52,11 @@ tail -c +<偏移> <bundle> | head -c 600
 | 21 | `delta_signature_type` | string | 未发；**已证不需要**，见下 |
 | 22 | `committed_acu_cost` | double | — |
 | 23 | `actual_model_uid` | string | ✓ `stopChunk` 尾部 |
+| 24 | `arena_invocation_cap_reached` | bool | — |
+| 25 | `phase` | string | — |
+| 26 | `committed_quota_cost_basis_points` | int64 optional | — |
+| 27 | `committed_overage_cost_cents` | int64 optional | — |
+| 28 | `response_dimension_groups` | repeated message | — |
 
 ## 入站：`exa.chat_pb.ChatMessagePrompt`（请求侧，已由 `parseChat` 消费）
 
@@ -74,6 +79,15 @@ tail -c +<偏移> <bundle> | head -c 600
 | 19 | `phase` | string |
 
 （其余为 `message_id`/`source`/`num_tokens`/`safe_for_code_telemetry`/`prompt_cache_options`/`prompt_annotation_ranges`/`videos`/`documents`。）
+
+## 入站补充：`GetChatMessageRequest` 与 `ChatToolDefinition`
+
+- `GetChatMessageRequest` **字段 11 `disable_parallel_tool_calls`**（bool）：`parseChat` 归一为 `disableParallelToolCalls`（默认 false，JSON 兼容 `disableParallelToolCalls`/`disable_parallel_tool_calls`）。仅当显式 `true` 才出站：OpenAI 两路 → `parallel_tool_calls:false`；Anthropic → `tool_choice.disable_parallel_tool_use:true`（choice 缺省时补 `{type:'auto',disable_parallel_tool_use:true}`；`type:'none'` 保持纯净不附加）。
+- `ChatToolDefinition` **字段 12 `strict`**（bool）：归一为 `tool.strict`。字段表原文是 `{no:12,name:"strict",kind:"scalar",T:8}`——**没有 `opt:!0`**，即普通 proto3 bool，**无法区分「未设置」与「显式 false」**，两者在原生侧都是 `false`。
+- **`strict` 与 `disable_parallel_tool_calls` 的出站策略刻意不同**：
+  - `strict`：OpenAI 两路（`openai` / `openai-responses`）**始终**写布尔 `strict: tool.strict === true`。理由是官方 Responses SDK 明说「省略 `strict` 时会尝试启用严格校验」（`strict?: boolean \| null` 的注释原文），所以「省略」≠「原生 false」，无法表达原生意图；Anthropic 仍只在 `true` 时写顶层 `strict:true`（Anthropic 没有这种「省略即自动严格」的语义）。
+  - `disable_parallel_tool_calls`：**只透传显式 `true`**，默认/未设置时不在 body 里写厂商字段，保持对老网关的兼容。
+- 实测（2026-10-16，真实端点）：`strict:false` 与省略 strict 两种写法在 DeepSeek `deepseek-flash`（responses）与 Moonshot `kimi-k2.6`（chat）上**都是 200**，参数键均为 `["source"]` 且无空串值（`{path, source}` 二选一 schema）。
 
 ## ⚠️ 陷阱：`CompletionDelta` 是**另一个消息**，字段号整体错位
 
