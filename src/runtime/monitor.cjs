@@ -39,7 +39,7 @@ function semanticOutput(event, chat) {
     items.some(item => item?.type === 'function_call' && (item.name || item.arguments));
   return { output: Boolean(text || delta || tool), text: Boolean(text) };
 }
-function createTracker({ id, request, route, provider, now = () => performance.now(), startedAt = new Date().toISOString() }) {
+function createTracker({ id, route, provider, now = () => performance.now(), startedAt = new Date().toISOString() }) {
   const start = now();
   let firstOutput = null, firstText = null, firstResponse = null, lastOutput = null, usage = null, complete = false;
   let hasTools = false, hasReasoning = false, terminalAt = null;
@@ -98,7 +98,7 @@ function createTracker({ id, request, route, provider, now = () => performance.n
         tps, decodeMs, visibleTokens, hasTools, hasReasoning,
         throughputTps: !inconsistent && usage?.outputTokens != null && durationMs > 0 ? usage.outputTokens * 1000 / durationMs : null,
         toolIds: [...new Set([...chatToolIds.values(), ...responseToolIds.values()].map(identifier).filter(Boolean))].slice(-32),
-        usageComplete: complete, messageIds: [...new Set((request.messages || []).map(m => identifier(m.messageId)).filter(Boolean))].slice(-8) };
+        usageComplete: complete };
     }
   };
 }
@@ -106,11 +106,10 @@ function normalize(record) {
   if (!identifier(record?.id) || !['success', 'error', 'cancelled'].includes(record.status) || !Number.isFinite(Date.parse(record.startedAt))) return null;
   const result = { id: record.id, startedAt: record.startedAt, model: identifier(record.model) || 'unknown',
     providerId: identifier(record.providerId) || '', effort: identifier(record.effort), status: record.status,
-    code: identifier(record.code), httpStatus: token(record.httpStatus) ?? 0, usageComplete: record.usageComplete === true,
-    messageIds: Array.isArray(record.messageIds) ? [...new Set(record.messageIds.map(identifier).filter(Boolean))].slice(-8) : [] };
-  // The stored record carries no `sessionId`/`attribution`/`role`: attribution is
-  // computed per snapshot by `associate`, so a placeholder here is a claim nothing
-  // has verified. Every line of the real monitor.jsonl read
+    code: identifier(record.code), httpStatus: token(record.httpStatus) ?? 0, usageComplete: record.usageComplete === true };
+  // The stored record carries no `sessionId`/`attribution`/`messageIds`/`role`:
+  // attribution is computed per snapshot by `associate`, so a placeholder here is
+  // a claim nothing has verified. Every line of the real monitor.jsonl read
   // `"attribution":"unassigned","role":"unknown"` while the same records were
   // attributed to sessions in the panel, and `role` is read nowhere at all.
   for (const key of ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens']) result[key] = token(record[key]);
@@ -137,30 +136,13 @@ function normalize(record) {
 }
 const quote = value => "'" + value.replace(/'/g, "''") + "'";
 const TOOL_LOOKUP_TIMEOUT_MS = 8000;
-// The message-id branch scans message_nodes without an index (json_extract in
-// WHERE), so it is the expensive half. It runs as a bounded supplement: a
-// timeout there must never discard the tool-id matches, which are indexed.
-// Measured on a real 8.1 GB sessions.db with 527k message_nodes rows: the scan
-// takes ~31s, so on a database of that size this branch cannot finish inside the
-// bound and always reports a timeout. It is off unless a caller opts in.
-const MESSAGE_LOOKUP_TIMEOUT_MS = 1500;
-// A killed child is a timeout, not an unreadable database. The two need
-// different copy: "timeout" says the query is too expensive for the bound,
-// "unavailable" would claim the database itself cannot be read.
-function lookupFailureStatus(error) {
-  return error?.timedOut === true ? 'timeout' : 'unavailable';
-}
 
 function lookupRows(databasePath, sql, timeoutMs) {
   return new Promise((resolve, reject) => {
     let child;
     try {
       child = execFile('/usr/bin/sqlite3', ['-readonly', '-json', databasePath], { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => {
-        if (error) {
-          reject(Object.assign(new Error(error.killed === true ? 'session_lookup_timeout' : 'session_lookup_unavailable'),
-            { timedOut: error.killed === true }));
-          return;
-        }
+        if (error) { reject(new Error('session_lookup_unavailable')); return; }
         try { resolve(JSON.parse(stdout || '[]')); } catch { reject(new Error('session_lookup_invalid')); }
       });
     } catch { reject(new Error('session_lookup_unavailable')); return; }
@@ -168,29 +150,21 @@ function lookupRows(databasePath, sql, timeoutMs) {
     child.stdin.end(sql);
   });
 }
-async function sessionMatches(databasePath, ids, toolIds = [], { messageLookup = false } = {}) {
-  const result = {
-    rows: [],
-    tools: toolIds.length ? 'ready' : 'not-needed',
-    messages: !messageLookup ? 'disabled' : ids.length ? 'ready' : 'not-needed'
-  };
-  if (toolIds.length) {
-    const tools = toolIds.map(quote).join(',') || "''";
-    try {
-      result.rows.push(...await lookupRows(databasePath, `.timeout 1000\nSELECT session_id, tool_call_id AS message_id, 'tool' AS kind FROM tool_call_state WHERE tool_call_id IN (${tools});\n`, TOOL_LOOKUP_TIMEOUT_MS));
-    } catch {
-      result.tools = 'unavailable';
-      result.messages = result.messages === 'ready' ? 'not-needed' : result.messages;
-      return result;
-    }
-  }
-  if (result.messages === 'ready') {
-    const values = ids.map(quote).join(',') || "''";
-    try {
-      result.rows.push(...await lookupRows(databasePath, `.timeout 1000\nSELECT DISTINCT session_id, json_extract(chat_message, '$.message_id') AS message_id, 'message' AS kind FROM message_nodes WHERE json_extract(chat_message, '$.message_id') IN (${values});\n`, MESSAGE_LOOKUP_TIMEOUT_MS));
-    } catch (error) { result.messages = lookupFailureStatus(error); /* supplemental branch: its failure must not discard indexed matches */ }
-  }
-  return result;
+// Attribution reads `tool_call_state` only. Its composite primary key
+// `(session_id, tool_call_id)` makes the `tool_call_id IN (...)` probe a covering
+// index scan (measured 58ms on a real 8.1 GB sessions.db). The `message_nodes`
+// side was removed instead of kept as an opt-in: matching a response id against
+// `json_extract(chat_message, '$.message_id')` has no index to use and took ~31s
+// on the same database, so it could never finish inside any sane bound — the
+// option only existed to be permanently off, which made `response-id`
+// attribution and the `messageIds` it keyed on unreachable dead weight.
+async function sessionMatches(databasePath, toolIds = []) {
+  if (!toolIds.length) return { rows: [], tools: 'not-needed' };
+  const tools = toolIds.map(quote).join(',') || "''";
+  try {
+    const rows = await lookupRows(databasePath, `.timeout 1000\nSELECT session_id, tool_call_id AS message_id FROM tool_call_state WHERE tool_call_id IN (${tools});\n`, TOOL_LOOKUP_TIMEOUT_MS);
+    return { rows, tools: 'ready' };
+  } catch { return { rows: [], tools: 'unavailable' }; }
 }
 // Labels are looked up per snapshot, never persisted: titles are user content
 // and must not leak into monitor.jsonl. Any failure degrades to no labels.
@@ -217,30 +191,27 @@ async function sessionLabels(databasePath, ids) {
   }
   return { labels, status: 'ready' };
 }
+// Attribution vocabulary, in order of what can be proven: a single session for
+// the record's tool ids, several sessions (ambiguous, never guessed), or nothing.
 function associate(records, rows, { toolLookupUnavailable = false } = {}) {
   const mapping = new Map();
   for (const row of rows) {
     if (!identifier(row.message_id) || !identifier(row.session_id)) continue;
-    const key = (row.kind === 'tool' ? 'tool:' : 'message:') + row.message_id;
-    if (!mapping.has(key)) mapping.set(key, new Set());
-    mapping.get(key).add(row.session_id);
+    if (!mapping.has(row.message_id)) mapping.set(row.message_id, new Set());
+    mapping.get(row.message_id).add(row.session_id);
   }
   return records.map(record => {
-    let sessions = mapping.get('message:' + record.id), attribution = 'response-id';
-    if (!sessions?.size) {
-      attribution = 'tool-id';
-      sessions = new Set((record.toolIds || []).flatMap(id => [...(mapping.get('tool:' + id) || [])]));
-    }
-    const { messageIds, toolIds, ...publicRecord } = record;
-    const sessionId = sessions?.size === 1 ? [...sessions][0] : null;
+    const { toolIds, ...publicRecord } = record;
+    const sessions = new Set((toolIds || []).flatMap(id => [...(mapping.get(id) || [])]));
+    const sessionId = sessions.size === 1 ? [...sessions][0] : null;
     return { ...publicRecord, sessionId,
-      attribution: sessionId ? attribution : sessions?.size > 1 ? 'ambiguous' : 'unassigned',
-      attributionReason: sessionId ? null : sessions?.size > 1 ? 'ambiguous-match'
-        : !(record.toolIds || []).length ? 'no-tool-ids'
+      attribution: sessionId ? 'tool-id' : sessions.size > 1 ? 'ambiguous' : 'unassigned',
+      attributionReason: sessionId ? null : sessions.size > 1 ? 'ambiguous-match'
+        : !(toolIds || []).length ? 'no-tool-ids'
         : toolLookupUnavailable ? 'lookup-unavailable' : 'tool-id-unmatched' };
   });
 }
-function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/share/devin/cli/sessions.db'), messageLookup = false }) {
+function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/share/devin/cli/sessions.db') }) {
   const file = path.join(root, 'monitor.jsonl');
   let records = [], storageError = false, pending = null, cached = null, cachedAt = 0, revision = 0;
   let projectedCount = 0, loadFailed = false;
@@ -326,9 +297,9 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
     const current = records.slice(), currentRevision = revision;
     pending = (async () => {
       await queue;
-      let lookup = { rows: [], tools: 'not-needed', messages: 'disabled' };
-      try { lookup = await sessionMatches(databasePath, current.map(r => r.id), [...new Set(current.flatMap(r => r.toolIds || []))], { messageLookup }); }
-      catch { lookup = { rows: [], tools: 'unavailable', messages: lookup.messages }; }
+      let lookup = { rows: [], tools: 'not-needed' };
+      try { lookup = await sessionMatches(databasePath, [...new Set(current.flatMap(r => r.toolIds || []))]); }
+      catch { lookup = { rows: [], tools: 'unavailable' }; }
       const sessionStatus = lookup.tools === 'unavailable' ? 'unavailable' : 'ready';
       const publicRecords = associate(current, lookup.rows, { toolLookupUnavailable: lookup.tools === 'unavailable' }).reverse();
       const groups = new Map();
@@ -343,7 +314,7 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
       const sessions = [...groups.values()].map(list => {
         const sessionId = list[0].sessionId, label = sessionId ? labels.get(sessionId) : null;
         return { sessionId, title: label?.title ?? null, lastActivityAt: label?.lastActivityAt ?? null,
-          attribution: list.every(r => r.attribution === 'response-id') ? 'response-id' : sessionId ? 'tool-id' : 'unassigned',
+          attribution: sessionId ? 'tool-id' : 'unassigned',
           attributionSummary: attributionStats(list),
           summary: summarize(list), records: list };
       });
@@ -354,7 +325,7 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
         (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
       const value = { version: 1, status: storageError || sessionStatus !== 'ready' || labelsStatus === 'unavailable' ? 'degraded' : 'ready',
         storageError, sessionStatus,
-        lookupStatus: { tools: lookup.tools, messages: lookup.messages, labels: labelsStatus },
+        lookupStatus: { tools: lookup.tools, labels: labelsStatus },
         storageDiagnostics: { code: storageCode, pendingWrites, failedWrites, persistenceBlocked: loadFailed },
         attributionSummary: attributionStats(publicRecords),
         retentionLimit: LIMIT, records: publicRecords, summary: summarize(publicRecords), sessions };
@@ -364,4 +335,4 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
   }
   return { record, snapshot, flush, close };
 }
-module.exports = { createMonitor, createTracker, usageOf, semanticOutput, summarize, associate, attributionStats, lookupFailureStatus };
+module.exports = { createMonitor, createTracker, usageOf, semanticOutput, summarize, associate, attributionStats };

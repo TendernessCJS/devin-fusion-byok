@@ -270,7 +270,7 @@ function processor(id, uid, chat, emit) {
 
 async function serveChat({ request, route, provider, res, signal, log = () => {}, timeouts = {}, onMetrics = () => {} }) {
   const id = randomUUID();
-  const metrics = createTracker({ id, request, route, provider });
+  const metrics = createTracker({ id, route, provider });
   let outcome = 'error', outcomeCode = null;
   const upstreamController = new AbortController();
   const abort = () => upstreamController.abort();

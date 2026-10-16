@@ -64,7 +64,7 @@ function fixture(t, initial = {}) {
       defaultConfig: realRequire('./config.cjs').defaultConfig,
       pruneRetiredKeys: realRequire('./config.cjs').pruneRetiredKeys, discover: async () => 2,
     },
-    './catalog.cjs': { migrateFusionConfig: () => false, staleFusionUids: () => [],
+    './catalog.cjs': { staleFusionUids: () => [],
       buildCatalog: config => ({ models: config.providers?.length
         ? [{ uid: 'dfbyok-own', label: 'own', kind: 'model' },
           { uid: 'fusion-dfbyok-selected', label: 'CPA Fusion', kind: 'matrix' },
@@ -224,14 +224,15 @@ test('a stale or absent remembered combination never replaces an official or mis
     assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-official');
   }
 });
-test('activation prunes retired config keys without touching preset keys', async t => {
-  const f = fixture(t, { config: { sidekicks: [], roleExclusions: { lead: [], sidekick: [] },
-    fusionPresets: [{ id: 'p1', name: 'P1' }] } });
+test('activation prunes every retired config key', async t => {
+  const f = fixture(t, { config: { sidekicks: [{ providerId: 'p', model: 'x' }], roleExclusions: { lead: [], sidekick: [] },
+    fusionPresets: [{ id: 'p1', name: 'P1' }], defaultFusionUid: 'fusion-dfbyok-gone', fusionMatrix: true } });
   await f.activate(f.context);
   const written = JSON.parse(fs.readFileSync(f.configFile, 'utf8'));
-  assert.ok(!Object.hasOwn(written, 'sidekicks'), 'retired sidekicks key is pruned');
-  assert.ok(!Object.hasOwn(written, 'roleExclusions'), 'empty role maps are pruned');
-  assert.ok(Object.hasOwn(written, 'fusionPresets'), 'preset data is never pruned');
+  for (const key of ['sidekicks', 'roleExclusions', 'fusionPresets', 'defaultFusionUid', 'fusionMatrix']) {
+    assert.ok(!Object.hasOwn(written, key), key + ' is a retired key with no reader left');
+  }
+  assert.deepEqual(written.providers, [{ id: 'cpa', name: 'CPA', models: [] }], 'nothing else in the config is touched');
 });
 test('cli cache checks are confined to the stubbed directory and see every own uid', async t => {
   const f = fixture(t);

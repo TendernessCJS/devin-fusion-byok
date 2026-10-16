@@ -52,7 +52,7 @@ function monitorScript() {
     const EXTRA = ${JSON.stringify(COLUMNS.map(([, extra]) => !!extra))};
     const format = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
     const metricFormat = (key, value) => key.endsWith('Ms') && typeof value === 'number' && Number.isFinite(value) ? (value / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) : format(value);
-    const attribution = value => ({ 'response-id': '输出 ID 确认', 'tool-id': '工具 ID 确认', ambiguous: '存在歧义', unassigned: '未归属' }[value] || '未知');
+    const attribution = value => ({ 'tool-id': '工具 ID 确认', ambiguous: '存在歧义', unassigned: '未归属' }[value] || '未知');
     const attributionReason = value => ({ 'ambiguous-match': '存在歧义', 'no-tool-ids': '无可用工具 ID', 'lookup-unavailable': '归属查询不可用', 'tool-id-unmatched': '工具状态未匹配' }[value]);
     const stateName = value => ({ success: '成功', error: '失败', cancelled: '已取消' }[value] || '未知');
     const usageName = value => ({ complete: '完整', partial: '不完整', missing: '未上报', inconsistent: '数据异常' }[value] || '—');
@@ -163,10 +163,6 @@ function monitorScript() {
           lines.push('归属：已确认 ' + counts.assigned + ' · 无可用工具 ID ' + counts.noToolIds + ' · 工具状态未匹配 ' + counts.unmatchedToolIds + ' · 歧义 ' + counts.ambiguous + ' · 查询不可用 ' + counts.lookupUnavailable);
         }
         if (s.excludedUsageRecords > 0) lines.push('已从用量与吞吐汇总排除 ' + s.excludedUsageRecords + ' 条异常记录（仍计入请求数和时间指标）');
-        const messages = snapshot.lookupStatus?.messages;
-        if (messages === 'disabled') lines.push('消息归属补查默认关闭');
-        else if (messages === 'timeout') lines.push('消息归属补查超时（会话库过大，该补查无法完成；未影响工具归属）');
-        else if (messages === 'unavailable') lines.push('消息归属补查失败（未影响工具归属）');
       }
       const diagnosticsText = lines.join('\\n');
       if (diagnostics.textContent !== diagnosticsText) diagnostics.textContent = diagnosticsText;

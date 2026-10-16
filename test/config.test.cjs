@@ -12,18 +12,19 @@ test('defaultConfig is a minimal enabled config without retired keys', () => {
   assert.ok(!Object.hasOwn(defaultConfig(), 'sidekicks'));
 });
 
-test('pruneRetiredKeys removes retired keys but keeps presets and live role lists', () => {
+test('pruneRetiredKeys removes every retired key but keeps live role lists', () => {
   const config = { enabled: true, providers: [], sidekicks: [{ providerId: 'cpa', model: 'x' }],
     roleExclusions: { lead: [], sidekick: [] }, roleInclusions: { lead: [{ providerId: 'cpa', model: 'x' }] },
     fusionPresets: [{ id: 'p1' }], defaultFusionUid: 'fusion-dfbyok-x', fusionMatrix: true };
   assert.equal(pruneRetiredKeys(config), true);
-  assert.ok(!Object.hasOwn(config, 'sidekicks'));
+  for (const key of ['sidekicks', 'fusionPresets', 'defaultFusionUid', 'fusionMatrix']) {
+    assert.ok(!Object.hasOwn(config, key), key + ' is a retired key with no reader left');
+  }
   assert.ok(!Object.hasOwn(config, 'roleExclusions'), 'empty role maps are pruned');
   assert.ok(Object.hasOwn(config, 'roleInclusions'), 'non-empty role lists survive');
-  assert.ok(Object.hasOwn(config, 'fusionPresets') && Object.hasOwn(config, 'defaultFusionUid')
-    && Object.hasOwn(config, 'fusionMatrix'), 'preset keys belong to migrateFusionConfig');
   assert.equal(pruneRetiredKeys({ enabled: true, providers: [] }), false, 'a clean config is untouched');
   assert.equal(pruneRetiredKeys({ roleInclusions: 'garbage' }), true, 'non-map role values are pruned too');
+  assert.deepEqual(config.roleInclusions, { lead: [{ providerId: 'cpa', model: 'x' }] }, 'live refs are preserved verbatim');
 });
 
 test('discover defaults freshly seen models to 131072 output tokens and keeps saved values', async t => {

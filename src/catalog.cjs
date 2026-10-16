@@ -21,107 +21,6 @@ function refKey(ref) {
   return '';
 }
 
-// Named presets are retired: the official Fusion card is the only entry point
-// and the matrix below mirrors every selectable combination into it, so a
-// parallel "my presets" catalog has nothing left to describe. One migration
-// carries over everything that still means something and drops the rest:
-//   - preset Lead/Sidekick references used to count as selected; they become
-//     explicit role inclusions so those models stay in the picker.
-//   - `defaultFusionUid` (the remembered combination, also the fallback for a
-//     locked official selection) moves to `lastFusionSelection`; a preset uid
-//     is mapped onto the equivalent matrix uid when that combination is still
-//     emittable.
-//   - `fusionPresets` and the `fusionMatrix` kill switch are removed — the
-//     flag's "off" branch only ever emitted presets, so it can no longer
-//     produce anything.
-// Returns whether the config changed and therefore must be persisted.
-function migrateFusionConfig(config, nativeModels = []) {
-  if (!config || typeof config !== 'object' || Array.isArray(config)) return false;
-  if (!['fusionPresets', 'defaultFusionUid', 'fusionMatrix'].some(key => Object.hasOwn(config, key))) return false;
-  const presets = Array.isArray(config.fusionPresets) ? config.fusionPresets : [];
-  const legacy = typeof config.defaultFusionUid === 'string' ? config.defaultFusionUid : '';
-  const lists = buildRoleLists(config, nativeModels);
-  const available = Object.fromEntries(['lead', 'sidekick'].map(role =>
-    [role, new Set(lists[role].filter(item => item.available).map(item => refKey(item.ref)))]));
-  const excluded = Object.fromEntries(['lead', 'sidekick'].map(role =>
-    [role, new Set(listRefs(config, role, 'roleExclusions').map(refKey).filter(Boolean))]));
-  const additions = { lead: [], sidekick: [] };
-  for (const preset of presets) {
-    if (!preset || typeof preset !== 'object' || Array.isArray(preset)) continue;
-    for (const role of ['lead', 'sidekick']) {
-      const key = refKey(preset[role]);
-      if (!key || !available[role].has(key) || excluded[role].has(key) || additions[role].some(ref => refKey(ref) === key)) continue;
-      additions[role].push(preset[role].nativeUid ? { nativeUid: preset[role].nativeUid }
-        : { providerId: preset[role].providerId, model: preset[role].model, effort: preset[role].effort ?? null });
-    }
-  }
-  for (const role of ['lead', 'sidekick']) {
-    // A ref recorded as both included and excluded is dead weight: exclusion
-    // already wins in roleSelected, so the inclusion only confuses the config.
-    const existing = listRefs(config, role, 'roleInclusions').filter(ref => !excluded[role].has(refKey(ref)));
-    const merged = [...existing, ...additions[role].filter(ref => !existing.some(item => refKey(item) === refKey(ref)))];
-    if (merged.length) config.roleInclusions = { ...config.roleInclusions, [role]: merged };
-    else if (config.roleInclusions && Array.isArray(config.roleInclusions[role])) delete config.roleInclusions[role];
-  }
-  if (config.roleInclusions && !Object.keys(config.roleInclusions).length) delete config.roleInclusions;
-  // Resolve the remembered uid against the catalog this config now produces:
-  // a preset uid maps onto the matrix uid of the same pair, anything else is
-  // kept only while it still resolves.
-  if (legacy) {
-    const catalog = buildCatalog(config, nativeModels);
-    const preset = presets.find(item => item && typeof item === 'object' && presetUid(item.id) === legacy);
-    const mapped = preset ? matrixUidOf(catalog, preset) : '';
-    const resolved = has(catalog.fusions, legacy) ? legacy : mapped;
-    if (resolved) config.lastFusionSelection = resolved;
-  }
-  delete config.fusionPresets;
-  delete config.defaultFusionUid;
-  delete config.fusionMatrix;
-  return true;
-}
-
-function presetUid(id) {
-  return 'fusion-dfbyok-preset-' + digest(['preset', id]).slice(0, 24);
-}
-
-function listRefs(config, role, key) {
-  return Array.isArray(config?.[key]?.[role]) ? config[key][role] : [];
-}
-
-// A retired preset names a Lead/Sidekick pair; the pair still exists in the
-// matrix under its own uid, which is what a stored selection must become. The
-// lookup goes through the emitted fusions rather than rebuilding the uid from
-// the role pool: the matrix emits one representative per Sidekick *model* (the
-// effort variants collapse), so the exact variant a preset named may have no
-// entry of its own, and the emitted representative is the pair Devin itself
-// offers anyway. Matching is at model level for the same reason.
-function matrixUidOf(catalog, preset) {
-  const refOf = uid => {
-    const route = catalog.routes?.[uid];
-    return route ? { providerId: route.providerId, model: route.model } : { nativeUid: uid };
-  };
-  // The uid a reference names exactly (a BYOK variant is a route; a native ref
-  // is already the uid), so a pair reproducing it can outrank a rep-only match.
-  const exactUid = ref => {
-    if (typeof ref?.nativeUid === 'string') return ref.nativeUid;
-    for (const [uid, route] of Object.entries(catalog.routes || {})) {
-      if (route.providerId === ref?.providerId && route.model === ref?.model && (route.effort ?? null) === (ref?.effort ?? null)) return uid;
-    }
-    return '';
-  };
-  const leadKey = refKey(preset.lead), sidekickKey = refKey(preset.sidekick);
-  const leadExact = exactUid(preset.lead), sidekickExact = exactUid(preset.sidekick);
-  if (!leadKey || !sidekickKey) return '';
-  let match = '', matchScore = 0;
-  for (const [uid, fusion] of Object.entries(catalog.fusions || {})) {
-    if (refKey(refOf(fusion.leadUid)) !== leadKey || refKey(refOf(fusion.sidekickUid)) !== sidekickKey) continue;
-    const score = (fusion.leadUid === leadExact ? 1 : 0) + (fusion.sidekickUid === sidekickExact ? 1 : 0);
-    if (score === 2) return uid;
-    if (score > matchScore) { match = uid; matchScore = score; }
-  }
-  return match;
-}
-
 function stableOrders(keys, reserved) {
   const result = new Map(), used = new Set(reserved || []);
   for (const key of [...new Set(keys)].sort()) {
@@ -1727,4 +1626,4 @@ function resolveAssignment(data, format = {}, catalog, lockedFusionUids) {
   } catch { return null; }
 }
 
-module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, collectAllowedUids, buildRoleLists, refKey, presetUid, migrateFusionConfig, staleFusionUids };
+module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, collectAllowedUids, buildRoleLists, refKey, staleFusionUids };

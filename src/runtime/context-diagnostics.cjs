@@ -1,7 +1,23 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-function createContextDiagnostics({ root, version, readStatus, snapshot, pid = process.pid, intervalMs = 2000 }) {
+// Diagnostics exist for a human reading them after something went wrong, not for
+// a live dashboard, so the write only has to stay recent enough to be useful.
+// At the original 2s cadence every window left a file behind forever — 192 had
+// accumulated, one per process that ever activated the extension.
+const WRITE_INTERVAL_MS = 15000;
+const SWEEP_INTERVAL_MS = 60000;
+// A file is residue only when its owner is gone *and* nothing has touched it for
+// a while. The age check is what protects a live window (its file is rewritten
+// every write interval) and it also stops PID reuse from preserving a dead file
+// or a freshly created one from being swept before its owner starts writing.
+const STALE_AFTER_MS = 10 * 60 * 1000;
+const FILE_NAME = /^(\d+)\.json$/;
+function isRunning(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error?.code === 'EPERM'; }
+}
+function createContextDiagnostics({ root, version, readStatus, snapshot, pid = process.pid, intervalMs = WRITE_INTERVAL_MS }) {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new TypeError('Invalid process ID');
   const directory = path.join(root, 'context-diagnostics');
   const file = path.join(directory, `${pid}.json`), temporary = file + '.tmp';
@@ -27,8 +43,28 @@ function createContextDiagnostics({ root, version, readStatus, snapshot, pid = p
       return true;
     } catch { return false; }
   }
+  // Only names this module could have written are candidates, so the directory
+  // stays safe to place beside anything else.
+  function sweep() {
+    try {
+      const cutoff = Date.now() - STALE_AFTER_MS;
+      for (const name of fs.readdirSync(directory)) {
+        const owned = FILE_NAME.exec(name);
+        if (!owned && !name.endsWith('.tmp')) continue;
+        if (owned && Number(owned[1]) === pid) continue;
+        const target = path.join(directory, name);
+        try {
+          if (fs.statSync(target).mtimeMs >= cutoff) continue;
+          if (owned && isRunning(Number(owned[1]))) continue;
+        } catch { continue; }
+        fs.rmSync(target, { force: true });
+      }
+      return true;
+    } catch { return false; }
+  }
   const timer = setInterval(refresh, intervalMs); timer.unref?.();
-  refresh();
-  return { refresh, dispose() { if (disposed) return; disposed = true; clearInterval(timer); refresh(); } };
+  const sweeper = setInterval(sweep, SWEEP_INTERVAL_MS); sweeper.unref?.();
+  refresh(); sweep();
+  return { refresh, sweep, dispose() { if (disposed) return; disposed = true; clearInterval(timer); clearInterval(sweeper); refresh(); } };
 }
-module.exports = { createContextDiagnostics };
+module.exports = { createContextDiagnostics, STALE_AFTER_MS };

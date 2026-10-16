@@ -61,7 +61,7 @@ test('session options show titles and relative times instead of internal slugs',
   const summary = { requests: 1, success: 1, error: 0, cancelled: 0 };
   const record = { id: 'r1', startedAt: 't', model: 'm', effort: null, status: 'success', usageState: 'missing', attribution: 'ambiguous' };
   receive({ data: { type: 'monitor-state', result: { snapshot: { summary, records: [record], sessionStatus: 'ready', sessions: [
-    { sessionId: 'sprout-skull', title: '查看并讨论 VS Code 插件项目', lastActivityAt: now - 7200, attribution: 'response-id', summary, records: [] },
+    { sessionId: 'sprout-skull', title: '查看并讨论 VS Code 插件项目', lastActivityAt: now - 7200, attribution: 'tool-id', summary, records: [] },
     { sessionId: 'puddle-airmail', title: '审查全局规则', lastActivityAt: now - 1800, attribution: 'tool-id', summary, records: [] },
     { sessionId: 'ghost-slug', title: null, lastActivityAt: null, attribution: 'tool-id', summary, records: [] },
     { sessionId: null, title: null, lastActivityAt: null, attribution: 'unassigned', summary, records: [] },
@@ -451,42 +451,24 @@ test('rows show attribution reasons in Chinese and keep the legacy fallback', ()
   assert.equal(cell(5), '存在歧义');
 });
 
-test('the diagnostics line summarizes the window, attribution, exclusions and the message branch', () => {
+test('the diagnostics line summarizes the window, attribution and exclusions', () => {
   const f = monitorFixture();
   f.selectTime('all');
   const record = (id, extra = {}) => ({ id, startedAt: 't', model: 'm', status: 'success', attribution: 'unassigned', ...extra });
   f.receive({ data: { type: 'monitor-state', result: { snapshot: {
     summary: { requests: 3, success: 3, error: 0, cancelled: 0 }, retentionLimit: 5000,
-    lookupStatus: { tools: 'ready', messages: 'disabled', labels: 'ready' },
+    lookupStatus: { tools: 'ready', labels: 'ready' },
     records: [record('a', { sessionId: 's-1' }), record('b', { attributionReason: 'no-tool-ids', usageState: 'inconsistent' }), record('c', { attributionReason: 'tool-id-unmatched' })], sessions: [], sessionStatus: 'ready' } } } });
   const diag = f.byId('monitor-diagnostics').textContent;
   assert.match(diag, /统计窗口：最近 5000 条（当前 3 条）/);
   assert.match(diag, /已确认 1 · 无可用工具 ID 1 · 工具状态未匹配 1 · 歧义 0 · 查询不可用 0/);
   assert.match(diag, /已从用量与吞吐汇总排除 1 条异常记录（仍计入请求数和时间指标）/);
-  assert.match(diag, /消息归属补查默认关闭/);
 
   f.receive({ data: { type: 'monitor-state', result: { snapshot: {
     summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, records: [record('x')], sessions: [], sessionStatus: 'ready' } } } });
   const legacy = f.byId('monitor-diagnostics').textContent;
   assert.match(legacy, /当前保留 1 条/, 'an old backend without retentionLimit still gets the window line');
   assert.doesNotMatch(legacy, /归属：已确认/, 'missing attributionSummary never fabricates zeros');
-  assert.doesNotMatch(legacy, /消息归属补查/, 'missing lookupStatus never fabricates a branch state');
-
-  f.receive({ data: { type: 'monitor-state', result: { snapshot: {
-    summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, retentionLimit: 5000,
-    lookupStatus: { tools: 'ready', messages: 'unavailable', labels: 'ready' },
-    records: [record('x')], sessions: [], sessionStatus: 'ready' } } } });
-  assert.match(f.byId('monitor-diagnostics').textContent, /消息归属补查失败（未影响工具归属）/);
-
-  // A killed child (the scan cannot finish inside the bound) is a different fact
-  // from an unreadable database and must not borrow its copy.
-  f.receive({ data: { type: 'monitor-state', result: { snapshot: {
-    summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, retentionLimit: 5000,
-    lookupStatus: { tools: 'ready', messages: 'timeout', labels: 'ready' },
-    records: [record('x')], sessions: [], sessionStatus: 'ready' } } } });
-  const timedOut = f.byId('monitor-diagnostics').textContent;
-  assert.match(timedOut, /消息归属补查超时（会话库过大，该补查无法完成；未影响工具归属）/);
-  assert.doesNotMatch(timedOut, /消息归属补查失败/, 'a timeout is not a failure to read the database');
 });
 
 test('status combines storage tool and label warnings without leaking internals', () => {
@@ -497,7 +479,7 @@ test('status combines storage tool and label warnings without leaking internals'
     storageError: true,
     storageDiagnostics: { code: 'append-failed', pendingWrites: 2, failedWrites: 3, persistenceBlocked: false, raw: 'ENOENT /secret/SECRET' },
     sessionStatus: 'unavailable',
-    lookupStatus: { tools: 'unavailable', messages: 'unavailable', labels: 'unavailable' },
+    lookupStatus: { tools: 'unavailable', labels: 'unavailable' },
     records: [], sessions: [] } } } });
   const status = f.byId('monitor-status').textContent;
   assert.match(status, /用量记录追加失败，部分数据可能仅在内存中/);
@@ -505,7 +487,6 @@ test('status combines storage tool and label warnings without leaking internals'
   assert.match(status, /待写 2 次/);
   assert.match(status, /工具归属查询暂不可用，统计用量仍可查看/);
   assert.match(status, /会话标题读取失败，暂显示会话 ID/);
-  assert.match(f.byId('monitor-diagnostics').textContent, /消息归属补查失败/);
   assert.ok(!status.includes('SECRET') && !status.includes('/secret'), 'raw errors and paths never surface');
 });
 
@@ -515,16 +496,18 @@ test('diagnostics update without rebuilding unchanged rows or tiles', () => {
   const record = { id: 'r1', startedAt: 't', model: 'm', status: 'success', attribution: 'unassigned', attributionReason: 'no-tool-ids' };
   const base = { summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, retentionLimit: 5000,
     records: [record], sessions: [], sessionStatus: 'ready' };
-  f.receive({ data: { type: 'monitor-state', result: { snapshot: { ...base, lookupStatus: { tools: 'ready', messages: 'disabled', labels: 'ready' } } } } });
+  f.receive({ data: { type: 'monitor-state', result: { snapshot: { ...base, lookupStatus: { tools: 'ready', labels: 'ready' } } } } });
   const row = f.byId('monitor-requests').children[0];
   const tile = f.byId('monitor-summary').children[0];
   const firstDiag = f.byId('monitor-diagnostics').textContent;
-  f.receive({ data: { type: 'monitor-state', result: { snapshot: { ...base, lookupStatus: { tools: 'ready', messages: 'unavailable', labels: 'ready' } } } } });
+  // Only the retention window changes: the diagnostics line must follow it while
+  // the rows and tiles keep their node identity.
+  f.receive({ data: { type: 'monitor-state', result: { snapshot: { ...base, retentionLimit: 4000, lookupStatus: { tools: 'ready', labels: 'ready' } } } } });
   assert.equal(f.byId('monitor-requests').children[0], row, 'identical rows keep their node identity');
   assert.equal(f.byId('monitor-summary').children[0], tile, 'identical tiles keep their node identity');
   const secondDiag = f.byId('monitor-diagnostics').textContent;
   assert.notEqual(secondDiag, firstDiag, 'a diagnostics-only change still refreshes the hint text');
-  assert.match(secondDiag, /消息归属补查失败/);
+  assert.match(secondDiag, /统计窗口：最近 4000 条/);
 });
 
 test('metric labels tooltips and cell titles carry the authored semantics', () => {

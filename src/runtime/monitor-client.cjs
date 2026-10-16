@@ -9,10 +9,10 @@ const METRIC_FIELDS = ['value', 'reported', 'samples'];
 const RECORD_FIELDS = ['schemaVersion', 'id', 'startedAt', 'model', 'providerId', 'effort', 'status', 'code', 'httpStatus',
   'inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens', 'firstOutputMs', 'firstTextMs', 'firstResponseMs',
   'durationMs', 'outputSpanMs', 'tps', 'decodeMs', 'visibleTokens', 'hasTools', 'hasReasoning',
-  'throughputTps', 'gatewayTps', 'usageState', 'usageComplete', 'sessionId', 'attribution', 'role'];
+  'throughputTps', 'gatewayTps', 'usageState', 'usageComplete', 'sessionId', 'attribution'];
 const ATTRIBUTION_REASONS = ['ambiguous-match', 'no-tool-ids', 'lookup-unavailable', 'tool-id-unmatched'];
 const ATTRIBUTION_FIELDS = ['assigned', 'ambiguous', 'noToolIds', 'unmatchedToolIds', 'lookupUnavailable'];
-const LOOKUP_STATUS_VALUES = { tools: ['ready', 'unavailable', 'not-needed'], messages: ['disabled', 'ready', 'unavailable', 'not-needed', 'timeout'], labels: ['ready', 'unavailable', 'not-needed'] };
+const LOOKUP_STATUS_VALUES = { tools: ['ready', 'unavailable', 'not-needed'], labels: ['ready', 'unavailable', 'not-needed'] };
 const STORAGE_CODES = ['load-too-large', 'load-invalid-record', 'load-unavailable', 'append-failed', 'compact-failed'];
 const { withConnectionRetry } = require('./retry.cjs');
 async function readOnce({ root, port, signal, request }) {

@@ -7,29 +7,25 @@ const os = require('node:os');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { collect } = require('../src/runtime/bridge.cjs');
-const { augmentCatalog, buildCatalog, migrateFusionConfig, collectNativeModels } = require('../src/catalog.cjs');
+const { augmentCatalog, buildCatalog, collectNativeModels } = require('../src/catalog.cjs');
 const { parseFields, s, m, v } = require('../src/protocol/wire.cjs');
 const cat = (...parts) => Buffer.concat(parts.flat());
 
 const TEAM_RPC = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
 const proto = { json: false, type: 'application/proto', framed: false };
 const SEEDED = [{ uid: 'swe-2-medium', label: 'SWE-2 Medium', disabled: false, isModelRouter: false, harnessUids: ['swe-2'] }];
-// The stored shape before presets were retired: the sidekick is selected only
-// because a preset referenced it, which the migration turns into a role
-// inclusion.
-const legacyConfig = () => ({
+// The sidekick is selected through an explicit role inclusion, which is the
+// shape the retired preset migration used to produce.
+const config = () => ({
   enabled: true,
   providers: [{ id: 'p', name: 'P', baseUrl: 'https://p.invalid/v1', apiKey: 'fixture-secret', apiFormat: 'openai',
     models: [{ id: 'lead', label: 'Lead' }] }],
-  fusionPresets: [{ id: 'ds', name: 'DS Pro', lead: { providerId: 'p', model: 'lead', effort: null },
-    sidekick: { nativeUid: 'swe-2-medium' } }],
+  roleInclusions: { sidekick: [{ nativeUid: 'swe-2-medium' }] },
 });
 
 async function fixture(t, { seedCache = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-cache-sync-'));
-  const config = legacyConfig();
-  migrateFusionConfig(config, seedCache ? SEEDED : []);
-  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config()));
   if (seedCache) {
     fs.writeFileSync(path.join(root, 'native-cache.json'), JSON.stringify({
       version: 1, savedAt: new Date().toISOString(),
@@ -71,9 +67,7 @@ const teamChoices = async base => {
 // A BYOK Lead combined with a native Sidekick is only emittable once the native
 // catalog knows that sidekick, so its matrix uid marks "resolvable now".
 const nativeSidekickCombo = nativeModels => {
-  const config = legacyConfig();
-  assert.equal(migrateFusionConfig(config, nativeModels), true, 'the fixture config must need migrating');
-  const catalog = buildCatalog(config, nativeModels);
+  const catalog = buildCatalog(config(), nativeModels);
   const leadUid = Object.keys(catalog.routes)[0];
   return `fusion-${leadUid}-sidekick-swe-2-medium`;
 };

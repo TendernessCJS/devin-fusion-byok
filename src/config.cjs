@@ -12,14 +12,20 @@ function writeConfig(file, config) {
   fs.renameSync(tmp, file);
 }
 function defaultConfig() { return { enabled: true, providers: [] }; }
-// Drops keys retired by the Fusion preset migration. `sidekicks` and empty
-// role override maps are dead weight; `fusionPresets`/`defaultFusionUid`/
-// `fusionMatrix` are NOT pruned here — `migrateFusionConfig` still lifts saved
-// presets into roleInclusions, so deleting them early would lose user data.
+// Retired keys: everything the named-preset pipeline used to own, plus empty
+// role override maps. The one-shot migration that lifted saved presets into
+// `roleInclusions` has run everywhere this fork is installed (verified against
+// the live config), so these are dead weight now — and a dead key with no
+// cleanup path would sit in a user's config forever with no way to remove it
+// from the panel.
 function pruneRetiredKeys(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) return false;
   let changed = false;
-  if (Object.hasOwn(config, 'sidekicks')) { delete config.sidekicks; changed = true; }
+  for (const key of ['sidekicks', 'fusionPresets', 'defaultFusionUid', 'fusionMatrix']) {
+    if (!Object.hasOwn(config, key)) continue;
+    delete config[key];
+    changed = true;
+  }
   for (const key of ['roleExclusions', 'roleInclusions']) {
     if (!Object.hasOwn(config, key)) continue;
     const value = config[key];

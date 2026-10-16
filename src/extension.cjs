@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { defaultConfig, pruneRetiredKeys, readConfig, writeConfig } = require('./config.cjs');
-const { buildCatalog, migrateFusionConfig, augmentCatalog, staleFusionUids } = require('./catalog.cjs');
+const { buildCatalog, augmentCatalog, staleFusionUids } = require('./catalog.cjs');
 const { createManager } = require('./panel/model.cjs');
 const { installLsInjection } = require('./runtime/ls-injection.cjs');
 const { createLsBridge } = require('./runtime/bridge.cjs');
@@ -215,22 +215,6 @@ async function activate(context) {
   // Complete-set verdict from team settings: whichever observation arrived
   // last decides which official uids the account may actually select.
   let nativeAllowedUids = new Set();
-  // Named presets are retired; run the one-shot config migration before
-  // anything reads the config. The pre-migration bytes are kept beside it so a
-  // preset list the user authored is never lost without a copy.
-  const migrateConfig = () => {
-    const backup = configFile + '.pre-preset-retirement.bak';
-    try {
-      if (fs.existsSync(backup)) return false;
-      const current = config();
-      if (!migrateFusionConfig(current, [...nativeModels.values()])) return false;
-      fs.copyFileSync(configFile, backup);
-      writeConfig(configFile, current);
-      log('config-migrated', { backup: path.basename(backup) });
-      return true;
-    } catch { log('config-migration-failed'); return false; }
-  };
-  migrateConfig();
   const pruneConfig = () => {
     try {
       const current = config();
