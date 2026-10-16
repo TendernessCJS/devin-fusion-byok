@@ -45,7 +45,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
     clearTimeout(bodyTimer);
     bodyTimer = setTimeout(() => timedOut('body'), limits.body);
   };
-  const timedOut = phase => { try { log('forward-timeout', { phase }); } catch {} fail(); };
+  const timedOut = phase => { try { log('forward-timeout', { phase, rpc: target.pathname.split('/').pop() }); } catch {} fail(); };
   let incoming;
   const fail = () => {
     stop();

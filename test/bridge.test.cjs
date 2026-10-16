@@ -300,6 +300,22 @@ test('forward destroys a stalled body stream after the idle budget without a tot
   assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['body']);
 });
 
+test('forward-timeout records the rpc name so stalled streams are identifiable', async t => {
+  const events = [];
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write('first-chunk');
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+    timeouts: { connectMs: 5000, firstResponseMs: 5000, idleMs: 50 } });
+  t.after(() => bridge.close());
+  await settleWithin(request(bridge.port, LS + 'GetProcessInfo'));
+  const timeout = events.find(([event]) => event === 'forward-timeout');
+  assert.equal(timeout[1].phase, 'body');
+  assert.equal(timeout[1].rpc, 'GetProcessInfo');
+});
+
 test('forward lets a slow but steady stream exceed every total-duration budget', async t => {
   const native = await listen((req, res) => {
     res.writeHead(200, { 'content-type': 'application/octet-stream' });
