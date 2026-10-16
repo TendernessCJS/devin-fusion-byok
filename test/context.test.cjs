@@ -350,3 +350,36 @@ test('a root-scoped state_update never settles the turn; only unscoped ones do',
   state.observe('s', { sessionUpdate: 'state_update', state: 'idle' });
   assert.equal(state.snapshot()[0].turn.status, 'idle');
 });
+
+test('sessions without observable data are hidden, cannot steal focus, and resolve native labels', () => {
+  let open, receive, focus = null, catalog = { models: [{ uid: 'm', label: 'M' }] };
+  let sessions = [
+    { sessionId: 'empty', modelUid: 'swe-2-high', subagents: [], lead: null, turn: null },
+    { sessionId: 'live', modelUid: 'm', subagents: [], lead: { used: 10, size: 100, timestampMs: 1 }, turn: null },
+  ];
+  const messages = [], item = { show() {}, hide() {}, dispose() {} };
+  const panel = { visible: true, webview: { postMessage(value) { messages.push(value); }, onDidReceiveMessage(fn) { receive = fn; return { dispose() {} }; } }, onDidDispose() { return { dispose() {} }; }, dispose() {} };
+  const handle = createContextUi({ vscode: { ViewColumn: { Active: 1 }, window: { createStatusBarItem: () => item, createWebviewPanel: () => panel }, commands: { registerCommand(_, fn) { open = fn; return { dispose() {} }; } } }, context: { subscriptions: [] },
+    snapshot: () => sessions, catalog: () => catalog, nativeLabels: () => new Map([['swe-2-high', 'SWE-2 High'], ['m', 'Native M']]),
+    readMonitor: async () => null, focused: () => focus });
+  try {
+    open(); receive({ type: 'ready' });
+    let items = messages.at(-1).items;
+    assert.equal(items.length, 1);
+    assert.equal(items[0].sessionId, 'live');
+    assert.ok(!items.some(entry => entry.sessionId === 'empty'), 'a prepared-but-unused session with no observable data never reaches the panel');
+    focus = { sessionId: 'empty', at: 100 }; handle.refresh();
+    assert.equal(messages.at(-1).selectedSessionId, 'live', 'an empty session must not steal the selection even though session/load counts as focus');
+    sessions = [{ sessionId: 'native', modelUid: 'swe-2-high', subagents: [], lead: { used: 1, size: 2, timestampMs: 1 } }];
+    handle.refresh();
+    assert.match(messages.at(-1).items[0].label, /SWE-2 High$/, 'a native uid resolves to its observed label');
+    sessions = [{ sessionId: 'own', modelUid: 'm', subagents: [], lead: { used: 1, size: 2, timestampMs: 1 } }];
+    handle.refresh();
+    assert.match(messages.at(-1).items[0].label, /· M$/, 'own catalog entries win over native labels for the same uid');
+    sessions = [{ sessionId: 'empty', modelUid: 'swe-2-high', subagents: [], lead: null, turn: null }];
+    handle.refresh();
+    items = messages.at(-1).items;
+    assert.equal(items.length, 1);
+    assert.equal(items[0].sessionId, '', 'with nothing observable the panel falls back to the empty hint entry');
+  } finally { handle.dispose(); }
+});

@@ -45,7 +45,7 @@ if(empty)return;
 grid('context',item.rows||[]);grid('request',item.request||[]);}
 selector.addEventListener('change',()=>{render();vscode.postMessage({type:'selectSession',sessionId:selector.value});});window.addEventListener('message',event=>{if(event.data?.type!=='context')return;const previous=selector.value;pluginEnabled=event.data.enabled!==false;items=event.data.items;const keys=JSON.stringify(items.map(x=>x.sessionId).sort());if(keys!==sessionKeys){sessionKeys=keys;selector.replaceChildren();for(const item of items){const option=document.createElement('option');option.value=item.sessionId;option.title=item.sessionId;selector.append(option);}if(items.some(x=>x.sessionId===previous))selector.value=previous;}for(const option of selector.children){const item=items.find(x=>x.sessionId===option.value);text(option,item?.label||'暂无会话');}if(items.some(x=>x.sessionId===event.data.selectedSessionId))selector.value=event.data.selectedSessionId;render();});vscode.postMessage({type:'ready'});`;
 }
-function createContextUi({ vscode, context, snapshot, readMonitor, catalog, isEnabled = () => true, focused = () => null }) {
+function createContextUi({ vscode, context, snapshot, readMonitor, catalog, nativeLabels, isEnabled = () => true, focused = () => null }) {
   let panel, disposed = false, pending = null, monitor = null, lastRead = -Infinity, shown = false, lastPayload = null, selectedSessionId = null, nextSessionLabel = 0, followedAt = 0;
   const sessionLabels = new Map();
   const item = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 19);
@@ -59,11 +59,20 @@ function createContextUi({ vscode, context, snapshot, readMonitor, catalog, isEn
   function refresh(force = false) {
     if (disposed) return;
     if (!isEnabled()) { monitor = null; selectedSessionId = null; sessionLabels.clear(); nextSessionLabel = 0; if (shown) { item?.hide(); shown = false; } post([], force); return; }
-    const sessions = snapshot(), currentCatalog = catalog();
+    // A session the app merely prepares or restores (session/new, session/load)
+    // carries a model uid but no usage at all: rendering it produced an
+    // all-dash「会话 N」tile, and since loading counts as focus the follow could
+    // even select it away from the session the user is working in.
+    const sessions = snapshot().filter(session => session.lead || session.subagents?.length || session.turn),
+      currentCatalog = catalog();
+    // Own emitted models win: contextDetails' label() takes the first match,
+    // so native observation labels are appended after the catalog's entries.
+    const labels = nativeLabels?.() || new Map();
+    const view = labels.size ? { ...currentCatalog, models: [...(currentCatalog.models || []), ...[...labels].map(([uid, label]) => ({ uid, label }))] } : currentCatalog;
     for (const id of sessionLabels.keys()) if (!sessions.some(session => session.sessionId === id)) sessionLabels.delete(id);
     const values = sessions.map(session => {
       if (!sessionLabels.has(session.sessionId)) sessionLabels.set(session.sessionId, ++nextSessionLabel);
-      const details = contextDetails(session, monitor, currentCatalog);
+      const details = contextDetails(session, monitor, view);
       const title = details.sessionTitle || `会话 ${sessionLabels.get(session.sessionId)}`;
       return { sessionId: session.sessionId, label: `${title} · ${details.rows[0].value}`, ...details };
     });

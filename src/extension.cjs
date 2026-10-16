@@ -639,6 +639,7 @@ async function activate(context) {
     }
     require('./panel/context-view.cjs').createContextUi({ vscode, context,
       snapshot: () => contextObserver?.snapshot() || [], catalog,
+      nativeLabels: () => new Map([...nativeModels.values()].map(entry => [entry.uid, entry.label])),
       focused: () => contextObserver?.focused?.() || null,
       isEnabled: () => !activationDisposed && config().enabled !== false,
       readMonitor: () => require('./runtime/monitor-client.cjs').readMonitor({ root }) });
