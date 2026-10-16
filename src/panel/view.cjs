@@ -756,7 +756,7 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
       element('option', { value: 'anthropic', text: 'Anthropic Messages' }));
     apiFormat.value = provider?.apiFormat || 'openai-responses';
     const apiKey = input('', { type: 'password', autocomplete: 'new-password', placeholder: provider?.keyConfigured ? '留空则不修改' : '', spellcheck: 'false' });
-    const urlField = field('API 地址', baseUrl, '只填域名时会自动补上 /v1；地址里已写了 /v1（或 /v4、/v1beta 等版本号）就按原样使用。');
+    const urlField = field('API 地址', baseUrl, '只填域名时会自动补上 /v1；写了路径就按原样使用，例如 /v1、/api/paas/v4、/openai 都原样保留。');
     const urlPreview = element('span', { class: 'hint url-preview' });
     urlField.append(urlPreview);
     const refreshPreview = () => {

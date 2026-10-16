@@ -34,6 +34,26 @@ function pruneRetiredKeys(config) {
   }
   return changed;
 }
+// Model lists arrive in one of two shapes: the OpenAI body itself, or that body
+// wrapped in the gateway's own envelope ({code, message, data: {object, data}}).
+// Only the bare shape was accepted, so an envelope was reported as "no model
+// list" — a message users read as "this provider has no /models endpoint",
+// hiding the real cause behind a wrong conclusion.
+function modelList(json) {
+  if (Array.isArray(json?.data)) return json.data;
+  if (Array.isArray(json?.data?.data)) return json.data.data;
+  return null;
+}
+// 404/405 means the route itself is absent — common for gateways that only proxy
+// inference. Name the escape hatch instead of leaving a bare status the user
+// reads as "no model list here". Any other status keeps the plain message: it
+// says nothing about whether the route exists.
+function discoveryError(status) {
+  if (status === 404 || status === 405) {
+    return new Error(`获取模型失败：HTTP ${status}（该供应商可能未提供 /models，可在供应商卡片里用「手动添加」录入模型）`);
+  }
+  return new Error('获取模型失败：HTTP ' + status);
+}
 async function discover(provider, { request = directFetch } = {}) {
   const anthropic = provider.apiFormat === 'anthropic';
   const headers = anthropic ? { 'anthropic-version': '2023-06-01', 'x-api-key': provider.apiKey } : { Authorization: 'Bearer ' + provider.apiKey };
@@ -45,10 +65,11 @@ async function discover(provider, { request = directFetch } = {}) {
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('API 地址必须以 http:// 或 https:// 开头');
     if (anthropic) { url.searchParams.set('limit', '1000'); if (after) url.searchParams.set('after_id', after); }
     const response = await request(url, { headers, redirect: 'error', signal: AbortSignal.timeout(20000) });
-    if (!response.ok) throw new Error('获取模型失败：HTTP ' + response.status);
+    if (!response.ok) throw discoveryError(response.status);
     const json = await response.json();
-    if (!Array.isArray(json.data)) throw new Error('API 未返回模型列表');
-    listed.push(...json.data);
+    const list = modelList(json);
+    if (!list) throw new Error('API 未返回模型列表');
+    listed.push(...list);
     if (!anthropic || !json.has_more || typeof json.last_id !== 'string' || json.last_id === after) break;
     after = json.last_id;
   }

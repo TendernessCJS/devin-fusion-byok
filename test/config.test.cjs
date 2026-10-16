@@ -64,3 +64,22 @@ test('discover uses its own direct transport, never the ambient fetch or global 
     if (oldProxy === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = oldProxy;
   }
 });
+
+test('discover accepts a gateway envelope wrapping the OpenAI model list', async () => {
+  const request = async () => ({ ok: true, json: async () => ({ code: 0, message: 'OK',
+    data: { object: 'list', data: [{ id: 'gpt-6.1-sol' }, { id: 'gpt-5.1' }] } }) });
+  const provider = { id: 'p', name: 'Proxy', baseUrl: 'https://gateway.invalid/openai', apiKey: 'fixture-secret', models: [] };
+  assert.equal(await discover(provider, { request }), 2);
+  assert.deepEqual(provider.models.map(m => m.id), ['gpt-6.1-sol', 'gpt-5.1']);
+  assert.equal(provider.models[0].label, 'Proxy · gpt-6.1-sol');
+});
+
+test('discover names the manual escape hatch only when /models is absent', async () => {
+  const provider = { name: 'Gateway', baseUrl: 'https://gateway.invalid/openai', apiKey: 'fixture-secret', models: [] };
+  const failure = status => discover(provider, { request: async () => ({ ok: false, status }) })
+    .then(() => null, error => error.message);
+  assert.match(await failure(404), /HTTP 404（该供应商可能未提供 \/models.*手动添加/);
+  assert.match(await failure(405), /HTTP 405（该供应商可能未提供 \/models/);
+  assert.equal(await failure(500), '获取模型失败：HTTP 500',
+    'a status that says nothing about the route must not claim /models is missing');
+});
