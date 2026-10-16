@@ -341,3 +341,12 @@ test('the reserved parent id root is the session context itself, not a subagent'
   assert.equal(session.subagents[0].used, 80);
   assert.equal(session.subagents[0].size, 262);
 });
+
+test('a root-scoped state_update never settles the turn; only unscoped ones do', () => {
+  const state = createContextState();
+  state.start('s');
+  state.observe('s', { sessionUpdate: 'state_update', state: 'idle', _meta: { 'cognition.ai/subagent_context': { parentAgentId: 'root' } } });
+  assert.equal(state.snapshot()[0].turn.status, 'running', 'root ownership is a usage-scoping signal, not the session lifecycle channel');
+  state.observe('s', { sessionUpdate: 'state_update', state: 'idle' });
+  assert.equal(state.snapshot()[0].turn.status, 'idle');
+});
