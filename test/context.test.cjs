@@ -310,16 +310,34 @@ test('the panel follows new focus events once, then manual picks hold', () => {
   } finally { handle.dispose(); }
 });
 
-test('subagent rows carry a visible run-id marker instead of relying on hover', () => {
+test('subagent rows name the owning agent and append the run id when present', () => {
   const session = { sessionId: 's', lead: { used: 10, size: 100 }, subagents: [
-    { parentAgentId: 'p', runId: 'abcdef1234567890', used: 20, size: 200 },
-    { parentAgentId: 'p', runId: null, used: 30, size: 300 },
+    { parentAgentId: 'sidekick', runId: 'abcdef1234567890', used: 20, size: 200 },
+    { parentAgentId: 'helper', runId: null, used: 30, size: 300 },
   ] };
   const subs = contextDetails(session).rows.filter(row => row.key.startsWith('subagent:'));
   assert.equal(subs.length, 2);
-  assert.equal(subs[0].label, '子代理 · abcdef12');
-  assert.equal(subs[1].label, '子代理 · 无 runId');
+  assert.equal(subs[0].label, '子代理 · sidekick · abcdef12');
+  assert.equal(subs[1].label, '子代理 · helper');
   assert.notEqual(subs[0].key, subs[1].key);
   assert.equal(subs[0].value, '20 / 200 token · 10%');
   assert.equal(subs[1].value, '30 / 300 token · 10%');
+});
+
+test('the reserved parent id root is the session context itself, not a subagent', () => {
+  const state = createContextState();
+  state.observe('s', update(100, 1000, { parentAgentId: 'root' }));
+  let session = state.snapshot()[0];
+  assert.equal(session.subagents.length, 0, 'a root-scoped update never produces a subagent row');
+  assert.equal(session.lead.used, 100);
+  assert.equal(session.lead.size, 1000);
+  state.observe('s', update(80, 262, { parentAgentId: 'sidekick' }));
+  state.observe('s', update(200, 1000, { parentAgentId: 'root' }));
+  session = state.snapshot()[0];
+  assert.equal(session.subagents.length, 1, 'only the sidekick-scoped update counts as a subagent');
+  assert.equal(session.lead.used, 200, 'root-scoped updates keep writing the lead usage');
+  assert.equal(session.lead.size, 1000);
+  assert.equal(session.subagents[0].parentAgentId, 'sidekick');
+  assert.equal(session.subagents[0].used, 80);
+  assert.equal(session.subagents[0].size, 262);
 });

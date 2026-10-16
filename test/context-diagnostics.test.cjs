@@ -116,3 +116,17 @@ test('subagent details stay untruncated within the bounds', () => {
       subagents: [{ parentAgentId: 'p', runId: 'r', used: 1, size: 2 }] }]);
   } finally { handle.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('diagnostics counts only real subagents, never the root-scoped duplicate', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-diagnostics-'));
+  const { createContextState } = require('../src/runtime/context-state.cjs');
+  const state = createContextState();
+  state.observe('s', { sessionUpdate: 'usage_update', used: 100, size: 1000, _meta: { 'cognition.ai/subagent_context': { parentAgentId: 'root' } } });
+  state.observe('s', { sessionUpdate: 'usage_update', used: 80, size: 262, _meta: { 'cognition.ai/subagent_context': { parentAgentId: 'sidekick' } } });
+  const handle = createContextDiagnostics({ root, version: '0.3.45', readStatus: () => ({}), snapshot: () => state.snapshot(), pid: 324, intervalMs: 60000 });
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(root, 'context-diagnostics', '324.json'), 'utf8'));
+    assert.equal(data.subagentUsages, 1, 'the root-scoped duplicate of the lead usage is not a subagent');
+    assert.deepEqual(data.subagentDetails[0].subagents, [{ parentAgentId: 'sidekick', runId: null, used: 80, size: 262 }]);
+  } finally { handle.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
+});

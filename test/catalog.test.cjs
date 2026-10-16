@@ -1563,7 +1563,8 @@ test('non-fast official leads still emit alongside the fast-lead filter', () => 
 test('officially declared harnessless leads qualify; fast siblings aggregate but never emit', () => {
   // The gpt-6-astra-* shape: the official Fusion card declares them as leads
   // while the native entries carry harnessUids=[] — under Fusion the lead runs
-  // on the combination's harness=["fusion"], so a missing own harness cannot
+  // on the combination's declared harnesses (['fusion'] plus the lead's own,
+  // degrading to bare ['fusion'] for a harnessless lead), so a missing own harness cannot
   // disqualify it (a real catalog carries 40 such combos). Sidekick eligibility
   // still requires a harness, and a harnessless uid with no official claim and
   // no official family base stays out of both pools.
@@ -1740,4 +1741,13 @@ test('matrix entries declare the native lead harness, matching resolveAssignment
   }
   // Plain provider entries keep the sidekick harness pool.
   assert.deepEqual(built.models.find(model => model.kind === 'model').json.modelInfo.harnessUids, ['swe-1p6', 'swe-1p5']);
+});
+
+test('emitted fusion entries always carry fusion and never a sidekick harness', () => {
+  for (const uid of catalog.matrixUids) {
+    const harnesses = catalog.models.find(model => model.uid === uid).json.modelInfo.harnessUids;
+    assert.ok(harnesses.includes('fusion'), `matrix entry ${uid} declares the fusion router`);
+    assert.ok(!harnesses.includes('swe-1p6') && !harnesses.includes('swe-1p5'),
+      `matrix entry ${uid} must not fall back to the sidekick harness pool`);
+  }
 });

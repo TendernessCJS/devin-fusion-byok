@@ -110,7 +110,7 @@ function configFor({ uid, label, family, familyUid, contextWindow, maxOutputToke
       modelUid: uid, modelType: 2, maxTokens: contextWindow,
       maxOutputTokens,
       inferenceServerUrl,
-      harnessUids: harnessUids ?? [...SIDEKICK_HARNESSES],
+      harnessUids: harnessUids ?? (fusion ? ['fusion'] : [...SIDEKICK_HARNESSES]),
       displayOption: fusion ? 3 : 0, modelFamilyUid: familyUid, isModelRouter: !!fusion,
       modelFeatures: { zeroShotCapable: true, supportsImages: !!supportsImages, supportsToolCalls: true,
         supportsParallelToolCalls: true, supportsThinking: !!effort && effort !== 'none' },
@@ -195,10 +195,12 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
 
     if (!leadKnown || !sideKnown) continue;
     const leadNative = nativeModelsMap.get(leadCandidate);
-    // A Fusion lead runs under the combination's own harness=["fusion"], so
-    // the member's harnessUids only decide standalone availability — declared
-    // leads with none (gpt-6-astra-*) still qualify. The sidekick below keeps
-    // the harness requirement: a subagent runs on its own harness.
+    // A Fusion lead runs under the harnesses its combination entry declares
+    // (['fusion'] plus the lead's own, degrading to bare ['fusion'] for a
+    // harnessless lead), so the member's harnessUids only decide standalone
+    // availability — declared leads with none (gpt-6-astra-*) still qualify.
+    // The sidekick below keeps the harness requirement: a subagent runs on
+    // its own harness.
     if (leadNative.disabled !== false || leadNative.isModelRouter !== false || hiddenSet.has(leadCandidate)
         || (allowed && !allowed.has(leadCandidate))) continue;
     if (sideNative.disabled !== false || sideNative.isModelRouter !== false || !sideNative.harnessUids?.length || hiddenSet.has(sideCandidate)

@@ -11,7 +11,7 @@ function contextDetails(session, monitor, catalog) {
     { key: 'turn', label: '本轮耗时 · 含等待', value: seconds(session?.turn?.durationMs) }];
   if (fusion) rows.push({ key: 'lead', label: '配置主模型', value: label(fusion.leadUid) }, { key: 'sidekick', label: '配置副模型', value: label(fusion.sidekickUid) });
   for (const subagent of session?.subagents || []) rows.push({ key: 'subagent:' + JSON.stringify([subagent.parentAgentId, subagent.runId]),
-    label: '子代理 · ' + (subagent.runId ? String(subagent.runId).slice(0, 8) : '无 runId'), value: usage(subagent),
+    label: '子代理 · ' + (subagent.parentAgentId || '—') + (subagent.runId ? ' · ' + String(subagent.runId).slice(0, 8) : ''), value: usage(subagent),
     title: `${subagent.parentAgentId} / ${subagent.runId ?? '—'}` });
   const matching = session ? monitor?.sessions?.filter(item => item.sessionId === session.sessionId) || [] : [];
   const sessionTitle = matching.length === 1 ? matching[0].title || null : null;

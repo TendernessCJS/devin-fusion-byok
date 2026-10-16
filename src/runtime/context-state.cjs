@@ -61,7 +61,12 @@ function createContextState({ now = () => performance.now(), wallNow = () => Dat
   function observe(sessionId, update) {
     if (!id(sessionId) || !update || typeof update !== 'object') return;
     const meta = update._meta?.['cognition.ai/subagent_context'];
-    const scoped = meta !== undefined && meta !== null;
+    // `parentAgentId` names the agent this update belongs to, not its parent:
+    // the CLI reports the session's own root context under the reserved id
+    // `root`, with usage byte-identical to the unscoped lead stream. Filing it
+    // as a subagent produced a phantom second row duplicating 主上下文; only
+    // values like `sidekick` denote real subagents.
+    const scoped = meta !== undefined && meta !== null && meta.parentAgentId !== 'root';
     if (update.sessionUpdate === 'usage_update') {
       const usage = usageOf(update, wallNow());
       if (!usage) return;
