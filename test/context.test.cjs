@@ -309,3 +309,17 @@ test('the panel follows new focus events once, then manual picks hold', () => {
     assert.equal(messages.at(-1).selectedSessionId, 'b', 'an unobservable session cannot steal the selection');
   } finally { handle.dispose(); }
 });
+
+test('subagent rows carry a visible run-id marker instead of relying on hover', () => {
+  const session = { sessionId: 's', lead: { used: 10, size: 100 }, subagents: [
+    { parentAgentId: 'p', runId: 'abcdef1234567890', used: 20, size: 200 },
+    { parentAgentId: 'p', runId: null, used: 30, size: 300 },
+  ] };
+  const subs = contextDetails(session).rows.filter(row => row.key.startsWith('subagent:'));
+  assert.equal(subs.length, 2);
+  assert.equal(subs[0].label, '子代理 · abcdef12');
+  assert.equal(subs[1].label, '子代理 · 无 runId');
+  assert.notEqual(subs[0].key, subs[1].key);
+  assert.equal(subs[0].value, '20 / 200 token · 10%');
+  assert.equal(subs[1].value, '30 / 300 token · 10%');
+});

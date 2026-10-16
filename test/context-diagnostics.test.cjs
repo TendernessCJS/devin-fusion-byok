@@ -8,14 +8,17 @@ const { spawnSync } = require('node:child_process');
 const { createContextDiagnostics, STALE_AFTER_MS } = require('../src/runtime/context-diagnostics.cjs');
 test('diagnostics are private, isolated, bounded snapshots without session payloads', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-diagnostics-'));
-  const options = { root, version: '0.3.26', readStatus: () => ({ state: 'observing', connections: 1, usageUpdates: 2, usageRejections: { 'invalid-used': 1, 'missing-size': 2, 'zero-size': -1, 'never-persist': 123 }, secret: 'never-persist' }), snapshot: () => [{ sessionId: 'never-persist', lead: { used: 123 }, subagents: [{}] }], intervalMs: 60000 };
+  const options = { root, version: '0.3.26', readStatus: () => ({ state: 'observing', connections: 1, usageUpdates: 2, usageRejections: { 'invalid-used': 1, 'missing-size': 2, 'zero-size': -1, 'never-persist': 123 }, secret: 'never-persist' }), snapshot: () => [{ sessionId: 'sess-diag', lead: { used: 123 }, subagents: [{}] }], intervalMs: 60000 };
   const first = createContextDiagnostics({ ...options, pid: 123 });
   const second = createContextDiagnostics({ ...options, pid: 456 });
   try {
     const file = path.join(root, 'context-diagnostics', '123.json');
     const raw = fs.readFileSync(file, 'utf8'), data = JSON.parse(raw);
     assert.equal(data.connections, 1); assert.equal(data.leadSessions, 1); assert.equal(data.subagentUsages, 1);
-    assert.equal(data.sessionUpdates, null); assert.ok(!raw.includes('never-persist')); assert.ok(!raw.includes('"used":'));
+    assert.equal(data.sessionUpdates, null); assert.ok(!raw.includes('never-persist'));
+    assert.deepEqual(Object.keys(data.subagentDetails[0]).sort(), ['lead', 'modelUid', 'sessionId', 'subagents']);
+    assert.deepEqual(Object.keys(data.subagentDetails[0].subagents[0]).sort(), ['parentAgentId', 'runId', 'size', 'used'],
+      'subagent detail rows carry ids and numbers only, no session payload');
     assert.deepEqual(data.usageRejections, { 'invalid-session-id': null, 'invalid-used': 1, 'missing-size': 2,
       'zero-size': null, 'invalid-parent-id': null, 'invalid-run-id': null }, 'the vocabulary matches the observer exactly');
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
@@ -58,4 +61,54 @@ test('residue from processes that are gone is swept while live and recent files 
       assert.equal(fs.existsSync(path.join(dir, `${process.pid}.json`)), true, 'our own file is written');
     } finally { handle.dispose(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('subagent details record bounded ids and numbers only', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-diagnostics-'));
+  const sub = (parentAgentId, runId, used, size) => ({ parentAgentId, runId, used, size });
+  const snapshot = [
+    { sessionId: 's1', modelUid: 'm1', lead: { used: 10, size: 100 }, subagents: [sub('p1', 'run-a', 5, 50), sub('p1', undefined, 6, 60)] },
+    { sessionId: 's2', modelUid: 'm2', lead: null },
+    { sessionId: 's3', modelUid: 'm3', lead: { used: 1, size: 2 }, subagents: Array.from({ length: 9 }, (_, i) => sub('p', 'r' + i, i, 10)) },
+    { sessionId: 's4', modelUid: 'm4', lead: { used: 1, size: 2 }, subagents: [sub('p', 'r', 1, 10)] },
+    { sessionId: 's5', modelUid: 'm5', lead: { used: 1, size: 2 }, subagents: [sub('p', 'r', 1, 10)] },
+  ];
+  const handle = createContextDiagnostics({ root, version: '0.3.45', readStatus: () => ({}), snapshot: () => snapshot, pid: 321, intervalMs: 60000 });
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(root, 'context-diagnostics', '321.json'), 'utf8'));
+    assert.equal(data.subagentUsages, 13);
+    assert.equal(data.subagentDetailsTruncated, true, 'five sessions and a nine-row session both trip the bounds');
+    assert.equal(data.subagentDetails.length, 4, 'sessions are bounded at four');
+    assert.equal(data.subagentDetails[0].sessionId, 's1');
+    assert.equal(data.subagentDetails[0].modelUid, 'm1');
+    assert.deepEqual(data.subagentDetails[0].lead, { used: 10, size: 100 });
+    assert.deepEqual(data.subagentDetails[0].subagents[0], { parentAgentId: 'p1', runId: 'run-a', used: 5, size: 50 });
+    assert.equal(data.subagentDetails[0].subagents[1].runId, null, 'a missing runId serializes as null, not undefined');
+    assert.equal(data.subagentDetails[1].subagents.length, 8, 'rows are bounded per session');
+  } finally { handle.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('subagent details stay empty and untruncated without subagent usage', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-diagnostics-'));
+  const handle = createContextDiagnostics({ root, version: '0.3.45', readStatus: () => ({}),
+    snapshot: () => [{ sessionId: 's', modelUid: 'm', lead: { used: 1, size: 2 } }], pid: 322, intervalMs: 60000 });
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(root, 'context-diagnostics', '322.json'), 'utf8'));
+    assert.deepEqual(data.subagentDetails, []);
+    assert.equal(data.subagentUsages, 0);
+    assert.equal(data.subagentDetailsTruncated, false);
+  } finally { handle.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('subagent details stay untruncated within the bounds', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-diagnostics-'));
+  const handle = createContextDiagnostics({ root, version: '0.3.45', readStatus: () => ({}),
+    snapshot: () => [{ sessionId: 's', modelUid: 'm', lead: { used: 1, size: 2 },
+      subagents: [{ parentAgentId: 'p', runId: 'r', used: 1, size: 2 }] }], pid: 323, intervalMs: 60000 });
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(root, 'context-diagnostics', '323.json'), 'utf8'));
+    assert.equal(data.subagentDetailsTruncated, false);
+    assert.deepEqual(data.subagentDetails, [{ sessionId: 's', modelUid: 'm', lead: { used: 1, size: 2 },
+      subagents: [{ parentAgentId: 'p', runId: 'r', used: 1, size: 2 }] }]);
+  } finally { handle.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
 });

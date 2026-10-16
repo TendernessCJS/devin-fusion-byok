@@ -14,6 +14,10 @@ const SWEEP_INTERVAL_MS = 60000;
 // or a freshly created one from being swept before its owner starts writing.
 const STALE_AFTER_MS = 10 * 60 * 1000;
 const FILE_NAME = /^(\d+)\.json$/;
+// Bounded ids-and-numbers detail for telling "one subagent reported under two
+// key shapes" apart from a genuine second instance — no hover needed.
+const SUBAGENT_SESSION_LIMIT = 4;
+const SUBAGENT_ROW_LIMIT = 8;
 function isRunning(pid) {
   try { process.kill(pid, 0); return true; }
   catch (error) { return error?.code === 'EPERM'; }
@@ -36,6 +40,15 @@ function createContextDiagnostics({ root, version, readStatus, snapshot, pid = p
       }
       data.leadSessions = sessions.filter(session => session.lead).length;
       data.subagentUsages = sessions.reduce((total, session) => total + (session.subagents?.length || 0), 0);
+      const withSubagents = sessions.filter(session => session.subagents?.length);
+      data.subagentDetails = withSubagents.slice(0, SUBAGENT_SESSION_LIMIT).map(session => ({
+        sessionId: session.sessionId ?? null, modelUid: session.modelUid ?? null,
+        lead: session.lead ? { used: session.lead.used, size: session.lead.size } : null,
+        subagents: session.subagents.slice(0, SUBAGENT_ROW_LIMIT).map(subagent => ({ parentAgentId: subagent.parentAgentId ?? null,
+          runId: subagent.runId ?? null, used: subagent.used ?? null, size: subagent.size ?? null })),
+      }));
+      data.subagentDetailsTruncated = withSubagents.length > SUBAGENT_SESSION_LIMIT ||
+        withSubagents.some(session => session.subagents.length > SUBAGENT_ROW_LIMIT);
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       if (fs.lstatSync(directory).isSymbolicLink()) return false;
       const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW, 0o600);
