@@ -1214,6 +1214,49 @@ test('matrix dimension orders are hash-stable across catalog generations', () =>
   for (const order of orders) assert.ok(order >= 0x10000000, 'custom orders stay out of the official range');
 });
 
+test('custom dimension values group per provider ranked by name, never by config position', () => {
+  const grouped = buildCatalog({
+    providers: [
+      { id: 'zeta', name: 'Zeta', baseUrl: 'https://zeta.invalid/v1', apiKey: 'k', apiFormat: 'openai',
+        models: [
+          { id: 'zeta-b', label: 'zeta-b', efforts: ['high', 'max'], contextWindow: 128000, maxOutputTokens: 8192 },
+          { id: 'zeta-a', label: 'zeta-a', efforts: ['max'], contextWindow: 128000, maxOutputTokens: 8192 },
+        ] },
+      { id: 'alpha', name: 'Alpha', baseUrl: 'https://alpha.invalid/v1', apiKey: 'k', apiFormat: 'openai',
+        models: [
+          { id: 'alpha-b', label: 'alpha-b', efforts: ['max'], contextWindow: 128000, maxOutputTokens: 8192 },
+          { id: 'alpha-a', label: 'alpha-a', efforts: ['high'], contextWindow: 128000, maxOutputTokens: 8192 },
+        ] },
+    ],
+    sidekicks: [
+      { providerId: 'zeta', model: 'zeta-b' }, { providerId: 'zeta', model: 'zeta-a' },
+      { providerId: 'alpha', model: 'alpha-b' }, { providerId: 'alpha', model: 'alpha-a' },
+    ],
+  }, [], null);
+  const dims = key => {
+    const seen = new Map();
+    for (const model of grouped.models) {
+      if (model.kind !== 'matrix') continue;
+      const entry = model.json.modelFamilyMetadata.entries.find(item => item.key === key);
+      if (entry && !seen.has(entry.value.name)) seen.set(entry.value.name, entry.value.order);
+    }
+    return [...seen].sort((a, b) => a[1] - b[1]);
+  };
+  const lead = dims('Lead');
+  assert.deepEqual(lead.map(([name]) => name),
+    ['Alpha · alpha-a', 'Alpha · alpha-b', 'Zeta · zeta-a', 'Zeta · zeta-b'],
+    'providers sort by name and models sort inside the block');
+  const side = dims('Sidekick');
+  assert.deepEqual(side.map(([name]) => name),
+    ['Alpha · alpha-a High', 'Alpha · alpha-b Max', 'Zeta · zeta-a Max', 'Zeta · zeta-b High', 'Zeta · zeta-b Max'],
+    'inside a provider, models sort by name and effort tiers by slot order');
+  for (const list of [lead, side]) {
+    const orders = list.map(([, order]) => order);
+    assert.equal(new Set(orders).size, orders.length, 'orders are unique per dimension');
+    for (const order of orders) assert.ok(order >= 0x10000000, 'custom orders stay out of the official range');
+  }
+});
+
 test('augmentation drops f32-less fusion entries emitted by earlier catalog generations', () => {
   const probe = buildCatalog(config(), OBSERVED_SWE);
   const stale = cat(s(1, 'Fusion (Claude Haiku 5.5 Medium + GLM)'), s(22, 'fusion-claude-haiku-5-5-medium-sidekick-glm-5-2'),

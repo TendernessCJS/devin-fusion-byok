@@ -29,6 +29,28 @@ function stableOrders(keys, reserved) {
   return result;
 }
 
+// Dimension values we own group per provider so the picker's Lead/Sidekick
+// dropdowns keep one provider's models together, and sort inside the group.
+// Provider blocks are ranked by NAME, never by config position: reordering
+// providers must not reshuffle orders that caches and the picker already saw.
+// A sorted rank is necessarily a function of the current set, so two catalog
+// generations can hand one `order` to two different names — and the picker
+// dedupes dimension values by `order`, silently dropping one. The per-name
+// offset inside the slot turns that from a certainty (a model joining the set
+// shifts every later rank) into a 1/SLOT coincidence.
+function groupedOrders(groups, reserved) {
+  const result = new Map(), used = new Set(reserved || []);
+  groups.forEach((names, providerRank) => {
+    names.forEach((name, valueRank) => {
+      let order = 0x10000000 + providerRank * 0x10000 + valueRank * 0x40
+        + (parseInt(digest(name).slice(0, 8), 16) % 0x40);
+      while (used.has(order)) order++;
+      result.set(name, order); used.add(order);
+    });
+  });
+  return result;
+}
+
 // A native uid ends with its effort tier slug, optionally followed by a fast
 // marker (-fast / -priority); a scale qualifier (-1m) may sit after the tier.
 // Everything before that is the family base, with the qualifier kept on it.
@@ -153,4 +175,4 @@ function nativeUid(entry) {
   const uid = camel ?? snake;
   return typeof uid === 'string' ? uid : '';
 }
-module.exports = { OWN_GROUP, SIDEKICK_HARNESSES, ownUid, has, digest, slug, concat, positive, refKey, stableOrders, NATIVE_EFFORT_SUFFIX, leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, NATIVE_LABEL_SUFFIX, leadFamilyLabel, effortMetadata, encodeFamily, encodeConfig, configFor, expandHiddenByFamily, normalizeAllowedUids, nativeUid };
+module.exports = { OWN_GROUP, SIDEKICK_HARNESSES, ownUid, has, digest, slug, concat, positive, refKey, stableOrders, groupedOrders, NATIVE_EFFORT_SUFFIX, leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, NATIVE_LABEL_SUFFIX, leadFamilyLabel, effortMetadata, encodeFamily, encodeConfig, configFor, expandHiddenByFamily, normalizeAllowedUids, nativeUid };
