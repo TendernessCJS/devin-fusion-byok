@@ -442,6 +442,60 @@ test('upstream errors expose HTTP status without body, prompt or credentials', a
   assert.equal(JSON.stringify(app.logs).includes('User message'), false);
 });
 
+test('a thinking-mode refusal of a forced tool_choice retries once with auto', async t => {
+  let call = 0;
+  const app = await bridge(t, async (req, res) => {
+    call += 1;
+    if (call === 1) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Thinking mode does not support this tool_choice' } }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [{ delta: { content: 'recovered' } }] }));
+    res.write(event({ choices: [{ delta: {}, finish_reason: 'stop' }] }));
+    res.end('data: [DONE]\n\n');
+  }, 'openai');
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(app.requests.length, 2, 'exactly one retry');
+  assert.deepEqual(app.requests[0].body.tool_choice, { type: 'function', function: { name: 'sidekick' } });
+  assert.equal(app.requests[1].body.tool_choice, 'auto');
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'recovered');
+  assert.equal(JSON.stringify(app.logs).includes('tool_choice'), false, 'the provider message is never logged');
+});
+
+test('the same refusal degrades on the Responses path too', async t => {
+  let call = 0;
+  const app = await bridge(t, async (req, res) => {
+    call += 1;
+    if (call === 1) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end('{"error":{"message":"Thinking mode does not support this tool_choice"}}');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'recovered' }));
+    res.write(event({ type: 'response.completed', response: { status: 'completed', output: [] } }));
+    res.end();
+  });
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(app.requests.length, 2);
+  assert.deepEqual(app.requests[0].body.tool_choice, { type: 'function', name: 'sidekick' });
+  assert.equal(app.requests[1].body.tool_choice, 'auto');
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'recovered');
+});
+
+test('a 400 unrelated to tool_choice keeps its single attempt and plain status', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end('{"error":{"message":"This model\'s maximum context length is 65536 tokens"}}');
+  });
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(app.requests.length, 1, 'an unrelated 400 must not be retried');
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'Provider returned HTTP 400.');
+  assert.equal(num(output.messages.at(-1), 5), 13);
+});
+
 test('client cancellation aborts active upstream request', async t => {
   let upstreamClosed;
   const closed = new Promise(resolve => { upstreamClosed = resolve; });

@@ -20,6 +20,31 @@ function endpoint(provider) {
   return { url, chat, anthropic };
 }
 
+// A forced/required choice is the only kind a thinking-mode provider refuses;
+// `auto`, `none` and an absent value are always accepted.
+function forcedToolChoice(body) {
+  const choice = body?.tool_choice;
+  if (choice === undefined || choice === null) return false;
+  return choice !== 'auto' && choice !== 'none';
+}
+
+// Bounded read of an error response, used only to classify a refusal. The text
+// is never logged or forwarded — it just decides whether one retry is worth it.
+async function readErrorDetail(response, limit = 4096) {
+  try {
+    const reader = response.body?.getReader();
+    if (!reader) return '';
+    let text = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += Buffer.from(value).toString('utf8');
+      if (text.length >= limit) { try { await reader.cancel(); } catch { /* already drained */ } break; }
+    }
+    return text.slice(0, limit);
+  } catch { return ''; }
+}
+
 function contentOf(message, chat) {
   if (!message.images?.length) return message.content;
   const parts = [];
@@ -331,20 +356,37 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
 
   try {
     const { url, chat, anthropic } = endpoint(provider);
-    const body = buildRequestBody(request, route, provider);
-
-    armTimer(firstResponseLimit, 'upstream_timeout');
-    const upstream = await fetch(url, {
-      redirect: 'error',
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'text/event-stream',
-        ...(anthropic ? anthropicHeaders(provider.apiKey) : provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {})
-      },
-      body: JSON.stringify(body),
-      signal: upstreamController.signal
-    });
+    let body = buildRequestBody(request, route, provider);
+    const headers = {
+      'content-type': 'application/json',
+      accept: 'text/event-stream',
+      ...(anthropic ? anthropicHeaders(provider.apiKey) : provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {})
+    };
+    const send = payload => {
+      armTimer(firstResponseLimit, 'upstream_timeout');
+      return fetch(url, {
+        redirect: 'error',
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: upstreamController.signal
+      });
+    };
+    let upstream = await send(body);
+    // Thinking-mode providers (DeepSeek) answer a forced/required tool_choice
+    // with HTTP 400 — "Thinking mode does not support this tool_choice" —
+    // instead of ignoring it, so a forced choice turns a working request into a
+    // hard failure. Degrade to `auto` only on that refusal: providers that do
+    // honour forced choices keep them, and one retry bounds the cost. The
+    // provider's own message must name tool_choice, so a 400 about anything
+    // else (context length, bad parameters) still surfaces unchanged.
+    if (!upstream.ok && upstream.status === 400 && forcedToolChoice(body)) {
+      const detail = await readErrorDetail(upstream);
+      if (/tool_choice/i.test(detail)) {
+        body = { ...body, tool_choice: 'auto' };
+        upstream = await send(body);
+      }
+    }
     clearTimer();
 
     status = upstream.status;
