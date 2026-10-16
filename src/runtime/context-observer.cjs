@@ -1,6 +1,6 @@
 'use strict';
 const { createRequire } = require('node:module');
-const { createContextState, usageRejectionReason } = require('./context-state.cjs');
+const { createContextState, usageRejectionReason, USAGE_REJECTIONS } = require('./context-state.cjs');
 const KEY = Symbol.for('devin-fusion-byok.context-observer.v1');
 function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
   const api = createRequire(nativeMainPath)('vscode').windsurfAcp;
@@ -14,7 +14,7 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
   // updates stream in the background and must not count as focus.
   const FOCUS_METHODS = new Set(['session/prompt', 'session/load', 'session/resume', 'session/set_config_option']);
   const focus = id => { if (id && enabled()) { focusedSessionId = id; focusedAt = Date.now(); } };
-  const usageRejections = { 'invalid-session-id': 0, 'invalid-used': 0, 'invalid-size': 0, 'invalid-parent-id': 0, 'invalid-run-id': 0 };
+  const usageRejections = Object.fromEntries(USAGE_REJECTIONS.map(key => [key, 0]));
   const status = () => ({ state: disposed ? 'disposed' : isEnabled() ? 'observing' : 'disabled', connections: connections.size, registrations, sessionUpdates, usageUpdates, acceptedUsageUpdates, rejectedUsageUpdates, usageRejections: { ...usageRejections } });
   function restore(object, key, wrapper, previous) {
     if (object[key] !== wrapper) return;

@@ -8,7 +8,7 @@ const { spawnSync } = require('node:child_process');
 const { createContextDiagnostics, STALE_AFTER_MS } = require('../src/runtime/context-diagnostics.cjs');
 test('diagnostics are private, isolated, bounded snapshots without session payloads', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-diagnostics-'));
-  const options = { root, version: '0.3.26', readStatus: () => ({ state: 'observing', connections: 1, usageUpdates: 2, usageRejections: { 'invalid-used': 1, 'invalid-size': -1, 'never-persist': 123 }, secret: 'never-persist' }), snapshot: () => [{ sessionId: 'never-persist', lead: { used: 123 }, subagents: [{}] }], intervalMs: 60000 };
+  const options = { root, version: '0.3.26', readStatus: () => ({ state: 'observing', connections: 1, usageUpdates: 2, usageRejections: { 'invalid-used': 1, 'missing-size': 2, 'zero-size': -1, 'never-persist': 123 }, secret: 'never-persist' }), snapshot: () => [{ sessionId: 'never-persist', lead: { used: 123 }, subagents: [{}] }], intervalMs: 60000 };
   const first = createContextDiagnostics({ ...options, pid: 123 });
   const second = createContextDiagnostics({ ...options, pid: 456 });
   try {
@@ -16,7 +16,8 @@ test('diagnostics are private, isolated, bounded snapshots without session paylo
     const raw = fs.readFileSync(file, 'utf8'), data = JSON.parse(raw);
     assert.equal(data.connections, 1); assert.equal(data.leadSessions, 1); assert.equal(data.subagentUsages, 1);
     assert.equal(data.sessionUpdates, null); assert.ok(!raw.includes('never-persist')); assert.ok(!raw.includes('"used":'));
-    assert.deepEqual(data.usageRejections, { 'invalid-session-id': null, 'invalid-used': 1, 'invalid-size': null, 'invalid-parent-id': null, 'invalid-run-id': null });
+    assert.deepEqual(data.usageRejections, { 'invalid-session-id': null, 'invalid-used': 1, 'missing-size': 2,
+      'zero-size': null, 'invalid-parent-id': null, 'invalid-run-id': null }, 'the vocabulary matches the observer exactly');
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
     assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
     first.refresh(); assert.equal(fs.readdirSync(path.dirname(file)).length, 2);

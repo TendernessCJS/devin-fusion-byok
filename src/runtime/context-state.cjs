@@ -6,10 +6,20 @@ function usageOf(update, timestampMs) {
   if (used === null || size === null || size === 0) return null;
   return { used, size, timestampMs };
 }
+// Closed vocabulary of why a `usage_update` cannot be used. One list, consumed by
+// the observer's counters and the diagnostics file, so the three copies cannot
+// drift apart again.
+// `missing-size` and `zero-size` are deliberately separate: the first means the
+// field was absent or malformed (an upstream shape change), the second is a value
+// upstream actually sent. Folding them into one `invalid-size` bucket made a
+// startup replay of 55 legacy updates read as a live 85% rejection rate with no
+// way to tell which cause it was.
+const USAGE_REJECTIONS = ['invalid-session-id', 'invalid-used', 'missing-size', 'zero-size', 'invalid-parent-id', 'invalid-run-id'];
 function usageRejectionReason(sessionId, update) {
   if (!id(sessionId)) return 'invalid-session-id';
   if (tokens(update?.used) === null) return 'invalid-used';
-  if (tokens(update?.size) === null || update.size === 0) return 'invalid-size';
+  if (tokens(update?.size) === null) return 'missing-size';
+  if (update.size === 0) return 'zero-size';
   const meta = update?._meta?.['cognition.ai/subagent_context'];
   if (meta != null && !id(meta?.parentAgentId)) return 'invalid-parent-id';
   if (meta?.runId != null && !id(meta.runId)) return 'invalid-run-id';
@@ -95,4 +105,4 @@ function createContextState({ now = () => performance.now(), wallNow = () => Dat
   }
   return { start, finish, observe, selectModel, reset, snapshot, clear() { sessions.clear(); } };
 }
-module.exports = { createContextState, usageRejectionReason };
+module.exports = { createContextState, usageRejectionReason, USAGE_REJECTIONS };

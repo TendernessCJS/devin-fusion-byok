@@ -179,8 +179,8 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 | `test/monitor-stats.test.cjs` | 本 fork 新增（upstream 无），日历月/自定义/DST 边界、同范围重算与浏览器函数注入验证 |
 | `src/runtime/monitor-client.cjs` | 公开白名单保留标题、归属/存储诊断和保留上限；新增字段缺失兼容旧 backend，非法诊断不伪装为零 |
 | `src/panel/monitor-view.cjs` | 完整会话 tooltip、100 条分页和 DOM 复用；默认当月时间×会话筛选，区间内重新汇总；本机时区展示与原始时间提示；细分诊断和明确 TPS 口径 |
-| `test/monitor.test.cjs`、`test/monitor-panel.test.cjs` | 覆盖默认禁用消息扫描、诊断 opt-in、细分归属/存储状态、旧快照兼容、reasoning/异常计数/分段 ID、指标口径，以及既有异步存储/分页/状态重传 |
-| `src/panel/context-view.cjs`、`test/context.test.cjs` | 上下文详情的最近请求指标文案与监控保持同一口径，不拿原生 TPS 替代插件度量 |
+| `test/monitor.test.cjs`、`test/monitor-panel.test.cjs` | 覆盖归属只走 `tool_call_state`（含「任何情况下都不得查 `message_nodes`」的 SQL 捕获断言）、细分归属/存储状态、旧快照兼容、reasoning/异常计数/分段 ID、指标口径，以及既有异步存储/分页/状态重传 |
+| `src/panel/context-view.cjs`、`src/runtime/context-state.cjs`、`src/runtime/context-observer.cjs` | 上下文详情的最近请求指标文案与监控保持同一口径，不拿原生 TPS 替代插件度量。拒绝原因词汇表**只在 `context-state.cjs` 定义一次**（`USAGE_REJECTIONS`），observer 的计数器与 `context-diagnostics` 写盘都从它派生——这三份清单历史上各写一遍，改动时必然漂移。**`size` 缺失与 `size === 0` 是两个不同的事实**（`missing-size` = 上游形态变了；`zero-size` = 上游确实发了 0），必须分开计数：实测 ACP 在会话加载时会重放约 55 条 `size: 0` 的历史 subagent `usage_update`（字段齐全、类型正确、`used` 是真实值，只是窗口未知），旧的合并桶把这次一次性重放显示成「85% 的实时更新被拒」且无法定性。这些更新还携带 `cognition.ai/{inputTokens,outputTokens,cachedReadTokens}`，若将来要在面板里显示 subagent 的 token 用量（无百分比），数据源就在这里 |
 | `src/config.cjs`、`test/config.test.cjs` | 模型发现使用独立 Agent 的 `directFetch`；显式 request 注入测试；不依赖宿主 fetch 或全局 Agent |
 | `src/extension.cjs`、`test/extension-lifecycle.test.cjs` | 错误自动继续达到预算后显示中文警告，安全处理提示 Promise；激活期执行一次幂等的退役配置键清理；`checkCliCaches` 返回报告并同时服务面板手动刷新 |
 | `src/runtime/auto-continue.cjs`、`test/auto-continue.test.cjs` | 连续错误最多自动重试 5 次、窗口 10 分钟；停止时结算并清理，回调不能影响新回合 |

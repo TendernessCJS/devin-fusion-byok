@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { USAGE_REJECTIONS } = require('./context-state.cjs');
 // Diagnostics exist for a human reading them after something went wrong, not for
 // a live dashboard, so the write only has to stay recent enough to be useful.
 // At the original 2s cadence every window left a file behind forever — 192 had
@@ -29,7 +30,7 @@ function createContextDiagnostics({ root, version, readStatus, snapshot, pid = p
         writtenAt: new Date().toISOString(), state: disposed ? 'disposed' : ['observing', 'disabled', 'disposed'].includes(status.state) ? status.state : 'unavailable' };
       for (const key of ['connections', 'registrations', 'sessionUpdates', 'usageUpdates', 'acceptedUsageUpdates', 'rejectedUsageUpdates']) data[key] = Number.isSafeInteger(status[key]) && status[key] >= 0 ? status[key] : null;
       data.usageRejections = {};
-      for (const key of ['invalid-session-id', 'invalid-used', 'invalid-size', 'invalid-parent-id', 'invalid-run-id']) {
+      for (const key of USAGE_REJECTIONS) {
         const count = status.usageRejections?.[key];
         data.usageRejections[key] = Number.isSafeInteger(count) && count >= 0 ? count : null;
       }

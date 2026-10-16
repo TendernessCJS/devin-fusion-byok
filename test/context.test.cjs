@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const { createContextState, usageRejectionReason } = require('../src/runtime/context-state.cjs');
+const { createContextState, usageRejectionReason, USAGE_REJECTIONS } = require('../src/runtime/context-state.cjs');
 const { contextDetails, contextScript, contextHtml, createContextUi } = require('../src/panel/context-view.cjs');
 const update = (used = 20, size = 100, meta) => ({ sessionUpdate: 'usage_update', used, size, ...(meta ? { _meta: { 'cognition.ai/subagent_context': meta } } : {}) });
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -52,7 +52,7 @@ function fixture(protocolVersion = 1) {
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(require.resolve('../src/runtime/context-observer.cjs'), 'utf8'), { module, exports: module.exports, require(name) {
     if (name === 'node:module') return { createRequire: () => () => ({ windsurfAcp: api }) };
-    return { createContextState, usageRejectionReason };
+    return { createContextState, usageRejectionReason, USAGE_REJECTIONS };
   } });
   const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion,
     sendRequest() { if (response instanceof Error) throw response; return response; },
@@ -110,7 +110,13 @@ test('observer diagnostics distinguish connected traffic from missing usage with
 test('usage rejection reasons are fixed, isolated and preserve valid zero and optional run IDs', () => {
   const f = fixture();
   try {
-    const cases = [[null, update(), 'invalid-session-id'], ['s', update(-1), 'invalid-used'], ['s', update(0, 0), 'invalid-size'], ['s', update(0, 100, { parentAgentId: '' }), 'invalid-parent-id'], ['s', update(0, 100, { parentAgentId: 'p', runId: 3 }), 'invalid-run-id']];
+    // `missing-size` and `zero-size` are separate facts: one is an upstream shape
+    // problem, the other is a value upstream sent. Folding them together once made
+    // a startup replay read as a live rejection rate with no way to tell which.
+    const cases = [[null, update(), 'invalid-session-id'], ['s', update(-1), 'invalid-used'],
+      ['s', { sessionUpdate: 'usage_update', used: 20 }, 'missing-size'], ['s', update(20, null), 'missing-size'],
+      ['s', update(0, 0), 'zero-size'],
+      ['s', update(0, 100, { parentAgentId: '' }), 'invalid-parent-id'], ['s', update(0, 100, { parentAgentId: 'p', runId: 3 }), 'invalid-run-id']];
     for (const [sessionId, data, reason] of cases) {
       assert.equal(usageRejectionReason(sessionId, data), reason);
       f.connector.forwardClientRequest({ method: 'session/update', params: { sessionId, update: data } });
@@ -119,8 +125,11 @@ test('usage rejection reasons are fixed, isolated and preserve valid zero and op
     assert.equal(usageRejectionReason('s', valid), null);
     f.connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's', update: valid } });
     const status = f.handle.status();
-    assert.equal(status.acceptedUsageUpdates, 1); assert.equal(status.rejectedUsageUpdates, 5);
-    assert.deepEqual(Object.values(status.usageRejections), [1, 1, 1, 1, 1]);
+    assert.equal(status.acceptedUsageUpdates, 1); assert.equal(status.rejectedUsageUpdates, 7);
+    assert.deepEqual(Object.keys(status.usageRejections).sort(), [...USAGE_REJECTIONS].sort());
+    // The counters are built inside the vm realm, so normalize before comparing.
+    assert.deepEqual(JSON.parse(JSON.stringify(status.usageRejections)), Object.fromEntries(USAGE_REJECTIONS.map(key =>
+      [key, cases.filter(([, , reason]) => reason === key).length])));
     status.usageRejections['invalid-used'] = 99;
     assert.equal(f.handle.status().usageRejections['invalid-used'], 1);
   } finally { f.handle.dispose(); }
