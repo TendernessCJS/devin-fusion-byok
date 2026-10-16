@@ -2,7 +2,7 @@
 
 const { randomUUID } = require('node:crypto');
 const { frame } = require('./wire.cjs');
-const { textChunk, thinkingChunk, toolChunk, stopChunk, usageChunk } = require('./chat.cjs');
+const { textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk } = require('./chat.cjs');
 const { createTracker } = require('./tracker.cjs');
 const { isAnthropicFormat, anthropicHeaders, buildAnthropicBody, createAnthropicAdapter } = require('./anthropic.cjs');
 const MAX_SSE_BUFFER = 64 * 1024 * 1024;
@@ -195,6 +195,10 @@ function processor(id, uid, chat, emit) {
           if (delta.content) await text('chat', delta.content);
           if (delta.refusal) await text('chat-refusal', delta.refusal);
           if (delta.reasoning_content || delta.reasoning) await text('reasoning', delta.reasoning_content || delta.reasoning, false, true);
+          // Signatures and redacted-thinking flags are passthrough markers, not
+          // semantic output — they must not feed `texts` or the empty-output check.
+          if (delta.signature) await emit(signatureChunk(id, delta.signature));
+          if (delta.thinking_redacted) await emit(redactedThinkingChunk(id));
           for (const tool of delta.tool_calls || []) {
             const call = getCall(tool.index ?? 0);
             if (tool.id) call.id += tool.id;

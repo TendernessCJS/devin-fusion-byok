@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { once } = require('node:events');
-const { s, v, m, str, fields } = require('../src/protocol/wire.cjs');
+const { s, v, m, str, num, fields } = require('../src/protocol/wire.cjs');
 const { parseChat } = require('../src/protocol/chat.cjs');
 const { serveChat, buildRequestBody } = require('../src/protocol/responses.cjs');
 const { modelEfforts } = require('../src/model-capabilities.cjs');
@@ -109,6 +109,51 @@ test('Anthropic stream relays text, thinking and usage with x-api-key auth', asy
   assert.equal(result.metrics[0].cachedTokens, 90);
   assert.equal(result.metrics[0].outputTokens, 7);
   assert.equal(result.metrics[0].hasReasoning, true);
+});
+
+test('Anthropic thinking signature and redacted marker reach the native stream', async t => {
+  const result = await run(t, [
+    sse('message_start', { message: { usage: { input_tokens: 5, output_tokens: 1 } } }),
+    sse('content_block_start', { index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    sse('content_block_delta', { index: 0, delta: { type: 'thinking_delta', thinking: 'Considering' } }),
+    sse('content_block_delta', { index: 0, delta: { type: 'signature_delta', signature: 'sig-xyz' } }),
+    sse('content_block_stop', { index: 0 }),
+    sse('content_block_start', { index: 1, content_block: { type: 'redacted_thinking' } }),
+    sse('content_block_stop', { index: 1 }),
+    sse('content_block_start', { index: 2, content_block: { type: 'text', text: '' } }),
+    sse('content_block_delta', { index: 2, delta: { type: 'text_delta', text: 'Answer' } }),
+    sse('content_block_stop', { index: 2 }),
+    sse('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 7 } }),
+    sse('message_stop', {}),
+  ]);
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Answer');
+  assert.ok(result.messages.some(message => str(message, 10) === 'sig-xyz'), 'signature reaches field 10');
+  assert.ok(result.messages.some(message => num(message, 11) === 1), 'redacted marker reaches field 11');
+  assert.equal(result.metrics[0].status, 'success');
+});
+
+test('Anthropic replays the thinking block only when its signature is present', () => {
+  const signed = buildRequestBody(parseChat(Buffer.concat([
+    s(21, 'local-claude'), nativeMessage(2, 'ANSWER', [s(11, 'TH-1'), s(12, 'SIG-1')]), nativeMessage(1, 'next'),
+  ])), { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  assert.deepEqual(signed.messages[0].content[0], { type: 'thinking', thinking: 'TH-1', signature: 'SIG-1' });
+  assert.deepEqual(signed.messages[0].content[1], { type: 'text', text: 'ANSWER' });
+  const unsigned = buildRequestBody(parseChat(Buffer.concat([
+    s(21, 'local-claude'), nativeMessage(2, 'ANSWER', [s(11, 'TH-1')]), nativeMessage(1, 'next'),
+  ])), { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  assert.ok(!unsigned.messages[0].content.some(block => block.type === 'thinking'), 'no signature means no thinking block');
+});
+
+test('redacted-only thinking still reports empty output', async t => {
+  const result = await run(t, [
+    sse('message_start', { message: { usage: { input_tokens: 5, output_tokens: 1 } } }),
+    sse('content_block_start', { index: 0, content_block: { type: 'redacted_thinking' } }),
+    sse('content_block_stop', { index: 0 }),
+    sse('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 7 } }),
+    sse('message_stop', {}),
+  ]);
+  assert.equal(result.metrics[0].status, 'error');
+  assert.equal(result.metrics[0].code, 'upstream_empty_output');
 });
 
 test('Anthropic stream assembles streamed and empty tool inputs in block order', async t => {

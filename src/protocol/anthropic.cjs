@@ -49,7 +49,10 @@ function buildAnthropicBody(request, route, provider) {
       if (!messages.length) { if (message.content) system.push(message.content); }
       else push('user', message.content ? [{ type: 'text', text: message.content }] : []);
     } else if (message.role === 'assistant') {
-      push('assistant', [...textBlocks(message),
+      // Claude requires the original thinking block, signature included, to be
+      // replayed verbatim once extended thinking is used together with tools.
+      const thinking = message.signature ? [{ type: 'thinking', thinking: message.thinking || '', signature: message.signature }] : [];
+      push('assistant', [...thinking, ...textBlocks(message),
         ...(message.toolCalls || []).map(tool => ({ type: 'tool_use', id: tool.id, name: tool.name, input: toolInput(tool.arguments) }))]);
     } else {
       push('user', textBlocks(message));
@@ -100,6 +103,8 @@ function createAnthropicAdapter() {
         const index = data.index ?? 0;
         if (block.type === 'text') return block.text ? [chunk(event.type, { content: block.text })] : [];
         if (block.type === 'thinking') return block.thinking ? [chunk(event.type, { reasoning_content: block.thinking })] : [];
+        // Redacted thinking carries no payload field, only the marker can pass through.
+        if (block.type === 'redacted_thinking') return [chunk(event.type, { thinking_redacted: true })];
         if (block.type !== 'tool_use') return [];
         const input = block.input && typeof block.input === 'object' && Object.keys(block.input).length ? JSON.stringify(block.input) : '';
         blocks.set(index, { streamed: false, input });
@@ -110,6 +115,7 @@ function createAnthropicAdapter() {
         const index = data.index ?? 0;
         if (delta.type === 'text_delta' && delta.text) return [chunk(event.type, { content: delta.text })];
         if (delta.type === 'thinking_delta' && delta.thinking) return [chunk(event.type, { reasoning_content: delta.thinking })];
+        if (delta.type === 'signature_delta' && delta.signature) return [chunk(event.type, { signature: delta.signature })];
         if (delta.type === 'input_json_delta' && typeof delta.partial_json === 'string' && blocks.has(index)) {
           if (delta.partial_json) blocks.get(index).streamed = true;
           return delta.partial_json ? [toolDelta(event.type, index, { function: { arguments: delta.partial_json } })] : [];
