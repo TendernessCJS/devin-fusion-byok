@@ -137,6 +137,8 @@ tail -c +<偏移> <bundle> | head -c 600
   响应字段 10 delta_signature ──→ 客户端持久化 ──→ 请求字段 12 signature ──→ 回传 thinking 块
   ```
 
+  **字段 10 被两条路径复用**（2026-10-16 登记）：Anthropic 用它回传思考签名，Responses 用它携带推理状态信封（`dfbyok-responses-v1:` + base64url）。信封落在 Devin 侧持久化的同一个 `signature` 槽位，因此 Anthropic 侧回放必须拒绝 `dfbyok-` 前缀（`FOREIGN_STATE_PREFIX`）——否则外来信封会被当成思考签名写进 `{type:'thinking',signature}`，官方对修改过的思考块直接 400。两条路径各自读同一字段但语义不同，**不要让任何一边把对方的值当作自己的载荷**。
+
   证据链：第 1 轮响应 `signature_delta` 1 次（**36 字符**）→ 第 2 轮请求新增助手轮块类型 `["thinking","tool_use"]`、`signedThinkingBlocks: 1`、签名长度 `[36]` → 第 3 轮 `[36, 36]` → 第 4 轮 `[36, 36, 36]`，**逐轮累积且长度逐字一致**。因此「客户端读字段 10 并写回请求字段 12」成立，捕获与回传两半都可达。
 - **字段 21 `delta_signature_type` 不需要发**：上述闭环在**完全不发字段 21** 的情况下成立，所以「取值未知」不再阻塞任何事。`signatureType` 在 JS 里只被初始化为 `""`、无消费逻辑；除非未来真机出现签名回放失败，再考虑补它。
 - **脱敏思考无法往返**：`redacted_thinking` 在请求（字段 13）与响应（字段 11）两侧都只有 bool 标志、没有任何载荷字段，所以本仓只透传 `thinking_redacted=true`，不做载荷回传。

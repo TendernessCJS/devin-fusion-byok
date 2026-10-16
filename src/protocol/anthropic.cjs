@@ -7,6 +7,10 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const MAX_OUTPUT_TOKENS = 128000;
 const DEFAULT_OUTPUT_TOKENS = 64000;
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+// ACP field 10 is shared: the Responses path also writes its state envelope
+// there. Never replay a foreign envelope as a thinking signature — Anthropic
+// requires the original signature verbatim, and a foreign string earns a 400.
+const FOREIGN_STATE_PREFIX = 'dfbyok-';
 
 function isAnthropicFormat(format = '') { return format === 'anthropic'; }
 
@@ -51,7 +55,8 @@ function buildAnthropicBody(request, route, provider) {
     } else if (message.role === 'assistant') {
       // Claude requires the original thinking block, signature included, to be
       // replayed verbatim once extended thinking is used together with tools.
-      const thinking = message.signature ? [{ type: 'thinking', thinking: message.thinking || '', signature: message.signature }] : [];
+      const thinking = message.signature && !message.signature.startsWith(FOREIGN_STATE_PREFIX)
+        ? [{ type: 'thinking', thinking: message.thinking || '', signature: message.signature }] : [];
       push('assistant', [...thinking, ...textBlocks(message),
         ...(message.toolCalls || []).map(tool => ({ type: 'tool_use', id: tool.id, name: tool.name, input: toolInput(tool.arguments) }))]);
     } else {

@@ -120,7 +120,7 @@ function buildRequestBody(request, route, provider) {
       if (message.toolCalls?.length) item.tool_calls = message.toolCalls.map(tool => ({ id: tool.id, type: 'function', function: { name: tool.name, arguments: tool.arguments } }));
       messages.push(item);
     } else {
-      if (message.role === 'assistant' && provider.responsesState === true &&
+      if (message.role === 'assistant' &&
           typeof message.signature === 'string' && message.signature.startsWith(STATE_PREFIX) &&
           Buffer.byteLength(message.signature) <= MAX_STATE_BYTES && !message.images?.length) {
         let state = null;
@@ -138,7 +138,7 @@ function buildRequestBody(request, route, provider) {
   }
   const body = { model: route.model, [chat ? 'messages' : 'input']: messages, stream: true };
   if (chat) body.stream_options = { include_usage: true };
-  if (!chat && provider.responsesState === true) {
+  if (!chat) {
     body.store = false;
     body.include = ['reasoning.encrypted_content'];
   }
@@ -495,13 +495,25 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     // honour forced choices keep them, and one retry bounds the cost. The
     // provider's own message must name tool_choice, so a 400 about anything
     // else (context length, bad parameters) still surfaces unchanged.
-    if (!upstream.ok && upstream.status === 400 && forcedToolChoice(body)) {
+    let retried = false;
+    if (!upstream.ok && upstream.status === 400) {
+      // The response body is read exactly once and shared by both degrade
+      // rules — getReader() fails on a consumed stream, so a second read would
+      // silently see an empty string and skip a recoverable retry.
       const detail = await readErrorDetail(upstream);
-      if (/tool_choice/i.test(detail)) {
+      if (forcedToolChoice(body) && /tool_choice/i.test(detail)) {
         body = { ...body, tool_choice: anthropic
           ? { type: 'auto', ...(body.tool_choice?.disable_parallel_tool_use ? { disable_parallel_tool_use: true } : {}) }
           : 'auto' };
         upstream = await send(body);
+        retried = true;
+      } else if (('store' in body || 'include' in body)
+          && /store|include|reasoning\.encrypted_content/i.test(detail)) {
+        const { store: _store, include: _include, ...stripped } = body;
+        body = stripped;
+        upstream = await send(body);
+        retried = true;
+        record({ event: 'provider-degraded', model: route.model, reason: 'responses-state' });
       }
     }
     clearTimer();
@@ -541,7 +553,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       }
     }
 
-    const stream = processor(id, route.uid || request.modelUid, chat, write, !chat && provider.responsesState === true ? stateScope(provider, route) : null);
+    const stream = processor(id, route.uid || request.modelUid, chat, write, !chat ? stateScope(provider, route) : null);
     try {
       const adapt = anthropic ? createAnthropicAdapter() : event => [event];
       upstream: for await (const raw of events(rawChunksWithTimeout(upstream.body))) {
@@ -617,4 +629,4 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
   }
 }
 
-module.exports = { serveChat, buildRequestBody, parseEvent };
+module.exports = { serveChat, buildRequestBody, parseEvent, STATE_PREFIX };

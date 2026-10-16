@@ -1002,7 +1002,7 @@ test('a custom tool call relays raw input verbatim, including non-JSON', async t
   assert.equal(app.logs.find(e => e.event === 'chat-error'), undefined);
 });
 
-// --- responsesState envelope and replay ---
+// --- responses state envelope and replay ---
 
 const STATE_PREFIX = 'dfbyok-responses-v1:';
 const REASONING_ITEM = { type: 'reasoning', id: 'r1', encrypted_content: 'enc-abc', summary: [] };
@@ -1043,24 +1043,31 @@ function decodeSignature(messages) {
   return { sigs, states: sigs.map(sig => JSON.parse(Buffer.from(sig.slice(STATE_PREFIX.length), 'base64url').toString('utf8'))) };
 }
 
-test('responsesState off (default): no include/store, no signature, no replay', async t => {
-  const signature = STATE_PREFIX + Buffer.from(JSON.stringify({ scope: 'x', items: [MESSAGE_ITEM] })).toString('base64url');
-  const request = Buffer.concat([
-    s(21, 'local-model'), nativeMessage(1, 'user'),
-    nativeMessage(2, 'done', [s(12, signature)]),
-    nativeMessage(1, 'again'),
-  ]);
+test('Responses always carries the state channel while chat and anthropic stay clean', async t => {
+  const request = Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]);
   const fixture = await upstreamFixture(t, TURN_EVENTS);
   const result = await stateSession(t, { apiFormat: 'openai-responses' }, request, fixture);
-  assert.equal('include' in fixture.bodies[0], false, 'off: no include');
-  assert.equal('store' in fixture.bodies[0], false, 'off: no store');
-  assert.equal(decodeSignature(result.messages).sigs.length, 0, 'off: no state signature emitted');
-  const input = fixture.bodies[0].input;
-  assert.equal(input.filter(item => item?.type === 'reasoning').length, 0, 'off: envelope is never replayed');
+  assert.equal(fixture.bodies[0].store, false, 'responses always sends store:false');
+  assert.deepEqual(fixture.bodies[0].include, ['reasoning.encrypted_content']);
+  assert.ok(decodeSignature(result.messages).sigs.length > 0, 'a state signature is emitted');
+
+  for (const apiFormat of ['openai', 'anthropic']) {
+    const other = await upstreamFixture(t, apiFormat === 'anthropic' ? [
+      event({ type: 'message_start', message: { usage: { input_tokens: 1, output_tokens: 0 } } }),
+      event({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'ok' } }),
+      event({ type: 'content_block_stop', index: 0 }),
+      event({ type: 'message_delta', delta: { stop_reason: 'end_turn' } }),
+      event({ type: 'message_stop' }),
+    ] : [event({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }), 'data: [DONE]\n\n']);
+    const clean = await stateSession(t, { apiFormat }, request, other);
+    assert.equal('store' in other.bodies[0], false, `${apiFormat} never sends store`);
+    assert.equal('include' in other.bodies[0], false, `${apiFormat} never sends include`);
+    assert.equal(decodeSignature(clean.messages).sigs.length, 0, `${apiFormat} emits no state signature`);
+  }
 });
 
-test('responsesState on: body gains store:false and encrypted-content include', async t => {
-  const provider = { id: 'p1', apiFormat: 'openai-responses', responsesState: true };
+test('Responses body gains store:false and encrypted-content include', async t => {
+  const provider = { id: 'p1', apiFormat: 'openai-responses' };
   const fixture = await upstreamFixture(t, TURN_EVENTS);
   const request = Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]);
   const result = await stateSession(t, provider, request, fixture);
@@ -1077,8 +1084,8 @@ test('responsesState on: body gains store:false and encrypted-content include', 
   assert.deepEqual(states[0].items, [REASONING_ITEM, MESSAGE_ITEM]);
 });
 
-test('responsesState replay restores items in order before the assistant text', async t => {
-  const provider = { id: 'p1', apiFormat: 'openai-responses', responsesState: true };
+test('the responses state envelope replay restores items in order before the assistant text', async t => {
+  const provider = { id: 'p1', apiFormat: 'openai-responses' };
   const fixture = await upstreamFixture(t, TURN_EVENTS);
   const first = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), fixture);
   const envelope = decodeSignature(first.messages).sigs[0];
@@ -1094,7 +1101,7 @@ test('responsesState replay restores items in order before the assistant text', 
 });
 
 test('replay silently degrades when scope, content or items are invalid', async t => {
-  const provider = { id: 'p1', apiFormat: 'openai-responses', responsesState: true };
+  const provider = { id: 'p1', apiFormat: 'openai-responses' };
   const fixture = await upstreamFixture(t, TURN_EVENTS);
   const first = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), fixture);
   const envelope = decodeSignature(first.messages).sigs[0];
@@ -1121,7 +1128,7 @@ test('replay silently degrades when scope, content or items are invalid', async 
 
 test('an oversized or invalid-item response produces no signature chunk', async t => {
   const bigItem = { ...MESSAGE_ITEM, content: [{ type: 'output_text', text: 'x'.repeat(300 * 1024) }] };
-  const provider = { apiFormat: 'openai-responses', responsesState: true };
+  const provider = { apiFormat: 'openai-responses' };
   const bigFixture = await upstreamFixture(t, [event({ type: 'response.completed', response: { status: 'completed', output: [bigItem] } })]);
   const big = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), bigFixture);
   assert.equal(decodeSignature(big.messages).sigs.length, 0, 'oversized envelope is dropped');
@@ -1130,8 +1137,8 @@ test('an oversized or invalid-item response produces no signature chunk', async 
   assert.equal(decodeSignature(invalid.messages).sigs.length, 0, 'missing encrypted_content drops the envelope');
 });
 
-test('responsesState never emits an empty-items envelope or drops an assistant turn', async t => {
-  const provider = { id: 'p1', apiFormat: 'openai-responses', responsesState: true };
+test('the responses state envelope is never emitted empty or drops an assistant turn', async t => {
+  const provider = { id: 'p1', apiFormat: 'openai-responses' };
   const fixture = await upstreamFixture(t, [
     event({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'done' }),
     event({ type: 'response.completed', response: { status: 'completed' } }),
@@ -1150,4 +1157,96 @@ test('responsesState never emits an empty-items envelope or drops an assistant t
   ]), fixture);
   const input = fixture.bodies.at(-1).input;
   assert.ok(input.some(item => item?.role === 'assistant'), 'an empty-items state must not drop the assistant turn');
+});
+
+test('a 400 naming store/include strips the state channel and retries once', async t => {
+  const bodies = [];
+  const logs = [];
+  const upstream = await server(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    bodies.push(JSON.parse(Buffer.concat(chunks)));
+    if (bodies.length === 1) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'Unknown parameter: store' } }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(TURN_EVENTS.join(''));
+  }, t);
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')])),
+      route: { model: 'm', uid: 'u' }, provider: { id: 'p1', apiFormat: 'openai-responses', baseUrl: `${upstream.url}/v1`, apiKey: 'k' },
+      res, log: event => logs.push(event) });
+  }, t);
+  const response = await fetch(proxy.url);
+  assert.equal(response.status, 200);
+  assert.equal(bodies.length, 2, 'exactly one retry happens');
+  assert.equal('store' in bodies[0], true, 'the first request carried the channel');
+  assert.equal('store' in bodies[1], false, 'the retry drops store');
+  assert.equal('include' in bodies[1], false, 'the retry drops include');
+  const degraded = logs.find(entry => entry.event === 'provider-degraded');
+  assert.equal(degraded?.reason, 'responses-state');
+});
+
+test('an unrelated 400 never triggers the state-channel retry', async t => {
+  const bodies = [];
+  const logs = [];
+  const upstream = await server(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    bodies.push(JSON.parse(Buffer.concat(chunks)));
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'context length exceeded' } }));
+  }, t);
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')])),
+      route: { model: 'm', uid: 'u' }, provider: { apiFormat: 'openai-responses', baseUrl: `${upstream.url}/v1`, apiKey: 'k' },
+      res, log: event => logs.push(event) });
+  }, t);
+  await fetch(proxy.url);
+  assert.equal(bodies.length, 1, 'no retry without a named refusal');
+  assert.equal(logs.find(entry => entry.event === 'provider-degraded'), undefined);
+});
+
+test('a forced tool_choice request still degrades when the 400 names store', async t => {
+  let call = 0;
+  const app = await bridge(t, async (req, res) => {
+    call += 1;
+    if (call === 1) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'Unknown parameter: store' } }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(TURN_EVENTS.join(''));
+  });
+  const response = await fetch(app.url);
+  assert.equal(response.status, 200);
+  assert.equal(app.requests.length, 2, 'the named store refusal earns the strip retry');
+  assert.equal(app.requests[0].body.tool_choice.type, 'function', 'the request carried a forced tool_choice');
+  assert.equal('store' in app.requests[1].body, false, 'the retry drops store');
+  assert.equal('include' in app.requests[1].body, false, 'the retry drops include');
+  assert.equal(app.logs.find(entry => entry.event === 'provider-degraded')?.reason, 'responses-state');
+});
+
+test('a 400 naming both tool_choice and store retries once via tool_choice', async t => {
+  let call = 0;
+  const app = await bridge(t, async (req, res) => {
+    call += 1;
+    if (call === 1) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'unsupported tool_choice value and store is not allowed' } }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(TURN_EVENTS.join(''));
+  });
+  const response = await fetch(app.url);
+  assert.equal(response.status, 200);
+  assert.equal(app.requests.length, 2, 'exactly one retry across both degrade paths');
+  assert.equal(app.requests[1].body.tool_choice, 'auto', 'the tool_choice branch wins');
+  assert.equal('store' in app.requests[1].body, true, 'the store branch does not also fire');
+  assert.equal('include' in app.requests[1].body, true);
+  assert.equal(app.logs.find(entry => entry.event === 'provider-degraded'), undefined, 'tool_choice degrade records nothing extra');
 });

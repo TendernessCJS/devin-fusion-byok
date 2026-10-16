@@ -122,3 +122,12 @@ test('Responses params still expose store and reasoning.encrypted_content includ
   const members = new Set(unionMembers(responsesSource, 'export type ResponseIncludable'));
   assert.ok(members.has('reasoning.encrypted_content'), 'reasoning.encrypted_content was removed from ResponseIncludable');
 });
+
+test('the anthropic foreign-signature guard covers the responses envelope prefix', () => {
+  const { STATE_PREFIX } = require('../src/protocol/responses.cjs');
+  const { readFileSync } = require('node:fs');
+  const anthropicSource = readFileSync(path.join(__dirname, '..', 'src', 'protocol', 'anthropic.cjs'), 'utf8');
+  const guard = anthropicSource.match(/FOREIGN_STATE_PREFIX = '([^']+)'/);
+  assert.ok(guard, 'FOREIGN_STATE_PREFIX not found — the guard was removed');
+  assert.ok(STATE_PREFIX.startsWith(guard[1]), `guard prefix ${guard[1]} no longer covers the envelope prefix ${STATE_PREFIX}`);
+});

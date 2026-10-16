@@ -272,6 +272,19 @@ test('Anthropic replays the thinking block only when its signature is present', 
   assert.ok(!unsigned.messages[0].content.some(block => block.type === 'thinking'), 'no signature means no thinking block');
 });
 
+test('Anthropic never replays a foreign dfbyok- signature as a thinking block', () => {
+  const foreign = 'dfbyok-responses-v1:eyJhIjoxfQ';
+  const body = buildRequestBody(parseChat(Buffer.concat([
+    s(21, 'local-claude'), nativeMessage(2, 'ANSWER', [s(11, 'TH-1'), s(12, foreign)]), nativeMessage(1, 'next'),
+  ])), { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  assert.ok(!body.messages[0].content.some(block => block.type === 'thinking'), 'the foreign envelope produces no thinking block');
+  assert.ok(!JSON.stringify(body).includes(foreign), 'the foreign string never reaches the wire');
+  const replay = buildRequestBody(parseChat(Buffer.concat([
+    s(21, 'local-claude'), nativeMessage(2, 'ANSWER', [s(11, 'TH-1'), s(12, 'AbCdEf==base64sig')]), nativeMessage(1, 'next'),
+  ])), { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  assert.deepEqual(replay.messages[0].content[0], { type: 'thinking', thinking: 'TH-1', signature: 'AbCdEf==base64sig' }, 'a genuine signature still replays');
+});
+
 test('Anthropic usage carries cache read and write as separate fields', async t => {
   const result = await run(t, [
     sse('message_start', { message: { usage: { input_tokens: 10, cache_read_input_tokens: 90, cache_creation_input_tokens: 3, output_tokens: 1 } } }),
