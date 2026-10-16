@@ -193,6 +193,7 @@ function processor(id, uid, chat, emit) {
           if ((choice.index ?? 0) !== 0) continue;
           const delta = choice.delta || choice.message || {};
           if (delta.content) await text('chat', delta.content);
+          if (delta.refusal) await text('chat-refusal', delta.refusal);
           if (delta.reasoning_content || delta.reasoning) await text('reasoning', delta.reasoning_content || delta.reasoning, false, true);
           for (const tool of delta.tool_calls || []) {
             const call = getCall(tool.index ?? 0);
@@ -216,6 +217,11 @@ function processor(id, uid, chat, emit) {
         case 'response.output_text.done': await text(`${data.output_index ?? 0}:${data.content_index ?? 0}`, data.text, true); break;
         case 'response.reasoning.delta':
         case 'response.reasoning_summary_text.delta': await text(`reasoning:${data.output_index ?? 0}:${data.summary_index ?? 0}`, data.delta, false, true); break;
+        case 'response.reasoning_text.delta': await text(`reasoning_text:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.delta, false, true); break;
+        case 'response.reasoning_text.done': await text(`reasoning_text:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.text, true, true); break;
+        case 'response.reasoning_summary_text.done': await text(`reasoning:${data.output_index ?? 0}:${data.summary_index ?? 0}`, data.text, true, true); break;
+        case 'response.refusal.delta': await text(`refusal:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.delta); break;
+        case 'response.refusal.done': await text(`refusal:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.refusal, true); break;
         case 'response.completed':
           if (data.response?.status && data.response.status !== 'completed') {
             const err = new Error('Unexpected completion status');
@@ -258,6 +264,11 @@ function processor(id, uid, chat, emit) {
           throw err;
         }
         tools.push({ id: call.id, name: call.name, arguments: args });
+      }
+      if (reason === 2 && !tools.length && !texts.size) {
+        const err = new Error('Upstream completed without output');
+        err.code = 'upstream_empty_output';
+        throw err;
       }
       if (tools.length) await emit(toolChunk(id, tools));
       if (usage) await emit(usageChunk(id, uid, usage));
@@ -375,7 +386,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
         const allowedCodes = new Set([
           'upstream_timeout', 'upstream_http', 'upstream_content_type',
           'upstream_stream_error', 'upstream_stream_incomplete',
-          'upstream_invalid_tool', 'upstream_invalid_json', 'upstream_network'
+          'upstream_invalid_tool', 'upstream_invalid_json', 'upstream_network', 'upstream_empty_output'
         ]);
         classifiedCode = allowedCodes.has(err?.code) ? err.code : 'upstream_stream_error';
       }
@@ -386,7 +397,8 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     try {
       toolNames = await stream.finish();
     } catch (err) {
-      classifiedCode = err?.code === 'upstream_invalid_tool' ? 'upstream_invalid_tool' : 'upstream_stream_incomplete';
+      const code = err?.code;
+      classifiedCode = code === 'upstream_invalid_tool' || code === 'upstream_empty_output' ? code : 'upstream_stream_incomplete';
       throw err;
     }
 
@@ -410,6 +422,8 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       errorText = `Provider returned HTTP ${status}.`;
     } else if (classifiedCode === 'upstream_content_type' || classifiedCode === 'upstream_invalid_json' || classifiedCode === 'upstream_invalid_tool') {
       errorText = 'Provider response format is invalid.';
+    } else if (classifiedCode === 'upstream_empty_output') {
+      errorText = 'Provider returned no output.';
     }
 
     try {

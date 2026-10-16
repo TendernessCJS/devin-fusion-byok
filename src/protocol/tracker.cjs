@@ -17,7 +17,8 @@ function semanticOutput(event, chat) {
   if (chat) {
     const choice = (d.choices || []).find(c => (c.index ?? 0) === 0);
     const delta = choice?.delta || choice?.message;
-    const text = typeof delta?.content === 'string' && delta.content.length > 0;
+    const text = (typeof delta?.content === 'string' && delta.content.length > 0)
+      || (typeof delta?.refusal === 'string' && delta.refusal.length > 0);
     const thinking = [delta?.reasoning_content, delta?.reasoning].some(v => typeof v === 'string' && v.length > 0);
     const tool = delta?.tool_calls?.some(v => v.function?.name || v.function?.arguments);
     return { output: Boolean(text || thinking || tool), text };
@@ -25,8 +26,11 @@ function semanticOutput(event, chat) {
   const items = event.type === 'response.completed' ? d.response?.output || [] : event.type === 'response.output_item.done' ? [d.item] : [];
   const text = (event.type === 'response.output_text.delta' && typeof d.delta === 'string' && d.delta.length > 0) ||
     (event.type === 'response.output_text.done' && typeof d.text === 'string' && d.text.length > 0) ||
+    (event.type === 'response.refusal.delta' && typeof d.delta === 'string' && d.delta.length > 0) ||
+    (event.type === 'response.refusal.done' && typeof d.refusal === 'string' && d.refusal.length > 0) ||
     items.some(item => item?.type === 'message' && item.content?.some(part => part.type === 'output_text' && part.text));
-  const delta = ['response.reasoning.delta', 'response.reasoning_summary_text.delta', 'response.function_call_arguments.delta'].includes(event.type) && typeof d.delta === 'string' && d.delta.length > 0;
+  const delta = (['response.reasoning.delta', 'response.reasoning_summary_text.delta', 'response.reasoning_text.delta', 'response.function_call_arguments.delta'].includes(event.type) && typeof d.delta === 'string' && d.delta.length > 0)
+    || (['response.reasoning_text.done', 'response.reasoning_summary_text.done'].includes(event.type) && typeof d.text === 'string' && d.text.length > 0);
   const tool = (event.type === 'response.output_item.added' && d.item?.type === 'function_call' && Boolean(d.item.name || d.item.arguments)) ||
     items.some(item => item?.type === 'function_call' && (item.name || item.arguments));
   return { output: Boolean(text || delta || tool), text: Boolean(text) };

@@ -300,6 +300,87 @@ test('Chat Completions assembles fragmented parallel native tool calls', async t
   assert.equal(num(result.messages.at(-1), 5), 10);
 });
 
+test('Responses refusal deltas and done events surface as visible text', async t => {
+  const viaDelta = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.refusal.delta', delta: 'I cannot help.', output_index: 0, content_index: 0 },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ].map(event).join(''));
+  });
+  const deltaResult = unpack(Buffer.from(await (await fetch(viaDelta.url)).arrayBuffer()));
+  assert.equal(deltaResult.messages.map(m => str(m, 3)).join(''), 'I cannot help.');
+
+  const viaDone = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.refusal.done', refusal: 'Refused fully.', output_index: 0, content_index: 0 },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ].map(event).join(''));
+  });
+  const doneResult = unpack(Buffer.from(await (await fetch(viaDone.url)).arrayBuffer()));
+  assert.equal(doneResult.messages.map(m => str(m, 3)).join(''), 'Refused fully.');
+});
+
+test('Responses reasoning_text and summary done events surface as thinking text', async t => {
+  const viaText = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.reasoning_text.delta', delta: 'thinking hard', output_index: 0, content_index: 0 },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ].map(event).join(''));
+  });
+  const textResult = unpack(Buffer.from(await (await fetch(viaText.url)).arrayBuffer()));
+  assert.equal(textResult.messages.map(m => str(m, 9)).join(''), 'thinking hard');
+  assert.equal(textResult.messages.map(m => str(m, 3)).join(''), '');
+
+  const viaSummary = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.reasoning_summary_text.done', text: 'summary全文', output_index: 0, summary_index: 0 },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ].map(event).join(''));
+  });
+  const summaryResult = unpack(Buffer.from(await (await fetch(viaSummary.url)).arrayBuffer()));
+  assert.equal(summaryResult.messages.map(m => str(m, 9)).join(''), 'summary全文');
+});
+
+test('Chat delta.refusal surfaces as visible text', async t => {
+  const proxy = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [{ delta: { refusal: 'no' } }] }));
+    res.write(event({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 1 } }));
+    res.end('data: [DONE]\n\n');
+  }, 'openai');
+  const output = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+  assert.equal(output.messages.map(m => str(m, 3)).join(''), 'no');
+});
+
+test('completed without any content reports upstream_empty_output but truncation does not', async t => {
+  const metrics = [];
+  const empty = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.created', response: { status: 'in_progress' } },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ].map(event).join(''));
+  }, 'openai-responses', {}, value => metrics.push(value));
+  const emptyResult = unpack(Buffer.from(await (await fetch(empty.url)).arrayBuffer()));
+  assert.match(emptyResult.messages.map(m => str(m, 3)).join(''), /no output/i);
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].status, 'error');
+  assert.equal(metrics[0].code, 'upstream_empty_output');
+
+  const truncatedMetrics = [];
+  const truncated = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(event({ type: 'response.incomplete', response: { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } } }));
+  }, 'openai-responses', {}, value => truncatedMetrics.push(value));
+  await fetch(truncated.url);
+  assert.equal(truncatedMetrics.length, 1);
+  assert.equal(truncatedMetrics[0].status, 'success');
+});
+
 test('incomplete, malformed and unterminated streams do not execute tools', async t => {
   for (const ending of ['incomplete', 'invalid-json', 'truncated']) await t.test(ending, async st => {
     const app = await bridge(st, async (req, res) => {
