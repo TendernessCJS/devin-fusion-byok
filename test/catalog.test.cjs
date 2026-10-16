@@ -276,6 +276,27 @@ test('JSON CLI only appends models and leaves official defaults and extras intac
   assert.ok(!Object.hasOwn(output, 'clientModelSorts'));
 });
 
+test('the team-settings allowlist reports why it left a payload alone', () => {
+  // This path injects through an allowlist rewrite rather than a model list, so
+  // it reports through the same channel the other shapes use: silence here made
+  // an unreadable payload indistinguishable from one that needed nothing.
+  const seat = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
+  const codes = [], report = code => codes.push(code);
+  const json = cat(v(7, 9), s(99, 'unreadable allowlist'));
+  const malformed = { allowedModelUids: [1] };
+  assert.equal(augmentCatalog(malformed, { rpc: seat, format: { json: true }, catalog, onSkip: report }), malformed);
+  assert.deepEqual(codes, ['shape-unrecognized'], 'non-string allowlist entries are a shape problem');
+  const original = Buffer.from(json);
+  assert.deepEqual(augmentCatalog(json, { rpc: seat, format: proto, catalog, onSkip: report }), original);
+  assert.deepEqual(codes, ['shape-unrecognized', 'transform-failed'], 'an unparsable allowlist reports a failure');
+  // An absent or empty allowlist is unrestricted, not a failure: there is
+  // genuinely nothing to inject and nothing to warn about.
+  for (const unrestricted of [{}, { allowedModelUids: [] }]) {
+    assert.deepEqual(augmentCatalog(unrestricted, { rpc: seat, format: { json: true }, catalog, onSkip: report }), unrestricted);
+  }
+  assert.deepEqual(codes, ['shape-unrecognized', 'transform-failed'], 'unrestricted payloads report nothing');
+});
+
 test('unknown RPCs, empty catalogs, missing user status and malformed responses are unchanged', () => {
   const input = statusFixture().body;
   assert.equal(augmentCatalog(input, { rpc: 'GetAccount', format: proto, catalog }), input);

@@ -14,17 +14,6 @@ function countOwn(value, depth = 0) {
   return 0;
 }
 const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server_pb\.ApiServerService|seat_management_pb\.SeatManagementService)\/(?:GetUserStatus|GetCliModelConfigs|GetCascadeModelConfigs|GetCommandModelConfigs)$|^\/exa\.seat_management_pb\.SeatManagementService\/GetCliTeamSettings$/;
-// An injection skip means the payload was returned untouched. That looks
-// identical to "nothing to do" in the `catalog` line, and a shape that stops
-// being recognized fires on every response — so record it once per (rpc, code)
-// per process instead of on each catalog round trip.
-const skippedInjection = new Set();
-function reportInjectionSkip(log, code, rpc) {
-  const key = rpc + ' ' + code;
-  if (skippedInjection.has(key)) return;
-  skippedInjection.add(key);
-  try { log('catalog-augment-skip', { code, rpc: String(rpc).split('/').pop() }); } catch {}
-}
 function cors(request) {
   const origin = request.headers.origin;
   return origin && /^(?:vscode-file:\/\/vscode-app|vscode-webview:\/\/[^/]+|https?:\/\/(?:[a-z0-9.-]+\.)?localhost(?::\d+)?)$/.test(origin)
@@ -97,12 +86,17 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         const allowedUids = collectAllowedUids(format.data, { rpc: target.pathname, format });
         if (allowedUids) try { onAllowedUids?.(allowedUids); } catch {}
         const catalog = getCatalog();
+        // A skip means the payload went back untouched, which otherwise reads
+        // exactly like "nothing to do". It rides on the `catalog` line, which is
+        // logged for every response, so a shape that stops being recognized stays
+        // visible instead of showing up once per process.
+        let skipped;
         const augmented = augmentCatalog(format.data, { rpc: target.pathname, format, catalog, onFusionStatus,
-          onSkip: (code, rpc) => reportInjectionSkip(log, code, rpc) });
+          onSkip: code => { skipped ??= code; } });
         outgoing = wire.encode(augmented, { ...format, gzip: false, compressed: false });
         delete outgoingHeaders['content-encoding']; delete outgoingHeaders['connect-content-encoding'];
         delete outgoingHeaders['transfer-encoding']; outgoingHeaders['content-length'] = String(outgoing.length);
-        log('catalog', { rpc: target.pathname.split('/').pop(), models: catalog.models.length, matrix: catalog.matrixUids?.size ?? 0, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented) });
+        log('catalog', { rpc: target.pathname.split('/').pop(), models: catalog.models.length, matrix: catalog.matrixUids?.size ?? 0, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented), ...(skipped ? { skipped } : {}) });
       } catch { log('catalog-error', { code: 'catalog_transform_failed' }); }
       response.writeHead(upstream.statusCode, outgoingHeaders); response.end(outgoing);
     } catch { fail(); }

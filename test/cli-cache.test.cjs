@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { CACHE_NAME, inspectCliCaches, refreshStaleCliCaches } = require('../src/runtime/cli-cache.cjs');
+const { buildCatalog, augmentCatalog, staleFusionUids } = require('../src/catalog.cjs');
+const { s, v, m } = require('../src/protocol/wire.cjs');
+const cat = (...parts) => Buffer.concat(parts.flat());
 
 const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cli-cache-'));
 const OWN = ['dfbyok-provider-aaaa-model-x-1111', 'dfbyok-provider-aaaa-model-y-2222', 'fusion-dfbyok-preset-3333'];
@@ -117,6 +120,61 @@ test('an augmenter that reports a skip while uids are still missing is not a no-
   const complete = refreshStaleCliCaches({ dir, expectedUids: OWN, force: true,
     augment: (payload, rpc, report) => { report('shape-unrecognized'); return payload; } });
   assert.deepEqual(complete.skipped, [{ name, reason: 'no-improvement' }]);
+});
+
+test('a bare UserStatus cache is rewritten end to end through the real augmenter', () => {
+  // This is the seam the two unit layers miss: the payload shape the CLI actually
+  // stores, fed through the real `augmentCatalog` and the real rewrite path. The
+  // shape mismatch that made every `user_status` rewrite a silent no-op passed
+  // both layers — catalog tests built envelope-shaped payloads, and the cache
+  // tests injected a synthetic augmenter. Measured on the real cache before the
+  // fix: 236 of 456 own uids present, 8 retired fusion uids stuck.
+  const dir = tmpdir();
+  const name = 'user_status.aaaaaaaaaaaaaaaa.bin';
+  const config = { providers: [{ id: 'cpa', name: 'CPA', baseUrl: 'https://cpa.invalid/v1', apiKey: 'k', apiFormat: 'openai',
+    models: [{ id: 'alpha', label: 'Alpha', efforts: ['high', 'max'], contextWindow: 200000, maxOutputTokens: 32768 },
+      { id: 'beta', label: 'Beta', contextWindow: 200000, maxOutputTokens: 32768 }] }] };
+  const current = buildCatalog(config, []);
+  const expected = current.models.map(model => model.uid);
+  assert.equal(expected.length, 7, 'two effort variants plus the plain model, and their combinations');
+  const emitted = new Set(Object.keys(current.fusions)), known = new Set([...Object.keys(current.routes), ...emitted]);
+  const own = expected.find(uid => /^dfbyok-/.test(uid));
+  const payload = cat(v(1, 1), m(33, cat(
+    m(1, cat(s(1, 'Old Alpha'), s(22, own))),
+    m(1, cat(s(1, 'Stale fusion'), s(22, 'fusion-gone-sidekick-also-gone'))),
+    m(1, cat(s(1, 'Official'), s(22, 'swe-2-max'))))));
+  fs.writeFileSync(path.join(dir, name), JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload: payload.toString('base64') }));
+  const run = force => refreshStaleCliCaches({ dir, expectedUids: expected, force,
+    staleProbe: value => staleFusionUids(value, { emitted, known }),
+    augment: (value, rpc, report) => augmentCatalog(value, { rpc, format: { json: false }, catalog: current, onSkip: report }) });
+  const result = run(true);
+  assert.deepEqual(result.refreshed, [name], 'the bare shape must actually be rewritten, not reported as current');
+  assert.deepEqual(result.errors, []);
+  const envelope = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+  const text = Buffer.from(envelope.payload, 'base64').toString('latin1');
+  for (const uid of expected) assert.ok(text.includes(uid), uid + ' is injected');
+  assert.ok(!text.includes('fusion-gone-sidekick-also-gone'), 'the retired fusion entry is dropped');
+  assert.ok(text.includes('swe-2-max'), 'official entries survive');
+  assert.deepEqual([envelope.version, envelope.identity_digest, envelope.fetched_at_secs], [1, 'd', 1]);
+  assert.ok(fs.existsSync(path.join(dir, name + '.bak')), 'the pre-rewrite bytes are kept');
+  assert.deepEqual(run(true).skipped.map(skip => skip.reason), ['no-improvement'], 'a second forced pass changes nothing');
+});
+
+test('a GetCliTeamSettings payload that cannot be read reports instead of reading as current', () => {
+  const dir = tmpdir();
+  const name = 'team_settings.aaaaaaaaaaaaaaaa.bin';
+  const config = { providers: [{ id: 'cpa', name: 'CPA', baseUrl: 'https://cpa.invalid/v1', apiKey: 'k', apiFormat: 'openai',
+    models: [{ id: 'alpha', label: 'Alpha', contextWindow: 200000, maxOutputTokens: 32768 }] }] };
+  const current = buildCatalog(config, []);
+  // Field 7 is the allowlist of model uids; a varint there cannot be read as one.
+  // The dfbyok marker keeps the file ours, so the allowlist rewrite is what fails.
+  const broken = cat(Buffer.from('dfbyok-cpa-alpha-0000000000000000'), v(7, 9));
+  fs.writeFileSync(path.join(dir, name), JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload: broken.toString('base64') }));
+  const result = refreshStaleCliCaches({ dir, expectedUids: current.models.map(model => model.uid),
+    augment: (payload, rpc, report) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current, onSkip: report }) });
+  assert.deepEqual(result.skipped, [{ name, reason: 'transform-failed' }],
+    'a failure code, never no-improvement — this path used to be silent while the uid was still missing');
+  assert.ok(!fs.existsSync(path.join(dir, name + '.bak')), 'an unreadable payload is never overwritten');
 });
 
 test('a payload without net uid gain is skipped as no-improvement', () => {

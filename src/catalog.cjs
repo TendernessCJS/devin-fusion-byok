@@ -1422,16 +1422,18 @@ function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativ
 
 /** Accept decoded wire messages; framing/compression is exclusively the caller's responsibility. */
 function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNativeModels, onSkip } = {}) {
-  if (rpc === '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings') return augmentLocalModelChoices(data, format, catalog);
-  const shape = rpcShape(rpc);
-  if (!shape || !catalog) return data;
-  if (!catalog.models?.length && !catalog.hiddenNativeModelUids?.length && !catalog.hiddenFusionUids?.length &&
-      typeof onFusionStatus !== 'function' && typeof onNativeModels !== 'function') return data;
   // Reported when the payload is left untouched for a reason the caller could
   // not infer from the bytes: silently returning the input looks exactly like
   // "nothing to do" and hid a shape mismatch that made every in-place cache
   // rewrite a no-op while the refresh still reported success.
   const skip = code => { try { onSkip?.(code, rpc); } catch {} };
+  // `GetCliTeamSettings` carries its whole injection in the allowlist rewrite,
+  // so it reports through the same channel as the catalog shapes below.
+  if (rpc === '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings') return augmentLocalModelChoices(data, format, catalog, skip);
+  const shape = rpcShape(rpc);
+  if (!shape || !catalog) return data;
+  if (!catalog.models?.length && !catalog.hiddenNativeModelUids?.length && !catalog.hiddenFusionUids?.length &&
+      typeof onFusionStatus !== 'function' && typeof onNativeModels !== 'function') return data;
   try {
     if (format.json === true) {
       if (!shape.status) return augmentJsonList(data, catalog, shape.sorts, onFusionStatus, onNativeModels, shape.source);
@@ -1627,7 +1629,7 @@ function collectAllowedUids(data, { rpc, format = {} } = {}) {
 // The CLI intersects the model catalog with its configured choices. Register
 // only locally routed BYOK models; native choices and every other setting stay
 // byte-identical. A native Sidekick must already be in the native choice list.
-function augmentLocalModelChoices(data, format, catalog) {
+function augmentLocalModelChoices(data, format, catalog, skip = () => {}) {
   if (!catalog?.models?.length) return data;
   try {
     const key = format.json ? jsonKey(data, 'allowedModelUids', 'allowed_model_uids') : null;
@@ -1638,7 +1640,7 @@ function augmentLocalModelChoices(data, format, catalog) {
     });
     // An absent or empty list is unrestricted; do not turn it into a restriction.
     if (entries === undefined || Array.isArray(entries) && entries.length === 0) return data;
-    if (!Array.isArray(entries) || entries.some(uid => typeof uid !== 'string')) return data;
+    if (!Array.isArray(entries) || entries.some(uid => typeof uid !== 'string')) { skip('shape-unrecognized'); return data; }
     const matrixUids = catalog.matrixUids instanceof Set ? catalog.matrixUids : new Set(catalog.matrixUids || []);
     const isOwn = uid => ownUid(uid) || matrixUids.has(uid);
     const native = new Set(entries.filter(uid => !isOwn(uid)));
@@ -1656,7 +1658,7 @@ function augmentLocalModelChoices(data, format, catalog) {
     }).map(model => model.uid);
     if (format.json) return { ...data, [key]: [...entries.filter(uid => !isOwn(uid)), ...additions] };
     return concat([...parsed.filter(f => !(f.number === 7 && isOwn(f.value.toString('utf8')))).map(f => f.raw), ...additions.map(uid => s(7, uid))]);
-  } catch { return data; }
+  } catch { skip('transform-failed'); return data; }
 }
 
 function assignmentUid(data, format, field, camel, snake) {
