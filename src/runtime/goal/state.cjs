@@ -1,8 +1,8 @@
 'use strict';
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { goalPrompt, commandReplyPrompt } = require('./goal-prompts.cjs');
-const store = require('./goal-store.cjs');
+const { goalPrompt, commandReplyPrompt } = require('./prompts.cjs');
+const store = require('./store.cjs');
 
 const NEXT_RUN_DELAY_MS = 1500;
 const MISSING_REPORT_LIMIT = 2;

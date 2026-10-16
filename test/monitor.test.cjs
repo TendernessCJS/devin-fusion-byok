@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createMonitor, createTracker, usageOf, associate, summarize } = require('../src/runtime/monitor-store.cjs');
+const { createMonitor, associate, summarize } = require('../src/runtime/monitor-store.cjs');
+const { createTracker, usageOf } = require('../src/protocol/tracker.cjs');
 function tracker() {
   let clock = 0;
   const value = createTracker({ id: 'response-1', route: { model: 'test' }, provider: { id: 'p', apiKey: 'SECRET' }, now: () => clock });

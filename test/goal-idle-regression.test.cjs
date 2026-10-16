@@ -5,9 +5,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { createGoalController } = require('../src/runtime/goal-state.cjs');
-const store = require('../src/runtime/goal-store.cjs');
-const reportCli = require('../src/runtime/goal-report.cjs');
+const { createGoalController } = require('../src/runtime/goal/state.cjs');
+const store = require('../src/runtime/goal/store.cjs');
+const reportCli = require('../src/runtime/goal/report.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 // Only the native ACP boundary is mocked: transport, controller and report
@@ -16,7 +16,7 @@ function fixture(t, protocolVersion) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'goal-idle-regression-'));
   const api = { registerConnection() { return { dispose() {} }; } };
   const module = { exports: {} };
-  const source = fs.readFileSync(process.env.GOAL_CONTINUE_TEST_SOURCE || path.resolve(__dirname, '../src/runtime/goal-continue.cjs'), 'utf8');
+  const source = fs.readFileSync(process.env.GOAL_CONTINUE_TEST_SOURCE || path.resolve(__dirname, '../src/runtime/goal/continue.cjs'), 'utf8');
   vm.runInNewContext(source, {
     module, exports: module.exports,
     require(name) {
@@ -24,7 +24,7 @@ function fixture(t, protocolVersion) {
       assert.equal(name, 'node:module');
       return { createRequire: () => () => ({ windsurfAcp: api }) };
     }
-  }, { filename: 'goal-continue.cjs' });
+  }, { filename: 'goal/continue.cjs' });
   const transport = module.exports.installGoalContinue({ nativeMainPath: '/isolated/native.js', isEnabled: () => true });
   const timers = new Map();
   let timerId = 0;
@@ -32,7 +32,7 @@ function fixture(t, protocolVersion) {
     setTimeout(fn) { const id = ++timerId; timers.set(id, fn); return id; },
     clearTimeout(id) { timers.delete(id); }
   };
-  const controller = createGoalController({ root, transport, scheduler, reportCliPath: path.resolve(__dirname, '../src/runtime/goal-report.cjs') });
+  const controller = createGoalController({ root, transport, scheduler, reportCliPath: path.resolve(__dirname, '../src/runtime/goal/report.cjs') });
   const pending = [];
   const connector = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion, sent: [], forwards: [], forwardError: false,

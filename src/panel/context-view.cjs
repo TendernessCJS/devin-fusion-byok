@@ -1,7 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { baseStyles } = require('./theme.cjs');
-const { timing, usageIsInconsistent } = require('../runtime/monitor-stats.cjs');
+const { timing, usageIsInconsistent } = require('../monitor-stats.cjs');
 const { domHelpersSource } = require('./dom.cjs');
 const number = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
 const seconds = value => typeof value === 'number' && Number.isFinite(value) ? (value / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) + ' s' : '—';

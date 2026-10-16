@@ -5,11 +5,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { createGoalController } = require('../src/runtime/goal-state.cjs');
-const store = require('../src/runtime/goal-store.cjs');
-const reportCli = require('../src/runtime/goal-report.cjs');
+const { createGoalController } = require('../src/runtime/goal/state.cjs');
+const store = require('../src/runtime/goal/store.cjs');
+const reportCli = require('../src/runtime/goal/report.cjs');
 
-const REPORT_CLI = path.resolve(__dirname, '../src/runtime/goal-report.cjs');
+const REPORT_CLI = path.resolve(__dirname, '../src/runtime/goal/report.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function fakeScheduler() {
@@ -87,7 +87,7 @@ test('kickoff dispatches once with the goal prompt and a fresh report token', as
   assert.equal(h.dispatched[0].sessionId, 'session-1');
   assert.equal(h.dispatched[0].revision, 2);
   assert.match(h.dispatched[0].prompt, /Fusion BYOK Goal mode is active/);
-  assert.match(h.dispatched[0].prompt, /goal-report\.cjs/);
+  assert.match(h.dispatched[0].prompt, /goal\/report\.cjs/);
   assert.match(h.dispatched[0].prompt, /--store '/);
   assert.equal(h.goal().runsStarted, 1);
   assert.equal(h.goal().status, 'active');

@@ -107,4 +107,6 @@ function createMonitorStats() {
   }
   return { token, timing, usageIsInconsistent, summarize, attributionStats, monitorDateRange, filterMonitorRecords, filteredMonitorView };
 }
-module.exports = { createMonitorStats, ...createMonitorStats() };
+// a usable identifier string — non-empty, bounded, and free of control bytes.
+const identifier = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/.test(value) ? value : null;
+module.exports = { createMonitorStats, identifier, ...createMonitorStats() };

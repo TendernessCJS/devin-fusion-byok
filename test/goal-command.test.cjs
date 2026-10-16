@@ -6,12 +6,12 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
-const { createGoalController } = require('../src/runtime/goal-state.cjs');
-const store = require('../src/runtime/goal-store.cjs');
-const reportCli = require('../src/runtime/goal-report.cjs');
-const { parseGoalCommand, withGoalCommand } = require('../src/runtime/goal-continue.cjs');
+const { createGoalController } = require('../src/runtime/goal/state.cjs');
+const store = require('../src/runtime/goal/store.cjs');
+const reportCli = require('../src/runtime/goal/report.cjs');
+const { parseGoalCommand, withGoalCommand } = require('../src/runtime/goal/continue.cjs');
 
-const REPORT_CLI = path.resolve(__dirname, '../src/runtime/goal-report.cjs');
+const REPORT_CLI = path.resolve(__dirname, '../src/runtime/goal/report.cjs');
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const text = value => [{ type: 'text', text: value }];
@@ -21,14 +21,14 @@ const text = value => [{ type: 'text', text: value }];
 function transportFixture() {
   const api = { registerConnection() { return { dispose() {} }; } };
   const module = { exports: {} };
-  const source = fs.readFileSync(path.join(__dirname, '../src/runtime/goal-continue.cjs'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '../src/runtime/goal/continue.cjs'), 'utf8');
   vm.runInNewContext(source, {
     module, exports: module.exports, setTimeout, clearTimeout,
     require(name) {
       if (name === 'node:crypto') return require('node:crypto');
       return { createRequire: () => () => ({ windsurfAcp: api, CancellationToken: { None: Symbol('None') } }) };
     }
-  }, { filename: 'goal-continue.cjs' });
+  }, { filename: 'goal/continue.cjs' });
   const handle = module.exports.installGoalContinue({ nativeMainPath: NATIVE_MAIN, isEnabled: () => true });
   const c = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 2, sent: [], forwards: [],

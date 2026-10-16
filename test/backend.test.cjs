@@ -474,7 +474,7 @@ test('same-version monitor-stats changes invalidate the runtime source identity'
     require(name) {
       if (name === 'node:fs') return { ...fs, readFileSync(file, ...options) {
         const original = fs.readFileSync(file, ...options);
-        return statsChanged && path.resolve(file) === path.resolve(__dirname, '../src/runtime/monitor-stats.cjs')
+        return statsChanged && path.resolve(file) === path.resolve(__dirname, '../src/monitor-stats.cjs')
           ? Buffer.concat([Buffer.from(original), Buffer.from('\n// synthetic stats change\n')]) : original;
       } };
       return realRequire(name);

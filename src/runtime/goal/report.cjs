@@ -3,9 +3,9 @@ const path = require('node:path');
 const {
   MAX_EVIDENCE_LENGTH, REPORT_STATUSES, identifier, goalId, runId, capabilityToken,
   normalizeEvidence, readCapability, readGoal, writeReport
-} = require('./goal-store.cjs');
+} = require('./store.cjs');
 
-const USAGE = '用法：goal-report.cjs --store <绝对路径> --capability <令牌> \'{"status":"progress","evidence":"..."}\'';
+const USAGE = '用法：goal/report.cjs --store <绝对路径> --capability <令牌> \'{"status":"progress","evidence":"..."}\'';
 const REPORT_FIELDS = new Set(['status', 'evidence']);
 
 const fail = error => ({ ok: false, error });

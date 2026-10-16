@@ -1,5 +1,5 @@
 'use strict';
-const { createMonitorStats } = require('../runtime/monitor-stats.cjs');
+const { createMonitorStats } = require('../monitor-stats.cjs');
 // Columns marked "extra" stay in the DOM but are hidden until "显示全部指标" is checked.
 const COLUMNS = [['开始时间（本机）'], ['模型／档位'], ['状态'], ['用量', true], ['首响应数据 s'], ['首响应后 TPS'], ['输入'], ['输出'], ['缓存命中', true], ['推理', true],
   ['首输出 s', true], ['正文首字 s', true], ['正文 TPS', true], ['请求吞吐 TPS', true], ['总耗时 s'], ['会话归属', true]];
