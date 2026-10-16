@@ -7,8 +7,8 @@ const { once } = require('node:events');
 const zlib = require('node:zlib');
 const { createHash } = require('node:crypto');
 const wire = require('../src/protocol/wire.cjs');
-const { parseChat } = require('../src/protocol/chat.cjs');
-const { serveChat, buildRequestBody } = require('../src/protocol/responses.cjs');
+const { parseChat } = require('../src/protocol/acp.cjs');
+const { serveChat, buildRequestBody } = require('../src/protocol/inference.cjs');
 const { s, v, m, str, num, fields } = wire;
 
 function nativeMessage(source, text, extra = []) {

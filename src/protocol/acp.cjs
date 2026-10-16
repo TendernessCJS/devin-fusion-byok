@@ -1,5 +1,10 @@
 'use strict';
 
+// Devin ACP side of the protocol boundary: parses the native exa.chat_pb
+// request (parseChat) and builds the outbound ACP chunks (text/thinking/
+// signature/tool/stop/usage). Despite the old name, this file has nothing to
+// do with OpenAI Chat Completions — that request body lives in inference.cjs.
+
 const { fields, str, num, s, v, m } = require('./wire.cjs');
 const SOURCE_ROLE = { 0: 'user', 1: 'user', 2: 'assistant', 3: 'assistant', 4: 'tool', 5: 'system' };
 

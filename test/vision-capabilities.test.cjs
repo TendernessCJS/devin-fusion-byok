@@ -5,8 +5,8 @@ const { modelSupportsImages } = require('../src/model-capabilities.cjs');
 const { buildCatalog: buildSavedCatalog, resolveAssignment } = require('../src/catalog.cjs');
 const buildCatalog = buildSavedCatalog;
 const { publicState } = require('../src/panel/manager.cjs');
-const { parseChat } = require('../src/protocol/chat.cjs');
-const { buildRequestBody } = require('../src/protocol/responses.cjs');
+const { parseChat } = require('../src/protocol/acp.cjs');
+const { buildRequestBody } = require('../src/protocol/inference.cjs');
 const { fields, num } = require('../src/protocol/wire.cjs');
 
 test('all imported models always advertise image support, including stored overrides', () => {

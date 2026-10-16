@@ -1360,7 +1360,7 @@ test('integration: serveChat simulated ACP adapter end-to-end failure then succe
   });
   t.after(() => handle.dispose());
 
-  const { serveChat } = require('../src/protocol/responses.cjs');
+  const { serveChat } = require('../src/protocol/inference.cjs');
   const wire = require('../src/protocol/wire.cjs');
   const http = require('node:http');
 

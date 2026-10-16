@@ -1,8 +1,14 @@
 'use strict';
 
+// Unified orchestration entry for all three provider protocols: serveChat,
+// endpoint routing, request bodies (OpenAI Responses + Chat Completions), the
+// SSE processor, bounded degrade retries, and the reasoning-state envelope
+// channel. Despite the old name, this is not Responses-only — the Anthropic
+// Messages implementation is delegated to anthropic.cjs.
+
 const { randomUUID, createHash } = require('node:crypto');
 const { frame } = require('./wire.cjs');
-const { textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk } = require('./chat.cjs');
+const { textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk } = require('./acp.cjs');
 const { createTracker } = require('./tracker.cjs');
 const { isAnthropicFormat, anthropicHeaders, buildAnthropicBody, createAnthropicAdapter } = require('./anthropic.cjs');
 const MAX_SSE_BUFFER = 64 * 1024 * 1024;

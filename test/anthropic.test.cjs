@@ -5,8 +5,8 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const { once } = require('node:events');
 const { s, v, m, str, num, fields } = require('../src/protocol/wire.cjs');
-const { parseChat } = require('../src/protocol/chat.cjs');
-const { serveChat, buildRequestBody } = require('../src/protocol/responses.cjs');
+const { parseChat } = require('../src/protocol/acp.cjs');
+const { serveChat, buildRequestBody } = require('../src/protocol/inference.cjs');
 const { createAnthropicAdapter } = require('../src/protocol/anthropic.cjs');
 const { modelEfforts } = require('../src/model-capabilities.cjs');
 

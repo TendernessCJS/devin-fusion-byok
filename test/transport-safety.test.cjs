@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { serveChat } = require('../src/protocol/responses.cjs');
+const { serveChat } = require('../src/protocol/inference.cjs');
 const { discover } = require('../src/config.cjs');
 const { forward, collect } = require('../src/runtime/bridge.cjs');
 

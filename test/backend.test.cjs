@@ -63,7 +63,7 @@ async function fixture(t) {
           else { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('official'); }
         },
       };
-      if (name === '../protocol/responses.cjs') return { serveChat: async ({ route, res }) => { chats.push(route); res.end('custom'); } };
+      if (name === '../protocol/inference.cjs') return { serveChat: async ({ route, res }) => { chats.push(route); res.end('custom'); } };
       return realRequire(name);
     },
   }, { filename });
@@ -429,7 +429,7 @@ test('close waits for both the client response and the serveChat handler so late
         async snapshot() { return {}; },
         close() { events.push('monitor-close'); return Promise.resolve(); },
       }) };
-      if (name === '../protocol/responses.cjs') return { serveChat: async ({ res, onMetrics }) => {
+      if (name === '../protocol/inference.cjs') return { serveChat: async ({ res, onMetrics }) => {
         entered = true;
         await new Promise(resolve => { releaseHandler = resolve; });
         onMetrics({ id: 'late-1', startedAt: '2026-01-01T00:00:00Z', status: 'cancelled', model: 'm', providerId: 'p' });

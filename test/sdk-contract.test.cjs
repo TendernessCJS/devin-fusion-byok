@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseChat } = require('../src/protocol/chat.cjs');
+const { parseChat } = require('../src/protocol/acp.cjs');
 const { buildAnthropicBody, createAnthropicAdapter } = require('../src/protocol/anthropic.cjs');
 
 const ANTHROPIC_FILE = path.join(__dirname, '..', '.refs', 'anthropic-sdk-typescript', 'src', 'resources', 'messages', 'messages.ts');
@@ -124,7 +124,7 @@ test('Responses params still expose store and reasoning.encrypted_content includ
 });
 
 test('the anthropic foreign-signature guard covers the responses envelope prefix', () => {
-  const { STATE_PREFIX } = require('../src/protocol/responses.cjs');
+  const { STATE_PREFIX } = require('../src/protocol/inference.cjs');
   const { readFileSync } = require('node:fs');
   const anthropicSource = readFileSync(path.join(__dirname, '..', 'src', 'protocol', 'anthropic.cjs'), 'utf8');
   const guard = anthropicSource.match(/FOREIGN_STATE_PREFIX = '([^']+)'/);
