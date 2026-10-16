@@ -25,33 +25,74 @@ tail -c +<偏移> <bundle> | head -c 600
 
 ## 出站：`exa.api_server_pb.GetChatMessageResponse`（chunk 全集）
 
-| 号 | 字段 | 类型 | 说明 |
+下表是**逐字段读出的完整 23 个字段**（2026-10-16 由 `sessions.desktop.main.js` 偏移 5980624 处的 `newFieldList` 原文核出），不是只列我们用到的那几个——只列子集曾让人以为「字段号不连续」。
+
+| 号 | 字段 | 类型 | 本仓用法 |
 | --- | --- | --- | --- |
-| 3 | `delta_text` | string | 可见文本增量（`textChunk`） |
-| 5 | `stop_reason` | enum StopReason | 结束原因（`stopChunk`） |
-| 6 | `delta_tool_calls` | repeated ChatToolCall | 工具调用（`toolChunk`） |
-| 7 | `usage` | ModelUsageStats | 用量（`usageChunk`） |
-| 9 | `delta_thinking` | string | 思考增量（`thinkingChunk`） |
-| 10 | `delta_signature` | string | 思考签名（`signatureChunk`，anthropic `signature_delta` 透出） |
-| 11 | `thinking_redacted` | bool | 脱敏思考标记（`redactedThinkingChunk`），**无载荷字段** |
-| 21 | `delta_signature_type` | string | 签名类型——取值未知，见下 |
-| 23 | `actual_model_uid` | string | 实际模型 uid（`stopChunk` 尾部） |
+| 1 | `message_id` | string | — |
+| 2 | `timestamp` | Timestamp | — |
+| 3 | `delta_text` | string | ✓ `textChunk` |
+| 4 | `delta_tokens` | int32 | — |
+| 5 | `stop_reason` | enum StopReason | ✓ `stopChunk` |
+| 6 | `delta_tool_calls` | repeated ChatToolCall | ✓ `toolChunk` |
+| 7 | `usage` | ModelUsageStats | ✓ `usageChunk` |
+| 8 | `redact` | bool | — |
+| 9 | `delta_thinking` | string | ✓ `thinkingChunk` |
+| 10 | `delta_signature` | string | ✓ `signatureChunk`（anthropic `signature_delta`） |
+| 11 | `thinking_redacted` | bool | ✓ `redactedThinkingChunk`，**无载荷字段** |
+| 12 | `latency` | double | — |
+| 13 | `completion_profile` | CompletionProfile | — |
+| 14 | `credit_cost` | double | — |
+| 15 | `output_id` | string | — |
+| 16 | `thinking_id` | string | — |
+| 17 | `request_id` | string | — |
+| 18 | `committed_credit_cost` | double | — |
+| 19 | `prompt` | string | — |
+| 20 | `gemini_thought_signature` | bytes | — |
+| 21 | `delta_signature_type` | string | 未发；**已证不需要**，见下 |
+| 22 | `committed_acu_cost` | double | — |
+| 23 | `actual_model_uid` | string | ✓ `stopChunk` 尾部 |
 
 ## 入站：`exa.chat_pb.ChatMessagePrompt`（请求侧，已由 `parseChat` 消费）
 
+完整 21 个字段（`sessions.desktop.main.js` 偏移 6258731 处核出）：
+
 | 号 | 字段 | 类型 |
 | --- | --- | --- |
-| 6 | tool calls | repeated |
+| 3 | `prompt` | string |
+| 6 | `tool_calls` | repeated ChatToolCall |
 | 7 | `tool_call_id` | string |
-| 10 | images | repeated |
+| 9 | `tool_result_is_error` | bool |
+| 10 | `images` | repeated ImageData |
 | 11 | `thinking` | string |
 | 12 | `signature` | string |
-| 13 | `thinking_redacted` | bool |
+| **13** | `thinking_redacted` | **bool** |
+| 15 | `output_id` | string |
 | 16 | `thinking_id` | string |
 | 17 | `gemini_thought_signature` | bytes |
 | 18 | `signature_type` | string |
+| 19 | `phase` | string |
 
-## `ModelUsageStats`（字段 7 的子消息）
+（其余为 `message_id`/`source`/`num_tokens`/`safe_for_code_telemetry`/`prompt_cache_options`/`prompt_annotation_ranges`/`videos`/`documents`。）
+
+## ⚠️ 陷阱：`CompletionDelta` 是**另一个消息**，字段号整体错位
+
+同一个 bundle 里还有一个 `exa.codeium_common_pb.CompletionDelta`（偏移 2610902），字段名**几乎一样但号全不同**。把它当成出站 chunk 会**每一个字段都写错**：
+
+| 字段 | `GetChatMessageResponse`（出站，本文档） | `CompletionDelta`（另一个消息） |
+| --- | --- | --- |
+| `delta_text` | **3** | 1 |
+| `stop_reason` | **5** | 3 |
+| `delta_tool_calls` | **6** | 5 |
+| `usage` | **7** | 4 |
+| `delta_thinking` | **9** | 6 |
+| `delta_signature` | **10** | 7 |
+| `thinking_redacted` | **11** | 8 |
+| `delta_signature_type` | **21** | 12 |
+
+判别方法：确认 `typeName` 是 `exa.api_server_pb.GetChatMessageResponse`。`delta_signature` 在 bundle 里有**两个**偏移，第一个（2611300）属 `CompletionDelta`，**不要用**。
+
+## `ModelUsageStats`（`GetChatMessageResponse` 字段 7 的子消息，`exa.codeium_common_pb`）
 
 | 号 | 字段 | 说明 |
 | --- | --- | --- |
@@ -61,8 +102,11 @@ tail -c +<偏移> <bundle> | head -c 600
 | 5 | `cache_read_tokens` | 读缓存子集 |
 | 6 | `api_provider` | |
 | 7 | `message_id` | 本仓用它装 chunk id（`s(7, id)`） |
-| 8 | `response_header` | |
+| 8 | `response_header` | map |
 | 9 | `model_uid` | |
+| 12 | `provider_refusal` | 拒绝标记（本仓未发） |
+
+（另有 1 `model_deprecated`(enum，jsonName `model`)、10 `billing_model_uid`、11 `requested_model_uid`。）
 
 ## `ChatToolCall` 与 `StopReason`
 
@@ -72,6 +116,14 @@ tail -c +<偏移> <bundle> | head -c 600
 ## 已核实的语义结论
 
 - **`cached_tokens` 是 `input_tokens` 的子集（inclusive）**：真机实测 `prompt_cache_hit_tokens:0 + prompt_cache_miss_tokens:7 = prompt_tokens:7`。因此 `ModelUsageStats.input_tokens`（字段 2）永远写含缓存总额，4/5 只是子集分列，**不要**把 input 改成「减缓存」。
-- **`delta_signature_type`（字段 21）取值未知**：JS bundle 里 `signatureType` 只被初始化为 `""`、无任何比较/消费逻辑。当前只发字段 10、不发类型；若真机验证发现签名未被持久化/回放失败，**优先尝试补字段 21**。
-- **脱敏思考无法往返**：`redacted_thinking` 在请求与响应两侧都只有 bool 标志、没有任何载荷字段，所以本仓只透传 `thinking_redacted=true`，不做载荷回传。
+- **思考签名闭环已真机证实**（2026-10-16，真实 Devin 窗口 + 真实 DeepSeek anthropic 端点，经本地反代只记形状）：
+
+  ```
+  响应字段 10 delta_signature ──→ 客户端持久化 ──→ 请求字段 12 signature ──→ 回传 thinking 块
+  ```
+
+  证据链：第 1 轮响应 `signature_delta` 1 次（**36 字符**）→ 第 2 轮请求新增助手轮块类型 `["thinking","tool_use"]`、`signedThinkingBlocks: 1`、签名长度 `[36]` → 第 3 轮 `[36, 36]` → 第 4 轮 `[36, 36, 36]`，**逐轮累积且长度逐字一致**。因此「客户端读字段 10 并写回请求字段 12」成立，捕获与回传两半都可达。
+- **字段 21 `delta_signature_type` 不需要发**：上述闭环在**完全不发字段 21** 的情况下成立，所以「取值未知」不再阻塞任何事。`signatureType` 在 JS 里只被初始化为 `""`、无消费逻辑；除非未来真机出现签名回放失败，再考虑补它。
+- **脱敏思考无法往返**：`redacted_thinking` 在请求（字段 13）与响应（字段 11）两侧都只有 bool 标志、没有任何载荷字段，所以本仓只透传 `thinking_redacted=true`，不做载荷回传。
 - Anthropic 侧 `ThinkingBlockParam.signature` 是**必需字段**：assistant 回传思考块仅在签名在场时进行，否则整块省略。
+- **验证方法（可复用）**：把临时 `apiFormat: anthropic` 供应商指向本地反代，反代只记录形状（块类型/签名长度/布尔），**不记正文与密钥**；跑一轮带工具回合即可看到回传。注意 baseUrl 会被规范化成 `<host>/anthropic/v1`，客户端再拼 `/messages`。
