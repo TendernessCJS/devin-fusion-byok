@@ -5,15 +5,16 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 
 ## 主题卷索引（按需加载）
 
-下面三卷是**流程与历史**内容，不常驻上下文。触到对应场景时**先读该卷**，再动手：
+下面四卷是**流程与历史**内容，不常驻上下文。触到对应场景时**先读该卷**，再动手：
 
 | 主题卷 | 何时必须读 |
 | --- | --- |
 | `.devin/rules/upstream-fork-release.md` | 同步 `upstream`、定/升版本号、发布、解 merge 冲突（含「本 fork 相对 upstream 的刻意差异」表） |
 | `.devin/rules/retired-and-deadends.md` | 清理配置键、审「这段代码还活着吗」、疑惑某个旧字段为何还在 |
 | `.devin/rules/testing-notes.md` | 写或调测试 |
+| `.devin/rules/acp-protocol-fields.md` | 改 `src/protocol/*` 的 protobuf 字段号、核对原生请求/响应/用量字段、怀疑某字段没被送出或读回 |
 
-**行为锚定的硬约束不在这三卷里**——全部留在本文件（always-on）。依据是实测：`devin rules list` 显示无论 `trigger: glob` 还是
+**行为锚定的硬约束不在这四卷里**——全部留在本文件（always-on）。依据是实测：`devin rules list` 显示无论 `trigger: glob` 还是
   `trigger: model_decision`，规则都只登记为 **`agent-decidable`**（按模型判断注入），**不保证加载**；而本项目里漏读的代价常常是静默的（改了
   `SOURCE_FILES` 不生效、陈旧判定误删条目、缓存写坏都不报错）。所以「漏读会安静地做错」的知识一律常驻。
 
