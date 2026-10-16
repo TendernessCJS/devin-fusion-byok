@@ -1,4 +1,5 @@
 'use strict';
+const { domHelpersSource } = require('./dom.cjs');
 function fastContextMarkup() {
   return `<div id="fast-context">
       <div class="section-head"><h2>Fast Context MCP</h2></div>
@@ -23,17 +24,17 @@ function fastContextMarkup() {
 function fastContextScript() {
   return `
   (() => {
-    const byId = id => document.getElementById('fc-' + id);
+    ${domHelpersSource('    ')}
     let snapshot = null;
-    const selected = () => byId('root').value;
+    const selected = () => byId('root', 'fc-').value;
     const send = (type, payload) => vscode.postMessage({ id: 'fc-' + Date.now(), type: 'fastContext.' + type, payload });
     function preview() {
       const root = selected();
-      if (!snapshot || !root) { byId('preview').textContent = '请先打开或选择一个本地项目文件夹。'; return; }
-      byId('preview').textContent = JSON.stringify({ mcpServers: { 'fusion-fast-context': { command: snapshot.node, args: [snapshot.server, '--root', root] } } }, null, 2);
+      if (!snapshot || !root) { byId('preview', 'fc-').textContent = '请先打开或选择一个本地项目文件夹。'; return; }
+      byId('preview', 'fc-').textContent = JSON.stringify({ mcpServers: { 'fusion-fast-context': { command: snapshot.node, args: [snapshot.server, '--root', root] } } }, null, 2);
     }
     function render(keep) {
-      const select = byId('root');
+      const select = byId('root', 'fc-');
       const previous = keep || select.value;
       select.replaceChildren();
       for (const root of snapshot.roots) {
@@ -43,23 +44,23 @@ function fastContextScript() {
       }
       if (snapshot.roots.some(root => root.path === previous)) select.value = previous;
       const empty = !snapshot.roots.length;
-      byId('copy-prompt').disabled = empty || !snapshot.trusted;
-      byId('copy-config').disabled = empty || !snapshot.trusted;
+      byId('copy-prompt', 'fc-').disabled = empty || !snapshot.trusted;
+      byId('copy-config', 'fc-').disabled = empty || !snapshot.trusted;
       const warnings = [];
       if (!snapshot.trusted) warnings.push('工作区未信任，请先信任工作区再复制。');
       if (empty) warnings.push('没有可用的本地项目，请打开一个文件夹或点击“选择其他文件夹…”。');
       if (!snapshot.nodeFound) warnings.push('没有在 PATH 中找到 Node.js，配置里暂用 node，请确认其他 Harness 能找到 Node.js 22.16+。');
-      byId('status').textContent = warnings.join(' ');
+      byId('status', 'fc-').textContent = warnings.join(' ');
       preview();
     }
-    byId('root').addEventListener('change', preview);
-    byId('pick').addEventListener('click', () => send('pick'));
-    byId('copy-prompt').addEventListener('click', () => send('copy', { kind: 'prompt', root: selected() }));
-    byId('copy-config').addEventListener('click', () => send('copy', { kind: 'config', root: selected() }));
+    byId('root', 'fc-').addEventListener('change', preview);
+    byId('pick', 'fc-').addEventListener('click', () => send('pick'));
+    byId('copy-prompt', 'fc-').addEventListener('click', () => send('copy', { kind: 'prompt', root: selected() }));
+    byId('copy-config', 'fc-').addEventListener('click', () => send('copy', { kind: 'config', root: selected() }));
     window.addEventListener('message', event => {
       const message = event.data;
       if (message?.type === 'fast-context-result') {
-        const result = byId('result');
+        const result = byId('result', 'fc-');
         result.textContent = message.text || '';
         result.className = message.ok ? 'hint' : 'warn';
         return;

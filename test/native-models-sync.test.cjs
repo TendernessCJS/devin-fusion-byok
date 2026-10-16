@@ -9,7 +9,7 @@ const vm = require('node:vm');
 const { startBackend, controlFile, runtimeIdentity } = require('../src/runtime/backend.cjs');
 const { readNativeModels } = require('../src/runtime/native-models.cjs');
 const { collect } = require('../src/runtime/bridge.cjs');
-const { createManager } = require('../src/panel/model.cjs');
+const { createManager } = require('../src/panel/manager.cjs');
 const { buildCatalog, buildRoleLists } = require('../src/catalog.cjs');
 const API = '/exa.api_server_pb.ApiServerService/';
 

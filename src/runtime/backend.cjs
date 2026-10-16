@@ -24,7 +24,7 @@ const MAX_INGEST_ENTRIES = 5000;
 // closure). Generous enough that ordinary drains finish first, short enough that
 // a stuck one cannot turn SIGTERM into a no-op.
 const DRAIN_TIMEOUT_MS = 5000;
-const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', 'monitor.cjs', 'monitor-stats.cjs', 'native-cache.cjs', '../config.cjs', '../proxy.cjs', '../update.cjs', '../catalog.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/chat.cjs', '../protocol/responses.cjs', '../protocol/anthropic.cjs'];
+const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', 'monitor-store.cjs', 'monitor-stats.cjs', 'native-cache.cjs', '../config.cjs', '../proxy.cjs', '../update.cjs', '../catalog.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/chat.cjs', '../protocol/responses.cjs', '../protocol/anthropic.cjs'];
 function sourceId() {
   const hash = crypto.createHash('sha256');
   for (const name of SOURCE_FILES) hash.update(name).update('\0').update(fs.readFileSync(path.resolve(__dirname, name))).update('\0');
@@ -43,7 +43,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
   const controlToken = crypto.randomBytes(32).toString('hex');
   let monitor;
   try {
-    const { createMonitor } = require('./monitor.cjs');
+    const { createMonitor } = require('./monitor-store.cjs');
     monitor = createMonitor({ root });
   } catch { log('monitor-unavailable'); }
   const recordMetrics = data => {

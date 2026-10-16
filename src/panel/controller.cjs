@@ -1,7 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { renderPanel } = require('./view.cjs');
-const { PanelInputError } = require('./model.cjs');
+const { PanelInputError } = require('./manager.cjs');
 function createPanelController({ vscode, context, manager, safeError, updater, restartApp, reloadWindow, fastContext, readMonitor = async () => ({ status: 'unsupported', snapshot: null }) }) {
   let panel;
   let monitorPending = false;

@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { baseStyles } = require('./theme.cjs');
+const { domHelpersSource } = require('./dom.cjs');
 
 const STATUS_LABELS = {
   active: '进行中', paused: '已暂停', waiting: '等待输入', blocked: '受阻', limited: '已达运行上限',
@@ -27,9 +28,10 @@ function statusText(goal) {
 }
 
 function goalScript() {
-  return `const vscode=acquireVsCodeApi();let state=null,errorText='',notice='',sessions=[],selectedSession='';
+  return `${domHelpersSource()}const vscode=acquireVsCodeApi();let state=null,errorText='',notice='',sessions=[],selectedSession='';
 const STATUS_LABELS=${JSON.stringify(STATUS_LABELS)},REASON_LABELS=${JSON.stringify(REASON_LABELS)},SESSION_LABELS=${JSON.stringify(SESSION_LABELS)};
-const el=id=>document.getElementById(id);
+const el=byId;
+
 function statusText(goal){const base=STATUS_LABELS[goal.status]||goal.status;
 if(goal.locked)return base+'（该会话由另一个窗口占用，本窗口不可操作）';
 const reason=goal.reason?(REASON_LABELS[goal.reason]||goal.reason):'';return reason?base+' · '+reason:base;}

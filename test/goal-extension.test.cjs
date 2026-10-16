@@ -107,7 +107,7 @@ function fixture(t) {
       refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } },
     './runtime/goal-continue.cjs': loadWithStubbedVscode(goalSource, 'goal-continue.cjs', api),
     './runtime/auto-continue.cjs': loadWithStubbedVscode(autoSource, 'auto-continue.cjs', api),
-    './panel/model.cjs': { ...realRequire('./panel/model.cjs'), createManager: options => realRequire('./panel/model.cjs').createManager(options) }
+    './panel/manager.cjs': { ...realRequire('./panel/manager.cjs'), createManager: options => realRequire('./panel/manager.cjs').createManager(options) }
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {

@@ -3,7 +3,7 @@
 const { randomUUID } = require('node:crypto');
 const { frame } = require('./wire.cjs');
 const { textChunk, thinkingChunk, toolChunk, stopChunk, usageChunk } = require('./chat.cjs');
-const { createTracker } = require('../runtime/monitor.cjs');
+const { createTracker } = require('../runtime/monitor-store.cjs');
 const { isAnthropicFormat, anthropicHeaders, buildAnthropicBody, createAnthropicAdapter } = require('./anthropic.cjs');
 const MAX_SSE_BUFFER = 64 * 1024 * 1024;
 

@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { defaultConfig, pruneRetiredKeys, readConfig, writeConfig } = require('./config.cjs');
 const { buildCatalog, augmentCatalog, staleFusionUids } = require('./catalog.cjs');
-const { createManager } = require('./panel/model.cjs');
+const { createManager } = require('./panel/manager.cjs');
 const { installLsInjection } = require('./runtime/ls-injection.cjs');
 const { createLsBridge } = require('./runtime/bridge.cjs');
 const { runtimeIdentity, controlFile, PORT, MANAGEMENT_PROTOCOL } = require('./runtime/backend.cjs');
@@ -18,17 +18,11 @@ const { installAcpObserver } = require('./runtime/acp-observer.cjs');
 const { defaultDir: cliCacheDir, refreshStaleCliCaches } = require('./runtime/cli-cache.cjs');
 const { createPickerRefresh } = require('./runtime/picker-refresh.cjs');
 const { createGoalController } = require('./runtime/goal-state.cjs');
-let stopNativeSync;
-let stopAutoContinue;
-let resetAutoContinue;
-let cancelAutoContinueSession;
-let stopGoalContinue;
-let goalController;
-let connection, acpObserver;
-let runtimeWaitAbort;
-let activationGeneration = 0;
-let reconcileHalted = true;
-let activationDisposed = true;
+// Shared lifecycle state across activate/teardown/deactivate.
+const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
+  cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
+  connection: undefined, acpObserver: undefined, runtimeWaitAbort: undefined,
+  activationGeneration: 0, reconcileHalted: true, activationDisposed: true };
 function globalSetting(settings, key) {
   return typeof settings.inspect === 'function' ? settings.inspect(key)?.globalValue || {} : settings.get(key, {});
 }
@@ -138,7 +132,7 @@ async function ensureBackend({ root, extensionPath, signal, log = () => {}, port
 }
 
 async function activate(context) {
-  activationDisposed = false;
+  lifecycle.activationDisposed = false;
   const output = vscode.window.createOutputChannel('Devin Fusion BYOK');
   context.subscriptions.push(output);
   const log = (event, data) => output.appendLine(JSON.stringify({ time: new Date().toISOString(), event, ...(data || {}) }));
@@ -154,61 +148,64 @@ async function activate(context) {
         ? path.resolve(native.extensionPath, native.packageJSON.main) : null;
     } catch { return null; }
   })();
-  try {
-    if (nativeMain) {
-      goalContinue = installGoalContinue({
-        nativeMainPath: nativeMain,
-        isEnabled: () => !activationDisposed && config().enabled !== false
-      });
-      autoContinue = installAutoContinue({
-        nativeMainPath: nativeMain,
-        isEnabled: () => config().enabled !== false && (config().autoContinueOnProviderError === true || config().autoContinueUntilPlanComplete === true),
-        getOptions: () => ({
-          onProviderError: config().autoContinueOnProviderError === true,
-          untilPlanComplete: config().autoContinueUntilPlanComplete === true
-        }),
-        isSessionSuppressed: sessionId => goalController ? goalController.ownsSession(sessionId) : false,
-        onStopped: () => vscode.window.showWarningMessage('服务商持续返回错误，已停止自动继续（上限为 5 次或 10 分钟）。请检查服务商状态后手动继续对话。'),
-        log
-      });
-    } else {
+  const installContinuation = () => {
+    try {
+      if (nativeMain) {
+        goalContinue = installGoalContinue({
+          nativeMainPath: nativeMain,
+          isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false
+        });
+        autoContinue = installAutoContinue({
+          nativeMainPath: nativeMain,
+          isEnabled: () => config().enabled !== false && (config().autoContinueOnProviderError === true || config().autoContinueUntilPlanComplete === true),
+          getOptions: () => ({
+            onProviderError: config().autoContinueOnProviderError === true,
+            untilPlanComplete: config().autoContinueUntilPlanComplete === true
+          }),
+          isSessionSuppressed: sessionId => lifecycle.goalController ? lifecycle.goalController.ownsSession(sessionId) : false,
+          onStopped: () => vscode.window.showWarningMessage('服务商持续返回错误，已停止自动继续（上限为 5 次或 10 分钟）。请检查服务商状态后手动继续对话。'),
+          log
+        });
+      } else {
+        log('auto-continue-unavailable');
+      }
+    } catch {
       log('auto-continue-unavailable');
     }
-  } catch {
-    log('auto-continue-unavailable');
-  }
-  if (goalContinue) {
-    try {
-      goalController = createGoalController({
-        root,
-        transport: {
-          dispatch: request => goalContinue.dispatch(request),
-          cancel: sessionId => goalContinue.cancel(sessionId),
-          sessions: () => goalContinue.sessions(),
-          sessionStatus: sessionId => goalContinue.sessionStatus(sessionId),
-          setListener: listener => goalContinue.setListener(listener),
-          setCommandHandler: handler => goalContinue.setCommandHandler(handler),
-          setGoalOwned: (sessionId, owned) => {
-            if (owned) cancelAutoContinueSession?.(sessionId);
-            return goalContinue.setGoalOwned(sessionId, owned);
-          }
-        },
-        isEnabled: () => !activationDisposed && config().enabled !== false,
-        isTrusted: () => vscode.workspace.isTrusted !== false,
-        reportCliPath: path.join(context.extensionPath, 'src/runtime/goal-report.cjs'),
-        log
-      });
-    } catch { goalController = undefined; log('goal-controller-unavailable'); }
-  }
-  stopAutoContinue = () => { autoContinue?.dispose(); autoContinue = undefined; };
-  resetAutoContinue = () => { autoContinue?.reset(); };
-  cancelAutoContinueSession = sessionId => autoContinue?.cancelSession?.(sessionId);
-  stopGoalContinue = () => {
-    try { goalController?.dispose(); } catch {}
-    goalController = undefined;
-    try { goalContinue?.dispose(); } catch {}
-    goalContinue = undefined;
+    if (goalContinue) {
+      try {
+        lifecycle.goalController = createGoalController({
+          root,
+          transport: {
+            dispatch: request => goalContinue.dispatch(request),
+            cancel: sessionId => goalContinue.cancel(sessionId),
+            sessions: () => goalContinue.sessions(),
+            sessionStatus: sessionId => goalContinue.sessionStatus(sessionId),
+            setListener: listener => goalContinue.setListener(listener),
+            setCommandHandler: handler => goalContinue.setCommandHandler(handler),
+            setGoalOwned: (sessionId, owned) => {
+              if (owned) lifecycle.cancelAutoContinueSession?.(sessionId);
+              return goalContinue.setGoalOwned(sessionId, owned);
+            }
+          },
+          isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false,
+          isTrusted: () => vscode.workspace.isTrusted !== false,
+          reportCliPath: path.join(context.extensionPath, 'src/runtime/goal-report.cjs'),
+          log
+        });
+      } catch { lifecycle.goalController = undefined; log('goal-controller-unavailable'); }
+    }
+    lifecycle.stopAutoContinue = () => { autoContinue?.dispose(); autoContinue = undefined; };
+    lifecycle.resetAutoContinue = () => { autoContinue?.reset(); };
+    lifecycle.cancelAutoContinueSession = sessionId => autoContinue?.cancelSession?.(sessionId);
+    lifecycle.stopGoalContinue = () => {
+      try { lifecycle.goalController?.dispose(); } catch {}
+      lifecycle.goalController = undefined;
+      try { goalContinue?.dispose(); } catch {}
+      goalContinue = undefined;
+    };
   };
+  installContinuation();
   const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...nativeModels.values()], nativeAllowedUids); };
   let management, manager;
   const nativeModels = new Map(), localNativeModels = new Map();
@@ -231,118 +228,129 @@ async function activate(context) {
   // (155) and the picker loses every native Sidekick pairing until the host
   // rewrites the cache.
   let pushTimer, lastPushAt = 0, lastPushKey = '';
-  const PUSH_INTERVAL_MS = 5 * 1000;
-  // The gate must describe what is actually sent, not some proxy for it. Keying
-  // it off the local bridge observations looked equivalent but was not: on the
-  // first refresh the backend can answer with nothing yet, so an empty payload
-  // claimed the key and the immediately following meaningful refresh was then
-  // judged "unchanged" and skipped — the push silently never happened (only the
-  // previous successful push, whose timing differed, hid it).
-  const pushPayload = () => [...nativeModels.values()].filter(entry => isUpstreamUid(entry?.uid));
-  const pushKey = () => localNativeModels.size + ':' + pushPayload().length + ':' + nativeAllowedUids.size + ':' +
-    pushPayload().filter(entry => entry.sidekickDimension || entry.fusionMetadata).length;
-  const pushToBackend = () => {
-    if (activationDisposed || config().enabled === false || pushTimer !== undefined) return;
-    // Nothing to offer yet: do not spend the key on an empty payload, or the
-    // first useful observation will look unchanged.
-    if (!pushPayload().length) return;
-    const key = pushKey();
-    if (key === lastPushKey) return;
-    const wait = Math.max(0, lastPushAt + PUSH_INTERVAL_MS - Date.now());
-    pushTimer = setTimeout(() => {
-      pushTimer = undefined;
-      if (activationDisposed || config().enabled === false) return;
-      lastPushAt = Date.now();
-      lastPushKey = key;
-      pushNativeModels({ root, models: pushPayload(), allowedUids: [...nativeAllowedUids] })
-        .then(result => {
-          if (result?.pushed) log('native-push', { pushed: result.pushed, count: result.count, improved: result.improved === true });
-          else if (result?.reason && result.reason !== 'empty') log('native-push-skip', { reason: result.reason });
-        })
-        .catch(() => {});
-    }, wait);
-    pushTimer.unref?.();
-  };
-  const refreshNativeModels = () => {
-    if (activationDisposed || config().enabled === false) return Promise.resolve();
-    if (syncPending) return syncPending;
-    const generation = activationGeneration;
-    const abort = new AbortController(); syncAbort = abort;
-    syncPending = (async () => {
-      let result;
-      try { result = await readNativeModels({ root, signal: abort.signal }); }
-      catch { result = { status: 'unavailable', models: [] }; }
-      if (abort.signal.aborted || generation !== activationGeneration || activationDisposed || config().enabled === false) return;
-      nativeCatalogStatus = result.status;
-      nativeModels.clear();
-      // Both channels observe the same upstream catalog from different sides —
-      // the backend sees the CLI's traffic, this host sees the native
-      // extension's — and their copies are not equally complete. Merge instead
-      // of letting the last one win: a dimension-less copy makes every native
-      // Sidekick unresolvable and the mirrored combinations vanish.
-      for (const entry of localNativeModels.values()) nativeModels.set(entry.uid, entry);
-      for (const entry of result.models) nativeModels.set(entry.uid, mergeNativeEntry(nativeModels.get(entry.uid), entry));
-      if (Array.isArray(result.allowedUids) && result.allowedUids.length) nativeAllowedUids = new Set(result.allowedUids);
-      try { await management?.publish(); } catch {}
-      updateStatusBar();
-      if (nativeModels.size !== nativeSyncSize) { nativeSyncSize = nativeModels.size; log('native-sync', { count: nativeSyncSize }); }
-      pickerRefresh?.changed?.();
-      checkCliCaches?.();
-      pushToBackend();
-    })().finally(() => { if (syncAbort === abort) { syncAbort = undefined; syncPending = undefined; } });
-    return syncPending;
-  };
-  const startNativeSync = () => {
-    stopNativeSync?.();
-    stopNativeSync = () => { clearInterval(syncTimer); syncAbort?.abort(); syncAbort = undefined; syncPending = undefined;
-      if (pushTimer !== undefined) { clearTimeout(pushTimer); pushTimer = undefined; } };
-    syncTimer = setInterval(() => { void refreshNativeModels(); }, 3000); syncTimer.unref?.();
-    void refreshNativeModels();
-  };
-  const observeNativeModels = entries => {
-    if (!Array.isArray(entries)) return;
-    let changed = false;
-    for (const entry of entries) {
-      if (!entry || typeof entry.uid !== 'string' || !entry.uid) continue;
-      const dimension = entry.sidekickDimension;
-      const next = { uid: entry.uid, label: typeof entry.label === 'string' ? entry.label : '', disabled: entry.disabled === true,
-        isModelRouter: entry.isModelRouter === true,
-        harnessUids: Array.isArray(entry.harnessUids) ? entry.harnessUids.filter(value => typeof value === 'string') : [],
-        ...(dimension && typeof dimension === 'object'
-          ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } } : {}),
-        ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
-        ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
-        ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
-        ...(entry.supportsImages ? { supportsImages: true } : {}),
-        ...(Number.isSafeInteger(entry.kind) ? { kind: entry.kind } : {}),
-        ...(entry.listed === true ? { listed: true } : {}),
-        ...(typeof entry.pickerListed === 'boolean' ? { pickerListed: entry.pickerListed } : {}),
-        ...(Array.isArray(entry.sources)
-          ? { sources: entry.sources.filter(value => typeof value === 'string' && value.length <= 32).slice(0, 8) } : {}) };
-      const previous = nativeModels.get(next.uid);
-      const merged = mergeNativeEntry(previous, next);
-      if (!previous || JSON.stringify(previous) !== JSON.stringify(merged)) {
-        localNativeModels.set(next.uid, merged); nativeModels.set(next.uid, merged); changed = true;
+  let nativeSyncSize = -1, cliCacheReport = null, contextObserver;
+  let lastAutoError, lastAutoPlan;
+  // Shared slots: each installer below assigns the ones it owns, while other
+  // installer segments (and enable/teardown) read them — so the declarations
+  // must live in this activate scope, not inside any single installer.
+  let refreshNativeModels, startNativeSync, observeNativeModels, pushToBackend;
+  let saveFusionChoice, reconcilePreference, disable, reconcileSelection;
+  let statusBar, updateStatusBar, pickerRefresh, checkCliCaches;
+  const installCatalogSync = () => {
+    const PUSH_INTERVAL_MS = 5 * 1000;
+    // The gate must describe what is actually sent, not some proxy for it. Keying
+    // it off the local bridge observations looked equivalent but was not: on the
+    // first refresh the backend can answer with nothing yet, so an empty payload
+    // claimed the key and the immediately following meaningful refresh was then
+    // judged "unchanged" and skipped — the push silently never happened (only the
+    // previous successful push, whose timing differed, hid it).
+    const pushPayload = () => [...nativeModels.values()].filter(entry => isUpstreamUid(entry?.uid));
+    const pushKey = () => localNativeModels.size + ':' + pushPayload().length + ':' + nativeAllowedUids.size + ':' +
+      pushPayload().filter(entry => entry.sidekickDimension || entry.fusionMetadata).length;
+    pushToBackend = () => {
+      if (lifecycle.activationDisposed || config().enabled === false || pushTimer !== undefined) return;
+      // Nothing to offer yet: do not spend the key on an empty payload, or the
+      // first useful observation will look unchanged.
+      if (!pushPayload().length) return;
+      const key = pushKey();
+      if (key === lastPushKey) return;
+      const wait = Math.max(0, lastPushAt + PUSH_INTERVAL_MS - Date.now());
+      pushTimer = setTimeout(() => {
+        pushTimer = undefined;
+        if (lifecycle.activationDisposed || config().enabled === false) return;
+        lastPushAt = Date.now();
+        lastPushKey = key;
+        pushNativeModels({ root, models: pushPayload(), allowedUids: [...nativeAllowedUids] })
+          .then(result => {
+            if (result?.pushed) log('native-push', { pushed: result.pushed, count: result.count, improved: result.improved === true });
+            else if (result?.reason && result.reason !== 'empty') log('native-push-skip', { reason: result.reason });
+          })
+          .catch(() => {});
+      }, wait);
+      pushTimer.unref?.();
+    };
+    refreshNativeModels = () => {
+      if (lifecycle.activationDisposed || config().enabled === false) return Promise.resolve();
+      if (syncPending) return syncPending;
+      const generation = lifecycle.activationGeneration;
+      const abort = new AbortController(); syncAbort = abort;
+      syncPending = (async () => {
+        let result;
+        try { result = await readNativeModels({ root, signal: abort.signal }); }
+        catch { result = { status: 'unavailable', models: [] }; }
+        if (abort.signal.aborted || generation !== lifecycle.activationGeneration || lifecycle.activationDisposed || config().enabled === false) return;
+        nativeCatalogStatus = result.status;
+        nativeModels.clear();
+        // Both channels observe the same upstream catalog from different sides —
+        // the backend sees the CLI's traffic, this host sees the native
+        // extension's — and their copies are not equally complete. Merge instead
+        // of letting the last one win: a dimension-less copy makes every native
+        // Sidekick unresolvable and the mirrored combinations vanish.
+        for (const entry of localNativeModels.values()) nativeModels.set(entry.uid, entry);
+        for (const entry of result.models) nativeModels.set(entry.uid, mergeNativeEntry(nativeModels.get(entry.uid), entry));
+        if (Array.isArray(result.allowedUids) && result.allowedUids.length) nativeAllowedUids = new Set(result.allowedUids);
+        try { await management?.publish(); } catch {}
+        updateStatusBar();
+        if (nativeModels.size !== nativeSyncSize) { nativeSyncSize = nativeModels.size; log('native-sync', { count: nativeSyncSize }); }
+        pickerRefresh?.changed?.();
+        checkCliCaches?.();
+        pushToBackend();
+      })().finally(() => { if (syncAbort === abort) { syncAbort = undefined; syncPending = undefined; } });
+      return syncPending;
+    };
+    startNativeSync = () => {
+      lifecycle.stopNativeSync?.();
+      lifecycle.stopNativeSync = () => { clearInterval(syncTimer); syncAbort?.abort(); syncAbort = undefined; syncPending = undefined;
+        if (pushTimer !== undefined) { clearTimeout(pushTimer); pushTimer = undefined; } };
+      syncTimer = setInterval(() => { void refreshNativeModels(); }, 3000); syncTimer.unref?.();
+      void refreshNativeModels();
+    };
+    observeNativeModels = entries => {
+      if (!Array.isArray(entries)) return;
+      let changed = false;
+      for (const entry of entries) {
+        if (!entry || typeof entry.uid !== 'string' || !entry.uid) continue;
+        const dimension = entry.sidekickDimension;
+        const next = { uid: entry.uid, label: typeof entry.label === 'string' ? entry.label : '', disabled: entry.disabled === true,
+          isModelRouter: entry.isModelRouter === true,
+          harnessUids: Array.isArray(entry.harnessUids) ? entry.harnessUids.filter(value => typeof value === 'string') : [],
+          ...(dimension && typeof dimension === 'object'
+            ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } } : {}),
+          ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
+          ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
+          ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
+          ...(entry.supportsImages ? { supportsImages: true } : {}),
+          ...(Number.isSafeInteger(entry.kind) ? { kind: entry.kind } : {}),
+          ...(entry.listed === true ? { listed: true } : {}),
+          ...(typeof entry.pickerListed === 'boolean' ? { pickerListed: entry.pickerListed } : {}),
+          ...(Array.isArray(entry.sources)
+            ? { sources: entry.sources.filter(value => typeof value === 'string' && value.length <= 32).slice(0, 8) } : {}) };
+        const previous = nativeModels.get(next.uid);
+        const merged = mergeNativeEntry(previous, next);
+        if (!previous || JSON.stringify(previous) !== JSON.stringify(merged)) {
+          localNativeModels.set(next.uid, merged); nativeModels.set(next.uid, merged); changed = true;
+        }
       }
-    }
-    if (changed && !activationDisposed) try {
-      void management?.publish()?.catch(() => {}); updateStatusBar(); pickerRefresh?.changed?.(); checkCliCaches?.();
-      pushToBackend();
-    } catch {}
+      if (changed && !lifecycle.activationDisposed) try {
+        void management?.publish()?.catch(() => {}); updateStatusBar(); pickerRefresh?.changed?.(); checkCliCaches?.();
+        pushToBackend();
+      } catch {}
+    };
   };
+  installCatalogSync();
   let enableQueue = Promise.resolve();
   const ensureEnabled = () => {
     const operation = enableQueue.then(() => {
-      if (activationDisposed || config().enabled === false || connection) return;
+      if (lifecycle.activationDisposed || config().enabled === false || lifecycle.connection) return;
       return enable();
     });
     enableQueue = operation.catch(() => {});
     return operation;
   };
   async function enable() {
-    const generation = ++activationGeneration;
-    runtimeWaitAbort?.abort();
-    const waiting = new AbortController(); runtimeWaitAbort = waiting;
+    const generation = ++lifecycle.activationGeneration;
+    lifecycle.runtimeWaitAbort?.abort();
+    const waiting = new AbortController(); lifecycle.runtimeWaitAbort = waiting;
     backendStatus = 'starting';
     let compatible;
     const compatibleReady = new Promise(resolve => { compatible = resolve; });
@@ -353,13 +361,13 @@ async function activate(context) {
         backendStatus = 'running'; void management?.publish()?.catch(() => {});
         compatible(health);
       } });
-    void upgrade.finally(() => { if (runtimeWaitAbort === waiting) runtimeWaitAbort = undefined; })
+    void upgrade.finally(() => { if (lifecycle.runtimeWaitAbort === waiting) lifecycle.runtimeWaitAbort = undefined; })
       .catch(error => { const code = safeError(error).code; if (code !== 'cancelled') log('runtime-upgrade-error', { code }); });
     upgrade.then(() => { backendStatus = 'running'; void management?.publish()?.catch(() => {}); },
       error => { const code = safeError(error).code; if (code !== 'cancelled') { backendStatus = code; void management?.publish()?.catch(() => {}); } });
     await Promise.race([upgrade, compatibleReady]);
-    if (generation !== activationGeneration || config().enabled === false) return;
-    reconcileHalted = false;
+    if (generation !== lifecycle.activationGeneration || config().enabled === false) return;
+    lifecycle.reconcileHalted = false;
     const settings = vscode.workspace.getConfiguration('devin.acp');
     const existing = globalSetting(settings, 'agentEnv');
     const previous = { ...(existing['devin-cli'] || {}) };
@@ -385,9 +393,9 @@ async function activate(context) {
     const current = config();
     if (current.inferenceServerUrl !== desired.WINDSURF_API_SERVER_URL) { current.inferenceServerUrl = desired.WINDSURF_API_SERVER_URL; writeConfig(configFile, current); }
     if (Object.keys(managed).some(k => !(k in desired)) || Object.entries(desired).some(([k, v]) => previous[k] !== v)) await settings.update('agentEnv', { ...existing, 'devin-cli': { ...previous, ...desired } }, vscode.ConfigurationTarget.Global);
-    if (generation !== activationGeneration || config().enabled === false) return;
+    if (generation !== lifecycle.activationGeneration || config().enabled === false) return;
     await reconcilePreference();
-    if (generation !== activationGeneration || config().enabled === false) return;
+    if (generation !== lifecycle.activationGeneration || config().enabled === false) return;
     const native = vscode.extensions.getExtension('codeium.windsurf');
     if (!native) throw new Error('未找到 Devin 原生扩展');
     const injected = await installLsInjection({ nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main),
@@ -399,12 +407,12 @@ async function activate(context) {
           void management?.publish()?.catch(() => {});
           pushToBackend();
         } }), log });
-    if (generation !== activationGeneration || config().enabled === false || activationDisposed) {
+    if (generation !== lifecycle.activationGeneration || config().enabled === false || lifecycle.activationDisposed) {
       try { await injected.dispose(); } catch {}
       return;
     }
-    connection = injected;
-    try { if (nativeMain) { acpObserver?.dispose?.(); acpObserver = installAcpObserver({ nativeMainPath: nativeMain, log, onModels: counts => { acpObservationSeq++; acpOwnModels = counts.ownModels; } }); } }
+    lifecycle.connection = injected;
+    try { if (nativeMain) { lifecycle.acpObserver?.dispose?.(); lifecycle.acpObserver = installAcpObserver({ nativeMainPath: nativeMain, log, onModels: counts => { acpObservationSeq++; acpOwnModels = counts.ownModels; } }); } }
     catch { log('acp-observer-error'); }
     startNativeSync();
     log('activated', { nativeVersion: native.packageJSON.version, storage: root });
@@ -414,301 +422,304 @@ async function activate(context) {
     if (safe.code === 'cancelled') return;
     log('error', { code: safe.code }); vscode.window.showErrorMessage('Fusion BYOK：' + safe.message);
   } };
-  const refresh = async () => {
-    management.open();
-    vscode.window.showInformationMessage('请选择供应商，点击「导入模型」，勾选要导入的模型后确认。');
-  };
-  context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.refreshModels', run(refresh)));
-  context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.openPanel', run(async () => management.open())));
-  require('./fast-context/config-ui.cjs').registerFastContext({ vscode, context });
-  const saveFusionChoice = async uid => {
-    const settings = vscode.workspace.getConfiguration('devin.acp'); const preferences = globalSetting(settings, 'agentPreferences');
-    const receipt = readReceipt(root, context.extensionPath), keys = ['devin.acp.agentPreferences', 'devin-cli', 'model'];
-    remember(receipt, keys, valueAt({ 'devin.acp.agentPreferences': preferences }, keys), uid);
-    saveReceipt(receipt);
-    await settings.update('agentPreferences', { ...preferences, 'devin-cli': { ...(preferences['devin-cli'] || {}), model: uid } }, vscode.ConfigurationTarget.Global);
-    rememberFusion(uid);
-    await management?.publish();
-  };
-  // Memory of the combination this extension serves (matrix entries included).
-  // It is what a locked official selection falls back to, and what an emptied
-  // preference is restored from — so it is recorded whenever one is chosen, but
-  // recording it never re-writes the preference itself.
-  const rememberFusion = uid => {
-    if (!Object.hasOwn(catalog().fusions, uid)) return false;
-    const current = config();
-    if (current.lastFusionSelection === uid) return false;
-    current.lastFusionSelection = uid;
-    writeConfig(configFile, current);
-    return true;
-  };
-  // The remembered combination is also the fallback served when a locked
-  // official Fusion entry is selected, so it is kept only while it resolves.
-  const rememberedFusion = () => {
-    const currentCatalog = catalog(), uid = currentCatalog.lastFusionSelection;
-    return typeof uid === 'string' && Object.hasOwn(currentCatalog.fusions, uid) ? uid : '';
-  };
-  let reconcileQueue = Promise.resolve();
-  const reconcilePreference = () => {
-    const operation = reconcileQueue.then(async () => {
-      if (reconcileHalted || config().enabled === false) return;
-      const current = globalSetting(vscode.workspace.getConfiguration('devin.acp'), 'agentPreferences')['devin-cli']?.model;
-      // Any fusion-shaped selection is legitimate — the official card's own
-      // combinations and our mirrored ones alike — so it is only remembered,
-      // never rewritten: the picker value the user sees must stay what they
-      // (or Devin) chose.
-      if (typeof current === 'string' && current.startsWith('fusion-')) {
-        rememberFusion(current);
-        return;
-      }
-      if (typeof current === 'string' && current) return;
-      const remembered = rememberedFusion();
-      if (remembered) await saveFusionChoice(remembered);
-    }).catch(() => log('preference-reconcile-error'));
-    reconcileQueue = operation;
-    return operation;
-  };
-  context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.selectFusion', run(async () => {
-    const choices = catalog().models.filter(model => model.kind === 'matrix').map(model => ({ label: model.label || model.uid, uid: model.uid }));
-    if (!choices.length) { management?.open(); vscode.window.showInformationMessage('Fusion 组合在 Devin 的模型选择器里选（打开 Fusion 卡片）；控制面板的「Fusion」页用来决定哪些模型能出现在那张卡片的下拉里。'); return; }
-    const choice = await vscode.window.showQuickPick(choices, { title: '选择 Fusion 组合', matchOnDescription: true }); if (!choice) return;
-    await saveFusionChoice(choice.uid);
-    vscode.window.showInformationMessage('Fusion 模型已保存，请新建 Devin Local 会话。');
-  })));
-  context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.status', () => { log('status', { runtime: connection?.status, models: config().providers.map(p => ({ name: p.name, models: p.models.length })) }); output.show(true); }));
-  const disable = async () => {
-    try { goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); }
-    backendStatus = 'stopped';
-    const current = config(); current.enabled = false; writeConfig(configFile, current);
-    await teardown();
-    const settings = vscode.workspace.getConfiguration('devin.acp');
-    const snapshot = { 'devin.acp.agentEnv': globalSetting(settings, 'agentEnv'), 'devin.acp.agentPreferences': globalSetting(settings, 'agentPreferences') };
-    const receipt = readReceipt(root, context.extensionPath);
-    const managed = context.globalState.get('managedEnv', {}), saved = context.globalState.get('savedEnv', {});
-    // Older releases kept the backup in globalState only. Migrate only values
-    // with an actual saved original; an unknown original is never guessed.
-    for (const [key, value] of Object.entries(managed)) {
-      const keys = ['devin.acp.agentEnv', 'devin-cli', key];
-      if (permitted(keys) && Object.hasOwn(saved, key) && !receipt.changes.some(change => JSON.stringify(change.path) === JSON.stringify(keys))) {
-        remember(receipt, keys, valueAt(snapshot, keys), value, saved[key] == null ? { exists: false } : { exists: true, value: saved[key] });
-      }
-    }
-    saveReceipt(receipt);
-    const restored = restoreObject(snapshot, receipt.changes);
-    for (const key of ['agentEnv', 'agentPreferences']) if (JSON.stringify(snapshot['devin.acp.' + key]) !== JSON.stringify(restored.value['devin.acp.' + key])) {
-      await settings.update(key, restored.value['devin.acp.' + key], vscode.ConfigurationTarget.Global);
-    }
-    receipt.changes = []; saveReceipt(receipt);
-    await context.globalState.update('savedEnv', undefined);
-    await context.globalState.update('managedEnv', undefined);
-    vscode.window.showInformationMessage('Fusion BYOK 已停用，原生连接已恢复。');
-  };
-  context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.disable', run(disable)));
-  const reconcileSelection = async () => {
-    const settings = vscode.workspace.getConfiguration('devin.acp');
-    const preferences = globalSetting(settings, 'agentPreferences'), current = preferences['devin-cli']?.model;
-    const isOwnSelection = uid => typeof uid === 'string' &&
-      (/^(?:fusion-)?dfbyok-/.test(uid) || (catalog().matrixUids instanceof Set && catalog().matrixUids.has(uid)));
-    if (!isOwnSelection(current) || catalog().models.some(model => model.uid === current)) return;
-    const receipt = readReceipt(root, context.extensionPath);
-    const changes = receipt.changes.filter(change => change.path[0] === 'devin.acp.agentPreferences');
-    const restored = restoreObject({ 'devin.acp.agentPreferences': preferences }, changes).value['devin.acp.agentPreferences'];
-    if (isOwnSelection(restored['devin-cli']?.model)) delete restored['devin-cli'].model;
-    await settings.update('agentPreferences', restored, vscode.ConfigurationTarget.Global);
-  };
-  const statusBar = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 20);
-  if (statusBar) {
-    statusBar.text = 'Fusion BYOK'; statusBar.tooltip = '管理供应商、模型列表与 Fusion 组合';
-    statusBar.command = 'devinFusionByok.openPanel'; statusBar.show(); context.subscriptions.push(statusBar);
-  }
-  let nativeSyncSize = -1;
-  const updateStatusBar = () => {
-    try {
-      if (!statusBar) return;
-      if (config().enabled === false) { statusBar.tooltip = 'Fusion BYOK：已停用，点击打开面板启用'; return; }
-      if (!nativeModels.size) {
-        statusBar.tooltip = 'Fusion BYOK：还没收到官方模型——打开一次模型选择器后会自动同步，或点击打开面板手动刷新';
-        return;
-      }
-      if (cliCacheReport?.errors?.length) {
-        statusBar.tooltip = `Fusion BYOK：${cliCacheReport.errors.length} 个 CLI 缓存文件写入失败，点击打开面板查看详情`;
-        return;
-      }
-      statusBar.tooltip = `Fusion BYOK：运行中 · 已镜像 Fusion 组合 ${catalog().matrixUids?.size ?? 0} 条，点击打开面板`;
-    } catch {}
-  };
-  const pickerRefresh = createPickerRefresh({ log,
-    // devin.reloadAcpConnections drops every ACP connection on execution —
-    // users see "ACP connection closed" and a conversation-area reload, and a
-    // window reload follows it by ~5-35s (observed 2026-10-14). The in-place
-    // CLI cache rewrite already guarantees what the next session reads, so no
-    // command is wired in here; keep the module for signature tracking/tests.
-    lightCommands: [],
-    executeCommand: command => vscode.commands.executeCommand(command),
-    readModels: () => catalog().models,
-    observe: () => acpObservationSeq,
-    applied: token => acpObservationSeq > token && acpOwnModels > 0 });
-  pickerRefresh.prime();
-  context.subscriptions.push(pickerRefresh);
-  // The CLI intersects its picker with per-identity caches under
-  // ~/.cache/devin/cli; a cache written before a config change keeps the old
-  // uid digests and drops the affected entries. This CLI never re-fetches a
-  // missing file, so stale caches are refreshed in place by rewriting the
-  // payload through the same augmentation the backend applies.
-  let cliCacheReport = null;
-  const checkCliCaches = ({ force = false } = {}) => {
-    try {
-      if (config().enabled === false) return cliCacheReport;
-      const current = catalog();
-      const expectedUids = current.models.map(model => model.uid);
-      if (!expectedUids.length) return cliCacheReport;
-      const emittedFusionUids = new Set(Object.keys(current.fusions || {}));
-      const knownUids = new Set([...Object.keys(current.routes || {}), ...emittedFusionUids, ...nativeModels.keys()]);
-      const excludedUids = role => {
-        const set = new Set();
-        for (const ref of Array.isArray(config().roleExclusions?.[role]) ? config().roleExclusions[role] : []) {
-          if (typeof ref?.nativeUid === 'string') { set.add(ref.nativeUid); continue; }
-          for (const [uid, route] of Object.entries(current.routes || {})) {
-            if (route.providerId === ref?.providerId && route.model === ref?.model) set.add(uid);
-          }
+  const installCommands = () => {
+    const refresh = async () => {
+      management.open();
+      vscode.window.showInformationMessage('请选择供应商，点击「导入模型」，勾选要导入的模型后确认。');
+    };
+    context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.refreshModels', run(refresh)));
+    context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.openPanel', run(async () => management.open())));
+    require('./fast-context/config-ui.cjs').registerFastContext({ vscode, context });
+    saveFusionChoice = async uid => {
+      const settings = vscode.workspace.getConfiguration('devin.acp'); const preferences = globalSetting(settings, 'agentPreferences');
+      const receipt = readReceipt(root, context.extensionPath), keys = ['devin.acp.agentPreferences', 'devin-cli', 'model'];
+      remember(receipt, keys, valueAt({ 'devin.acp.agentPreferences': preferences }, keys), uid);
+      saveReceipt(receipt);
+      await settings.update('agentPreferences', { ...preferences, 'devin-cli': { ...(preferences['devin-cli'] || {}), model: uid } }, vscode.ConfigurationTarget.Global);
+      rememberFusion(uid);
+      await management?.publish();
+    };
+    // Memory of the combination this extension serves (matrix entries included).
+    // It is what a locked official selection falls back to, and what an emptied
+    // preference is restored from — so it is recorded whenever one is chosen, but
+    // recording it never re-writes the preference itself.
+    const rememberFusion = uid => {
+      if (!Object.hasOwn(catalog().fusions, uid)) return false;
+      const current = config();
+      if (current.lastFusionSelection === uid) return false;
+      current.lastFusionSelection = uid;
+      writeConfig(configFile, current);
+      return true;
+    };
+    // The remembered combination is also the fallback served when a locked
+    // official Fusion entry is selected, so it is kept only while it resolves.
+    const rememberedFusion = () => {
+      const currentCatalog = catalog(), uid = currentCatalog.lastFusionSelection;
+      return typeof uid === 'string' && Object.hasOwn(currentCatalog.fusions, uid) ? uid : '';
+    };
+    let reconcileQueue = Promise.resolve();
+    reconcilePreference = () => {
+      const operation = reconcileQueue.then(async () => {
+        if (lifecycle.reconcileHalted || config().enabled === false) return;
+        const current = globalSetting(vscode.workspace.getConfiguration('devin.acp'), 'agentPreferences')['devin-cli']?.model;
+        // Any fusion-shaped selection is legitimate — the official card's own
+        // combinations and our mirrored ones alike — so it is only remembered,
+        // never rewritten: the picker value the user sees must stay what they
+        // (or Devin) chose.
+        if (typeof current === 'string' && current.startsWith('fusion-')) {
+          rememberFusion(current);
+          return;
         }
-        return set;
-      };
-      const excluded = { lead: excludedUids('lead'), sidekick: excludedUids('sidekick') };
-      const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force,
-        staleProbe: payload => staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded }),
-        augment: (payload, rpc, report) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current, onSkip: report }) });
-      // The report is part of panel state, and panel state is deduplicated by
-      // its JSON. Restamping `at` on every automatic check made each 3s sync
-      // look like a change, so the panel re-rendered forever — killing the
-      // focused search box and resetting every list scroll. Record the moment
-      // the outcome was established instead, and keep the previous object when
-      // the outcome is unchanged (only a manual, forced check always restamps).
-      const summary = { checked: result.checked, refreshed: result.refreshed,
-        skipped: result.skipped || [], errors: result.errors || [] };
-      const previous = cliCacheReport && JSON.stringify({ checked: cliCacheReport.checked,
-        refreshed: cliCacheReport.refreshed, skipped: cliCacheReport.skipped, errors: cliCacheReport.errors });
-      if (force || previous !== JSON.stringify(summary)) cliCacheReport = { at: new Date().toISOString(), ...summary };
-      if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed, force });
-      for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });
-      for (const error of result.errors || []) log('cli-cache-write-error', { name: error.name, code: error.code });
-    } catch (error) { log('cli-cache-check-failed', { code: error?.code || 'unknown' }); }
-    return cliCacheReport;
+        if (typeof current === 'string' && current) return;
+        const remembered = rememberedFusion();
+        if (remembered) await saveFusionChoice(remembered);
+      }).catch(() => log('preference-reconcile-error'));
+      reconcileQueue = operation;
+      return operation;
+    };
+    context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.selectFusion', run(async () => {
+      const choices = catalog().models.filter(model => model.kind === 'matrix').map(model => ({ label: model.label || model.uid, uid: model.uid }));
+      if (!choices.length) { management?.open(); vscode.window.showInformationMessage('Fusion 组合在 Devin 的模型选择器里选（打开 Fusion 卡片）；控制面板的「Fusion」页用来决定哪些模型能出现在那张卡片的下拉里。'); return; }
+      const choice = await vscode.window.showQuickPick(choices, { title: '选择 Fusion 组合', matchOnDescription: true }); if (!choice) return;
+      await saveFusionChoice(choice.uid);
+      vscode.window.showInformationMessage('Fusion 模型已保存，请新建 Devin Local 会话。');
+    })));
+    context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.status', () => { log('status', { runtime: lifecycle.connection?.status, models: config().providers.map(p => ({ name: p.name, models: p.models.length })) }); output.show(true); }));
+    disable = async () => {
+      try { lifecycle.goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); }
+      backendStatus = 'stopped';
+      const current = config(); current.enabled = false; writeConfig(configFile, current);
+      await teardown();
+      const settings = vscode.workspace.getConfiguration('devin.acp');
+      const snapshot = { 'devin.acp.agentEnv': globalSetting(settings, 'agentEnv'), 'devin.acp.agentPreferences': globalSetting(settings, 'agentPreferences') };
+      const receipt = readReceipt(root, context.extensionPath);
+      const managed = context.globalState.get('managedEnv', {}), saved = context.globalState.get('savedEnv', {});
+      // Older releases kept the backup in globalState only. Migrate only values
+      // with an actual saved original; an unknown original is never guessed.
+      for (const [key, value] of Object.entries(managed)) {
+        const keys = ['devin.acp.agentEnv', 'devin-cli', key];
+        if (permitted(keys) && Object.hasOwn(saved, key) && !receipt.changes.some(change => JSON.stringify(change.path) === JSON.stringify(keys))) {
+          remember(receipt, keys, valueAt(snapshot, keys), value, saved[key] == null ? { exists: false } : { exists: true, value: saved[key] });
+        }
+      }
+      saveReceipt(receipt);
+      const restored = restoreObject(snapshot, receipt.changes);
+      for (const key of ['agentEnv', 'agentPreferences']) if (JSON.stringify(snapshot['devin.acp.' + key]) !== JSON.stringify(restored.value['devin.acp.' + key])) {
+        await settings.update(key, restored.value['devin.acp.' + key], vscode.ConfigurationTarget.Global);
+      }
+      receipt.changes = []; saveReceipt(receipt);
+      await context.globalState.update('savedEnv', undefined);
+      await context.globalState.update('managedEnv', undefined);
+      vscode.window.showInformationMessage('Fusion BYOK 已停用，原生连接已恢复。');
+    };
+    context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.disable', run(disable)));
+    reconcileSelection = async () => {
+      const settings = vscode.workspace.getConfiguration('devin.acp');
+      const preferences = globalSetting(settings, 'agentPreferences'), current = preferences['devin-cli']?.model;
+      const isOwnSelection = uid => typeof uid === 'string' &&
+        (/^(?:fusion-)?dfbyok-/.test(uid) || (catalog().matrixUids instanceof Set && catalog().matrixUids.has(uid)));
+      if (!isOwnSelection(current) || catalog().models.some(model => model.uid === current)) return;
+      const receipt = readReceipt(root, context.extensionPath);
+      const changes = receipt.changes.filter(change => change.path[0] === 'devin.acp.agentPreferences');
+      const restored = restoreObject({ 'devin.acp.agentPreferences': preferences }, changes).value['devin.acp.agentPreferences'];
+      if (isOwnSelection(restored['devin-cli']?.model)) delete restored['devin-cli'].model;
+      await settings.update('agentPreferences', restored, vscode.ConfigurationTarget.Global);
+    };
   };
-  // Manual counterpart of the automatic check: the panel button exists so a
-  // user whose picker looks stale can force the rewrite now instead of waiting
-  // for the next config change or native sync. It is forced because the
-  // automatic check only sees uid presence, while a payload can be complete and
-  // still carry out-of-date entries (a changed dimension shape, a stale
-  // label) — exactly the case the button is for.
-  const refreshCliCaches = async () => {
-    const report = checkCliCaches({ force: true });
-    await management?.publish();
-    return report;
-  };
-  checkCliCaches();
-  manager = createManager({ read: config, write: current => writeConfig(configFile, current),
-    nativeModels: () => [...nativeModels.values()], nativeAllowedUids: () => nativeAllowedUids, refreshNativeModels, nativeCatalogStatus: () => nativeCatalogStatus,
-    backendStatus: () => backendStatus,
-    autoContinueStatus: () => autoContinue ? (autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
-    refreshCliCaches, cliCacheStatus: () => cliCacheReport,
-    selectFusion: saveFusionChoice,
-    afterChange: async type => {
-      if (type === 'setEnabled' && config().enabled === false) await disable();
-      else if (type === 'setAutoContinue' || type === 'setAutoContinueUntilPlanComplete') resetAutoContinue?.();
-      else if (type === 'setUpdateProxy') {}
-      else if (config().enabled !== false) { await ensureEnabled(); await reconcileSelection(); }
-      pickerRefresh.changed();
-      checkCliCaches();
-    } });
-  const updater = require('./update.cjs').createUpdateHost({ vscode, context,
-    proxy: () => config().updateProxy,
-    onChange: () => management?.publishUpdates?.() });
-  management = require('./panel/controller.cjs').createPanelController({ vscode, context, manager, safeError, updater,
-    fastContext: require('./fast-context/config-ui.cjs').createFastContextHost({ vscode, context }),
-    restartApp: () => { log('app-restart-requested'); return require('./runtime/app-restart.cjs').restartApp({ vscode, spawn, logFile: path.join(root, 'restart.log'), userData: path.resolve(root, '..', '..', '..') }); },
-    reloadWindow: () => { log('window-reload-requested'); return vscode.commands.executeCommand('workbench.action.reloadWindow'); },
-    readMonitor: () => require('./runtime/monitor-client.cjs').readMonitor({ root }) });
-  let contextObserver;
-  try {
-    const native = vscode.extensions.getExtension('codeium.windsurf');
-    if (native?.extensionPath && native.packageJSON?.main) {
-      contextObserver = require('./runtime/context-observer.cjs').installContextObserver({
-        nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main), isEnabled: () => !activationDisposed && config().enabled !== false });
-      context.subscriptions.push(contextObserver);
+  installCommands();
+  const installPanel = () => {
+    statusBar = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 20);
+    if (statusBar) {
+      statusBar.text = 'Fusion BYOK'; statusBar.tooltip = '管理供应商、模型列表与 Fusion 组合';
+      statusBar.command = 'devinFusionByok.openPanel'; statusBar.show(); context.subscriptions.push(statusBar);
     }
-    require('./panel/context-view.cjs').createContextUi({ vscode, context,
-      snapshot: () => contextObserver?.snapshot() || [], catalog,
-      nativeLabels: () => new Map([...nativeModels.values()].map(entry => [entry.uid, entry.label])),
-      focused: () => contextObserver?.focused?.() || null,
-      isEnabled: () => !activationDisposed && config().enabled !== false,
+    updateStatusBar = () => {
+      try {
+        if (!statusBar) return;
+        if (config().enabled === false) { statusBar.tooltip = 'Fusion BYOK：已停用，点击打开面板启用'; return; }
+        if (!nativeModels.size) {
+          statusBar.tooltip = 'Fusion BYOK：还没收到官方模型——打开一次模型选择器后会自动同步，或点击打开面板手动刷新';
+          return;
+        }
+        if (cliCacheReport?.errors?.length) {
+          statusBar.tooltip = `Fusion BYOK：${cliCacheReport.errors.length} 个 CLI 缓存文件写入失败，点击打开面板查看详情`;
+          return;
+        }
+        statusBar.tooltip = `Fusion BYOK：运行中 · 已镜像 Fusion 组合 ${catalog().matrixUids?.size ?? 0} 条，点击打开面板`;
+      } catch {}
+    };
+    pickerRefresh = createPickerRefresh({ log,
+      // devin.reloadAcpConnections drops every ACP connection on execution —
+      // users see "ACP connection closed" and a conversation-area reload, and a
+      // window reload follows it by ~5-35s (observed 2026-10-14). The in-place
+      // CLI cache rewrite already guarantees what the next session reads, so no
+      // command is wired in here; keep the module for signature tracking/tests.
+      lightCommands: [],
+      executeCommand: command => vscode.commands.executeCommand(command),
+      readModels: () => catalog().models,
+      observe: () => acpObservationSeq,
+      applied: token => acpObservationSeq > token && acpOwnModels > 0 });
+    pickerRefresh.prime();
+    context.subscriptions.push(pickerRefresh);
+    // The CLI intersects its picker with per-identity caches under
+    // ~/.cache/devin/cli; a cache written before a config change keeps the old
+    // uid digests and drops the affected entries. This CLI never re-fetches a
+    // missing file, so stale caches are refreshed in place by rewriting the
+    // payload through the same augmentation the backend applies.
+    checkCliCaches = ({ force = false } = {}) => {
+      try {
+        if (config().enabled === false) return cliCacheReport;
+        const current = catalog();
+        const expectedUids = current.models.map(model => model.uid);
+        if (!expectedUids.length) return cliCacheReport;
+        const emittedFusionUids = new Set(Object.keys(current.fusions || {}));
+        const knownUids = new Set([...Object.keys(current.routes || {}), ...emittedFusionUids, ...nativeModels.keys()]);
+        const excludedUids = role => {
+          const set = new Set();
+          for (const ref of Array.isArray(config().roleExclusions?.[role]) ? config().roleExclusions[role] : []) {
+            if (typeof ref?.nativeUid === 'string') { set.add(ref.nativeUid); continue; }
+            for (const [uid, route] of Object.entries(current.routes || {})) {
+              if (route.providerId === ref?.providerId && route.model === ref?.model) set.add(uid);
+            }
+          }
+          return set;
+        };
+        const excluded = { lead: excludedUids('lead'), sidekick: excludedUids('sidekick') };
+        const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force,
+          staleProbe: payload => staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded }),
+          augment: (payload, rpc, report) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current, onSkip: report }) });
+        // The report is part of panel state, and panel state is deduplicated by
+        // its JSON. Restamping `at` on every automatic check made each 3s sync
+        // look like a change, so the panel re-rendered forever — killing the
+        // focused search box and resetting every list scroll. Record the moment
+        // the outcome was established instead, and keep the previous object when
+        // the outcome is unchanged (only a manual, forced check always restamps).
+        const summary = { checked: result.checked, refreshed: result.refreshed,
+          skipped: result.skipped || [], errors: result.errors || [] };
+        const previous = cliCacheReport && JSON.stringify({ checked: cliCacheReport.checked,
+          refreshed: cliCacheReport.refreshed, skipped: cliCacheReport.skipped, errors: cliCacheReport.errors });
+        if (force || previous !== JSON.stringify(summary)) cliCacheReport = { at: new Date().toISOString(), ...summary };
+        if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed, force });
+        for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });
+        for (const error of result.errors || []) log('cli-cache-write-error', { name: error.name, code: error.code });
+      } catch (error) { log('cli-cache-check-failed', { code: error?.code || 'unknown' }); }
+      return cliCacheReport;
+    };
+    // Manual counterpart of the automatic check: the panel button exists so a
+    // user whose picker looks stale can force the rewrite now instead of waiting
+    // for the next config change or native sync. It is forced because the
+    // automatic check only sees uid presence, while a payload can be complete and
+    // still carry out-of-date entries (a changed dimension shape, a stale
+    // label) — exactly the case the button is for.
+    const refreshCliCaches = async () => {
+      const report = checkCliCaches({ force: true });
+      await management?.publish();
+      return report;
+    };
+    checkCliCaches();
+    manager = createManager({ read: config, write: current => writeConfig(configFile, current),
+      nativeModels: () => [...nativeModels.values()], nativeAllowedUids: () => nativeAllowedUids, refreshNativeModels, nativeCatalogStatus: () => nativeCatalogStatus,
+      backendStatus: () => backendStatus,
+      autoContinueStatus: () => autoContinue ? (autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
+      refreshCliCaches, cliCacheStatus: () => cliCacheReport,
+      selectFusion: saveFusionChoice,
+      afterChange: async type => {
+        if (type === 'setEnabled' && config().enabled === false) await disable();
+        else if (type === 'setAutoContinue' || type === 'setAutoContinueUntilPlanComplete') lifecycle.resetAutoContinue?.();
+        else if (type === 'setUpdateProxy') {}
+        else if (config().enabled !== false) { await ensureEnabled(); await reconcileSelection(); }
+        pickerRefresh.changed();
+        checkCliCaches();
+      } });
+    const updater = require('./update.cjs').createUpdateHost({ vscode, context,
+      proxy: () => config().updateProxy,
+      onChange: () => management?.publishUpdates?.() });
+    management = require('./panel/controller.cjs').createPanelController({ vscode, context, manager, safeError, updater,
+      fastContext: require('./fast-context/config-ui.cjs').createFastContextHost({ vscode, context }),
+      restartApp: () => { log('app-restart-requested'); return require('./runtime/app-restart.cjs').restartApp({ vscode, spawn, logFile: path.join(root, 'restart.log'), userData: path.resolve(root, '..', '..', '..') }); },
+      reloadWindow: () => { log('window-reload-requested'); return vscode.commands.executeCommand('workbench.action.reloadWindow'); },
       readMonitor: () => require('./runtime/monitor-client.cjs').readMonitor({ root }) });
-  } catch { log('context-observer-unavailable'); }
-  context.subscriptions.push(require('./runtime/context-diagnostics.cjs').createContextDiagnostics({
-    root, version: require('../package.json').version,
-    readStatus: () => contextObserver?.status(), snapshot: () => contextObserver?.snapshot() || []
-  }));
-  try {
-    require('./panel/goal-view.cjs').createGoalUi({ vscode, context,
-      controller: {
-        snapshot: () => goalController ? goalController.snapshot() : {
-          enabled: config().enabled !== false, trusted: vscode.workspace.isTrusted !== false,
-          storeError: 'goal-controller-unavailable', corruptGoals: 0, sessions: [], goals: []
-        },
-        start: payload => goalController.start(payload),
-        pause: payload => goalController.pause(payload),
-        resume: payload => goalController.resume(payload),
-        accept: payload => goalController.accept(payload),
-        archive: payload => goalController.archive(payload)
-      },
-      isEnabled: () => !activationDisposed && config().enabled !== false,
-      isTrusted: () => vscode.workspace.isTrusted !== false,
-      safeError });
-  } catch { log('goal-ui-unavailable'); }
-  let lastAutoError = config().autoContinueOnProviderError === true;
-  let lastAutoPlan = config().autoContinueUntilPlanComplete === true;
-  const onConfigChanged = () => {
     try {
-      const currentConfig = config();
-      const currentAutoError = currentConfig.autoContinueOnProviderError === true;
-      const currentAutoPlan = currentConfig.autoContinueUntilPlanComplete === true;
-      if (currentAutoError !== lastAutoError || currentAutoPlan !== lastAutoPlan) {
-        lastAutoError = currentAutoError;
-        lastAutoPlan = currentAutoPlan;
-        resetAutoContinue?.();
+      const native = vscode.extensions.getExtension('codeium.windsurf');
+      if (native?.extensionPath && native.packageJSON?.main) {
+        contextObserver = require('./runtime/context-observer.cjs').installContextObserver({
+          nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main), isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false });
+        context.subscriptions.push(contextObserver);
       }
-      if (currentConfig.enabled === false) void teardown().catch(() => log('disable-cleanup-error'));
-      else {
-        void ensureEnabled().catch(error => { const safe = safeError(error); if (safe.code !== 'cancelled') log('error', { code: safe.code }); });
-        void reconcilePreference();
+      require('./panel/context-view.cjs').createContextUi({ vscode, context,
+        snapshot: () => contextObserver?.snapshot() || [], catalog,
+        nativeLabels: () => new Map([...nativeModels.values()].map(entry => [entry.uid, entry.label])),
+        focused: () => contextObserver?.focused?.() || null,
+        isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false,
+        readMonitor: () => require('./runtime/monitor-client.cjs').readMonitor({ root }) });
+    } catch { log('context-observer-unavailable'); }
+    context.subscriptions.push(require('./runtime/context-diagnostics.cjs').createContextDiagnostics({
+      root, version: require('../package.json').version,
+      readStatus: () => contextObserver?.status(), snapshot: () => contextObserver?.snapshot() || []
+    }));
+    try {
+      require('./panel/goal-view.cjs').createGoalUi({ vscode, context,
+        controller: {
+          snapshot: () => lifecycle.goalController ? lifecycle.goalController.snapshot() : {
+            enabled: config().enabled !== false, trusted: vscode.workspace.isTrusted !== false,
+            storeError: 'goal-controller-unavailable', corruptGoals: 0, sessions: [], goals: []
+          },
+          start: payload => lifecycle.goalController.start(payload),
+          pause: payload => lifecycle.goalController.pause(payload),
+          resume: payload => lifecycle.goalController.resume(payload),
+          accept: payload => lifecycle.goalController.accept(payload),
+          archive: payload => lifecycle.goalController.archive(payload)
+        },
+        isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false,
+        isTrusted: () => vscode.workspace.isTrusted !== false,
+        safeError });
+    } catch { log('goal-ui-unavailable'); }
+    lastAutoError = config().autoContinueOnProviderError === true;
+    lastAutoPlan = config().autoContinueUntilPlanComplete === true;
+    const onConfigChanged = () => {
+      try {
+        const currentConfig = config();
+        const currentAutoError = currentConfig.autoContinueOnProviderError === true;
+        const currentAutoPlan = currentConfig.autoContinueUntilPlanComplete === true;
+        if (currentAutoError !== lastAutoError || currentAutoPlan !== lastAutoPlan) {
+          lastAutoError = currentAutoError;
+          lastAutoPlan = currentAutoPlan;
+          lifecycle.resetAutoContinue?.();
+        }
+        if (currentConfig.enabled === false) void teardown().catch(() => log('disable-cleanup-error'));
+        else {
+          void ensureEnabled().catch(error => { const safe = safeError(error); if (safe.code !== 'cancelled') log('error', { code: safe.code }); });
+          void reconcilePreference();
+        }
+        void management.publish()?.catch(() => {});
       }
-      void management.publish()?.catch(() => {});
-    }
-    catch { log('configuration-read-error'); }
+      catch { log('configuration-read-error'); }
+    };
+    fs.watchFile(configFile, { interval: 500, persistent: false }, onConfigChanged);
+    context.subscriptions.push({ dispose: () => fs.unwatchFile(configFile, onConfigChanged) });
+    const preferenceSubscription = vscode.workspace.onDidChangeConfiguration?.(event => {
+      if (typeof event?.affectsConfiguration === 'function' && !event.affectsConfiguration('devin.acp.agentPreferences')) return;
+      return reconcilePreference();
+    });
+    if (preferenceSubscription) context.subscriptions.push(preferenceSubscription);
   };
-  fs.watchFile(configFile, { interval: 500, persistent: false }, onConfigChanged);
-  context.subscriptions.push({ dispose: () => fs.unwatchFile(configFile, onConfigChanged) });
-  const preferenceSubscription = vscode.workspace.onDidChangeConfiguration?.(event => {
-    if (typeof event?.affectsConfiguration === 'function' && !event.affectsConfiguration('devin.acp.agentPreferences')) return;
-    return reconcilePreference();
-  });
-  if (preferenceSubscription) context.subscriptions.push(preferenceSubscription);
+  installPanel();
   if (config().enabled !== false) await run(ensureEnabled)();
-  return { status: () => connection?.status, autoContinue: () => autoContinue?.status() };
+  return { status: () => lifecycle.connection?.status, autoContinue: () => autoContinue?.status() };
 }
 async function teardown() {
-  try { goalController?.suspend({ reason: 'disabled' }); } catch {}
-  resetAutoContinue?.();
-  stopNativeSync?.(); stopNativeSync = undefined;
-  activationGeneration++; runtimeWaitAbort?.abort(); reconcileHalted = true;
-  if (connection) { const current = connection; connection = undefined; await current.dispose(); }
-  try { acpObserver?.dispose?.(); } catch {}
-  acpObserver = undefined;
+  try { lifecycle.goalController?.suspend({ reason: 'disabled' }); } catch {}
+  lifecycle.resetAutoContinue?.();
+  lifecycle.stopNativeSync?.(); lifecycle.stopNativeSync = undefined;
+  lifecycle.activationGeneration++; lifecycle.runtimeWaitAbort?.abort(); lifecycle.reconcileHalted = true;
+  if (lifecycle.connection) { const current = lifecycle.connection; lifecycle.connection = undefined; await current.dispose(); }
+  try { lifecycle.acpObserver?.dispose?.(); } catch {}
+  lifecycle.acpObserver = undefined;
 }
 async function deactivate() {
-  activationDisposed = true;
-  stopAutoContinue?.(); stopAutoContinue = undefined;
-  stopGoalContinue?.(); stopGoalContinue = undefined;
+  lifecycle.activationDisposed = true;
+  lifecycle.stopAutoContinue?.(); lifecycle.stopAutoContinue = undefined;
+  lifecycle.stopGoalContinue?.(); lifecycle.stopGoalContinue = undefined;
   await teardown();
 }
 module.exports = { activate, deactivate, ensureBackend, safeError };

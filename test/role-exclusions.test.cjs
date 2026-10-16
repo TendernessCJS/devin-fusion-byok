@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { buildCatalog: buildSavedCatalog, buildRoleLists, refKey, augmentCatalog, resolveAssignment } = require('../src/catalog.cjs');
 const buildCatalog = buildSavedCatalog;
-const { createManager } = require('../src/panel/model.cjs');
+const { createManager } = require('../src/panel/manager.cjs');
 
 const fixture = JSON.parse(fs.readFileSync('test/fixtures/real-picker-0.3.11.json', 'utf8'));
 

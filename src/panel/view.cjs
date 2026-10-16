@@ -5,10 +5,7 @@ const { monitorMarkup, monitorScript } = require('./monitor-view.cjs');
 const { updateMarkup, updateScript } = require('./update-view.cjs');
 const { fastContextMarkup, fastContextScript } = require('./fast-context-view.cjs');
 const { baseStyles } = require('./theme.cjs');
-
-function escapeAttribute(value) {
-  return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-}
+const { escapeAttribute, domHelpersSource } = require('./dom.cjs');
 
 const TABS = [['models', '模型'], ['fusion', 'Fusion'], ['usage', '用量'], ['goal', 'Goal', 'Beta'], ['fastcontext', 'Fast Context'], ['settings', '设置']];
 
@@ -47,7 +44,6 @@ function goalMarkup() {
 
 function renderPanel({ nonce, cspSource }) {
   const safeNonce = escapeAttribute(nonce);
-  const tabs = TABS.map(([id, label, tag], index) => `<button id="tab-${id}" class="tab" type="button" role="tab" aria-controls="view-${id}" aria-selected="${index === 0}" data-tab="${id}">${label}${tag ? ` <span class="badge beta">${tag}</span>` : ''}</button>`).join('');
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -55,7 +51,16 @@ function renderPanel({ nonce, cspSource }) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${safeNonce}'; script-src 'nonce-${safeNonce}'; img-src ${escapeAttribute(cspSource || "'none'")}; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none';">
   <title>Fusion BYOK</title>
-  <style nonce="${safeNonce}">${baseStyles()}
+  <style nonce="${safeNonce}">${baseStyles()}${panelStyles()}</style>
+</head>
+${panelMarkup()}
+  <script nonce="${safeNonce}">${panelScript()}</script>
+</body>
+</html>`;
+}
+
+function panelStyles() {
+  return `
     :root { color-scheme: light dark; }
     body { --page-top: 0; }
     main { max-width: 960px; margin: 0 auto; }
@@ -151,9 +156,12 @@ function renderPanel({ nonce, cspSource }) {
       .provider-nav { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
       .field-grid { grid-template-columns: 1fr; gap: 0; }
     }
-  </style>
-</head>
-<body>
+  `;
+}
+
+function panelMarkup() {
+  const tabs = TABS.map(([id, label, tag], index) => `<button id="tab-${id}" class="tab" type="button" role="tab" aria-controls="view-${id}" aria-selected="${index === 0}" data-tab="${id}">${label}${tag ? ` <span class="badge beta">${tag}</span>` : ''}</button>`).join('');
+  return `<body>
   <main id="main" aria-busy="true">
     <header class="topbar">
       <div class="topbar-row"><h1>Fusion BYOK</h1><div class="actions"><button id="reload-window" class="secondary" type="button" title="应用插件改动或刷新模型选择器时使用。会中断当前窗口正在进行的对话，但不关闭应用、不影响其他窗口，比重启 Devin 快。">重载窗口</button><button id="restart-devin" class="secondary" type="button" title="重载窗口仍无效时使用。会关闭所有窗口并中断正在进行的对话，之后自动重新打开（通常几秒，失败会自动重试）。">重启 Devin</button><label class="toggle"><span class="muted">启用</span><input id="plugin-enabled" class="switch" type="checkbox" role="switch" aria-label="启用插件" disabled></label></div></div>
@@ -186,15 +194,15 @@ function renderPanel({ nonce, cspSource }) {
     </section>
   </main>
   <div id="status" class="toast" role="status" aria-live="polite" hidden></div>
-  <dialog id="editor-dialog" aria-labelledby="dialog-title"></dialog>
-  <script nonce="${safeNonce}">const vscode = acquireVsCodeApi(); (${panelClient.toString()})(${modelSupportsImages.toString()}, vscode, ${normalizeBaseUrlPath.toString()}, ${modelEfforts.toString()}); ${monitorScript()} ${updateScript()} ${fastContextScript()}</script>
-</body>
-</html>`;
+  <dialog id="editor-dialog" aria-labelledby="dialog-title"></dialog>`;
+}
+
+function panelScript() {
+  return `${domHelpersSource()}const vscode = acquireVsCodeApi(); (${panelClient.toString()})(${modelSupportsImages.toString()}, vscode, ${normalizeBaseUrlPath.toString()}, ${modelEfforts.toString()}); ${monitorScript()} ${updateScript()} ${fastContextScript()}`;
 }
 
 function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEfforts) {
   'use strict';
-  const byId = id => document.getElementById(id);
   // Nodes recreated by render() cannot be found through the document after the
   // rebuild, so remember the live nodes here: typing must survive a state push.
   const focusTargets = new Map();
@@ -212,22 +220,6 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
   let toastTimer;
   const roleSearch = { lead: '', sidekick: '' };
   const roleMoreOpen = { lead: false, sidekick: false };
-
-  function element(tag, attributes, ...children) {
-    const node = document.createElement(tag);
-    for (const [key, value] of Object.entries(attributes || {})) {
-      if (key === 'class') node.className = value;
-      else if (key === 'text') node.textContent = String(value ?? '');
-      else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
-      else if (key === 'checked' || key === 'disabled' || key === 'required' || key === 'readOnly' || key === 'hidden' || key === 'open') node[key] = Boolean(value);
-      else node.setAttribute(key, String(value));
-    }
-    for (const child of children.flat()) {
-      if (child == null) continue;
-      node.append(typeof child === 'string' ? document.createTextNode(child) : child);
-    }
-    return node;
-  }
 
   function button(text, action, variant = 'secondary') {
     return element('button', { type: 'button', text, class: variant, onclick: action });
@@ -865,4 +857,4 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
   request('ready').catch(error => notice(error.message, 'error'));
 }
 
-module.exports = { renderPanel };
+module.exports = { renderPanel, panelStyles, panelMarkup, panelScript };

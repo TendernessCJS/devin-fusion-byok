@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createManager, publicState, PanelInputError } = require('../src/panel/model.cjs');
+const { createManager, publicState, PanelInputError } = require('../src/panel/manager.cjs');
 const { buildCatalog } = require('../src/catalog.cjs');
 
 const nativeSidekick = { nativeUid: 'swe-2-max', label: 'SWE-2 Max' };

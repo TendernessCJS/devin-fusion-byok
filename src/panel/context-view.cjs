@@ -2,6 +2,7 @@
 const crypto = require('node:crypto');
 const { baseStyles } = require('./theme.cjs');
 const { timing, usageIsInconsistent } = require('../runtime/monitor-stats.cjs');
+const { domHelpersSource } = require('./dom.cjs');
 const number = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
 const seconds = value => typeof value === 'number' && Number.isFinite(value) ? (value / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) + ' s' : '—';
 const clock = value => { const stamp = Date.parse(value); if (!Number.isFinite(stamp)) return null; const date = new Date(stamp); return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0'); };
@@ -51,8 +52,7 @@ function contextHtml(nonce) {
 </style></head><body><div class="toolbar"><div class="usage"><svg viewBox="0 0 40 40" aria-label="上下文占用"><circle class="track" cx="20" cy="20" r="16"/><circle id="fill" cx="20" cy="20" r="16" stroke-dasharray="100.531" stroke-dashoffset="100.531"/></svg><span id="percent">—</span></div><select id="sessions" aria-label="选择上下文会话"></select></div><p id="empty" class="hint" hidden>还没有可观察的会话。打开一个对话后，这里会显示上下文占用与最近请求指标。</p><h3 id="contextTitle">会话与上下文</h3><div id="context" class="tiles"></div><h3 id="requestTitle" class="mt">最近请求指标</h3><div id="request" class="tiles"></div><script nonce="${nonce}">${contextScript()}</script></body></html>`;
 }
 function contextScript() {
-  return `const vscode=acquireVsCodeApi();let items=[],sessionKeys='';let pluginEnabled=true;const selector=document.getElementById('sessions');const grids=new Map();
-function text(node,value){if(node.textContent!==value)node.textContent=value;}
+  return `${domHelpersSource()}const vscode=acquireVsCodeApi();let items=[],sessionKeys='';let pluginEnabled=true;const selector=document.getElementById('sessions');const grids=new Map();
 function grid(id,rows){const root=document.getElementById(id);let cells=grids.get(id);const keys=JSON.stringify(rows.map(row=>row.key));if(!cells||cells.keys!==keys){root.replaceChildren();cells={keys,nodes:[]};for(const row of rows){const cell=document.createElement('div'),label=document.createElement('div'),value=document.createElement('div');cell.className='tile';label.className='tile-label';value.className='tile-value';cell.append(label,value);root.append(cell);cells.nodes.push({cell,label,value});}grids.set(id,cells);}rows.forEach((row,i)=>{const nodes=cells.nodes[i];text(nodes.label,row.label);text(nodes.value,row.value);if(nodes.cell.title!==(row.title||''))nodes.cell.title=row.title||'';});}
 function render(){const item=items.find(x=>x.sessionId===selector.value);const percent=item?.percent;
 text(document.getElementById('percent'),percent==null?'—':percent.toFixed(1)+'%');

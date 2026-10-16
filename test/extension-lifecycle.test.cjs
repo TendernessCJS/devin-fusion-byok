@@ -85,9 +85,9 @@ function fixture(t, initial = {}) {
       if (injectionGate) { const gate = injectionGate; injectionGate = null; await gate; }
       return { status: { state: 'ready' }, dispose: async () => { disposed++; } };
     } },
-    './panel/model.cjs': { ...realRequire('./panel/model.cjs'), createManager: options => {
+    './panel/manager.cjs': { ...realRequire('./panel/manager.cjs'), createManager: options => {
       managerOptions = options;
-      return realRequire('./panel/model.cjs').createManager(options);
+      return realRequire('./panel/manager.cjs').createManager(options);
     } },
     './runtime/cli-cache.cjs': { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
       inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
@@ -463,7 +463,7 @@ test('native model observations from the bridge reach the panel and hide persist
   assert.deepEqual(JSON.parse(JSON.stringify(f.managerOptions().nativeModels())), [
     { uid: 'swe-2-max', label: 'Official SWE', disabled: false, isModelRouter: false, harnessUids: [] },
     { uid: 'claude-x', label: 'Claude X', disabled: true, isModelRouter: false, harnessUids: [] }]);
-  const manager = realRequire('./panel/model.cjs').createManager(f.managerOptions());
+  const manager = realRequire('./panel/manager.cjs').createManager(f.managerOptions());
   const state = await manager.dispatch('setNativeModelHidden', { uid: 'swe-2-max', hidden: true });
   assert.deepEqual(JSON.parse(fs.readFileSync(f.configFile)).hiddenNativeModelUids, ['swe-2-max']);
   const sweMember = state.nativeFamilies.flatMap(family => family.members).find(member => member.uid === 'swe-2-max');
@@ -494,7 +494,7 @@ test('backend sync hydrates the actual extension manager without LS observations
     sidekickDimension: { order: 2, name: 'SWE-2 High' } };
   f.setNativeRead(async () => ({ status: 'ready', models: [record, official] }));
   await f.activate(f.context); await f.settle();
-  const manager = realRequire('./panel/model.cjs').createManager(f.managerOptions());
+  const manager = realRequire('./panel/manager.cjs').createManager(f.managerOptions());
   const state = await manager.dispatch('ready');
   assert.equal(state.nativeCatalogStatus, 'ready');
   const sweRow = state.nativeFamilies.flatMap(family => family.members).find(m => m.uid === record.uid);

@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildCatalog, buildRoleLists, resolveAssignment } = require('../src/catalog.cjs');
-const { createManager } = require('../src/panel/model.cjs');
+const { createManager } = require('../src/panel/manager.cjs');
 const { fields, str, s } = require('../src/protocol/wire.cjs');
 
 const ref = (model, effort = null) => ({ providerId: 'p', model, effort });

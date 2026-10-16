@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const { modelEfforts } = require('../src/model-capabilities.cjs');
 const { buildCatalog, resolveAssignment } = require('../src/catalog.cjs');
 const { buildRequestBody } = require('../src/protocol/responses.cjs');
-const { createManager } = require('../src/panel/model.cjs');
+const { createManager } = require('../src/panel/manager.cjs');
 const { rendererFile, loadFamilyPicker } = require('./support/installed-renderer.cjs');
 const config = () => ({ providers: [{ id: 'load', name: 'load', apiFormat: 'openai-responses', models:
   ['gpt-6-astra', 'swe-2-high', 'swe-2-max', 'swe-2-medium'].map(id => ({ id, efforts: [] })) }],
