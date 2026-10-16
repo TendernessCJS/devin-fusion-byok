@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createContextDiagnostics, STALE_AFTER_MS } = require('../src/runtime/context-diagnostics.cjs');
-test('diagnostics are private, isolated, bounded snapshots without session payloads', () => {
+test('diagnostics are private, isolated, bounded snapshots carrying ids, numbers and counters only', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-diagnostics-'));
   const options = { root, version: '0.3.26', readStatus: () => ({ state: 'observing', connections: 1, usageUpdates: 2, usageRejections: { 'invalid-used': 1, 'missing-size': 2, 'zero-size': -1, 'never-persist': 123 }, secret: 'never-persist' }), snapshot: () => [{ sessionId: 'sess-diag', lead: { used: 123 }, subagents: [{}] }], intervalMs: 60000 };
   const first = createContextDiagnostics({ ...options, pid: 123 });
@@ -16,6 +16,10 @@ test('diagnostics are private, isolated, bounded snapshots without session paylo
     const raw = fs.readFileSync(file, 'utf8'), data = JSON.parse(raw);
     assert.equal(data.connections, 1); assert.equal(data.leadSessions, 1); assert.equal(data.subagentUsages, 1);
     assert.equal(data.sessionUpdates, null); assert.ok(!raw.includes('never-persist'));
+    assert.deepEqual(Object.keys(data).sort(), ['acceptedUsageUpdates', 'connections', 'leadSessions', 'pid', 'pluginVersion',
+      'registrations', 'rejectedUsageUpdates', 'schemaVersion', 'sessionUpdates', 'state', 'subagentDetails',
+      'subagentDetailsTruncated', 'subagentUsages', 'usageRejections', 'usageUpdates', 'writtenAt'],
+      'the diagnostics document carries a fixed set of counters, ids and bounded detail');
     assert.deepEqual(Object.keys(data.subagentDetails[0]).sort(), ['lead', 'modelUid', 'sessionId', 'subagents']);
     assert.deepEqual(Object.keys(data.subagentDetails[0].subagents[0]).sort(), ['parentAgentId', 'runId', 'size', 'used'],
       'subagent detail rows carry ids and numbers only, no session payload');
