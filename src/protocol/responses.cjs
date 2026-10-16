@@ -179,6 +179,7 @@ function processor(id, uid, chat, emit) {
     if (key === undefined) {
       const err = new Error('Tool call has no index');
       err.code = 'upstream_invalid_tool';
+      err.detail = 'no-index';
       throw err;
     }
     if (itemId) itemIndexes.set(itemId, key);
@@ -316,6 +317,7 @@ function processor(id, uid, chat, emit) {
         if (!call.name || !call.id || typeof args !== 'string') {
           const err = new Error('Incomplete tool call');
           err.code = 'upstream_invalid_tool';
+          err.detail = 'incomplete-call';
           throw err;
         }
         try {
@@ -323,6 +325,7 @@ function processor(id, uid, chat, emit) {
         } catch {
           const err = new Error('Invalid tool call JSON');
           err.code = 'upstream_invalid_tool';
+          err.detail = 'invalid-json';
           throw err;
         }
         tools.push({ id: call.id, name: call.name, arguments: args });
@@ -517,7 +520,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       if (!res.destroyed && !res.writableEnded) res.destroy();
     }
     outcomeCode = classifiedCode;
-    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id });
+    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}) });
     return { status, error: true, code: classifiedCode, requestId: id };
   } finally {
     try { onMetrics(metrics.finish(outcome, status, outcomeCode)); } catch {}

@@ -579,6 +579,52 @@ test('incomplete, malformed and unterminated streams do not execute tools', asyn
     const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
     assert.equal(result.messages.flatMap(message => fields(message, 6)).length, 0);
     assert.equal(num(result.messages.at(-1), 5), ending === 'incomplete' ? 3 : 13);
+    const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+    if (ending === 'invalid-json') {
+      assert.equal(errorLog?.code, 'upstream_invalid_tool');
+      assert.equal(errorLog?.detail, 'invalid-json');
+    }
+  });
+});
+
+test('upstream_invalid_tool logs self-distinguishing detail for each cause', async t => {
+  await t.test('incomplete-call: a call item without any id', async st => {
+    const app = await bridge(st, async (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(event({ type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', name: 'sidekick' } }));
+      res.write(event({ type: 'response.completed', response: { status: 'completed', output: [] } }));
+      res.end();
+    });
+    await fetch(app.url);
+    const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+    assert.equal(errorLog?.code, 'upstream_invalid_tool');
+    assert.equal(errorLog?.detail, 'incomplete-call');
+  });
+
+  await t.test('no-index: arguments delta without output_index or item_id', async st => {
+    const app = await bridge(st, async (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(event({ type: 'response.function_call_arguments.delta', delta: '{}' }));
+      res.write(event({ type: 'response.completed', response: { status: 'completed', output: [] } }));
+      res.end();
+    });
+    await fetch(app.url);
+    const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+    assert.equal(errorLog?.code, 'upstream_invalid_tool');
+    assert.equal(errorLog?.detail, 'no-index');
+  });
+
+  await t.test('a valid tool call produces no chat-error with detail', async st => {
+    const app = await bridge(st, async (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(event({ type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'c1', name: 'sidekick' } }));
+      res.write(event({ type: 'response.function_call_arguments.done', output_index: 0, arguments: '{"prompt":"ok"}' }));
+      res.write(event({ type: 'response.completed', response: { status: 'completed', output: [] } }));
+      res.end();
+    });
+    await fetch(app.url);
+    assert.equal(app.logs.find(entry => entry.event === 'chat-error'), undefined);
+    assert.equal(app.logs.find(entry => 'detail' in entry), undefined);
   });
 });
 
