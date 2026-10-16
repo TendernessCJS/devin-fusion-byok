@@ -23,6 +23,9 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   两个易踩的字段名陷阱：**`response.refusal.done` 带的是 `refusal` 字段而不是 `text`**（`output_text.done`/`reasoning_text.done` 才是 `text`）；
   `reasoning.generate_summary` 是**被废弃**的旧名，现名是 `summary`（别被「更新」的直觉带反）。同一事件的 `delta` 与 `done` 必须在 `text()` 里用**同一个 key**
   （done 走 `complete=true` 会校验前缀，key 不一致会抛 `upstream_invalid_json`）。
+- **`test/sdk-contract.test.cjs` 是防 SDK 漂移的契约测试**（2026-10-16 加）：它**读** `.refs/` 里的官方 SDK 源码，把我们的手写常量与 SDK 字面量做交叉断言——Anthropic `StopReason` 每个成员都必须映射进共享处理器认识的集合、`OutputConfig.effort` 每个取值都必须能到达 `output_config.effort`、`ReasoningEffort` 必须仍覆盖我方取值集合、`ToolChoice` 四个成员接口与出站形状一致、`ThinkingBlockParam.signature` 必须仍是**必需**字段（它一旦变可选，「只在签名在场时回放思考」这条规则就该重审）。
+  `.refs/` 被 gitignore，**CI 上不存在**，所以五个用例都用 `{ skip: ... }` 在文件缺失时跳过；但「**文件在、却解析不出来**」必须**失败**并提示 layout changed——两者不可混同，否则 SDK 换写法时测试会静默失效。**改这些常量时必须同步跑该文件**，别只看全量计数（CI 上它是 skipped，全绿没有信息量）。
+- **给「防漂移」类测试加断言后，要用变异法证明它真的有牙**（2026-10-16 实测，3/3 命中）：把源码临时改坏（删 `pause_turn` 映射、从 `EFFORTS` 删 `max`、让 `tool_choice` 丢掉 `any`）后逐个跑该测试文件，确认**恰好对应的那一条**失败，再逐字节还原（`cp` 备份 → `diff -q` 校验），最后 `rm` 掉备份。基线要同时确认 `skipped 0`——否则「全绿」可能只是整个文件被跳过。不做这一步时，「断言写得像那么回事但其实恒真」的测试和真测试长得一模一样。
 - **「HTTP 200 + text/event-stream」不足以判定供应商可用**：中转/网关会给不存在的路径返回 200 的 HTML 兜底页，甚至把 anthropic 路径**透传**成
   Responses 格式（`object:"response"`、id 前缀 `resp_`、SSE 首帧 `response.created`）——此时传输层全部正常，只是我们的 anthropic 适配器不认这些事件名，
   于是**状态 200、日志 chat-complete、回答为空**。判据只能是**响应体形状**（事件名/字段），不是状态码或 content-type。
