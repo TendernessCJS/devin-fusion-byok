@@ -125,7 +125,7 @@ function buildRequestBody(request, route, provider) {
           Buffer.byteLength(message.signature) <= MAX_STATE_BYTES && !message.images?.length) {
         let state = null;
         try { state = JSON.parse(Buffer.from(message.signature.slice(STATE_PREFIX.length), 'base64url').toString('utf8')); } catch {}
-        if (state && state.scope === stateScope(provider, route) && Array.isArray(state.items) && replayMatches(state, message)) {
+        if (state && state.scope === stateScope(provider, route) && Array.isArray(state.items) && state.items.length && replayMatches(state, message)) {
           messages.push(...state.items);
           continue;
         }
@@ -418,7 +418,7 @@ function processor(id, uid, chat, emit, scope = null) {
       if (scope) {
         const items = finalItems ?? [...stateItems.entries()]
           .sort(([left], [right]) => typeof left === 'number' && typeof right === 'number' ? left - right : 0).map(([, value]) => value);
-        if (items.every(validStateItem)) {
+        if (items.length && items.every(validStateItem)) {
           const envelope = STATE_PREFIX + Buffer.from(JSON.stringify({ scope, items })).toString('base64url');
           if (Buffer.byteLength(envelope) <= MAX_STATE_BYTES) await emit(signatureChunk(id, envelope));
         }

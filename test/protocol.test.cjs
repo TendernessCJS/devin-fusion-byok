@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const { once } = require('node:events');
 const zlib = require('node:zlib');
+const { createHash } = require('node:crypto');
 const wire = require('../src/protocol/wire.cjs');
 const { parseChat } = require('../src/protocol/chat.cjs');
 const { serveChat, buildRequestBody } = require('../src/protocol/responses.cjs');
@@ -1127,4 +1128,26 @@ test('an oversized or invalid-item response produces no signature chunk', async 
   const invalidFixture = await upstreamFixture(t, [event({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'reasoning', summary: [] }, MESSAGE_ITEM] } })]);
   const invalid = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), invalidFixture);
   assert.equal(decodeSignature(invalid.messages).sigs.length, 0, 'missing encrypted_content drops the envelope');
+});
+
+test('responsesState never emits an empty-items envelope or drops an assistant turn', async t => {
+  const provider = { id: 'p1', apiFormat: 'openai-responses', responsesState: true };
+  const fixture = await upstreamFixture(t, [
+    event({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'done' }),
+    event({ type: 'response.completed', response: { status: 'completed' } }),
+  ]);
+  const first = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), fixture);
+  assert.equal(decodeSignature(first.messages).sigs.length, 0, 'no empty-items signature is emitted');
+  // A state carrying no items has nothing to replay. Accepting one would replace
+  // the assistant turn with nothing and drop it from the outgoing input entirely,
+  // so the reader must reject it even if some other writer produced it.
+  const scope = createHash('sha256').update(JSON.stringify(['p1', fixture.baseUrl, 'k', 'm'])).digest('hex');
+  const empty = STATE_PREFIX + Buffer.from(JSON.stringify({ scope, items: [] })).toString('base64url');
+  await stateSession(t, provider, Buffer.concat([
+    s(21, 'local-model'), nativeMessage(1, 'user'),
+    nativeMessage(2, '', [s(12, empty)]),
+    nativeMessage(1, 'again'),
+  ]), fixture);
+  const input = fixture.bodies.at(-1).input;
+  assert.ok(input.some(item => item?.role === 'assistant'), 'an empty-items state must not drop the assistant turn');
 });
