@@ -14,6 +14,17 @@ function countOwn(value, depth = 0) {
   return 0;
 }
 const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server_pb\.ApiServerService|seat_management_pb\.SeatManagementService)\/(?:GetUserStatus|GetCliModelConfigs|GetCascadeModelConfigs|GetCommandModelConfigs)$|^\/exa\.seat_management_pb\.SeatManagementService\/GetCliTeamSettings$/;
+// An injection skip means the payload was returned untouched. That looks
+// identical to "nothing to do" in the `catalog` line, and a shape that stops
+// being recognized fires on every response — so record it once per (rpc, code)
+// per process instead of on each catalog round trip.
+const skippedInjection = new Set();
+function reportInjectionSkip(log, code, rpc) {
+  const key = rpc + ' ' + code;
+  if (skippedInjection.has(key)) return;
+  skippedInjection.add(key);
+  try { log('catalog-augment-skip', { code, rpc: String(rpc).split('/').pop() }); } catch {}
+}
 function cors(request) {
   const origin = request.headers.origin;
   return origin && /^(?:vscode-file:\/\/vscode-app|vscode-webview:\/\/[^/]+|https?:\/\/(?:[a-z0-9.-]+\.)?localhost(?::\d+)?)$/.test(origin)
@@ -86,7 +97,8 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         const allowedUids = collectAllowedUids(format.data, { rpc: target.pathname, format });
         if (allowedUids) try { onAllowedUids?.(allowedUids); } catch {}
         const catalog = getCatalog();
-        const augmented = augmentCatalog(format.data, { rpc: target.pathname, format, catalog, onFusionStatus });
+        const augmented = augmentCatalog(format.data, { rpc: target.pathname, format, catalog, onFusionStatus,
+          onSkip: (code, rpc) => reportInjectionSkip(log, code, rpc) });
         outgoing = wire.encode(augmented, { ...format, gzip: false, compressed: false });
         delete outgoingHeaders['content-encoding']; delete outgoingHeaders['connect-content-encoding'];
         delete outgoingHeaders['transfer-encoding']; outgoingHeaders['content-length'] = String(outgoing.length);

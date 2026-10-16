@@ -97,6 +97,28 @@ test('an augment failure or empty result leaves the file byte-identical', () => 
   }
 });
 
+test('an augmenter that reports a skip while uids are still missing is not a no-op', () => {
+  const dir = tmpdir();
+  const name = 'user_status.aaaaaaaaaaaaaaaa.bin';
+  writeCache(dir, name, [OWN[0], 'native-1']);
+  const before = readCache(dir, name);
+  // The automatic check gates on uid presence, so a payload can be missing uids
+  // the augmenter never managed to add because the shape it assumed does not
+  // match the stored payload. Reporting that as "nothing to do" hides a real
+  // failure behind a successful-looking refresh.
+  const reported = refreshStaleCliCaches({ dir, expectedUids: OWN,
+    augment: (payload, rpc, report) => { report('shape-unrecognized'); return payload; } });
+  assert.deepEqual(reported.skipped, [{ name, reason: 'shape-unrecognized' }]);
+  assert.deepEqual(reported.errors, []);
+  assert.deepEqual(readCache(dir, name).raw, before.raw, 'the file stays byte-identical');
+  // The same report on a payload that already carries every expected uid stays
+  // benign under a forced check: there is genuinely nothing left to rewrite.
+  writeCache(dir, name, OWN);
+  const complete = refreshStaleCliCaches({ dir, expectedUids: OWN, force: true,
+    augment: (payload, rpc, report) => { report('shape-unrecognized'); return payload; } });
+  assert.deepEqual(complete.skipped, [{ name, reason: 'no-improvement' }]);
+});
+
 test('a payload without net uid gain is skipped as no-improvement', () => {
   const dir = tmpdir();
   const name = 'user_status.aaaaaaaaaaaaaaaa.bin';

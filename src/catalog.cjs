@@ -1421,12 +1421,17 @@ function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativ
 }
 
 /** Accept decoded wire messages; framing/compression is exclusively the caller's responsibility. */
-function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNativeModels } = {}) {
+function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNativeModels, onSkip } = {}) {
   if (rpc === '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings') return augmentLocalModelChoices(data, format, catalog);
   const shape = rpcShape(rpc);
   if (!shape || !catalog) return data;
   if (!catalog.models?.length && !catalog.hiddenNativeModelUids?.length && !catalog.hiddenFusionUids?.length &&
       typeof onFusionStatus !== 'function' && typeof onNativeModels !== 'function') return data;
+  // Reported when the payload is left untouched for a reason the caller could
+  // not infer from the bytes: silently returning the input looks exactly like
+  // "nothing to do" and hid a shape mismatch that made every in-place cache
+  // rewrite a no-op while the refresh still reported success.
+  const skip = code => { try { onSkip?.(code, rpc); } catch {} };
   try {
     if (format.json === true) {
       if (!shape.status) return augmentJsonList(data, catalog, shape.sorts, onFusionStatus, onNativeModels, shape.source);
@@ -1437,8 +1442,24 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
     }
     if (!Buffer.isBuffer(data)) return data;
     if (!shape.status) return augmentProtoList(data, catalog, shape.sorts, onFusionStatus, onNativeModels, shape.source);
-    return rewriteMessage(data, shape.field, status => rewriteMessage(status, 33, list => augmentProtoList(list, catalog, true, onFusionStatus, onNativeModels, shape.source), true));
-  } catch { return data; }
+    const parsed = parseFields(data);
+    const wrapped = parsed.filter(field => field.number === shape.field);
+    // `GetUserStatus` has two shapes. The bridge repeats back the
+    // `GetUserStatusResponse` envelope, whose field 1 is a `user_status` message
+    // carrying the model list at *its* field 33; the CLI persists the bare
+    // `UserStatus` message instead, where field 1 is the `pro` boolean and the
+    // list already sits at field 33 of the payload. Field 1's wire type is the
+    // only discriminator between them.
+    if (wrapped.length !== 1 || wrapped[0].wire !== 2) {
+      const list = parsed.filter(field => field.number === 33);
+      if (list.length !== 1 || list[0].wire !== 2) { skip('shape-unrecognized'); return data; }
+      // `create: false` keeps a payload that merely resembles a status — the
+      // malformed inputs the callers already rely on returning untouched — from
+      // gaining a model list it never had.
+      return rewriteMessage(data, 33, value => augmentProtoList(value, catalog, true, onFusionStatus, onNativeModels, shape.source), false);
+    }
+    return rewriteMessage(data, shape.field, status => rewriteMessage(status, 33, value => augmentProtoList(value, catalog, true, onFusionStatus, onNativeModels, shape.source), true));
+  } catch { skip('transform-failed'); return data; }
 }
 
 // Fusion entries we emitted but no longer do are indistinguishable from the
@@ -1488,11 +1509,17 @@ function staleFusionUids(data, options) {
     const dead = (uid, role) => !known.has(uid) || (excluded[role] instanceof Set && excluded[role].has(uid));
     if (dead(leadUid, 'lead') || dead(sidekickUid, 'sidekick')) stale.push(uid);
   };
+  // The payload itself is scanned alongside every field-1 message it carries:
+  // the flat CLI-configs list keeps its entries at the top level, the
+  // `GetUserStatusResponse` envelope nests them under field 1 → 33, and the bare
+  // `UserStatus` message the CLI caches (field 1 is the `pro` boolean) keeps them
+  // at field 33 of the payload itself. Scanning only the envelope made the cached
+  // shape invisible, so its stale entries could never be retired.
   try {
-    for (const top of parseFields(data).filter(field => field.number === 1 && field.wire === 2)) {
-      scan(top.value);
+    for (const body of [data, ...parseFields(data).filter(field => field.number === 1 && field.wire === 2).map(field => field.value)]) {
+      scan(body);
       try {
-        for (const list of parseFields(top.value).filter(field => field.number === 33 && field.wire === 2)) {
+        for (const list of parseFields(body).filter(field => field.number === 33 && field.wire === 2)) {
           for (const entry of parseFields(list.value).filter(field => field.number === 1 && field.wire === 2)) scan(entry.value);
         }
       } catch { /* not a status envelope — the flat scan above already ran */ }

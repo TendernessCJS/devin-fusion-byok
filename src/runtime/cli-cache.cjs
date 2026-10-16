@@ -89,6 +89,10 @@ const presentUids = (payload, expected) => {
 // a dimension value that gained an explicit order. `force` is what the panel
 // button uses: the automatic check only looks at uid presence, so it cannot see
 // a payload that is complete yet out of date.
+// `augment(payload, rpc, report)` gets a `report(code)` it can call when it
+// leaves a payload untouched for a reason uid presence cannot express (the
+// shape it assumed does not match the stored bytes); that code reaches the
+// panel instead of being flattened into `no-improvement`.
 function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, force = false } = {}) {
   requireDir(dir);
   const { expected, entries, checked } = inspectCliCaches({ dir, expectedUids, staleProbe });
@@ -103,15 +107,23 @@ function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, fo
       envelope = JSON.parse(fs.readFileSync(entry.file, 'utf8'));
       payload = Buffer.from(envelope.payload, 'base64');
     } catch (error) { skipped.push({ name: entry.name, reason: 'read-failed' }); continue; }
-    let next;
-    try { next = augment(payload, rpc); } catch { next = null; }
-    if (!Buffer.isBuffer(next) || !next.length) { skipped.push({ name: entry.name, reason: 'augment-failed' }); continue; }
+    // `augment(payload, rpc, report)` may call `report(code)` to say why it left
+    // the payload alone. Without that signal an untouched payload is
+    // indistinguishable from a completed one.
+    let next, reported = [];
+    try { next = augment(payload, rpc, code => { if (typeof code === 'string') reported.push(code); }); } catch { next = null; }
+    if (!Buffer.isBuffer(next) || !next.length) { skipped.push({ name: entry.name, reason: reported[0] || 'augment-failed' }); continue; }
     // Rewrite only when the augmented payload loses no expected uid and actually
     // changes the bytes; an identical payload is the one no-improvement case
     // (it also avoids pointless .bak churn).
     const before = presentUids(payload, expected), after = presentUids(next, expected);
     if (![...before].every(uid => after.has(uid)) || payload.equals(next)) {
-      skipped.push({ name: entry.name, reason: 'no-improvement' });
+      // `no-improvement` must mean "nothing left to do". When the augmenter
+      // reported a skip and expected uids are still absent afterwards the
+      // rewrite could not do its job, and calling that "nothing to do" is what
+      // hid a shape bug where every `user_status` rewrite was a silent no-op.
+      const stalled = reported.length && expected.some(uid => !after.has(uid));
+      skipped.push({ name: entry.name, reason: stalled ? reported[0] : 'no-improvement' });
       continue;
     }
     try {

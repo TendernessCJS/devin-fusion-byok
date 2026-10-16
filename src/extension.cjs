@@ -593,7 +593,7 @@ async function activate(context) {
       const excluded = { lead: excludedUids('lead'), sidekick: excludedUids('sidekick') };
       const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force,
         staleProbe: payload => staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded }),
-        augment: (payload, rpc) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current }) });
+        augment: (payload, rpc, report) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current, onSkip: report }) });
       // The report is part of panel state, and panel state is deduplicated by
       // its JSON. Restamping `at` on every automatic check made each 3s sync
       // look like a change, so the panel re-rendered forever — killing the

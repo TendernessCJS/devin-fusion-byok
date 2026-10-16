@@ -192,6 +192,29 @@ for (const rpc of [lsStatus, seatStatus]) test(`${rpc} appends namespace entries
   assert.deepEqual(augmentCatalog(output, { rpc, format: proto, catalog }), output);
 });
 
+test('the bare UserStatus cache shape is augmented at its own top-level model list', () => {
+  // The CLI persists `user_status.<digest>.bin` as the bare `UserStatus`
+  // message, not the `GetUserStatusResponse` envelope its RPC returns: field 1
+  // is the `pro` boolean and the model list already sits at field 33 of the
+  // payload. Field 1's wire type is the discriminator. Assuming the envelope
+  // made every in-place cache rewrite return the payload untouched while the
+  // refresh still reported success, so the uids a config change dropped were
+  // never restored (measured before the fix: 96 of 120 own uids present).
+  const fixture = statusFixture();
+  const bare = cat(v(1, 1), s(3, 'opaque-user-value'), v(27, 33), m(33, fixture.list), m(98, cat(v(1, 456))));
+  const original = Buffer.from(bare);
+  const output = augmentCatalog(bare, { rpc: lsStatus, format: proto, catalog });
+  assert.deepEqual(bare, original, 'the input buffer is never mutated');
+  const list = getNested(output, 33);
+  assert.deepEqual(configs(list).slice(0, catalog.models.length), catalog.models.map(model => model.raw));
+  assert.deepEqual(configs(list).at(-1), fixture.native, 'official entries survive');
+  assert.equal(configs(list).length, 19);
+  assert.equal(num(output, 27), 33);
+  assert.equal(str(output, 3), 'opaque-user-value');
+  assert.deepEqual(fields(output, 98)[0].raw, fields(bare, 98)[0].raw);
+  assert.deepEqual(augmentCatalog(output, { rpc: lsStatus, format: proto, catalog }), output);
+});
+
 test('GetCliModelConfigs preserves defaults, subagent model and unknown field 2 without inventing sorts', () => {
   const native = statusFixture().native;
   const input = cat(m(1, native), s(2, 'future-field-two'), m(3, native), s(4, 'swe-2-max'), v(99, 9));
@@ -257,7 +280,14 @@ test('unknown RPCs, empty catalogs, missing user status and malformed responses 
   const input = statusFixture().body;
   assert.equal(augmentCatalog(input, { rpc: 'GetAccount', format: proto, catalog }), input);
   assert.equal(augmentCatalog(input, { rpc: lsStatus, format: proto, catalog: buildCatalog() }), input);
-  for (const invalid of [Buffer.from([0x0a, 0xff]), cat(m(1, Buffer.alloc(0)), m(1, Buffer.alloc(0))), v(1, 1), s(2, 'unrelated')]) {
+  // A status payload with no locatable model list is left untouched *and*
+  // reported: silence here is what let a shape mismatch look like "nothing to
+  // do" while every in-place cache rewrite was a no-op.
+  const codes = [];
+  const barren = v(1, 1);
+  assert.equal(augmentCatalog(barren, { rpc: lsStatus, format: proto, catalog, onSkip: code => codes.push(code) }), barren);
+  assert.deepEqual(codes, ['shape-unrecognized']);
+  for (const invalid of [Buffer.from([0x0a, 0xff]), cat(m(1, Buffer.alloc(0)), m(1, Buffer.alloc(0))), s(2, 'unrelated')]) {
     assert.equal(augmentCatalog(invalid, { rpc: lsStatus, format: proto, catalog }), invalid);
   }
   for (const invalid of [{}, { userStatus: null }, { userStatus: { cascadeModelConfigData: { clientModelConfigs: 'invalid' } } }]) {
@@ -1177,7 +1207,7 @@ test('augmentation drops f32-less fusion entries emitted by earlier catalog gene
   for (const model of probe.models) assert.ok(uids.includes(model.uid), 'current emit is re-added');
 });
 
-test('staleFusionUids reports only unemitted f32-less fusion uids in both payload shapes', () => {
+test('staleFusionUids reports only unemitted f32-less fusion uids in every payload shape', () => {
   const { staleFusionUids } = require('../src/catalog.cjs');
   const emitted = new Set(['fusion-a-sidekick-b']);
   const ours = cat(s(1, 'F'), s(22, 'fusion-a-sidekick-b'));
@@ -1188,6 +1218,11 @@ test('staleFusionUids reports only unemitted f32-less fusion uids in both payloa
   assert.deepEqual(staleFusionUids(flat, { emitted, known: emitted }), ['fusion-claude-x-sidekick-claude-y']);
   const nested = cat(m(1, cat(s(1, 'status'), m(33, cat(m(1, staleEntry), m(1, official))))));
   assert.deepEqual(staleFusionUids(nested, { emitted, known: emitted }), ['fusion-claude-x-sidekick-claude-y']);
+  // The bare `UserStatus` message the CLI caches carries the list at field 33 of
+  // the payload itself, with field 1 taken by the `pro` boolean. Scanning only
+  // the envelope made these entries invisible, so they could never be retired.
+  const bare = cat(v(1, 1), m(33, cat(m(1, staleEntry), m(1, official))));
+  assert.deepEqual(staleFusionUids(bare, { emitted, known: emitted }), ['fusion-claude-x-sidekick-claude-y']);
   const both = new Set(['fusion-a-sidekick-b', 'fusion-claude-x-sidekick-claude-y']);
   assert.deepEqual(staleFusionUids(flat, { emitted: both, known: both }), []);
   assert.deepEqual(staleFusionUids(Buffer.from('garbage'), { emitted, known: emitted }), []);

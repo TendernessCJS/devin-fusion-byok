@@ -179,7 +179,7 @@ function renderPanel({ nonce, cspSource }) {
       <div id="settings-general"></div>
       <details id="native-group" class="group"><summary>官方模型显示<span id="native-count" class="hint"></span></summary><div class="group-body" id="native-models"></div></details>
       <details id="cache-group" class="group"><summary>CLI 缓存<span id="cache-hint" class="hint"></span></summary><div class="group-body">
-        <p class="hint mb">模型选择器读的是 Devin CLI 在 <code class="cmd">~/.cache/devin/cli</code> 下的缓存文件（按账号身份区分）。配置改过后如果下拉里少条目或出现已删除的模型，点「刷新缓存」原地重写——原文件保留为 <code class="cmd">.bak</code>，不删除。</p>
+        <p class="hint mb">模型选择器读的是 Devin CLI 在 <code class="cmd">~/.cache/devin/cli</code> 下的缓存文件（按账号身份区分）。配置改过后如果下拉里少条目或出现已删除的模型，点「刷新缓存」原地重写——重写前把原文件另存为 <code class="cmd">.bak</code>（只保留最近一次），主文件不删除、不改名。</p>
         <div class="actions"><button id="refresh-cache" type="button">刷新缓存</button><span id="cache-report" class="hint"></span></div>
       </div></details>
       ${updateMarkup()}
@@ -563,8 +563,16 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
     if (!report) { detail.append(document.createTextNode('还没有记录，点一次「刷新缓存」即可。')); return; }
     const parts = [];
     if (report.refreshed?.length) parts.push('已重写 ' + report.refreshed.map(name => name.split('.')[0]).join('、'));
-    const SKIP_REASONS = { 'no-improvement': '已是最新', unsupported: '格式不支持', 'read-failed': '读取失败', 'augment-failed': '重写失败' };
-    for (const skip of report.skipped || []) parts.push(skip.name.split('.')[0] + ' 无需重写（' + (SKIP_REASONS[skip.reason] || skip.reason) + '）');
+    const SKIP_REASONS = { 'no-improvement': '已是最新', unsupported: '格式不支持', 'read-failed': '读取失败' };
+    // Injection failures are not "no rewrite needed": the file was left alone
+    // because the injected catalog did not apply, which the user can act on.
+    const SKIP_WARNINGS = { 'augment-failed': '重写失败', 'shape-unrecognized': '载荷形状未识别', 'transform-failed': '注入出错' };
+    for (const skip of report.skipped || []) {
+      const name = skip.name.split('.')[0];
+      parts.push(SKIP_WARNINGS[skip.reason]
+        ? name + ' 未改动（' + SKIP_WARNINGS[skip.reason] + '）'
+        : name + ' 无需重写（' + (SKIP_REASONS[skip.reason] || skip.reason) + '）');
+    }
     for (const error of report.errors || []) parts.push(error.name.split('.')[0] + ' 写入失败（' + error.code + '）');
     if (!report.checked) parts.push('没有找到本插件写入的缓存文件');
     else if (!parts.length) parts.push('检查了 ' + report.checked + ' 个文件，内容已是最新');

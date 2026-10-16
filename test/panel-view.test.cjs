@@ -195,6 +195,17 @@ test('the settings tab exposes the CLI cache refresh and reports the last run', 
   assert.ok(posts.some(message => message.type === 'refreshCliCaches'), 'the button asks the host to refresh');
 });
 
+test('an injection failure in the cache report reads as untouched, not as up to date', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-16T12:00:00.000Z', checked: 2, refreshed: [],
+    skipped: [{ name: 'user_status.abcd1234.bin', reason: 'shape-unrecognized' },
+      { name: 'team_settings.abcd1234.bin', reason: 'no-improvement' }], errors: [] } } } });
+  const report = textOf(byId('cache-report'));
+  assert.match(report, /user_status 未改动（载荷形状未识别）/);
+  assert.doesNotMatch(report, /user_status 无需重写/, 'a failed injection must not claim the file is current');
+  assert.match(report, /team_settings 无需重写/);
+});
+
 test('the settings tab summarizes backend and catalog status', () => {
   const { byId, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), backendStatus: 'running', nativeCatalogStatus: 'ready' } } });
