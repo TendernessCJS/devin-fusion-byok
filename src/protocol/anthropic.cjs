@@ -136,7 +136,9 @@ function createAnthropicAdapter() {
         const result = chunk(event.type, {}, reason ? { finish_reason: FINISH[reason] || 'stop' } : {});
         if (usage.input !== null && usage.output !== null) {
           result.data.usage = { prompt_tokens: usage.input + usage.cacheRead + usage.cacheCreate, completion_tokens: usage.output,
-            prompt_tokens_details: { cached_tokens: usage.cacheRead } };
+            // `cache_creation_tokens` inside prompt_tokens_details is our own
+            // internal convention between this adapter and usageSnapshot().
+            prompt_tokens_details: { cached_tokens: usage.cacheRead, cache_creation_tokens: usage.cacheCreate } };
         }
         return [result];
       }

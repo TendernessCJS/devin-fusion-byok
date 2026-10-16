@@ -82,8 +82,11 @@ function toolChunk(id, tools) {
 }
 function stopChunk(id, reason = 2, modelUid = '') { return Buffer.concat([...prefix(id), v(5, reason), ...(modelUid ? [s(23, modelUid)] : [])]); }
 function usageChunk(id, modelUid, usage) {
-  return Buffer.concat([...prefix(id),
-    m(7, Buffer.concat([v(2, usage.inputTokens), v(3, usage.outputTokens), s(7, id), s(9, modelUid)]))]);
+  const stats = [v(2, usage.inputTokens), v(3, usage.outputTokens)];
+  if (Number.isSafeInteger(usage.cacheWriteTokens) && usage.cacheWriteTokens > 0) stats.push(v(4, usage.cacheWriteTokens));
+  if (Number.isSafeInteger(usage.cacheReadTokens) && usage.cacheReadTokens > 0) stats.push(v(5, usage.cacheReadTokens));
+  stats.push(s(7, id), s(9, modelUid));
+  return Buffer.concat([...prefix(id), m(7, Buffer.concat(stats))]);
 }
 
 module.exports = { parseChat, textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk };

@@ -123,7 +123,14 @@ function usageSnapshot(data, chat) {
   const input = chat ? usage.prompt_tokens : usage.input_tokens;
   const output = chat ? usage.completion_tokens : usage.output_tokens;
   if (!Number.isSafeInteger(input) || input < 0 || !Number.isSafeInteger(output) || output < 0) return null;
-  return { inputTokens: input, outputTokens: output };
+  // input_tokens is INCLUSIVE of cached tokens; the cache fields are subsets.
+  const details = chat ? usage.prompt_tokens_details : usage.input_tokens_details;
+  const cacheRead = details?.cached_tokens ?? (chat ? usage.prompt_cache_hit_tokens : undefined);
+  const cacheWrite = chat ? details?.cache_creation_tokens : undefined;
+  const snapshot = { inputTokens: input, outputTokens: output };
+  if (Number.isSafeInteger(cacheRead) && cacheRead >= 0) snapshot.cacheReadTokens = cacheRead;
+  if (Number.isSafeInteger(cacheWrite) && cacheWrite >= 0) snapshot.cacheWriteTokens = cacheWrite;
+  return snapshot;
 }
 
 function processor(id, uid, chat, emit) {

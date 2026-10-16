@@ -144,6 +144,20 @@ test('Anthropic replays the thinking block only when its signature is present', 
   assert.ok(!unsigned.messages[0].content.some(block => block.type === 'thinking'), 'no signature means no thinking block');
 });
 
+test('Anthropic usage carries cache read and write as separate fields', async t => {
+  const result = await run(t, [
+    sse('message_start', { message: { usage: { input_tokens: 10, cache_read_input_tokens: 90, cache_creation_input_tokens: 3, output_tokens: 1 } } }),
+    sse('content_block_start', { index: 0, content_block: { type: 'text', text: 'ok' } }),
+    sse('content_block_stop', { index: 0 }),
+    sse('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 7 } }),
+    sse('message_stop', {}),
+  ]);
+  const usage = result.messages.map(message => fields(message, 7)).flat().map(field => field.value)[0];
+  assert.equal(num(usage, 5), 90, 'cache_read_tokens');
+  assert.equal(num(usage, 4), 3, 'cache_write_tokens');
+  assert.equal(num(usage, 2), 103, 'input_tokens stays inclusive');
+});
+
 test('redacted-only thinking still reports empty output', async t => {
   const result = await run(t, [
     sse('message_start', { message: { usage: { input_tokens: 5, output_tokens: 1 } } }),

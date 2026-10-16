@@ -381,6 +381,42 @@ test('completed without any content reports upstream_empty_output but truncation
   assert.equal(truncatedMetrics[0].status, 'success');
 });
 
+test('Responses usage carries cached tokens as cache_read_tokens', async t => {
+  const proxy = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.output_text.delta', delta: 'ok', output_index: 0, content_index: 0 },
+      { type: 'response.completed', response: { status: 'completed', output: [], usage: { input_tokens: 100, output_tokens: 5, input_tokens_details: { cached_tokens: 40 } } } },
+    ].map(event).join(''));
+  });
+  const output = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+  const usage = output.messages.map(m => fields(m, 7)).flat().map(field => field.value)[0];
+  assert.equal(num(usage, 5), 40, 'cache_read_tokens');
+  assert.equal(num(usage, 2), 100, 'input_tokens stays inclusive');
+});
+
+test('Chat usage carries cached tokens from details and the flat fallback', async t => {
+  const viaDetails = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [{ delta: { content: 'ok' } }] }));
+    res.write(event({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 40 } } }));
+    res.end('data: [DONE]\n\n');
+  }, 'openai');
+  const detailed = unpack(Buffer.from(await (await fetch(viaDetails.url)).arrayBuffer()));
+  const detailedUsage = detailed.messages.map(m => fields(m, 7)).flat().map(field => field.value)[0];
+  assert.equal(num(detailedUsage, 5), 40);
+
+  const viaFlat = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [{ delta: { content: 'ok' } }] }));
+    res.write(event({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 5, prompt_cache_hit_tokens: 25 } }));
+    res.end('data: [DONE]\n\n');
+  }, 'openai');
+  const flat = unpack(Buffer.from(await (await fetch(viaFlat.url)).arrayBuffer()));
+  const flatUsage = flat.messages.map(m => fields(m, 7)).flat().map(field => field.value)[0];
+  assert.equal(num(flatUsage, 5), 25);
+});
+
 test('incomplete, malformed and unterminated streams do not execute tools', async t => {
   for (const ending of ['incomplete', 'invalid-json', 'truncated']) await t.test(ending, async st => {
     const app = await bridge(st, async (req, res) => {
