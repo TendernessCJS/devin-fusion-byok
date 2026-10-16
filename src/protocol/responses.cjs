@@ -1,6 +1,6 @@
 'use strict';
 
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { frame } = require('./wire.cjs');
 const { textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk } = require('./chat.cjs');
 const { createTracker } = require('./tracker.cjs');
@@ -9,6 +9,51 @@ const MAX_SSE_BUFFER = 64 * 1024 * 1024;
 
 function isChatFormat(format = '') { return /chat[-_\/]?completions|^(?:chat|openai)$/.test(format); }
 const STANDARD_CHAT_FINISH = new Set(['stop', 'length', 'tool_calls', 'content_filter', 'function_call']);
+const STATE_PREFIX = 'dfbyok-responses-v1:';
+const MAX_STATE_BYTES = 256 * 1024;
+
+function stateScope(provider, route) {
+  return createHash('sha256').update(JSON.stringify([provider.id || '', provider.baseUrl || '', provider.apiKey || '', route.model])).digest('hex');
+}
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalize(value[key])]));
+  return value;
+}
+function sameArguments(left, right) {
+  try { return JSON.stringify(canonicalize(JSON.parse(left))) === JSON.stringify(canonicalize(JSON.parse(right))); }
+  catch { return false; }
+}
+// Replays a stored Responses output sequence only when it still describes this
+// assistant turn byte-for-byte; every mismatch silently falls back to the
+// regular projection.
+function replayMatches(state, message) {
+  let text = '';
+  const tools = [];
+  for (const item of state.items) {
+    if (item?.type === 'message') for (const part of item.content || []) {
+      if (part?.type === 'output_text' && typeof part.text === 'string') text += part.text;
+      else return false;
+    } else if (item?.type === 'function_call') tools.push({ id: item.call_id, name: item.name, arguments: item.arguments });
+    else if (item?.type !== 'reasoning') return false;
+  }
+  if (text !== message.content) return false;
+  const calls = message.toolCalls || [];
+  if (tools.length !== calls.length) return false;
+  for (const [index, tool] of tools.entries()) {
+    if (tool.id !== calls[index].id || tool.name !== calls[index].name || !sameArguments(tool.arguments, calls[index].arguments)) return false;
+  }
+  return true;
+}
+function validStateItem(item) {
+  if (!item || typeof item !== 'object') return false;
+  if (item.type === 'reasoning') return typeof item.encrypted_content === 'string' && item.encrypted_content !== '' && Array.isArray(item.summary);
+  if (item.type === 'message') return item.role === 'assistant' && Array.isArray(item.content) &&
+    item.content.every(part => part?.type === 'output_text' && typeof part.text === 'string');
+  if (item.type === 'function_call') return typeof item.call_id === 'string' && item.call_id !== '' &&
+    typeof item.name === 'string' && item.name !== '' && typeof item.arguments === 'string';
+  return false;
+}
 function endpoint(provider) {
   const url = new URL(provider.baseUrl);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid provider URL');
@@ -75,6 +120,16 @@ function buildRequestBody(request, route, provider) {
       if (message.toolCalls?.length) item.tool_calls = message.toolCalls.map(tool => ({ id: tool.id, type: 'function', function: { name: tool.name, arguments: tool.arguments } }));
       messages.push(item);
     } else {
+      if (message.role === 'assistant' && provider.responsesState === true &&
+          typeof message.signature === 'string' && message.signature.startsWith(STATE_PREFIX) &&
+          Buffer.byteLength(message.signature) <= MAX_STATE_BYTES && !message.images?.length) {
+        let state = null;
+        try { state = JSON.parse(Buffer.from(message.signature.slice(STATE_PREFIX.length), 'base64url').toString('utf8')); } catch {}
+        if (state && state.scope === stateScope(provider, route) && Array.isArray(state.items) && replayMatches(state, message)) {
+          messages.push(...state.items);
+          continue;
+        }
+      }
       // A native message stores text before its repeated tool calls. Preserve
       // that sequence and keep every system message at its original position.
       if (content !== '' || !message.toolCalls?.length) messages.push({ role: message.role === 'system' ? 'developer' : message.role, content });
@@ -83,6 +138,10 @@ function buildRequestBody(request, route, provider) {
   }
   const body = { model: route.model, [chat ? 'messages' : 'input']: messages, stream: true };
   if (chat) body.stream_options = { include_usage: true };
+  if (!chat && provider.responsesState === true) {
+    body.store = false;
+    body.include = ['reasoning.encrypted_content'];
+  }
   if (request.disableParallelToolCalls === true) body.parallel_tool_calls = false;
   const maxTokens = request.maxTokens ?? route.maxOutputTokens ?? route.maxTokens ?? provider.maxOutputTokens ?? provider.maxTokens;
   if (Number.isSafeInteger(maxTokens) && maxTokens > 0) body[chat ? 'max_completion_tokens' : 'max_output_tokens'] = maxTokens;
@@ -94,9 +153,18 @@ function buildRequestBody(request, route, provider) {
     // Native strict is a plain proto3 bool, so an unset field and an explicit
     // false are indistinguishable; always send the boolean, because omitting it
     // lets a Responses server auto-enable strict validation on a compatible schema.
-    body.tools = request.tools.map(tool => chat
-      ? { type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters, strict: tool.strict === true } }
-      : { type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters, strict: tool.strict === true });
+    body.tools = request.tools.map(tool => {
+      // Chat Completions has no custom tool type; custom tools stay function-shaped.
+      if (chat) return { type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters, strict: tool.strict === true } };
+      if (tool.isCustomTool === true) {
+        const custom = { type: 'custom', name: tool.name };
+        if (tool.description) custom.description = tool.description;
+        if (tool.customToolGrammar && ['lark', 'regex'].includes(tool.customToolGrammarSyntax))
+          custom.format = { type: 'grammar', definition: tool.customToolGrammar, syntax: tool.customToolGrammarSyntax };
+        return custom;
+      }
+      return { type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters, strict: tool.strict === true };
+    });
     const choice = request.toolChoice;
     if (choice?.name) body.tool_choice = chat ? { type: 'function', function: { name: choice.name } } : { type: 'function', name: choice.name };
     else if (choice) {
@@ -166,9 +234,11 @@ function usageSnapshot(data, chat) {
   return snapshot;
 }
 
-function processor(id, uid, chat, emit) {
+function processor(id, uid, chat, emit, scope = null) {
   const calls = new Map();
   const itemIndexes = new Map();
+  const stateItems = new Map();
+  let finalItems = null;
   const texts = new Map();
   let terminal = false;
   let reason = 2;
@@ -199,13 +269,16 @@ function processor(id, uid, chat, emit) {
     if (delta) await emit(thinking ? thinkingChunk(id, delta) : textChunk(id, delta));
   };
   const item = async (value, index, done) => {
-    if (value.type === 'function_call') {
+    if (scope && value && typeof value === 'object' && index !== undefined) stateItems.set(index, value);
+    if (value.type === 'function_call' || value.type === 'custom_tool_call') {
       const call = getCall(index, value.id);
+      if (value.type === 'custom_tool_call') call.custom = true;
       if (value.call_id || value.id) call.id = value.call_id || value.id;
       if (value.name) call.name = value.name;
-      if (typeof value.arguments === 'string' && (done || value.arguments)) {
-        if (done) call.complete = value.arguments;
-        else call.arguments = value.arguments;
+      const payload = value.type === 'custom_tool_call' ? value.input : value.arguments;
+      if (typeof payload === 'string' && (done || payload)) {
+        if (done) call.complete = payload;
+        else call.arguments = payload;
       }
     } else if (done && value.type === 'message') {
       for (const [contentIndex, part] of (value.content || []).entries()) {
@@ -272,6 +345,9 @@ function processor(id, uid, chat, emit) {
         case 'response.output_item.done': await item(data.item, data.output_index, true); break;
         case 'response.function_call_arguments.delta': getCall(data.output_index, data.item_id).arguments += data.delta || ''; break;
         case 'response.function_call_arguments.done': getCall(data.output_index, data.item_id).complete = data.arguments; break;
+        // Custom tool calls carry raw-string input, not JSON arguments.
+        case 'response.custom_tool_call_input.delta': { const call = getCall(data.output_index, data.item_id); call.custom = true; call.arguments += data.delta || ''; break; }
+        case 'response.custom_tool_call_input.done': { const call = getCall(data.output_index, data.item_id); call.custom = true; call.complete = data.input; break; }
         case 'response.output_text.delta': await text(`${data.output_index ?? 0}:${data.content_index ?? 0}`, data.delta); break;
         case 'response.output_text.done': await text(`${data.output_index ?? 0}:${data.content_index ?? 0}`, data.text, true); break;
         case 'response.reasoning.delta':
@@ -282,6 +358,7 @@ function processor(id, uid, chat, emit) {
         case 'response.refusal.delta': await text(`refusal:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.delta); break;
         case 'response.refusal.done': await text(`refusal:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.refusal, true); break;
         case 'response.completed':
+          if (scope && Array.isArray(data.response?.output)) finalItems = data.response.output;
           if (data.response?.status && data.response.status !== 'completed') {
             const err = new Error('Unexpected completion status');
             err.code = 'upstream_stream_error';
@@ -291,6 +368,7 @@ function processor(id, uid, chat, emit) {
           terminal = true;
           break;
         case 'response.incomplete':
+          if (scope && Array.isArray(data.response?.output)) finalItems = data.response.output;
           for (const [index, value] of (data.response?.output || []).entries()) await item(value, index, true);
           terminal = true;
           reason = data.response?.incomplete_details?.reason === 'content_filter' ? 11 : 3;
@@ -321,7 +399,7 @@ function processor(id, uid, chat, emit) {
           throw err;
         }
         try {
-          JSON.parse(args); // Validate once, then forward the original JSON bytes.
+          if (!call.custom) JSON.parse(args); // Validate once, then forward the original JSON bytes.
         } catch {
           const err = new Error('Invalid tool call JSON');
           err.code = 'upstream_invalid_tool';
@@ -337,6 +415,14 @@ function processor(id, uid, chat, emit) {
       }
       if (tools.length) await emit(toolChunk(id, tools));
       if (usage) await emit(usageChunk(id, uid, usage));
+      if (scope) {
+        const items = finalItems ?? [...stateItems.entries()]
+          .sort(([left], [right]) => typeof left === 'number' && typeof right === 'number' ? left - right : 0).map(([, value]) => value);
+        if (items.every(validStateItem)) {
+          const envelope = STATE_PREFIX + Buffer.from(JSON.stringify({ scope, items })).toString('base64url');
+          if (Buffer.byteLength(envelope) <= MAX_STATE_BYTES) await emit(signatureChunk(id, envelope));
+        }
+      }
       await emit(stopChunk(id, tools.length ? 10 : reason, uid));
       finished = true;
       return tools.map(tool => tool.name);
@@ -455,7 +541,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       }
     }
 
-    const stream = processor(id, route.uid || request.modelUid, chat, write);
+    const stream = processor(id, route.uid || request.modelUid, chat, write, !chat && provider.responsesState === true ? stateScope(provider, route) : null);
     try {
       const adapt = anthropic ? createAnthropicAdapter() : event => [event];
       upstream: for await (const raw of events(rawChunksWithTimeout(upstream.body))) {

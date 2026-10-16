@@ -89,3 +89,36 @@ test('Anthropic ThinkingBlockParam keeps signature as a required field', { ...(a
   assert.ok(/signature: string;/.test(block[0]), 'signature is no longer a required string field');
   assert.ok(!/signature\?:/.test(block[0]), 'signature became optional — revisit the replay-only-when-signed rule');
 });
+
+const RESPONSES_FILE = path.join(__dirname, '..', '.refs', 'openai-node', 'src', 'resources', 'responses', 'responses.ts');
+const responsesSource = fs.existsSync(RESPONSES_FILE) ? fs.readFileSync(RESPONSES_FILE, 'utf8') : null;
+const missingResponses = { skip: '.refs/openai-node is a read-only local copy, absent on CI' };
+
+test('Responses CustomTool stays type custom with an optional format', { ...(responsesSource ? {} : missingResponses) }, () => {
+  const block = responsesSource.match(/export interface CustomTool \{[\s\S]*?\n\}/);
+  assert.ok(block, 'CustomTool interface not found — the SDK layout changed');
+  assert.ok(/type: 'custom'/.test(block[0]), 'CustomTool.type literal changed');
+  assert.ok(/format\?:/.test(block[0]), 'CustomTool.format became required — update our emission');
+});
+
+test('Responses Grammar syntax union stays lark|regex with type grammar', { ...(openaiSource ? {} : missingOpenai) }, () => {
+  const block = openaiSource.match(/interface Grammar \{[\s\S]*?\n  \}/);
+  assert.ok(block, 'CustomToolInputFormat.Grammar not found — the SDK layout changed');
+  assert.ok(/type: 'grammar'/.test(block[0]), 'Grammar.type literal changed');
+  const syntax = block[0].match(/syntax: ([^;]+);/);
+  assert.ok(syntax, 'Grammar.syntax not found — the SDK layout changed');
+  assert.deepEqual(new Set([...syntax[1].matchAll(/'([^']+)'/g)].map(match => match[1])), new Set(['lark', 'regex']));
+});
+
+test('ResponseCustomToolCall.input stays a plain string', { ...(responsesSource ? {} : missingResponses) }, () => {
+  const block = responsesSource.match(/export interface ResponseCustomToolCall \{[\s\S]*?\n\}/);
+  assert.ok(block, 'ResponseCustomToolCall not found — the SDK layout changed');
+  assert.ok(/\n {2}input: string;/.test(block[0]), 'input is no longer a required string — raw forwarding is broken');
+  assert.ok(!/input\?:/.test(block[0]) && !/input: (?!string\b)/.test(block[0]), 'input shape changed');
+});
+
+test('Responses params still expose store and reasoning.encrypted_content include', { ...(responsesSource ? {} : missingResponses) }, () => {
+  assert.ok(/\n {2}store\?: boolean \| null;/.test(responsesSource), 'store param disappeared — the state channel must change');
+  const members = new Set(unionMembers(responsesSource, 'export type ResponseIncludable'));
+  assert.ok(members.has('reasoning.encrypted_content'), 'reasoning.encrypted_content was removed from ResponseIncludable');
+});

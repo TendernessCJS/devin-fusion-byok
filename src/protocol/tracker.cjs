@@ -30,13 +30,13 @@ function semanticOutput(event, chat) {
     (event.type === 'response.refusal.delta' && typeof d.delta === 'string' && d.delta.length > 0) ||
     (event.type === 'response.refusal.done' && typeof d.refusal === 'string' && d.refusal.length > 0) ||
     items.some(item => item?.type === 'message' && item.content?.some(part => (part.type === 'output_text' && part.text) || (part.type === 'refusal' && part.refusal)));
-  const delta = (['response.reasoning.delta', 'response.reasoning_summary_text.delta', 'response.reasoning_text.delta', 'response.function_call_arguments.delta'].includes(event.type) && typeof d.delta === 'string' && d.delta.length > 0)
+  const delta = (['response.reasoning.delta', 'response.reasoning_summary_text.delta', 'response.reasoning_text.delta', 'response.function_call_arguments.delta', 'response.custom_tool_call_input.delta'].includes(event.type) && typeof d.delta === 'string' && d.delta.length > 0)
     || (['response.reasoning_text.done', 'response.reasoning_summary_text.done'].includes(event.type) && typeof d.text === 'string' && d.text.length > 0)
     || items.some(item => item?.type === 'reasoning' &&
       ((item.summary || []).some(part => part.type === 'summary_text' && part.text) ||
        (item.content || []).some(part => part.type === 'reasoning_text' && part.text)));
-  const tool = (event.type === 'response.output_item.added' && d.item?.type === 'function_call' && Boolean(d.item.name || d.item.arguments)) ||
-    items.some(item => item?.type === 'function_call' && (item.name || item.arguments));
+  const tool = (event.type === 'response.output_item.added' && ['function_call', 'custom_tool_call'].includes(d.item?.type) && Boolean(d.item.name || d.item.arguments || d.item.input)) ||
+    items.some(item => ['function_call', 'custom_tool_call'].includes(item?.type) && (item.name || item.arguments || item.input));
   return { output: Boolean(text || delta || tool), text: Boolean(text) };
 }
 function createTracker({ id, route, provider, now = () => performance.now(), startedAt = new Date().toISOString() }) {
@@ -45,7 +45,7 @@ function createTracker({ id, route, provider, now = () => performance.now(), sta
   let hasTools = false, hasReasoning = false, terminalAt = null, providerStop = null;
   const chatToolIds = new Map(), responseToolIds = new Map(), itemIndexes = new Map();
   const rememberResponseTool = (item, index) => {
-    if (item?.type !== 'function_call') return;
+    if (item?.type !== 'function_call' && item?.type !== 'custom_tool_call') return;
     const key = index ?? itemIndexes.get(item.id) ?? item.id;
     if (key === undefined) return;
     if (item.id) itemIndexes.set(item.id, key);
@@ -61,7 +61,7 @@ function createTracker({ id, route, provider, now = () => performance.now(), sta
       const choice = choices.find(c => (c.index ?? 0) === 0);
       const delta = choice?.delta || choice?.message;
       const items = chat ? [] : data?.response?.output || (data?.item ? [data.item] : []);
-      if (delta?.tool_calls?.length || delta?.function_call || items.some(item => item?.type === 'function_call') || event.type?.startsWith('response.function_call_arguments.')) hasTools = true;
+      if (delta?.tool_calls?.length || delta?.function_call || items.some(item => item?.type === 'function_call' || item?.type === 'custom_tool_call') || event.type?.startsWith('response.function_call_arguments.') || event.type?.startsWith('response.custom_tool_call_input.')) hasTools = true;
       if (delta?.function_call) chatToolIds.set('function_call', identifier(`${id}:0`));
       for (const call of delta?.tool_calls || []) {
         const key = call.index ?? 0;

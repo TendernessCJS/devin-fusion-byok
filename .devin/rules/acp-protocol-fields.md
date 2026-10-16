@@ -88,6 +88,7 @@ tail -c +<偏移> <bundle> | head -c 600
   - `strict`：OpenAI 两路（`openai` / `openai-responses`）**始终**写布尔 `strict: tool.strict === true`。理由是官方 Responses SDK 明说「省略 `strict` 时会尝试启用严格校验」（`strict?: boolean \| null` 的注释原文），所以「省略」≠「原生 false」，无法表达原生意图；Anthropic 仍只在 `true` 时写顶层 `strict:true`（Anthropic 没有这种「省略即自动严格」的语义）。
   - `disable_parallel_tool_calls`：**只透传显式 `true`**，默认/未设置时不在 body 里写厂商字段，保持对老网关的兼容。
 - 实测（2026-10-16，真实端点）：`strict:false` 与省略 strict 两种写法在 DeepSeek `deepseek-flash`（responses）与 Moonshot `kimi-k2.6`（chat）上**都是 200**，参数键均为 `["source"]` 且无空串值（`{path, source}` 二选一 schema）。
+- `ChatToolDefinition` **字段 9/10/11 自定义工具**（2026-10-16 登记）：`{no:9,name:"is_custom_tool",kind:"scalar",T:8,opt:!0}`、`{no:10,name:"custom_tool_grammar",T:9,opt:!0}`、`{no:11,name:"custom_tool_grammar_syntax",T:9,opt:!0}`——**三者都带 `opt:!0`**（可选），与上面无 `opt` 的 `strict` 不同：`is_custom_tool` 是 optional bool，两字符串字段缺省为 `''`（JSON/proto 两侧归一为 `isCustomTool`/`customToolGrammar`/`customToolGrammarSyntax`，字符串缺席落 `''` 以保 parity）。出站：仅 `openai-responses` 且 `isCustomTool === true` → `{type:'custom',name,[description]}`；`grammar` 与 `syntax` **同时存在**且 syntax 恰为 `'lark'`/`'regex'` 时才附 `format:{type:'grammar',definition,syntax}`，否则无 `format`（官方 SDK 默认无约束文本，不猜默认值）；`openai`/`anthropic` 无此类型，仍为 function 形态。响应侧 `custom_tool_call` 的 `input` 是**原始字符串**（非 JSON），`response.custom_tool_call_input.delta`（`delta` 字段）/`.done`（`input` 字段）只按字符串校验、跳过 `JSON.parse`，原样进 ACP 工具块。
 
 ## ⚠️ 陷阱：`CompletionDelta` 是**另一个消息**，字段号整体错位
 

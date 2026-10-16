@@ -924,3 +924,207 @@ test('events without a usage property retain the latest valid snapshot', async t
   assert.equal(num(usages[0].value, 2), 13);
   assert.equal(num(usages[0].value, 3), 6);
 });
+
+// --- Responses custom tools (native fields 9-11) ---
+
+function customToolRequest(extra = []) {
+  return Buffer.concat([
+    s(21, 'local-model'), m(3, Buffer.concat([v(2, 1), s(3, 'hi')])),
+    m(10, Buffer.concat([s(1, 'apply_patch'), s(2, 'Edit files'), s(3, '{}'), ...extra])),
+  ]);
+}
+
+test('custom tool declaration emits type custom with grammar format when complete', () => {
+  const request = parseChat(customToolRequest([v(9, 1), s(10, 'start: "a"'), s(11, 'lark')]));
+  const body = buildRequestBody(request, { model: 'm' }, { apiFormat: 'openai-responses' });
+  assert.deepEqual(body.tools[0], {
+    type: 'custom', name: 'apply_patch', description: 'Edit files',
+    format: { type: 'grammar', definition: 'start: "a"', syntax: 'lark' }
+  });
+});
+
+test('custom tool without syntax emits no format instead of guessing', () => {
+  const request = parseChat(customToolRequest([v(9, 1), s(10, 'start: "a"')]));
+  const body = buildRequestBody(request, { model: 'm' }, { apiFormat: 'openai-responses' });
+  assert.equal(body.tools[0].type, 'custom');
+  assert.equal('format' in body.tools[0], false);
+});
+
+test('custom tool with an unrecognized syntax emits no format', () => {
+  const request = parseChat(customToolRequest([v(9, 1), s(10, 'x'), s(11, 'yaml')]));
+  const body = buildRequestBody(request, { model: 'm' }, { apiFormat: 'openai-responses' });
+  assert.equal(body.tools[0].type, 'custom');
+  assert.equal('format' in body.tools[0], false);
+});
+
+test('a tool without is_custom_tool stays a function with the strict flag intact', () => {
+  const request = parseChat(customToolRequest([v(12, 1)]));
+  const body = buildRequestBody(request, { model: 'm' }, { apiFormat: 'openai-responses' });
+  assert.equal(body.tools[0].type, 'function');
+  assert.equal(body.tools[0].strict, true);
+});
+
+test('custom tools stay function-shaped under openai and anthropic formats', () => {
+  const request = parseChat(customToolRequest([v(9, 1), s(10, 'g'), s(11, 'lark')]));
+  const chat = buildRequestBody(request, { model: 'm' }, { apiFormat: 'openai' });
+  assert.equal(chat.tools[0].type, 'function');
+  const anthropic = buildRequestBody(request, { model: 'm' }, { apiFormat: 'anthropic' });
+  assert.equal(anthropic.tools[0].type, undefined);
+  assert.equal('strict' in anthropic.tools[0], false);
+  assert.ok(anthropic.tools[0].input_schema);
+});
+
+test('a custom tool call relays raw input verbatim, including non-JSON', async t => {
+  const raw = '*** Begin Patch\n*** Update File: a.txt\n+line\n*** End Patch';
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'response.output_item.added', output_index: 0, item: { type: 'custom_tool_call', id: 'ctc1', call_id: 'cc1', name: 'apply_patch' } }));
+    res.write(event({ type: 'response.custom_tool_call_input.delta', output_index: 0, item_id: 'ctc1', delta: '*** Begin' }));
+    res.write(event({ type: 'response.custom_tool_call_input.done', output_index: 0, item_id: 'ctc1', input: raw }));
+    res.write(event({ type: 'response.completed', response: { status: 'completed', output: [] } }));
+    res.end();
+  });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  const tools = result.messages.flatMap(message => fields(message, 6)).map(f => {
+    const calls = [];
+    for (let o = 0; o < f.value.length;) {
+      const tag = f.value[o], len = f.value.readUInt32BE(o + 1);
+      calls.push(f.value.subarray(o + 5, o + 5 + len)); o += 5 + len;
+    }
+    return calls;
+  }).flat();
+  const args = tools.map(call => str(call, 3));
+  assert.equal(tools.length, 1);
+  assert.equal(str(tools[0], 2), 'apply_patch');
+  assert.equal(args[0], raw, 'raw non-JSON input reaches the ACP tool call verbatim');
+  assert.equal(num(result.messages.at(-1), 5), 10);
+  assert.equal(app.logs.find(e => e.event === 'chat-error'), undefined);
+});
+
+// --- responsesState envelope and replay ---
+
+const STATE_PREFIX = 'dfbyok-responses-v1:';
+const REASONING_ITEM = { type: 'reasoning', id: 'r1', encrypted_content: 'enc-abc', summary: [] };
+const MESSAGE_ITEM = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'done' }] };
+const CALL_ITEM = { type: 'function_call', call_id: 'c9', name: 'shell', arguments: '{"cmd":"ls"}' };
+
+async function upstreamFixture(t, events) {
+  const bodies = [];
+  const upstream = await server(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    bodies.push(JSON.parse(Buffer.concat(chunks)));
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(events.join(''));
+  }, t);
+  return { bodies, baseUrl: `${upstream.url}/v1` };
+}
+
+async function stateSession(t, provider, request, fixture) {
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(request), route: { model: 'm', uid: 'u' },
+      provider: { ...provider, baseUrl: fixture.baseUrl, apiKey: provider.apiKey || 'k' }, res });
+  }, t);
+  const response = await fetch(proxy.url);
+  return unpack(Buffer.from(await response.arrayBuffer()));
+}
+
+const TURN_EVENTS = [
+  event({ type: 'response.output_item.added', output_index: 0, item: REASONING_ITEM }),
+  event({ type: 'response.output_item.done', output_index: 0, item: REASONING_ITEM }),
+  event({ type: 'response.output_item.added', output_index: 1, item: MESSAGE_ITEM }),
+  event({ type: 'response.output_item.done', output_index: 1, item: MESSAGE_ITEM }),
+  event({ type: 'response.completed', response: { status: 'completed', output: [REASONING_ITEM, MESSAGE_ITEM] } }),
+];
+
+function decodeSignature(messages) {
+  const sigs = messages.map(message => str(message, 10)).filter(Boolean);
+  return { sigs, states: sigs.map(sig => JSON.parse(Buffer.from(sig.slice(STATE_PREFIX.length), 'base64url').toString('utf8'))) };
+}
+
+test('responsesState off (default): no include/store, no signature, no replay', async t => {
+  const signature = STATE_PREFIX + Buffer.from(JSON.stringify({ scope: 'x', items: [MESSAGE_ITEM] })).toString('base64url');
+  const request = Buffer.concat([
+    s(21, 'local-model'), nativeMessage(1, 'user'),
+    nativeMessage(2, 'done', [s(12, signature)]),
+    nativeMessage(1, 'again'),
+  ]);
+  const fixture = await upstreamFixture(t, TURN_EVENTS);
+  const result = await stateSession(t, { apiFormat: 'openai-responses' }, request, fixture);
+  assert.equal('include' in fixture.bodies[0], false, 'off: no include');
+  assert.equal('store' in fixture.bodies[0], false, 'off: no store');
+  assert.equal(decodeSignature(result.messages).sigs.length, 0, 'off: no state signature emitted');
+  const input = fixture.bodies[0].input;
+  assert.equal(input.filter(item => item?.type === 'reasoning').length, 0, 'off: envelope is never replayed');
+});
+
+test('responsesState on: body gains store:false and encrypted-content include', async t => {
+  const provider = { id: 'p1', apiFormat: 'openai-responses', responsesState: true };
+  const fixture = await upstreamFixture(t, TURN_EVENTS);
+  const request = Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]);
+  const result = await stateSession(t, provider, request, fixture);
+  assert.equal(fixture.bodies[0].store, false);
+  assert.deepEqual(fixture.bodies[0].include, ['reasoning.encrypted_content']);
+  const { sigs, states } = decodeSignature(result.messages);
+  assert.equal(sigs.length, 1);
+  const signatureIndex = result.messages.findIndex(message => str(message, 10));
+  const stopIndex = result.messages.findIndex(message => num(message, 5) === 2);
+  assert.ok(signatureIndex >= 0 && signatureIndex < stopIndex, 'signature precedes the stop chunk');
+  const { createHash } = require('node:crypto');
+  const scope = createHash('sha256').update(JSON.stringify(['p1', fixture.baseUrl, 'k', 'm'])).digest('hex');
+  assert.equal(states[0].scope, scope);
+  assert.deepEqual(states[0].items, [REASONING_ITEM, MESSAGE_ITEM]);
+});
+
+test('responsesState replay restores items in order before the assistant text', async t => {
+  const provider = { id: 'p1', apiFormat: 'openai-responses', responsesState: true };
+  const fixture = await upstreamFixture(t, TURN_EVENTS);
+  const first = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), fixture);
+  const envelope = decodeSignature(first.messages).sigs[0];
+  await stateSession(t, provider, Buffer.concat([
+    s(21, 'local-model'), nativeMessage(1, 'user'),
+    nativeMessage(2, 'done', [s(12, envelope)]),
+    nativeMessage(1, 'again'),
+  ]), fixture);
+  const input = fixture.bodies[1].input;
+  const start = input.findIndex(item => item?.type === 'reasoning');
+  assert.ok(start >= 0, 'reasoning item is replayed');
+  assert.deepEqual(input.slice(start, start + 2), [REASONING_ITEM, MESSAGE_ITEM]);
+});
+
+test('replay silently degrades when scope, content or items are invalid', async t => {
+  const provider = { id: 'p1', apiFormat: 'openai-responses', responsesState: true };
+  const fixture = await upstreamFixture(t, TURN_EVENTS);
+  const first = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), fixture);
+  const envelope = decodeSignature(first.messages).sigs[0];
+  const requestWith = (signature, text = 'done') => Buffer.concat([
+    s(21, 'local-model'), nativeMessage(1, 'user'),
+    nativeMessage(2, text, [s(12, signature)]),
+    nativeMessage(1, 'again'),
+  ]);
+  const replayed = input => input.filter(item => item?.type === 'reasoning').length;
+
+  const edited = await stateSession(t, provider, requestWith(envelope, 'done differently'), fixture);
+  assert.equal(replayed(fixture.bodies.at(-1).input), 0, 'content drift disables replay');
+
+  const decoded = JSON.parse(Buffer.from(envelope.slice(STATE_PREFIX.length), 'base64url').toString('utf8'));
+  const badScope = STATE_PREFIX + Buffer.from(JSON.stringify({ ...decoded, scope: 'deadbeef' })).toString('base64url');
+  await stateSession(t, provider, requestWith(badScope), fixture);
+  assert.equal(replayed(fixture.bodies.at(-1).input), 0, 'scope mismatch disables replay');
+
+  const badItems = STATE_PREFIX + Buffer.from(JSON.stringify({ ...decoded, items: [{ type: 'mystery' }] })).toString('base64url');
+  await stateSession(t, provider, requestWith(badItems), fixture);
+  assert.equal(fixture.bodies.at(-1).input.filter(item => item?.type === 'mystery').length, 0, 'invalid items are not replayed');
+  void edited;
+});
+
+test('an oversized or invalid-item response produces no signature chunk', async t => {
+  const bigItem = { ...MESSAGE_ITEM, content: [{ type: 'output_text', text: 'x'.repeat(300 * 1024) }] };
+  const provider = { apiFormat: 'openai-responses', responsesState: true };
+  const bigFixture = await upstreamFixture(t, [event({ type: 'response.completed', response: { status: 'completed', output: [bigItem] } })]);
+  const big = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), bigFixture);
+  assert.equal(decodeSignature(big.messages).sigs.length, 0, 'oversized envelope is dropped');
+  const invalidFixture = await upstreamFixture(t, [event({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'reasoning', summary: [] }, MESSAGE_ITEM] } })]);
+  const invalid = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), invalidFixture);
+  assert.equal(decodeSignature(invalid.messages).sigs.length, 0, 'missing encrypted_content drops the envelope');
+});

@@ -65,6 +65,7 @@ function buildAnthropicBody(request, route, provider) {
   const effort = route.effort === 'minimal' ? 'low' : route.effort;
   if (EFFORTS.has(effort)) body.output_config = { effort };
   if (request.tools?.length) {
+    // Anthropic Messages has no custom tool type; custom tools stay function-shaped.
     body.tools = request.tools.map(tool => ({ name: tool.name, description: tool.description,
       input_schema: tool.parameters && typeof tool.parameters === 'object' ? tool.parameters : { type: 'object', properties: {} },
       ...(tool.strict === true ? { strict: true } : {}) }));
