@@ -383,3 +383,48 @@ test('sessions without observable data are hidden, cannot steal focus, and resol
     assert.equal(items[0].sessionId, '', 'with nothing observable the panel falls back to the empty hint entry');
   } finally { handle.dispose(); }
 });
+
+test('tps falls back to the latest eligible sample with a visible timestamp note', () => {
+  const localClock = value => { const d = new Date(Date.parse(value)); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  const session = { sessionId: 's', lead: { used: 5, size: 100, timestampMs: 1 } };
+  const rec = over => ({ schemaVersion: 2, status: 'success', model: 'm', startedAt: '2026-10-16T10:00:00', durationMs: 1000, ...over });
+  const details = records => contextDetails(session, { sessions: [{ sessionId: 's', records }] });
+  const pick = records => { const rows = details(records).request; const row = rows.find(r => r.key === 'tps'); return { row, values: Object.fromEntries(rows.map(r => [r.key, r.value])), labels: Object.fromEntries(rows.map(r => [r.key, r.label])) }; };
+
+  // The newest request used tools (tps null); an older valid sample wins and is marked.
+  const older = rec({ startedAt: '2026-10-16T10:00:00', tps: 88, hasTools: false });
+  const toolCall = rec({ startedAt: '2026-10-16T10:05:00', tps: null, hasTools: true });
+  let out = pick([older, toolCall]);
+  assert.equal(out.values.tps, '88');
+  assert.equal(out.labels.tps, '正文 TPS（不含工具） · 最近有效 ' + localClock(older.startedAt));
+  assert.match(out.row.title, /早于最近一次请求/);
+
+  // The newest request is itself eligible: no annotation.
+  out = pick([rec({ startedAt: '2026-10-16T10:05:00', tps: 200, hasTools: false })]);
+  assert.equal(out.values.tps, '200');
+  assert.equal(out.labels.tps, '正文 TPS（不含工具）');
+
+  // Ineligible-looking records are skipped: old schema, error status, inconsistent
+  // usage (cachedTokens > inputTokens) and a null tps all lose to the one valid sample.
+  out = pick([older,
+    rec({ startedAt: '2026-10-16T10:06:00', schemaVersion: 1, tps: 999 }),
+    rec({ startedAt: '2026-10-16T10:07:00', status: 'error', tps: 999 }),
+    rec({ startedAt: '2026-10-16T10:08:00', tps: 999, cachedTokens: 50, inputTokens: 10 }),
+    rec({ startedAt: '2026-10-16T10:09:00', tps: null }),
+    rec({ startedAt: '2026-10-16T10:10:00', tps: -1 })]);
+  assert.equal(out.values.tps, '88');
+  assert.equal(out.labels.tps, '正文 TPS（不含工具） · 最近有效 ' + localClock(older.startedAt));
+
+  // No eligible sample at all: dash value, bare label.
+  out = pick([toolCall]);
+  assert.equal(out.values.tps, '—');
+  assert.equal(out.labels.tps, '正文 TPS（不含工具）');
+
+  // An eligible sample whose timestamp cannot be parsed: keep the bare label, and
+  // do not claim it is older than the newest request.
+  out = pick([rec({ startedAt: 'not-a-timestamp', tps: 42 })]);
+  assert.equal(out.values.tps, '42');
+  assert.equal(out.labels.tps, '正文 TPS（不含工具）');
+  assert.match(out.row.title, /时间无法解析/);
+  assert.doesNotMatch(out.row.title, /早于最近一次请求/);
+});

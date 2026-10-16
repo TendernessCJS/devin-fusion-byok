@@ -1,8 +1,10 @@
 'use strict';
 const crypto = require('node:crypto');
 const { baseStyles } = require('./theme.cjs');
+const { timing, usageIsInconsistent } = require('../runtime/monitor-stats.cjs');
 const number = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
 const seconds = value => typeof value === 'number' && Number.isFinite(value) ? (value / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) + ' s' : '—';
+const clock = value => { const stamp = Date.parse(value); if (!Number.isFinite(stamp)) return null; const date = new Date(stamp); return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0'); };
 function contextDetails(session, monitor, catalog) {
   const usage = value => value ? `${number(value.used)} / ${number(value.size)} token · ${number(value.used / value.size * 100)}%` : '—';
   const label = uid => catalog?.models?.find(model => model.uid === uid)?.label || uid || '—';
@@ -17,9 +19,27 @@ function contextDetails(session, monitor, catalog) {
   const sessionTitle = matching.length === 1 ? matching[0].title || null : null;
   const records = matching.length === 1 ? matching[0].records || [] : [];
   const latest = records.reduce((best, record) => Number.isFinite(Date.parse(record.startedAt)) && (!best || Date.parse(record.startedAt) > Date.parse(best.startedAt)) ? record : best, null);
+  // The tps metric exists only for tool-free successful requests, and tool use is
+  // the norm for agent traffic (measured: 92% of this machine's records), so reading
+  // it off the newest request left the tile blank nearly always. Mirror the usage
+  // page (monitor-stats summarize): show the latest eligible sample, and when that
+  // sample is older than the newest request say so in visible text — this panel's
+  // tooltips do not render on hover, so a title alone would not be seen.
+  const tpsSample = records.filter(record => record.schemaVersion >= 2 && record.status === 'success' && !usageIsInconsistent(record) && timing(record.tps) !== null)
+    .reduce((best, record) => !best || Date.parse(record.startedAt) >= Date.parse(best.startedAt) ? record : best, null);
+  const tpsAt = tpsSample ? clock(tpsSample.startedAt) : null;
+  const tpsFromLatest = Boolean(tpsSample && latest && Date.parse(tpsSample.startedAt) === Date.parse(latest.startedAt));
+  const tpsLabel = '正文 TPS（不含工具）';
+  const tpsTitle = '正文 TPS = 非工具输出 token ÷ 解码耗时；含工具或 reasoning 分项不明的请求不计算。' +
+    (!tpsSample ? '当前保留记录中没有有效样本。'
+      : !tpsAt ? '当前显示最近一条有效样本，其时间无法解析。'
+      : '当前显示最近一条有效样本（' + tpsAt + '）' + (tpsFromLatest ? '，即最近一次请求。' : '，早于最近一次请求。'));
   const state = { success: '成功', error: '失败', cancelled: '已取消' };
   const request = [{ key: 'request', label: '最近请求', value: latest ? `${latest.model || '—'} · ${state[latest.status] || latest.status || '—'}` : '—' }];
-  for (const [key, label] of [['durationMs', '请求耗时'], ['firstResponseMs', '首响应数据'], ['firstTextMs', '正文首字'], ['firstOutputMs', '首输出'], ['gatewayTps', '首响应后吞吐 TPS'], ['tps', '正文 TPS（不含工具）'], ['inputTokens', '输入 token'], ['outputTokens', '输出 token'], ['cachedTokens', '缓存 token'], ['reasoningTokens', '推理 token']]) request.push({ key, label, value: key.endsWith('Ms') ? seconds(latest?.[key]) : number(latest?.[key]) });
+  for (const [key, label] of [['durationMs', '请求耗时'], ['firstResponseMs', '首响应数据'], ['firstTextMs', '正文首字'], ['firstOutputMs', '首输出'], ['gatewayTps', '首响应后吞吐 TPS'], ['tps', tpsLabel], ['inputTokens', '输入 token'], ['outputTokens', '输出 token'], ['cachedTokens', '缓存 token'], ['reasoningTokens', '推理 token']]) {
+    if (key === 'tps') { request.push({ key, label: tpsFromLatest || !tpsAt ? tpsLabel : tpsLabel + ' · 最近有效 ' + tpsAt, value: number(tpsSample?.tps), title: tpsTitle }); continue; }
+    request.push({ key, label, value: key.endsWith('Ms') ? seconds(latest?.[key]) : number(latest?.[key]) });
+  }
   const lines = [...rows, ...request].map(row => `${row.label}：${row.value}`);
   const tooltip = [rows[0], rows[1], ...request.slice(0, 7)].map(row => `${row.label}：${row.value}`).join('\n');
   const ratio = session?.lead?.size > 0 ? session.lead.used / session.lead.size : null;
