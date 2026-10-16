@@ -50,7 +50,8 @@
 - GPT-5/6、o 系列、Claude Opus/Sonnet/Fable 4.6+ 自动提供 Low～Max 思考档位；实际是否生效取决于供应商。
 - 你在 Fusion 卡片里选的组合会被记住：Devin 让你选中一个锁定的官方组合时，插件用它回退。你自己（或 Devin）在官方卡片里做的选择不会被插件改掉。
 - 状态栏的 **上下文** 入口可以查看所选会话的上下文占用和最近请求的速度。
-- 高级开关 `responsesState`（供应商 JSON 字段，默认关闭）：**接入官方 OpenAI Responses 推理模型时**才开启。开启后请求带 `store:false` 与 `include:['reasoning.encrypted_content']`，插件把该轮的推理/工具调用输出项打包进签名通道（ACP 字段 10）随会话带回，下一轮在作用域（供应商/地址/密钥/模型）与内容校验一致时按原序回放——这是官方对无状态多轮推理模型的要求。兼容面供应商（DeepSeek、Moonshot、各类中转）不需要它，保持关闭即可；**不要按模型名猜**，显式打开。
+- 高级开关 `responsesState`（供应商 JSON 字段，默认关闭）：**接入官方 OpenAI Responses 推理模型时**才开启；也可在**编辑供应商**弹窗里开关（仅 OpenAI Responses 格式显示该项）。开启后请求带 `store:false` 与 `include:['reasoning.encrypted_content']`，插件把该轮的推理/工具调用输出项打包进签名通道（ACP 字段 10）随会话带回，下一轮在作用域（供应商/地址/密钥/模型）与内容校验一致时按原序回放——这是官方对无状态多轮推理模型的要求。**不要按模型名猜**，显式打开。
+  实测补充：直连官方的转发面（如本机的 Proxy）会返回真实 `encrypted_content`（约 2–3 KB），且其 `store:true` + `previous_response_id` 续轮实测 400，多轮推理延续**只能**靠无状态回放——这类面才是它的目标场景。DeepSeek 也会产出带 `encrypted_content` 的 reasoning item（但仅 38 字符，形似占位），Moonshot 的 reasoning item 则**不带** `encrypted_content`（因此对它整轮都发不出信封）。实测回放与省略推理在 DeepSeek、Proxy 上**均返回 200**，故开启与否不影响可用性，差别在语义对齐；已知风险是携带通道在真实尺寸（最高约 42 KB，已证闭环仅 36 B）上尚未验证，而状态损坏在官方面上的表现是难以归因的 502。
 
 ### 用量监控
 

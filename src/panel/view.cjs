@@ -756,6 +756,10 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
       element('option', { value: 'anthropic', text: 'Anthropic Messages' }));
     apiFormat.value = provider?.apiFormat || 'openai-responses';
     const apiKey = input('', { type: 'password', autocomplete: 'new-password', placeholder: provider?.keyConfigured ? '留空则不修改' : '', spellcheck: 'false' });
+    const responsesState = element('input', { type: 'checkbox', role: 'switch', class: 'switch', 'aria-label': 'Responses 推理状态' });
+    responsesState.checked = provider?.responsesState === true;
+    const responsesStateField = field('Responses 推理状态', responsesState, '仅接入官方 OpenAI Responses（推理模型 + 工具）时开启；开启后请求带 store:false 与 include: reasoning.encrypted_content，并把该轮推理与工具输出项经签名通道随会话带回、下一轮校验一致时按原序回放。兼容面供应商多数不需要——实测回放与省略均返回 200，开启只是语义对齐，是否开启不影响可用性。');
+    responsesStateField.style.display = apiFormat.value === 'openai-responses' ? '' : 'none';
     const urlField = field('API 地址', baseUrl, '只填域名时会自动补上 /v1；写了路径就按原样使用，例如 /v1、/api/paas/v4、/openai 都原样保留。');
     const urlPreview = element('span', { class: 'hint url-preview' });
     urlField.append(urlPreview);
@@ -773,13 +777,16 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
       if (url.pathname.replace(/\/+$/, '') === '') urlPreview.append(element('br'), '地址只填了域名，已自动补 /v1');
     };
     baseUrl.addEventListener('input', refreshPreview);
-    apiFormat.addEventListener('change', refreshPreview);
+    apiFormat.addEventListener('change', event => {
+      refreshPreview();
+      responsesStateField.style.display = apiFormat.value === 'openai-responses' ? '' : 'none';
+    });
     refreshPreview();
-    form.append(field('名称', name), urlField, field('API 类型', apiFormat), field('API 密钥', apiKey));
+    form.append(field('名称', name), urlField, field('API 类型', apiFormat), field('API 密钥', apiKey), responsesStateField);
     const remove = provider ? deleteButton(dialog, '删除供应商？', '会一并移除“' + provider.name + '”导入的模型；用到它们的 Fusion 组合会失效。',
       () => request('deleteProvider', { id: provider.id })) : null;
     finishDialog(dialog, form, '保存', () => {
-      const payload = { name: name.value.trim(), baseUrl: baseUrl.value.trim(), apiFormat: apiFormat.value };
+      const payload = { name: name.value.trim(), baseUrl: baseUrl.value.trim(), apiFormat: apiFormat.value, responsesState: responsesState.checked };
       if (provider) payload.id = provider.id;
       if (apiKey.value.trim()) payload.apiKey = apiKey.value.trim();
       return request('saveProvider', payload);

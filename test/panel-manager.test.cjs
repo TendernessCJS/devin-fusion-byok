@@ -780,3 +780,37 @@ test('setNativeModelHidden rejects malformed uid lists without writes', async ()
   assert.deepEqual(f.read(), before);
   assert.equal(f.writes.length, 0);
 });
+
+test('saveProvider persists responsesState only when the key is present', async () => {
+  const f = memory();
+  const state = await f.manager.dispatch('saveProvider', providerPayload({ responsesState: true }));
+  assert.equal(f.read().providers[0].responsesState, true, 'true is persisted');
+  assert.equal(state.providers[0].responsesState, true, 'publicState exposes it');
+  await f.manager.dispatch('saveProvider', providerPayload({ responsesState: false }));
+  assert.equal(f.read().providers[0].responsesState, false, 'false is persisted');
+});
+
+test('a payload without responsesState keeps the stored value', async () => {
+  const f = memory();
+  await f.manager.dispatch('saveProvider', providerPayload({ responsesState: true }));
+  const next = providerPayload({ name: 'Renamed CPA' });
+  assert.equal('responsesState' in next, false, 'the fixture payload omits the key');
+  await f.manager.dispatch('saveProvider', next);
+  assert.equal(f.read().providers[0].responsesState, true, 'missing key leaves the flag untouched');
+});
+
+test('a new provider defaults responsesState off unless the payload sets it', async () => {
+  const f = memory();
+  await f.manager.dispatch('saveProvider', providerPayload({ id: undefined, name: 'Local', baseUrl: 'https://local.invalid/v1' }));
+  assert.equal(f.read().providers.at(-1).responsesState, false);
+  await f.manager.dispatch('saveProvider', providerPayload({ id: undefined, name: 'Local2', baseUrl: 'https://local2.invalid/v1', responsesState: true }));
+  assert.equal(f.read().providers.at(-1).responsesState, true);
+});
+
+test('a non-boolean responsesState is rejected without touching the config', async () => {
+  const f = memory();
+  await f.manager.dispatch('saveProvider', providerPayload({ responsesState: true }));
+  const before = f.read().providers[0];
+  await assert.rejects(f.manager.dispatch('saveProvider', providerPayload({ responsesState: 'yes' })), PanelInputError);
+  assert.deepEqual(f.read().providers[0], before, 'the failed save changes nothing');
+});

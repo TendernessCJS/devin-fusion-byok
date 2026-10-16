@@ -390,3 +390,59 @@ test('bulk toggles act on the search-filtered set and say so', () => {
     [{ id: 'flash-a', enabled: false }, { id: 'flash-b', enabled: false }],
     'only filtered models are touched');
 });
+
+function responsesSwitch(dialog) {
+  return collect(dialog, 'input', node => node.attributes['aria-label'] === 'Responses 推理状态')[0];
+}
+function openProviderDialog(byId, receive, provider) {
+  receive({ data: { type: 'state', state: { ...state(), providers: [{ ...state().providers[0], ...provider }] } } });
+  collect(byId('models'), 'button', node => node.textContent === '编辑')[0].listeners.click();
+  return byId('editor-dialog');
+}
+const responsesField = dialog => collect(dialog, 'label', node => node.className === 'field' && collect(node, 'input', i => i.attributes['aria-label'] === 'Responses 推理状态').length)[0];
+const apiFormatSelect = dialog => collect(dialog, 'select', node => node.attributes['aria-label'] === 'API 类型')[0];
+
+test('the provider dialog checks the responses-state switch only when enabled', () => {
+  const { byId, receive } = panel();
+  let dialog = openProviderDialog(byId, receive, { apiFormat: 'openai-responses', responsesState: true });
+  assert.equal(responsesSwitch(dialog).checked, true, 'a stored true pre-fills the switch');
+  dialog = openProviderDialog(byId, receive, { apiFormat: 'openai-responses' });
+  assert.equal(responsesSwitch(dialog).checked, false, 'unset defaults to off');
+  dialog = openProviderDialog(byId, receive, { apiFormat: 'openai-responses', responsesState: false });
+  assert.equal(responsesSwitch(dialog).checked, false);
+});
+
+test('the responses-state field is visible only for the Responses format', () => {
+  const { byId, receive } = panel();
+  let dialog = openProviderDialog(byId, receive, { apiFormat: 'openai' });
+  assert.equal(responsesField(dialog).style.display, 'none', 'hidden under openai chat');
+  dialog = openProviderDialog(byId, receive, { apiFormat: 'anthropic' });
+  assert.equal(responsesField(dialog).style.display, 'none', 'hidden under anthropic');
+  dialog = openProviderDialog(byId, receive, { apiFormat: 'openai-responses' });
+  assert.equal(responsesField(dialog).style.display, '', 'visible under openai-responses');
+  apiFormatSelect(dialog).value = 'openai';
+  apiFormatSelect(dialog).listeners.change({});
+  assert.equal(responsesField(dialog).style.display, 'none', 'switching format hides the field');
+  apiFormatSelect(dialog).value = 'openai-responses';
+  apiFormatSelect(dialog).listeners.change({});
+  assert.equal(responsesField(dialog).style.display, '', 'switching back restores it');
+});
+
+test('submitting the provider dialog sends the switch state as responsesState', () => {
+  const { byId, posts, receive } = panel();
+  const dialog = openProviderDialog(byId, receive, { apiFormat: 'openai-responses', responsesState: true });
+  const form = collect(dialog, 'form')[0];
+  responsesSwitch(dialog).checked = false;
+  form.listeners.submit({ preventDefault() {} });
+  const save = posts.find(message => message.type === 'saveProvider');
+  assert.equal(save.payload.responsesState, false, 'the payload mirrors the unchecked box');
+});
+
+test('a checked responses-state switch submits true in the payload', () => {
+  const { byId, posts, receive } = panel();
+  const dialog = openProviderDialog(byId, receive, { apiFormat: 'openai-responses' });
+  responsesSwitch(dialog).checked = true;
+  collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
+  const save = posts.find(message => message.type === 'saveProvider');
+  assert.equal(save.payload.responsesState, true);
+});
