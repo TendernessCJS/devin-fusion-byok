@@ -9,7 +9,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 
 | 主题卷 | 何时必须读 |
 | --- | --- |
-| `.devin/rules/upstream-fork-release.md` | 同步 `upstream`、定/升版本号、发布、解 merge 冲突（含「本 fork 相对 upstream 的刻意差异」表） |
+| `.devin/rules/upstream-fork-release.md` | 同步 `upstream`、定/升版本号、发布、解 merge 冲突；含 upstream 基线（读到哪儿、上游新增了什么）与「按需重算差异」的命令 |
 | `.devin/rules/retired-and-deadends.md` | 清理配置键、审「这段代码还活着吗」、疑惑某个旧字段为何还在 |
 | `.devin/rules/testing-notes.md` | 写或调测试 |
 | `.devin/rules/acp-protocol-fields.md` | 改 `src/protocol/*` 的 protobuf 字段号、核对原生请求/响应/用量字段、怀疑某字段没被送出或读回 |
@@ -179,7 +179,7 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
   搬回即成环）。旧名对照：`chat.cjs → acp.cjs`、`responses.cjs → inference.cjs`——旧名正是误读源头（前者与 Chat Completions 无关，OpenAI Chat 的请求体在
   `inference.cjs`）。**撞名警告**：`src/fast-context/protocol.cjs` 是**另一个** protocol（Fast Context 的 MCP 实现），且它反向 import
   `src/protocol/wire.cjs`——两条路径别混。在 `protocol/` 内增删/改名文件时，除 `SOURCE_FILES` 外还要留意**不靠 `require` 的隐式引用**（按模块名打桩的
-  字符串键、`readFileSync` 的路径、差异表条目），这类漏改不报错、只静默失效。
+  字符串键、`readFileSync` 的路径、`AGENTS.md` 里按路径写的说明），这类漏改不报错、只静默失效。
 - `AssignModel` 本地应答不含 `assignment_jwt`（官方 `ModelAssignment` 响应带该字段）。当前 CLI（3000.10.48 实测）不校验；若未来版本强制校验，
   本地指派整体失效——届时改为转发上游或显式降级，不得伪造成功。
 - 修改行为时不要放宽现有安全校验（Origin 一律 403、控制令牌 `timingSafeEqual`、webview 只用 `createElement`/`textContent` 不用
