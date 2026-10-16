@@ -177,6 +177,32 @@ test('a GetCliTeamSettings payload that cannot be read reports instead of readin
   assert.ok(!fs.existsSync(path.join(dir, name + '.bak')), 'an unreadable payload is never overwritten');
 });
 
+test('a cache the CLI refreshed mid-rewrite is left alone instead of clobbered', () => {
+  // The CLI persists these files itself (it fetches the augmented catalog through
+  // the bridge), so our augmentation can be derived from bytes that are already
+  // superseded when the rename lands. Overwriting a fresher payload would drop
+  // whatever the CLI just stored, and the check reruns on every native sync.
+  const dir = tmpdir();
+  const name = 'user_status.aaaaaaaaaaaaaaaa.bin';
+  writeCache(dir, name, ['dfbyok-old', 'native-1']);
+  const newer = JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 7,
+    payload: Buffer.from('dfbyok-newer\x00native-2').toString('base64') });
+  const result = refreshStaleCliCaches({ dir, expectedUids: OWN, augment: payload => {
+    fs.writeFileSync(path.join(dir, name), newer);
+    return Buffer.concat([payload, Buffer.from('\x00' + OWN[0])]);
+  } });
+  assert.deepEqual(result.refreshed, []);
+  assert.deepEqual(result.skipped, [{ name, reason: 'concurrent-write' }]);
+  assert.equal(fs.readFileSync(path.join(dir, name), 'utf8'), newer, 'the fresher payload survives untouched');
+  assert.ok(!fs.existsSync(path.join(dir, name + '.bak')), 'nothing is backed up when nothing is written');
+  // A forced pass over a file that no longer changes rewrites it normally.
+  const clean = refreshStaleCliCaches({ dir, expectedUids: OWN, force: true,
+    augment: payload => Buffer.concat([payload, Buffer.from('\x00' + OWN[0])]) });
+  assert.deepEqual(clean.refreshed, [name]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, name + '.bak'), 'utf8')).fetched_at_secs, 7,
+    '.bak is the payload the rewrite was derived from, not a newer generation');
+});
+
 test('a payload without net uid gain is skipped as no-improvement', () => {
   const dir = tmpdir();
   const name = 'user_status.aaaaaaaaaaaaaaaa.bin';

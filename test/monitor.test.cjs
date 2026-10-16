@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 const { createMonitor, createTracker, usageOf, associate, summarize } = require('../src/runtime/monitor.cjs');
 function tracker() {
   let clock = 0;
@@ -489,6 +489,65 @@ test('a broken message_nodes branch stays isolated: invisible by default, unavai
   assert.equal(optSnapshot.records[0].sessionId, 'session-t', 'the isolated failure does not sink tool attribution');
   assert.equal(optSnapshot.sessionStatus, 'ready');
   assert.equal(optSnapshot.status, 'ready', 'a message-branch failure must not degrade the whole snapshot');
+});
+
+test('a starved message lookup reports a timeout, not an unreadable database', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-msgslow-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // A FIFO never yields to sqlite3, so the child is still alive when the bounded
+  // timeout kills it — the same shape as the real database, where the unindexed
+  // scan of 527k message_nodes rows needs ~31s against a 1500ms bound. Reporting
+  // that as `unavailable` would claim the database itself cannot be read.
+  const db = path.join(root, 'sessions.db');
+  execFileSync('/usr/bin/mkfifo', [db]);
+  const monitor = createMonitor({ root, databasePath: db, messageLookup: true });
+  monitor.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.lookupStatus.messages, 'timeout');
+  assert.equal(snapshot.status, 'ready', 'an optional supplement must not degrade the whole snapshot');
+  assert.equal(snapshot.sessionStatus, 'ready', 'the indexed tool branch is unaffected');
+  assert.equal(snapshot.records[0].attributionReason, 'no-tool-ids');
+});
+
+test('the lookup failure classifier follows the signal node actually reports', async () => {
+  const { lookupFailureStatus } = require('../src/runtime/monitor.cjs');
+  assert.equal(lookupFailureStatus({ timedOut: true }), 'timeout');
+  for (const error of [undefined, null, {}, { code: 'ENOENT' }, { timedOut: false }]) {
+    assert.equal(lookupFailureStatus(error), 'unavailable', String(error?.code ?? error));
+  }
+  // `killed` is the only signal separating "too slow for the bound" from "cannot
+  // be read", so the fix depends on node setting it when the timeout fires.
+  const failure = await new Promise(resolve => {
+    const child = execFile(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { timeout: 100 }, resolve);
+    child.on('error', () => {});
+  });
+  assert.equal(failure.killed, true, 'a child killed by the execFile timeout is marked killed');
+  assert.equal(lookupFailureStatus({ timedOut: failure.killed }), 'timeout');
+});
+
+test('a stored record never claims attribution it has not computed', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-shape-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'monitor.jsonl');
+  const monitor = createMonitor({ root, databasePath: path.join(root, 'missing.db') });
+  monitor.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p' });
+  await monitor.flush();
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8').trim());
+  for (const key of ['sessionId', 'attribution', 'attributionReason', 'role']) {
+    assert.ok(!(key in stored), key + ' is a snapshot-time verdict, not a stored fact');
+  }
+  // The snapshot that serves the panel still carries the computed verdict.
+  const snapshot = await monitor.snapshot();
+  assert.equal(snapshot.records[0].attribution, 'unassigned');
+  assert.equal(snapshot.records[0].sessionId, null);
+  // Lines written by an older version keep their placeholders and still load.
+  fs.appendFileSync(file, JSON.stringify({ id: 'legacy', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm',
+    sessionId: 'stale-session', attribution: 'tool-id', role: 'unknown' }) + '\n');
+  const reloaded = createMonitor({ root, databasePath: path.join(root, 'missing.db') });
+  const again = await reloaded.snapshot();
+  assert.equal(again.records.length, 2);
+  assert.equal(again.records.find(record => record.id === 'legacy').attribution, 'unassigned',
+    'a stored placeholder is recomputed rather than trusted');
 });
 
 test('records without tool ids report not-needed and no-tool-ids without any database work', async t => {

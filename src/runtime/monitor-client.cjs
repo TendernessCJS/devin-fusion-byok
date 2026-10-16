@@ -12,7 +12,7 @@ const RECORD_FIELDS = ['schemaVersion', 'id', 'startedAt', 'model', 'providerId'
   'throughputTps', 'gatewayTps', 'usageState', 'usageComplete', 'sessionId', 'attribution', 'role'];
 const ATTRIBUTION_REASONS = ['ambiguous-match', 'no-tool-ids', 'lookup-unavailable', 'tool-id-unmatched'];
 const ATTRIBUTION_FIELDS = ['assigned', 'ambiguous', 'noToolIds', 'unmatchedToolIds', 'lookupUnavailable'];
-const LOOKUP_STATUS_VALUES = { tools: ['ready', 'unavailable', 'not-needed'], messages: ['disabled', 'ready', 'unavailable', 'not-needed'], labels: ['ready', 'unavailable', 'not-needed'] };
+const LOOKUP_STATUS_VALUES = { tools: ['ready', 'unavailable', 'not-needed'], messages: ['disabled', 'ready', 'unavailable', 'not-needed', 'timeout'], labels: ['ready', 'unavailable', 'not-needed'] };
 const STORAGE_CODES = ['load-too-large', 'load-invalid-record', 'load-unavailable', 'append-failed', 'compact-failed'];
 const { withConnectionRetry } = require('./retry.cjs');
 async function readOnce({ root, port, signal, request }) {

@@ -93,6 +93,10 @@ const presentUids = (payload, expected) => {
 // leaves a payload untouched for a reason uid presence cannot express (the
 // shape it assumed does not match the stored bytes); that code reaches the
 // panel instead of being flattened into `no-improvement`.
+// The rewrite is a compare-then-replace, never a blind overwrite: the payload is
+// re-read first and must still hold the exact bytes that were augmented, so a
+// file the CLI refreshed in the meantime is left for the next pass instead of
+// losing whatever it stored.
 function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, force = false } = {}) {
   requireDir(dir);
   const { expected, entries, checked } = inspectCliCaches({ dir, expectedUids, staleProbe });
@@ -102,9 +106,10 @@ function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, fo
     if (!force && !entry.missing.length && !(entry.stale || []).length) continue;
     const rpc = CACHE_RPC[entry.name.slice(0, entry.name.indexOf('.'))];
     if (!rpc || !canAugment) { skipped.push({ name: entry.name, reason: 'unsupported' }); continue; }
-    let envelope, payload;
+    let envelope, payload, raw;
     try {
-      envelope = JSON.parse(fs.readFileSync(entry.file, 'utf8'));
+      raw = fs.readFileSync(entry.file);
+      envelope = JSON.parse(raw.toString('utf8'));
       payload = Buffer.from(envelope.payload, 'base64');
     } catch (error) { skipped.push({ name: entry.name, reason: 'read-failed' }); continue; }
     // `augment(payload, rpc, report)` may call `report(code)` to say why it left
@@ -127,7 +132,20 @@ function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, fo
       continue;
     }
     try {
-      atomicWrite(entry.file + '.bak', fs.readFileSync(entry.file));
+      // The CLI owns these files too: it fetches the augmented catalog through
+      // the bridge and persists it on its own schedule, so the bytes we augmented
+      // can already be superseded by the time this lands. Overwriting a fresher
+      // payload with an augmentation of an older one would drop whatever it just
+      // stored, and the check runs on every native sync, so a changed file is
+      // simply left for the next pass. The window is the few microseconds between
+      // this read and the rename below.
+      let current;
+      try { current = fs.readFileSync(entry.file); }
+      catch { errors.push({ name: entry.name, code: 'read-failed' }); continue; }
+      if (!current.equals(raw)) { skipped.push({ name: entry.name, reason: 'concurrent-write' }); continue; }
+      // `.bak` is the payload this rewrite was derived from, not a fresh read
+      // that may already belong to a newer generation.
+      atomicWrite(entry.file + '.bak', raw);
       atomicWrite(entry.file, JSON.stringify({ ...envelope, payload: next.toString('base64') }));
       refreshed.push(entry.name);
     } catch (error) {

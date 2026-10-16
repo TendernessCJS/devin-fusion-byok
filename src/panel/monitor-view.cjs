@@ -165,6 +165,7 @@ function monitorScript() {
         if (s.excludedUsageRecords > 0) lines.push('已从用量与吞吐汇总排除 ' + s.excludedUsageRecords + ' 条异常记录（仍计入请求数和时间指标）');
         const messages = snapshot.lookupStatus?.messages;
         if (messages === 'disabled') lines.push('消息归属补查默认关闭');
+        else if (messages === 'timeout') lines.push('消息归属补查超时（会话库过大，该补查无法完成；未影响工具归属）');
         else if (messages === 'unavailable') lines.push('消息归属补查失败（未影响工具归属）');
       }
       const diagnosticsText = lines.join('\\n');

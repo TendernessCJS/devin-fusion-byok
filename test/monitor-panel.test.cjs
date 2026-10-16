@@ -477,6 +477,16 @@ test('the diagnostics line summarizes the window, attribution, exclusions and th
     lookupStatus: { tools: 'ready', messages: 'unavailable', labels: 'ready' },
     records: [record('x')], sessions: [], sessionStatus: 'ready' } } } });
   assert.match(f.byId('monitor-diagnostics').textContent, /消息归属补查失败（未影响工具归属）/);
+
+  // A killed child (the scan cannot finish inside the bound) is a different fact
+  // from an unreadable database and must not borrow its copy.
+  f.receive({ data: { type: 'monitor-state', result: { snapshot: {
+    summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, retentionLimit: 5000,
+    lookupStatus: { tools: 'ready', messages: 'timeout', labels: 'ready' },
+    records: [record('x')], sessions: [], sessionStatus: 'ready' } } } });
+  const timedOut = f.byId('monitor-diagnostics').textContent;
+  assert.match(timedOut, /消息归属补查超时（会话库过大，该补查无法完成；未影响工具归属）/);
+  assert.doesNotMatch(timedOut, /消息归属补查失败/, 'a timeout is not a failure to read the database');
 });
 
 test('status combines storage tool and label warnings without leaking internals', () => {
