@@ -767,6 +767,10 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
       const base = url.origin + normalizeBaseUrlPath(url.pathname);
       const path = { openai: '/chat/completions', anthropic: '/messages' }[apiFormat.value] || '/responses';
       urlPreview.append('实际请求：' + base + path, element('br'), '获取模型：' + base + '/models');
+      // /v1 is appended only for a bare host. Saying so outright beats leaving
+      // the user to reverse-engineer the rule from the two URLs above — the
+      // failure mode of getting it wrong is a silent 404.
+      if (url.pathname.replace(/\/+$/, '') === '') urlPreview.append(element('br'), '地址只填了域名，已自动补 /v1');
     };
     baseUrl.addEventListener('input', refreshPreview);
     apiFormat.addEventListener('change', refreshPreview);
