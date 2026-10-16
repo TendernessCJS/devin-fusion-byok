@@ -102,7 +102,7 @@ function encodeConfig(config) {
     s(22, config.modelUid), m(23, infoRaw), m(30, encodeFamily(config.modelFamilyMetadata))]);
 }
 
-function configFor({ uid, label, family, familyUid, contextWindow, maxOutputTokens, effort, fusion, supportsImages, inferenceServerUrl, kind }) {
+function configFor({ uid, label, family, familyUid, contextWindow, maxOutputTokens, effort, fusion, supportsImages, inferenceServerUrl, kind, harnessUids }) {
   const json = {
     label, modelUid: uid, provider: fusion ? 1 : 2,
     maxTokens: contextWindow, supportsImages: !!supportsImages,
@@ -110,7 +110,7 @@ function configFor({ uid, label, family, familyUid, contextWindow, maxOutputToke
       modelUid: uid, modelType: 2, maxTokens: contextWindow,
       maxOutputTokens,
       inferenceServerUrl,
-      harnessUids: fusion ? ['fusion'] : [...SIDEKICK_HARNESSES],
+      harnessUids: harnessUids ?? [...SIDEKICK_HARNESSES],
       displayOption: fusion ? 3 : 0, modelFamilyUid: familyUid, isModelRouter: !!fusion,
       modelFeatures: { zeroShotCapable: true, supportsImages: !!supportsImages, supportsToolCalls: true,
         supportsParallelToolCalls: true, supportsThinking: !!effort && effort !== 'none' },
@@ -397,9 +397,11 @@ function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles, a
     const token = leadFamilyTier(native.uid);
     // Lead candidates: harnessed entries, officially declared leads, and
     // tier-token siblings of an official family — a Fusion lead runs under
-    // the combination's harness=["fusion"], so the member's own harness only
+    // the combination's harness (['fusion', ...its own harnesses], same rule
+    // resolveAssignment emits), so the member's own harness still only
     // decides standalone availability. Sidekick candidates keep the harness
-    // requirement: a subagent always runs on its own harness.
+    // requirement: a subagent always runs on its own harness, and the
+    // combination never declares it — sidekicks resolve through their router.
     const leadCandidate = native.eligible || officialLead || (officialDim && token);
     const sideCandidate = native.eligible || officialSidekick;
     if (!leadCandidate && !sideCandidate) continue;
@@ -896,6 +898,13 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
       ...(sidekick.native ? { sidekickHarnessUids: sidekick.harnessUids } : {}) };
     matrixModels.push(configFor({ ...lead, uid, label,
       inferenceServerUrl,
+      // The combination runs the Lead on its own execution channel:
+      // ['fusion', ...lead harnesses] for a native lead, the bare ['fusion']
+      // router for a BYOK lead — the same rule resolveAssignment applies.
+      // The sidekick is resolved by its own router, so no sidekick harness
+      // ever lands on a combination entry.
+      harnessUids: lead.native && Array.isArray(lead.leadHarnessUids) && lead.leadHarnessUids.length
+        ? lead.leadHarnessUids : ['fusion'],
       family: { modelFamilyLabel: 'Fusion', entries: [
         { key: 'Lead', value: { order: leadOrder, name: leadDim, controlType: 3 } },
         ...(effort ? [{ key: 'Effort', value: { order: effort.order, name: effort.name, controlType: 1 } }] : []),

@@ -1702,3 +1702,42 @@ for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} c
       { key: 'Speed', order: 0, name: '', controlType: 2 }]);
   }
 });
+
+test('matrix entries declare the native lead harness, matching resolveAssignment', () => {
+  const claude = nativeLead('claude-x-high', 'Claude X High', [{ key: 'Effort', order: 1, name: 'High', controlType: 1 }]);
+  claude.harnessUids = ['strawberry-pancake'];
+  const gpt = nativeLead('gpt-x-high', 'GPT X High', [{ key: 'Effort', order: 1, name: 'High', controlType: 1 }]);
+  gpt.harnessUids = ['gpt-5p6-codex', 'gpt-5p6'];
+  const cfg = { ...config(), roleInclusions: { lead: [{ nativeUid: 'claude-x-high' }, { nativeUid: 'gpt-x-high' }] } };
+  const built = buildCatalog(cfg, [...OBSERVED_SWE, claude, gpt]);
+  const matrix = built.models.filter(model => model.kind === 'matrix');
+
+  const claudeCombos = matrix.filter(model => model.uid.startsWith('fusion-claude-x-high-sidekick-'));
+  assert.ok(claudeCombos.length >= 2, 'the included lead pairs with every selected sidekick representative');
+  for (const model of claudeCombos) {
+    assert.deepEqual(model.json.modelInfo.harnessUids, ['fusion', 'strawberry-pancake'], model.uid);
+  }
+  for (const model of matrix.filter(model => model.uid.startsWith('fusion-gpt-x-high-sidekick-'))) {
+    assert.deepEqual(model.json.modelInfo.harnessUids, ['fusion', 'gpt-5p6-codex', 'gpt-5p6'], model.uid);
+  }
+  // BYOK leads keep the bare fusion router — whichever side they pair with.
+  for (const model of matrix.filter(model => model.uid.startsWith('fusion-dfbyok-'))) {
+    assert.deepEqual(model.json.modelInfo.harnessUids, ['fusion'], model.uid);
+  }
+  // Every emitted combination declares exactly what the lead assignment resolves to.
+  for (const fusion of Object.values(built.fusions)) {
+    const output = resolveAssignment(s(2, fusion.uid), proto, built);
+    if (!output) continue;
+    const emitted = built.models.find(model => model.uid === fusion.uid);
+    assert.ok(emitted, fusion.uid + ' resolves without an emitted entry');
+    assert.deepEqual(fields(getNested(output, 1), 3).map(field => field.value.toString()),
+      emitted.json.modelInfo.harnessUids, fusion.uid);
+  }
+  // The proto encoding carries the same list the JSON metadata declares.
+  for (const model of matrix) {
+    assert.deepEqual(fields(getNested(model.raw, 23), 20).map(field => field.value.toString()),
+      model.json.modelInfo.harnessUids, model.uid);
+  }
+  // Plain provider entries keep the sidekick harness pool.
+  assert.deepEqual(built.models.find(model => model.kind === 'model').json.modelInfo.harnessUids, ['swe-1p6', 'swe-1p5']);
+});
