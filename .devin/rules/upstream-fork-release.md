@@ -52,7 +52,17 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 
 ### 本 fork 相对 upstream 的刻意差异
 
-merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 upstream。
+**遇到冲突时的判据（不要只按本表机械取舍）**：先查该文件在 fork 侧有没有提交——
+
+```bash
+git log --oneline "$(git merge-base upstream/main HEAD)..HEAD" -- <file>
+```
+
+- **有 fork 提交 → 该文件是 fork 文件**，按「保住 fork 行为」解，并对照下表该行的差异要点逐条核对；
+- **无 fork 提交 → 该文件只有 upstream 在改**，取 upstream；
+- 两边都改了且下表未列出该文件 → **停下来人工判断**，不要默认取 upstream（下表是差异**说明**，下面「完整差异文件清单」才是完整性依据）。
+
+唯一例外是 `package.json` 的 `version`：一律取 ours（见上）。
 
 | 文件 | 差异 |
 | --- | --- |
@@ -68,8 +78,8 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 | `src/runtime/retry.cjs` | 本 fork 新增（upstream 无），连接层一次性重试；只被 `native-models.cjs` 与 `monitor-client.cjs` 使用 |
 | `src/runtime/app-restart.cjs` | 「重启 Devin」：存活探测用 `ps -Ao comm=`（`pgrep` 跳过祖先）；helper 优先 `launchctl submit` 注册给 launchd（落在 `gui/501`，避免 `open` 被归因为 App 自我激活且 job 不随 App 拆除），失败回退 detached `/bin/sh`；退出后先清陈旧 `*-main.sock`/`code.lock`（Devin 自实现单实例仲裁，`EADDRINUSE` 即交接退出——113ms exit 0 的根因），小静置 3s + 最多 10 轮自适应重试「先探测再启动 + 二次确认存活」（前 50% `open`、至 80% `open -n`、末两轮直接 exec 可执行文件），日志写 `restart.log` 并轮转 `.previous`（`open`/应用输出也追加进日志，成功轮次与通道可观测） |
 | `test/app-restart.test.cjs` | 覆盖探测与重试策略：合成 app 复现 `pgrep` 祖先盲区、退出后才拉起、瞬时进程不误判、预算内退出、日志行、`launchctl` 首选/回退与日志轮转 |
-| `src/runtime/monitor-store.cjs` | 工具归属查询与细分诊断；message-id 补充分支默认关闭，仅内部显式诊断开启并保留 1500 ms 上限；完整标题仅进快照；分段 ID/reasoning/异常用量安全口径；统计复用 monitor-stats；异步存储与失败保护原日志 |
-| `src/runtime/monitor-stats.cjs` | 本 fork 新增（upstream 无），无 I/O 的共享统计工厂与本机日历区间筛选；前后端使用同一公式 |
+| `src/runtime/monitor-store.cjs` | **改名**：upstream 的 `src/runtime/monitor.cjs` → 本 fork 的 `monitor-store.cjs`。工具归属查询与细分诊断；message-id 补充分支默认关闭，仅内部显式诊断开启并保留 1500 ms 上限；完整标题仅进快照；分段 ID/reasoning/异常用量安全口径；统计复用 monitor-stats；异步存储与失败保护原日志 |
+| `src/monitor-stats.cjs` | 本 fork 新增（upstream 无），无 I/O 的共享统计工厂与本机日历区间筛选；前后端使用同一公式。**位置**：原在 `src/runtime/monitor-stats.cjs`，`7a4b8b0` 上提到 `src/` 根（它是共享纯计算，被面板直接消费，不属于宿主侧运行时） |
 | `test/monitor-stats.test.cjs` | 本 fork 新增（upstream 无），日历月/自定义/DST 边界、同范围重算与浏览器函数注入验证 |
 | `src/runtime/monitor-client.cjs` | 公开白名单保留标题、归属/存储诊断和保留上限；新增字段缺失兼容旧 backend，非法诊断不伪装为零 |
 | `src/panel/monitor-view.cjs` | 完整会话 tooltip、100 条分页和 DOM 复用；默认当月时间×会话筛选，区间内重新汇总；本机时区展示与原始时间提示；细分诊断和明确 TPS 口径 |
@@ -83,4 +93,40 @@ merge 冲突时以此表为准；表外差异一律视为 upstream 改动，取 
 | `src/panel/controller.cjs` | state 成功投递后才去重；发送串行化，ready 强制同步，旧面板不得污染新缓存 |
 | `src/panel/view.cjs` | tab 顺序「模型 / Fusion / 用量 / Goal / Fast Context / 设置」；Fusion 页即官方 Fusion 卡片的角色配置（Lead/Sidekick 勾选），默认 tab 为「模型」；设置页含「官方模型显示」与「CLI 缓存」（手动刷新入口）；会话选择器单行省略、日期控件、监控分页与诊断分行布局；导出 `panelStyles`/`panelMarkup`/`panelScript`，`renderPanel` 只做组装（CSP/style/markup/script），与其余视图的 `xxxMarkup()`/`xxxScript()` 形态对齐 |
 | `src/panel/dom.cjs` | webview 共享 DOM 助手：`escapeAttribute()` 与 `domHelpersSource()`（返回浏览器侧 `byId`/`text`/`element` 源码字符串）。**拼接作用域规则**：独立文档（context/goal/update/fast-context 视图）在自己 IIFE 内发射一次；主面板由 `panelScript()` 在 `<script>` 顶层**只发射一次**，`panelClient` 因 `toString()` 序列化进 webview、**不能**内联 `${...}`，只能沿用外层那份；同一 `<script>` 顶层禁止重复发射；`domHelpersSource(indent)` 的可选参数只缩进第 2 行起（首行由调用处模板字面量定位），默认不传时输出逐字节不变 |
+| `src/catalog.cjs`、`src/catalog/*.cjs` | **BYOK 核心，改动最密集，冲突代价最高**。upstream 是单文件 `catalog.cjs` 的内部实现；本 fork 在 `7a4b8b0` 拆为门面 + 6 模块（`identity`/`roles`/`build`/`payload`/`augment`/`assignment`），门面导出面固定为 8 个符号（`augmentCatalog`/`buildCatalog`/`buildRoleLists`/`collectAllowedUids`/`collectNativeModels`/`refKey`/`resolveAssignment`/`staleFusionUids`）。**若 upstream 改了 `catalog.cjs` 的内部实现，必须把改动落进对应模块，绝不能把门面覆盖回大文件** |
+| `src/protocol/responses.cjs`、`src/protocol/tracker.cjs` | 消除 `protocol → runtime` 反向依赖：流式计量从 upstream 的 `../runtime/monitor.cjs` 移到 `./tracker.cjs`，`createTracker({ id, route, provider })` 不再接收 `request`；`tracker.cjs` 是本 fork 新增，承载 `createTracker`/`semanticOutput`/`usageOf` |
+| `src/goal/*.cjs`（5 个） | **搬迁**：upstream 的平铺 `src/runtime/goal-{continue,prompts,report,state,store}.cjs` → 本 fork 的 `src/goal/` 且去掉 `goal-` 前缀（`7cdc4ff`，内容逐字节未改）。Goal 功能本身 upstream 就有。`report.cjs` 是**路径型入口**：`extension.cjs` 把它的绝对路径拼进 shell 命令（`reportCliPath`），任何改名/移动都必须同步该字符串 |
+| `src/panel/model.cjs`（删）→ `src/panel/manager.cjs`（增） | **改名**（`c592368`）：upstream 的 `model.cjs` 实际是面板状态管理器，改名后名实相符。`test/panel-model.test.cjs` → `test/panel-manager.test.cjs` 同步 |
+| `src/panel/theme.cjs` | 本 fork 新增（upstream 无），共享样式层 `baseStyles()`：控件（`button`/`.secondary`/`.quiet`/`.danger`、`input`/`select`/`textarea`、`input.switch`）、字号层级、页面边距、`ul/ol` reset、`.code-block`、`.tiles` 指标原语只在此定义一次；视图专有 CSS 必须排在 base **之后**才能覆盖 |
+| `src/panel/update-view.cjs`、`src/panel/goal-view.cjs`、`src/panel/fast-context-view.cjs` | 差异主要为 `c592368` 的共享 DOM 助手改造与 `4bafdeb` 的样式层抽取：各视图改为发射 `domHelpersSource()`（浏览器侧 `byId`/`text`/`element`），**不再各自手写** `const byId = id => document.getElementById(...)`；`byId` 新增第二个参数 `prefix`（`byId(id, prefix = '')`），fast-context 因此从 `document.getElementById('fc-' + id)` 改为 `byId(id, 'fc-')`。**发射缩进**：`update-view`/`fast-context-view` 用 `domHelpersSource('    ')`（嵌在更深的模板里），`context-view`/`goal-view`/`view.cjs` 用无参调用。另 update-view 含设置页状态汇总与文案统一，`fast-context-view` 的预览 `<pre>` 类名从 `update-notes setting mono` 改为 `.code-block` |
+| `src/runtime/cli-cache.cjs` | 本 fork 新增（upstream 无），CLI 按身份持久缓存的**原地重写**（陈旧 uid 修复）。**绝不改名、绝不写 `.stale`**——该 CLI 版本不会因文件缺失补拉 `model_configs_v5`，改名会把 picker 打空且不自愈 |
+| `src/runtime/native-cache.cjs` | 本 fork 新增（upstream 无），原生模型观测的跨进程缓存（`native-cache.json`，TTL 7 天，原子写 `0o600`，追加并集语义）；只含 uid/label/能力标志，绝不落凭证 |
+| `src/runtime/native-models.cjs` | 宿主把完整原生观测推送给 backend（消除两侧目录不一致）；推送门控对齐实际载荷；**禁止 ingest 存我方 uid**；「官方模型显示」按服务器家族聚合；对齐官方 picker 可见性契约 |
+| `src/runtime/picker-refresh.cjs` | 收敛 ACP 强制刷新：仅 `model_configs` 重写触发、与 `changed()` 共享 `cliCacheMs` 间隔；消除启用期窗口重载循环；**`lightCommands` 默认值必须是空数组**（历史上默认是 `['devin.reloadAcpConnections']`，漏传即刷新风暴） |
+| `src/runtime/context-diagnostics.cjs` | 子代理行内联 `runId` 标记并落诊断明细；上下文用量拒绝原因拆分并向**单一词汇表**（`context-state.cjs` 的 `USAGE_REJECTIONS`）收敛 |
+| `src/runtime/acp-observer.cjs` | `installAcpObserver` 增加 `onModels` 回调（模型计数变化时通知宿主） |
+| `src/runtime/ls-injection.cjs` | 增加 `ls port observed` 上报（端口可观测，排障用） |
+| `src/lifecycle/owned-settings.cjs` | **`saveReceipt` 只在 roots 列表真正变化时才写**：往安装目录写 `.fusion-byok-storage.json` 会被应用监视，每次 activate 都触发扩展宿主重启（启用期重载循环的嫌疑点之一） |
+| `src/runtime/acp-injection.cjs`（删）、`test/acp-injection.test.cjs`（删） | upstream 有、本 fork **删除**。该模块自 fork 初始提交起**从未接线**；env（`WINDSURF_API_SERVER_URL`）通道作用域严格覆盖它，保留只会误导 |
+| `test/fixtures/presets.cjs`（删）、`test/fusion-presets.test.cjs`（删） | upstream 的具名预设管线测试；本 fork 退役该管线（改由官方 Fusion 卡片承载），迁移与清理见 `retired-and-deadends` 卷 |
+
+### 完整差异文件清单（完整性依据，与上表互补）
+
+上表是**说明**（改了哪些行为、为什么），下面是**清单**（哪些文件有 fork 侧改动）。判据以此为准：
+
+```bash
+git diff --name-only "$(git merge-base upstream/main HEAD)" HEAD -- src test
+```
+
+截至 `1930f11`：**91 个条目**（src 49 / test 42），其中 **85 个现存**（src 46 / test 39）+ **6 个已删除**（src 3 / test 3）。
+
+**src 现存（46）**：`catalog.cjs`、`catalog/{assignment,augment,build,identity,payload,roles}.cjs`、`config.cjs`、`extension.cjs`、`goal/{continue,prompts,report,state,store}.cjs`、`lifecycle/owned-settings.cjs`、`monitor-stats.cjs`、`panel/{context-view,controller,dom,fast-context-view,goal-view,manager,monitor-view,theme,update-view,view}.cjs`、`protocol/{responses,tracker}.cjs`、`proxy.cjs`、`runtime/{acp-observer,app-restart,auto-continue,backend,bridge,cli-cache,context-diagnostics,context-observer,context-state,ls-injection,monitor-client,monitor-store,native-cache,native-models,picker-refresh,retry}.cjs`、`update.cjs`
+
+**src 已删除（3）**：`runtime/acp-injection.cjs`、`runtime/monitor.cjs`（→ `monitor-store.cjs`）、`panel/model.cjs`（→ `manager.cjs`）
+
+**test 现存（39）**：`app-restart`、`auto-continue`、`backend`、`bridge`、`catalog`、`cli-cache`、`config`、`context-diagnostics`、`context`、`extension-lifecycle`、`fast-context-panel`、`fast-context-view`、`fusion-options`、`goal-{command,extension,idle-regression,integration,state,store,tab,transport,view}`、`monitor-panel`、`monitor-stats`、`monitor`、`native-cache-sync`、`native-cache`、`native-models-sync`、`native-roles`、`panel-manager`、`panel-view`、`picker-refresh`、`proxy`、`retry`、`role-exclusions`、`runtime-manager`、`theme`、`update`、`vision-capabilities`
+
+**test 已删除（3）**：`acp-injection`、`fixtures/presets`、`fusion-presets`
+
+其余文件（`src/fast-context/*`、`src/model-capabilities.cjs`、`src/panel/base-url.cjs`、`src/lifecycle/{jsonc-edit,uninstall}.cjs`、`src/protocol/{wire,chat,anthropic}.cjs` 等）**两边同源、无 fork 改动**，冲突时取 upstream。
 
