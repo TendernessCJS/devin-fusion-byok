@@ -9,6 +9,7 @@ const wire = require('../protocol/wire.cjs');
 const { parseChat } = require('../protocol/acp.cjs');
 const { serveChat } = require('../protocol/inference.cjs');
 const { forward, collect } = require('./bridge.cjs');
+const { createRuntimeControl } = require('./backend-control.cjs');
 const { normalizeNativeEntry, mergeNativeEntry, loadNativeCache, saveNativeCache, normalizeAllowedUids } = require('./native-cache.cjs');
 const PORT = 39842;
 const VERSION = require('../../package.json').version;
@@ -24,7 +25,7 @@ const MAX_INGEST_ENTRIES = 5000;
 // closure). Generous enough that ordinary drains finish first, short enough that
 // a stuck one cannot turn SIGTERM into a no-op.
 const DRAIN_TIMEOUT_MS = 5000;
-const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', '../monitor/store.cjs', '../monitor/stats.cjs', 'native-cache.cjs', '../native-entry.cjs', '../config.cjs', '../proxy.cjs', '../update-url.cjs', '../catalog.cjs', '../catalog/identity.cjs', '../catalog/roles.cjs', '../catalog/build.cjs', '../catalog/payload.cjs', '../catalog/augment.cjs', '../catalog/assignment.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/acp.cjs', '../protocol/inference.cjs', '../protocol/state-envelope.cjs', '../protocol/provider-request.cjs', '../protocol/provider-events.cjs', '../protocol/anthropic.cjs', '../protocol/tracker.cjs'];
+const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'backend-control.cjs', 'bridge.cjs', '../monitor/store.cjs', '../monitor/stats.cjs', 'native-cache.cjs', '../native-entry.cjs', '../config.cjs', '../proxy.cjs', '../update-url.cjs', '../catalog.cjs', '../catalog/identity.cjs', '../catalog/roles.cjs', '../catalog/build.cjs', '../catalog/payload.cjs', '../catalog/augment.cjs', '../catalog/assignment.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/acp.cjs', '../protocol/inference.cjs', '../protocol/state-envelope.cjs', '../protocol/provider-request.cjs', '../protocol/provider-events.cjs', '../protocol/anthropic.cjs', '../protocol/tracker.cjs'];
 function sourceId() {
   const hash = crypto.createHash('sha256');
   for (const name of SOURCE_FILES) hash.update(name).update('\0').update(fs.readFileSync(path.resolve(__dirname, name))).update('\0');
@@ -196,12 +197,14 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     if (improved) scheduleNativeCacheSave();
     return { accepted, count: observedNatives.size, improved };
   };
-  const authorized = request => {
-    const provided = typeof request.headers.authorization === 'string' ? request.headers.authorization : '';
-    const expected = 'Bearer ' + controlToken;
-    return Buffer.byteLength(provided) === Buffer.byteLength(expected) &&
-      crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
-  };
+  const control = createRuntimeControl({
+    identity, instanceId, controlToken,
+    managementProtocol: MANAGEMENT_PROTOCOL, nativeModelsProtocol: 1, nativeModelsIngest: NATIVE_MODELS_INGEST,
+    monitorProtocol: monitor ? 1 : 0,
+    getActiveRequests: () => activeRequests, getDraining: () => draining, setDraining: value => { draining = value; },
+    monitor, getNativeModels: () => [...observedNatives.values()], getAllowedUids: () => [...allowedUids].sort(),
+    ingest, onAllowedUids, close,
+  });
   const handle = async (request, response) => {
     const incoming = new URL(request.url, 'https://server.codeium.com');
     const rpc = incoming.pathname;
@@ -248,54 +251,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
   };
   const server = http.createServer((request, response) => {
     if (request.headers.origin) { response.writeHead(403); response.end(); return; }
-    if (request.method === 'GET' && request.url === '/health') {
-      response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify({ ...identity, pid: process.pid, instanceId, managementProtocol: MANAGEMENT_PROTOCOL, nativeModelsProtocol: 1, nativeModelsIngest: NATIVE_MODELS_INGEST, monitorProtocol: monitor ? 1 : 0, activeRequests, draining })); return;
-    }
-    if (request.method === 'GET' && request.url === '/_runtime/monitor') {
-      if (!authorized(request)) { response.writeHead(403); response.end(); return; }
-      Promise.resolve().then(() => monitor?.snapshot()).then(snapshot => {
-        if (response.destroyed) return;
-        response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        response.end(JSON.stringify({ instanceId, snapshot: snapshot || null }));
-      }).catch(() => { if (!response.destroyed) { response.writeHead(503); response.end(); } });
-      return;
-    }
-    if (request.method === 'GET' && request.url === '/_runtime/native-models') {
-      if (!authorized(request)) { response.writeHead(403); response.end(); return; }
-      response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify({ instanceId, models: [...observedNatives.values()], allowedUids: [...allowedUids].sort() })); return;
-    }
-    if (request.method === 'POST' && request.url === '/_runtime/native-models') {
-      if (!authorized(request)) { response.writeHead(403); response.end(); return; }
-      collect(request).then(body => {
-        if (body.length > 4 * 1024 * 1024) throw new Error('too_large');
-        const payload = JSON.parse(body.toString('utf8'));
-        const result = ingest(payload?.models);
-        if (result && Array.isArray(payload?.allowedUids)) onAllowedUids(payload.allowedUids);
-        if (!result) throw new Error('invalid');
-        response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        response.end(JSON.stringify({ instanceId, ...result }));
-      }).catch(() => {
-        if (response.destroyed) return;
-        response.writeHead(400, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ instanceId, error: 'invalid_payload' }));
-      });
-      return;
-    }
-    if (request.method === 'POST' && request.url === '/_runtime/shutdown') {
-      if (!authorized(request)) { response.writeHead(403); response.end(); return; }
-      if (activeRequests > 0) {
-        response.writeHead(409, { 'content-type': 'application/json' }); response.end(JSON.stringify({ activeRequests })); return;
-      }
-      // Check and transition synchronously. A request racing the health check
-      // either makes shutdown busy or is rejected before work starts.
-      draining = true;
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.once('finish', () => { close(); });
-      response.end('{"stopping":true}');
-      return;
-    }
+    if (control(request, response)) return;
     if (draining) {
       response.writeHead(503); response.end(); return;
     }
