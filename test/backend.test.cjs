@@ -659,3 +659,73 @@ test('the backend never stores our own uids, so a read cannot be poisoned', asyn
   assert.equal(seen.status, 'ready');
   assert.deepEqual(seen.models.map(entry => entry.uid), ['swe-2-high']);
 });
+
+test('native ingest is authenticated, origin-blocked, filters bad and own entries, and publishes deduped state', async t => {
+  const f = await fixture(t);
+  const endpoint = f.base + '/_runtime/native-models';
+  const headers = { authorization: 'Bearer ' + f.control().token, 'content-type': 'application/json' };
+  const payload = { models: [
+    { uid: 'native-alpha', label: 'Alpha', disabled: false, isModelRouter: false, harnessUids: ['h1'] },
+    { uid: 'dfbyok-own', label: 'Own', disabled: false, isModelRouter: false, harnessUids: ['fusion'] },
+    { uid: '', label: 'Broken' },
+    null,
+  ], allowedUids: ['native-beta', 'dfbyok-own', 'native-alpha', 'native-alpha'] };
+  assert.equal((await fetch(endpoint)).status, 403, 'the read is authenticated too');
+  const pushed = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(payload) });
+  assert.equal(pushed.status, 200);
+  const result = await pushed.json();
+  assert.equal(result.accepted, 1, 'only the well-formed upstream entry is accepted');
+  assert.equal(result.count, 1);
+  assert.ok(!JSON.stringify(result).includes(f.control().token), 'the response never echoes the control token');
+  const listed = await (await fetch(endpoint, { headers })).json();
+  assert.deepEqual(listed.models.map(entry => entry.uid), ['native-alpha']);
+  assert.equal(listed.models[0].label, 'Alpha');
+  assert.deepEqual(listed.allowedUids, ['native-alpha', 'native-beta'],
+    'the allowlist is deduplicated, sorted and stripped of our own uids');
+
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })).status, 403);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { authorization: 'Bearer wrong', 'content-type': 'application/json' }, body: JSON.stringify(payload) })).status, 403);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { ...headers, origin: 'https://example.com' }, body: JSON.stringify(payload) })).status, 403);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers, body: '{broken' })).status, 400);
+  const after = await (await fetch(endpoint, { headers })).json();
+  assert.deepEqual(after, listed, 'rejected writes never move the stored catalog or allowlist');
+});
+
+test('close is bounded: an abandoned in-flight request hits drain-timeout and stopped still resolves', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-drain-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  const logs = [], held = new Map();
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout,
+    require(name) {
+      // Responses are written but never ended, so the request drains never.
+      if (name === './bridge.cjs') return { collect, async forward(req, res) { res.writeHead(200); held.set(req.url, res); } };
+      return realRequire(name);
+    },
+  }, { filename });
+  const backend = await module.exports.startBackend({ root, port: 0, drainTimeoutMs: 20, log: (...event) => logs.push(event) });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = 'http://127.0.0.1:' + backend.port;
+  const rpc = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
+  const inflight = fetch(base + rpc, { method: 'POST', body: 'native' }).then(response => response.status, () => 0);
+  const deadline = Date.now() + 2000;
+  while (!held.has(rpc)) {
+    assert.ok(Date.now() < deadline, 'the RPC never reached the held forwarder');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  const outcome = await Promise.race([
+    backend.close().then(() => 'closed'),
+    new Promise(resolve => setTimeout(() => resolve('hung'), 1000)),
+  ]);
+  assert.equal(outcome, 'closed', 'close() is bounded even with a stuck in-flight request');
+  await backend.stopped;
+  assert.ok(logs.some(([event]) => event === 'drain-timeout'), 'the abandoned request is reported as a drain timeout');
+  assert.equal(fs.existsSync(actualBackend.controlFile(root)), false);
+  for (const res of held.values()) res.end();
+  await inflight;
+  await assert.rejects(fetch(base + '/health'), 'the port is released once stopped resolves');
+});
