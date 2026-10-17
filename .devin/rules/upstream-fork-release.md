@@ -50,6 +50,13 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 要点：`npm run package` 产出的 `devin-fusion-byok-<version>.vsix` 必须原样命名为 `v<version>` Release 的资产；必须 Publish 而非存为
   draft；Release body 即面板显示的更新说明（截取前 6000 字符）。
 
+**`gh` 在本仓库默认解析到 `upstream`，不是 `origin`**：本机没有 `gh-resolved` 配置，多 remote 时 gh 取名为 `upstream` 的那个
+  （2026-10-18 实测：裸 `gh release list` 列出的是上游 v0.3.42/40/39…，`gh repo view --json nameWithOwner` 返回
+  `kuobibulaien/devin-fusion-byok`）。因此 `gh release view/list/create` 一律显式带 `--repo TendernessCJS/devin-fusion-byok`，
+  否则会读到上游 Release，把「本 fork 最新版本」判错——而版本递增的判据正是「相对本 fork 自己的历史版本」。
+  一次性固化可让用户执行 `gh repo set-default origin`（写 `.git/config`）。读回路验收走的是插件自己的 `releaseInfo()`
+  （`REPOSITORY` 常量已指向 fork），不经 gh，所以不受这条影响。
+
 ### upstream 基线（只记「读到哪儿」）
 
 **不记录逐文件差异**——差异是**可再生的**（见下节命令），存成清单只会过期：本文件的历史版本曾长期列着已改名的文件（`protocol/chat.cjs`、`protocol/responses.cjs` 在 2026-10-17 改名后，表里仍是旧名）。

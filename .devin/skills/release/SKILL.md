@@ -47,6 +47,14 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 
 三段纯数字是硬约束：`0.3.44-1`、`0.3.44+foo`、`0.3.44.1` 会让 `parseVersion()` 抛错，自更新彻底失效（表现为面板「检查更新失败」）。
 
+要查「本 fork 上次发布了什么」，用本地 tag 最稳（不受 `gh` 解析仓库影响）：
+
+```bash
+git tag --list 'v*' --sort=-v:refname | head -3
+```
+
+用 `gh release list` 时**必须**带 `--repo TendernessCJS/devin-fusion-byok`，原因见第 5 步末尾。
+
 ## 2. 跑测试
 
 ```bash
@@ -93,6 +101,10 @@ HTTPS_PROXY=http://127.0.0.1:7897 gh release create v<version> \
 **这一步刻意保留人工确认**：`permissions.allow` 未放行 `gh release create`，因为它是对外生效操作。同理 `git push`、`git tag` 与安装 vsix 也未放行。不要为了省一次确认而把它们加进 allow。
 
 `permissions.allow` 里的 `gh release view` / `gh release list` **各写了两条**（带与不带 `HTTPS_PROXY=` 前缀）：`Exec(前缀)` 的语义是「命令以该前缀开头」（见 Devin 文档 `reference/permissions`），而本机调用 `gh` 必须带前缀，只写不带前缀的那条可能永不匹配。若要精简成一条，保留带前缀的那条。
+
+另外 **`gh release view` / `gh release list` 必须带 `--repo TendernessCJS/devin-fusion-byok`**：本仓库多 remote 且 gh 优先取名为
+  `upstream` 的那个，裸跑会列出**上游** Release（实测 `gh release list` 返回上游的 v0.3.42/40/39…，本 fork 的 v0.3.48 不在其中）。
+  第 5 步的 `create` 已带 `--repo`，`view`/`list` 容易漏。第 6 步的读回路验收不经 gh（走插件 `releaseInfo()`），不受影响。
 
 ## 6. 验收：读回路，不只看网页
 

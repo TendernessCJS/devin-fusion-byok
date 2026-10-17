@@ -58,6 +58,9 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 - `upstream` = 上游原项目（`https://github.com/kuobibulaien/devin-fusion-byok.git`），只读，**不要向 upstream 推送**。
 - 本地 `main` 跟踪 `origin/main`。新克隆或首次拉取后需先执行 `git fetch origin`，否则 `git status` 会显示 `[origin/main: gone]`。
 - 两个 remote 走**不同的网络通道**（`origin` 是 SSH、`upstream` 是 HTTPS），代理要求不同——见下节。
+- **裸 `gh` 在本仓库指向 `upstream`，不是 `origin`**：多 remote 时 `gh` 按**名字**优先选 `upstream`（实测：`origin`+`upstream` → 上游；
+  只留 `origin` 或把上游仓改名 → `origin`）。所以 `gh release view/list/create` 一律显式带 `--repo TendernessCJS/devin-fusion-byok`，
+  否则读到上游 Release、把「本 fork 最新版本」判错。细节见 `.devin/rules/upstream-fork-release.md`。
 - 同步上游更新见「fork 同步与发布」一节。
 ## 本机网络路径
 
@@ -69,6 +72,8 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `origin`（`git push` / `git fetch`） | SSH | **不要**：`~/.ssh/config` 的 `ProxyCommand` 自动代理 |
 | `upstream`（`git fetch`） | HTTPS | **不要**：本机已配 URL 限定代理，裸命令即可；未配置的机器要加 |
 | `gh`（建 Release 等） | HTTPS | **要**：`gh` 没有 proxy 配置项，也不读 git 配置 |
+
+代理只管「怎么连」，「连到哪个仓库」是另一回事：本仓库裸 `gh` 解析到 `upstream`，见上一节。
 
 用 `git remote -v` 确认 remote 属于哪种。HTTPS remote 漏了前缀是**长时间挂起**而非快速报错——卡住 10 秒以上先怀疑这个。
 

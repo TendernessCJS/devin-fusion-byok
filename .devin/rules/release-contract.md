@@ -16,6 +16,8 @@ description: "Apply when changing self-update behaviour or the release contract 
 - tag 必须是 `v<major>.<minor>.<patch>` 形式的三段纯数字 semver（`v` 可省略）；draft 与 prerelease 一律不被接受。
 - 资产必须带 GitHub 自动计算的 `digest`（`sha256:` + 64 位十六进制）且大小 ≤ 50 MiB，否则 `installable=false`，面板只提供「打开发布页面」。
 - 插件内 `package.json` 的 `version` 必须严格小于 Release 版本才会提示更新，发布前记得 bump。
+- 面板「最新正式版」的唯一来源是 `REPOSITORY` 常量（已固定为 `TendernessCJS/devin-fusion-byok`），比的是**本 fork** 的 Release；
+  不要用 `gh release list` 的输出判断最新版——本仓库裸 `gh` 解析到 `upstream`（见 `upstream-fork-release.md`），读到的是上游 Release。
 - 一键安装仅在 macOS 且 `<appRoot>/bin/devin-desktop` 存在时可用（`createUpdateHost` 里的 `supported` 判断）；其他情况
   `canInstall=false`，只能手动下载 vsix。
 - 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经
