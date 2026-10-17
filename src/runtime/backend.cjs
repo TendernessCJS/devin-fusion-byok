@@ -24,7 +24,7 @@ const MAX_INGEST_ENTRIES = 5000;
 // closure). Generous enough that ordinary drains finish first, short enough that
 // a stuck one cannot turn SIGTERM into a no-op.
 const DRAIN_TIMEOUT_MS = 5000;
-const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', 'monitor-store.cjs', '../monitor-stats.cjs', 'native-cache.cjs', '../config.cjs', '../proxy.cjs', '../update.cjs', '../catalog.cjs', '../catalog/identity.cjs', '../catalog/roles.cjs', '../catalog/build.cjs', '../catalog/payload.cjs', '../catalog/augment.cjs', '../catalog/assignment.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/acp.cjs', '../protocol/inference.cjs', '../protocol/anthropic.cjs', '../protocol/tracker.cjs'];
+const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'bridge.cjs', 'monitor-store.cjs', '../monitor-stats.cjs', 'native-cache.cjs', '../config.cjs', '../proxy.cjs', '../update.cjs', '../catalog.cjs', '../catalog/identity.cjs', '../catalog/roles.cjs', '../catalog/build.cjs', '../catalog/payload.cjs', '../catalog/augment.cjs', '../catalog/assignment.cjs', '../model-capabilities.cjs', '../protocol/wire.cjs', '../protocol/acp.cjs', '../protocol/inference.cjs', '../protocol/state-envelope.cjs', '../protocol/provider-request.cjs', '../protocol/provider-events.cjs', '../protocol/anthropic.cjs', '../protocol/tracker.cjs'];
 function sourceId() {
   const hash = crypto.createHash('sha256');
   for (const name of SOURCE_FILES) hash.update(name).update('\0').update(fs.readFileSync(path.resolve(__dirname, name))).update('\0');
