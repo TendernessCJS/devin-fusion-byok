@@ -62,3 +62,38 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Responses reasoning-state envelope
+
+The Responses reasoning-state envelope — the `dfbyok-responses-v1:` signature
+prefix, the base64url `{ scope, items }` envelope, and its scope binding — is
+adapted from Saito-Sakuya/devin-fusion-byok, commit
+19332ab937202f41a35ddf0880041a7f6e134bd4, under the MIT license. This fork's
+implementation differs: it validates every replay with `replayMatches` and
+`validStateItem`, keeps the channel always on rather than behind a switch, and
+rejects the envelope prefix on the Anthropic path so that a Responses envelope
+can never be replayed as a signed thinking block.
+
+Source: https://github.com/Saito-Sakuya/devin-fusion-byok
+
+MIT License
+
+Copyright (c) 2026 Devin Fusion BYOK contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
