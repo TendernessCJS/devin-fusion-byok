@@ -14,7 +14,7 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   20 轮后 `setTimeout(0)` 仍未执行）。依赖真实定时器的行为（例如宿主的推送节流）必须用带 deadline 的轮询等待，
   否则测试会在负载变化时假性通过或假性失败——`extension-lifecycle` 的推送用例就这样脆弱过一轮。反过来，若某断言依赖「节流窗口已过」，等待时间必须**长于**节流间隔，否则删掉节流门控也测不出来。
 - **扩展 fixture 的桩按「解析后的绝对路径」匹配，不再按字面符号**（2026-10-18 拆分 `extension.cjs` 时改造，见 `test/helpers/sandbox.cjs`）：`'./config.cjs'`
-  这类相对键按 `src/extension.cjs` 所在目录解析成绝对路径，所以 `src/activation/x.cjs` 里写的 `require('../config.cjs')` 命中**同一个**桩——新增或搬移模块时
+  这类相对键按 `src/extension.cjs` 所在目录解析成绝对路径，所以 `src/activation/panel-install.cjs` 里写的 `require('../config.cjs')` 命中**同一个**桩——新增或搬移模块时
   **不需要改桩键**。相对 require 若没有桩，就在**同一个 vm 上下文**递归加载（共享模块缓存与 realm，否则 `instanceof`/单例守卫会碎）；解析不到、或
   require 到既无桩又非内置/`vscode` 的模块时**直接抛错**——绝不回退到真实 `require`，回退会静默绕过桩、把桩测试变成假绿。
 - **`globals`（立即化的 `setTimeout`、注入的 `fetch`）默认只作用于入口文件**，`shareGlobals` 谓词目前只额外覆盖 `src/activation/*`。这不是随意选择：
