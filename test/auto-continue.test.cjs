@@ -1035,6 +1035,49 @@ test('frozen connector rollback cleans up on partial attachment failure', t => {
   assert.equal(handle.status().connections, 0);
 });
 
+test('native call contract: register passthrough, sync/rejection identity, dispose restores connector methods', async t => {
+  const f = fixture();
+  const handle = f.install({ isEnabled: () => true });
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(request) { if (request.throw) throw request.throw; return request.reply; },
+    forwardClientRequest(request) { if (request.throw) throw request.throw; return request.reply; }
+  };
+  const originalSend = connector.sendRequest, originalForward = connector.forwardClientRequest;
+
+  const customThis = { marker: true };
+  const registration = f.api.registerConnection.call(customThis, connector, 'extra-arg');
+  assert.equal(registration, f.disposable, 'the native registration object is returned untouched');
+  const call = f.registrations.at(-1);
+  assert.equal(call.thisArg, customThis, 'registerConnection keeps the caller thisArg');
+  assert.deepEqual(call.args, [connector, 'extra-arg'], 'registerConnection forwards every argument');
+  assert.equal(handle.status().connections, 1, 'the eligible connector is still attached');
+
+  const reply = {};
+  assert.equal(connector.sendRequest({ method: 'session/cancel', params: { sessionId: 's1' }, reply }), reply,
+    'a synchronous native result keeps its identity');
+  const boom = new Error('native send failure');
+  assert.throws(() => connector.sendRequest({ method: 'session/cancel', params: { sessionId: 's1' }, throw: boom }),
+    error => error === boom, 'a synchronous native throw propagates unwrapped');
+  const rejected = Promise.reject(boom);
+  assert.equal(connector.sendRequest({ method: 'session/cancel', params: { sessionId: 's1' }, reply: rejected }), rejected,
+    'a native Promise comes back as itself, not re-wrapped');
+  await assert.rejects(rejected, error => error === boom);
+  assert.equal(connector.forwardClientRequest({ method: 'session/update', reply }), reply);
+  assert.throws(() => connector.forwardClientRequest({ throw: boom }), error => error === boom,
+    'forwardClientRequest failures stay failures, never swallowed into success');
+
+  handle.dispose();
+  t.after(() => handle.dispose());
+  assert.equal(f.api.registerConnection, f.originalRegister);
+  assert.equal(connector.sendRequest, originalSend);
+  assert.equal(connector.forwardClientRequest, originalForward);
+  assert.doesNotThrow(() => handle.dispose(), 'dispose is idempotent');
+});
+
 test('plan tracking v1/v2: pending->pending->completed sends exactly 2 continues then stops', { timeout: 1000 }, async t => {
   const f = fixture();
   const scheduler = fakeScheduler();

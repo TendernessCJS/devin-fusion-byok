@@ -48,7 +48,8 @@ test('turn wall duration preserves generations and model changes invalidate cont
 });
 function fixture(protocolVersion = 1) {
   let enabled = true, response = Promise.resolve({}), forwardCalls = 0;
-  const api = { registerConnection() { return { dispose() {} }; } }, original = api.registerConnection;
+  const registrations = [], registration = { dispose() {} };
+  const api = { registerConnection(...args) { registrations.push({ thisArg: this, args }); return registration; } }, original = api.registerConnection;
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(require.resolve('../src/runtime/context-observer.cjs'), 'utf8'), { module, exports: module.exports, require(name) {
     if (name === 'node:module') return { createRequire: () => () => ({ windsurfAcp: api }) };
@@ -60,7 +61,7 @@ function fixture(protocolVersion = 1) {
   const originalSend = connector.sendRequest, originalForward = connector.forwardClientRequest;
   const handle = module.exports.installContextObserver({ nativeMainPath: 'native', isEnabled: () => enabled });
   api.registerConnection(connector);
-  return { api, original, connector, originalSend, originalForward, handle, setResponse(value) { response = value; }, disable() { enabled = false; }, forwards: () => forwardCalls };
+  return { api, original, connector, originalSend, originalForward, handle, registrations, registration, setResponse(value) { response = value; }, disable() { enabled = false; }, forwards: () => forwardCalls };
 }
 test('observer preserves native calls/promises, ignores authentication payload, tracks v1 and disposes', async () => {
   const f = fixture(), promise = Promise.resolve({}); f.setResponse(promise);
@@ -71,6 +72,40 @@ test('observer preserves native calls/promises, ignores authentication payload, 
   assert.equal(f.handle.snapshot()[0].lead.used, 20);
   f.handle.dispose(); assert.equal(f.connector.sendRequest, f.originalSend); assert.equal(f.connector.forwardClientRequest, f.originalForward); assert.equal(f.api.registerConnection, f.original);
   assert.equal(f.handle.snapshot().length, 0);
+});
+test('register passthrough, rejection identity and descriptor restore on inherited methods', async () => {
+  const f = fixture();
+  const first = f.registrations.at(-1);
+  assert.equal(first.thisArg, f.api, 'registerConnection keeps the caller thisArg');
+  assert.deepEqual(first.args, [f.connector], 'registerConnection forwards every argument');
+
+  // A connector whose methods live on the prototype gets own wrappers that
+  // delete cleanly on detach, revealing the inherited implementation again.
+  const base = { sendRequest() { return 'sync-send'; }, forwardClientRequest() { return 'sync-fwd'; } };
+  const inherited = Object.create(base);
+  Object.assign(inherited, { agentId: 'devin-cli', bundled: true, location: { kind: 'local' } });
+  const customThis = { marker: 1 };
+  const returned = f.api.registerConnection.call(customThis, inherited, 'extra');
+  assert.equal(returned, f.registration, 'the native registration object is returned untouched');
+  const second = f.registrations.at(-1);
+  assert.equal(second.thisArg, customThis);
+  assert.deepEqual(second.args, [inherited, 'extra']);
+  assert.equal(inherited.sendRequest({ method: 'session/cancel', params: { sessionId: 'x' } }), 'sync-send',
+    'a synchronous native result keeps its identity');
+  assert.equal(inherited.forwardClientRequest({ method: 'session/update' }), 'sync-fwd');
+
+  const boom = new Error('native rejection');
+  const rejected = Promise.reject(boom);
+  f.setResponse(rejected);
+  assert.equal(f.connector.sendRequest({ method: 'session/cancel', params: { sessionId: 'rej' } }), rejected,
+    'a rejecting native Promise comes back as itself');
+  await assert.rejects(rejected, error => error === boom, 'the rejection reason is not re-wrapped');
+
+  f.handle.dispose();
+  assert.equal(Object.hasOwn(inherited, 'sendRequest'), false, 'the own wrapper is removed, not replaced');
+  assert.equal(inherited.sendRequest, base.sendRequest, 'the inherited implementation is visible again');
+  assert.equal(inherited.forwardClientRequest, base.forwardClientRequest);
+  assert.doesNotThrow(() => f.handle.dispose(), 'dispose is idempotent');
 });
 test('v2 acknowledgement is not completion; cancellation, failures, disable and disconnect clear safely', async () => {
   const f = fixture(2);

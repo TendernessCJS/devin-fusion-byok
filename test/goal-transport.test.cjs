@@ -10,7 +10,9 @@ const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/w
 
 function fixture() {
   const logs = [];
-  const api = { registerConnection() { return { dispose() {} }; } };
+  const registrations = [], registration = { dispose() {} };
+  const api = { registerConnection(...args) { registrations.push({ thisArg: this, args }); return registration; } };
+  const original = api.registerConnection;
   const module = { exports: {} };
   vm.runInNewContext(source, {
     module, exports: module.exports, setTimeout, clearTimeout,
@@ -25,7 +27,7 @@ function fixture() {
       };
     }
   }, { filename: 'goal/continue.cjs' });
-  return { api, logs, install: options => module.exports.installGoalContinue({ nativeMainPath: NATIVE_MAIN, log: (e, d) => logs.push({ e, d }), ...options }) };
+  return { api, original, logs, registrations, registration, install: options => module.exports.installGoalContinue({ nativeMainPath: NATIVE_MAIN, log: (e, d) => logs.push({ e, d }), ...options }) };
 }
 function connector(overrides = {}) {
   return {
@@ -322,6 +324,42 @@ test('goal ownership mirrors the controller and clearing it re-enables legacy su
   assert.equal(handle.hasActiveGoal('s1'), true);
   handle.setGoalOwned('s1', false);
   assert.equal(handle.hasActiveGoal('s1'), false);
+});
+
+test('native call contract: register passthrough, result/throw/rejection identity, dispose restores connectors', async t => {
+  const f = fixture();
+  const handle = f.install({ isEnabled: () => true });
+  const boom = new Error('native failure');
+  const reply = {}, rejected = Promise.reject(boom);
+  const c = connector({
+    sendRequest(request) { this.sent.push(request); if (request.throw) throw request.throw; return request.reply; },
+    forwardClientRequest(request) { this.forwards.push(request); if (request.throw) throw request.throw; return request.reply; },
+  });
+  const originalSend = c.sendRequest, originalForward = c.forwardClientRequest;
+
+  const customThis = { marker: true };
+  const returned = f.api.registerConnection.call(customThis, c, 'extra-arg');
+  assert.equal(returned, f.registration, 'the native registration object is returned untouched');
+  const call = f.registrations.at(-1);
+  assert.equal(call.thisArg, customThis, 'registerConnection keeps the caller thisArg');
+  assert.deepEqual(call.args, [c, 'extra-arg'], 'registerConnection forwards every argument');
+
+  assert.equal(await c.sendRequest({ method: 'session/cancel', params: { sessionId: 's1' }, reply: Promise.resolve(reply) }), reply,
+    'the resolved value keeps its identity through the wrapped call');
+  assert.throws(() => c.sendRequest({ method: 'session/cancel', params: { sessionId: 's1' }, throw: boom }),
+    error => error === boom, 'a synchronous native throw propagates unwrapped');
+  await assert.rejects(c.sendRequest({ method: 'session/cancel', params: { sessionId: 's1' }, reply: rejected }),
+    error => error === boom, 'a rejection is observed, never converted to success');
+  assert.equal(c.forwardClientRequest({ method: 'session/update', reply }), reply,
+    'a synchronous forward result keeps its identity');
+  assert.throws(() => c.forwardClientRequest({ throw: boom }), error => error === boom);
+
+  handle.dispose();
+  assert.equal(c.sendRequest, originalSend);
+  assert.equal(c.forwardClientRequest, originalForward);
+  assert.equal(f.api.registerConnection, f.original);
+  assert.doesNotThrow(() => handle.dispose(), 'dispose is idempotent');
+  t.after(() => handle.dispose());
 });
 
 test('install is idempotent per api and dispose restores the original register', t => {
