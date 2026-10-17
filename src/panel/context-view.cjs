@@ -1,7 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { baseStyles } = require('./theme.cjs');
-const { timing, usageIsInconsistent } = require('../monitor-stats.cjs');
+const { timing, usageIsInconsistent } = require('../monitor/stats.cjs');
 const { domHelpersSource } = require('./dom.cjs');
 const number = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
 const seconds = value => typeof value === 'number' && Number.isFinite(value) ? (value / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) + ' s' : '—';
@@ -23,7 +23,7 @@ function contextDetails(session, monitor, catalog) {
   // The tps metric exists only for tool-free successful requests, and tool use is
   // the norm for agent traffic (measured: 92% of this machine's records), so reading
   // it off the newest request left the tile blank nearly always. Mirror the usage
-  // page (monitor-stats summarize): show the latest eligible sample, and when that
+  // page (summarize from monitor stats): show the latest eligible sample, and when that
   // sample is older than the newest request say so in visible text — this panel's
   // tooltips do not render on hover, so a title alone would not be seen.
   const tpsSample = records.filter(record => record.schemaVersion >= 2 && record.status === 'success' && !usageIsInconsistent(record) && timing(record.tps) !== null)

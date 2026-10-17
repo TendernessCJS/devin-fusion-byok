@@ -5,6 +5,7 @@ const http = require('node:http');
 const https = require('node:https');
 const { Duplex, Readable, pipeline } = require('node:stream');
 const zlib = require('node:zlib');
+const updateUrl = require('./update-url.cjs');
 // @vscode/proxy-agent patches http(s).request/get in the extension host and can
 // drop our CONNECT createConnection; ClientRequest stays public and unpatched.
 // `_defaultAgent` mirrors what http.request/https.request inject: the agent
@@ -135,7 +136,7 @@ async function proxyRequestBytes(url, { proxy, limit, signal, timeout = 30000, c
   const timer = setTimeout(abort, timeout);
   try {
     for (let hops = 0; hops <= 5; hops++) {
-      const target = require('./update.cjs').allowedUrl(url);
+      const target = updateUrl.allowedUrl(url);
       let response;
       try { response = await request(target, { proxy, signal: controller.signal, connect }); }
       catch (error) { if (controller.signal.aborted) throw Error('aborted'); throw error; }

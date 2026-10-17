@@ -46,6 +46,8 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   被测试与 `package.json` 依赖**。这些文件运行在扩展宿主、**不在 backend 里，因此不进 `SOURCE_FILES`**（加了会让 source-identity 测试红）。
   拆分时的硬约束：共享可变槽必须放进显式传递的 `shared` 对象，**不得**改成模块级单例（会在多次 activate 之间串状态）；
   `enableQueue`/`reconcileQueue` 这类序列化队列留在各自工厂闭包内；`generation`/abort 判据一处都不能少（`enable()` 里有 4 处）。
+  改激活流程前先确认动的是哪个入口：全仓共 **5 个入口**，其中 3 个（`fast-context/server.cjs`、`goal/report.cjs`、`lifecycle/uninstall.cjs`）
+  **从 `extension.cjs` 的 require 图走不到**，清单见 `.devin/rules/retired-and-deadends.md` 的「路径型入口」表。
 - `AssignModel` 本地应答不含 `assignment_jwt`（官方 `ModelAssignment` 响应带该字段）。当前 CLI（3000.10.48 实测）不校验；若未来版本强制校验，
   本地指派整体失效——届时改为转发上游或显式降级，不得伪造成功。
 - 修改行为时不要放宽现有安全校验（Origin 一律 403、控制令牌 `timingSafeEqual`、webview 只用 `createElement`/`textContent` 不用

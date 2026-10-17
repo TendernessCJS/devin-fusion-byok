@@ -6,6 +6,7 @@ const net = require('node:net');
 const { Duplex } = require('node:stream');
 const { parseProxy, tunnel, proxyRequestBytes } = require('../src/proxy.cjs');
 const update = require('../src/update.cjs');
+const updateUrl = require('../src/update-url.cjs');
 
 function listen(server) { return new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); }
 function fakeSocket(written) {
@@ -103,8 +104,8 @@ test('end-to-end CONNECT tunnel carries plain HTTP traffic and enforces limits',
   await listen(target); await listen(proxyServer);
   const targetPort = target.address().port;
   const px = parseProxy('http://127.0.0.1:' + proxyServer.address().port);
-  const original = update.allowedUrl;
-  update.allowedUrl = url => new URL(url);
+  const original = updateUrl.allowedUrl;
+  updateUrl.allowedUrl = url => new URL(url);
   try {
     const base = 'http://127.0.0.1:' + targetPort;
     assert.equal((await proxyRequestBytes(base + '/ok', { proxy: px, limit: 1024 })).toString(), 'hello /ok');
@@ -115,7 +116,7 @@ test('end-to-end CONNECT tunnel carries plain HTTP traffic and enforces limits',
     await assert.rejects(proxyRequestBytes(base + '/lengthy', { proxy: px, limit: 10 }), error => error.message === 'http');
     await assert.rejects(proxyRequestBytes(base + '/stream', { proxy: px, limit: 10 }), error => error.message === 'size');
   } finally {
-    update.allowedUrl = original;
+    updateUrl.allowedUrl = original;
     target.close(); proxyServer.close();
   }
 });
@@ -403,14 +404,14 @@ test('request paths never touch the request/get functions patched by the extensi
   t.after(() => { target.close(); proxyServer.close(); });
 
   const px = parseProxy('http://127.0.0.1:' + proxyServer.address().port);
-  const original = update.allowedUrl;
-  update.allowedUrl = url => new URL(url);
+  const original = updateUrl.allowedUrl;
+  updateUrl.allowedUrl = url => new URL(url);
   try {
     const base = 'http://127.0.0.1:' + target.address().port;
     assert.equal((await proxyRequestBytes(base + '/tunneled', { proxy: px, limit: 1024 })).toString(), 'ok /tunneled');
     const { directFetch } = require('../src/proxy.cjs');
     assert.equal(await (await directFetch(base + '/direct')).text(), 'ok /direct');
-  } finally { update.allowedUrl = original; }
+  } finally { updateUrl.allowedUrl = original; }
   assert.deepEqual(calls, { 'http.request': 0, 'http.get': 0, 'https.request': 0, 'https.get': 0 });
 });
 

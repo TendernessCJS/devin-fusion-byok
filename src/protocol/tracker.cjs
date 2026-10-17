@@ -1,5 +1,5 @@
 'use strict';
-const { token, usageIsInconsistent, identifier } = require('../monitor-stats.cjs');
+const { token, usageIsInconsistent, identifier } = require('../monitor/stats.cjs');
 
 function usageOf(data, chat) {
   const u = chat ? data?.usage : data?.response?.usage;

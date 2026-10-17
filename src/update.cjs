@@ -4,6 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const execFile = promisify(require('node:child_process').execFile);
+const { allowedUrl } = require('./update-url.cjs');
 const REPOSITORY = 'TendernessCJS/devin-fusion-byok';
 const PAGE = `https://github.com/${REPOSITORY}/releases`;
 const API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
@@ -21,11 +22,6 @@ function compareVersions(a, b) {
   const left = parseVersion(a), right = parseVersion(b);
   for (let i = 0; i < 3; i++) if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
   return 0;
-}
-function allowedUrl(value) {
-  const url = new URL(value);
-  if (url.protocol !== 'https:' || url.username || url.password || url.port || !['api.github.com', 'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'].includes(url.hostname)) throw Error('url');
-  return url;
 }
 function releaseInfo(value) {
   if (!value || value.draft || value.prerelease || typeof value.tag_name !== 'string') throw Error('release');

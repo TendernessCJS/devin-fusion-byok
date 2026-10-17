@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { monitorDateRange, filterMonitorRecords, filteredMonitorView, createMonitorStats } = require('../src/monitor-stats.cjs');
+const { monitorDateRange, filterMonitorRecords, filteredMonitorView, createMonitorStats } = require('../src/monitor/stats.cjs');
 
 test('date presets use local calendar days and month boundaries', () => {
   const now = new Date(2026, 9, 13, 12).getTime();

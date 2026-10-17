@@ -28,6 +28,16 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   **不是**握手 `_meta.api_server_url` 改写——后者的模块已在审查后删除（`acp-injection.cjs` 自 fork 初始提交起从未接线，env 通道作用域严格覆盖它）。排障
   ACP 流量先看 settings.json 的 agentEnv 与 backend 日志，不要去复活握手改写。
 
-- **审「这段代码还活着吗」时，`require` 图会漏掉「路径型入口」**：`src/goal/report.cjs` 没有任何 `require` 指向它，是 `goal/state.cjs`
-  把它的**绝对路径拼进 shell 命令**交给 agent 执行（入口在 `extension.cjs` 的 `reportCliPath`）。纯靠模块依赖图做死代码分析会把它报成死模块（2026-10-15
-  实际误判过一次）。判死前先搜「文件名字符串是否出现在代码里」（`grep -rn "$(basename X)" src/`），再下结论。
+- **审「这段代码还活着吗」时，`require` 图会漏掉「路径型入口」**。本仓有 **5 个入口**，其中 **3 个从 `src/extension.cjs` 的 require 图走不到**：
+
+  | 入口 | 触发方式 |
+  | --- | --- |
+  | `src/extension.cjs` | `package.json` 的 `main` |
+  | `src/runtime/backend.cjs` | `ensureBackend` 用 `process.execPath` 派生（也被 `extension.cjs` require，故在依赖图内） |
+  | `src/fast-context/server.cjs` | `npm run mcp:fast-context`（自带 `require.main` 块） |
+  | `src/goal/report.cjs` | `goal/state.cjs` 把绝对路径拼进 shell 命令（`extension.cjs` 的 `reportCliPath`） |
+  | `src/lifecycle/uninstall.cjs` | `package.json` 的 `vscode:uninstall`，VS Code 卸载扩展时执行 |
+
+  纯靠模块依赖图做死代码分析会把后三个报成死模块：2026-10-15 误判过一次 `goal/report.cjs`；2026-10-18 审查时又差点误判
+  `lifecycle/uninstall.cjs`——它**只被测试 require、生产无人引用**，看起来正是「只有测试续命的死代码」，实际是 `vscode:uninstall` 入口。
+  判死前先搜模块名与文件名（`grep -rn "$(basename X)" src/ test/ scripts/ package.json`），**并检查文件末尾有没有 `require.main === module`**。

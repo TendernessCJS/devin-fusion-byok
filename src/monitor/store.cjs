@@ -6,7 +6,7 @@ const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const LIMIT = 5000;
 const COMPACT_AT = LIMIT + 250;
-const { token, timing, usageIsInconsistent, summarize, attributionStats, identifier } = require('../monitor-stats.cjs');
+const { token, timing, usageIsInconsistent, summarize, attributionStats, identifier } = require('./stats.cjs');
 function normalize(record) {
   if (!identifier(record?.id) || !['success', 'error', 'cancelled'].includes(record.status) || !Number.isFinite(Date.parse(record.startedAt))) return null;
   const result = { id: record.id, startedAt: record.startedAt, model: identifier(record.model) || 'unknown',

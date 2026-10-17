@@ -17,7 +17,7 @@ description: "Apply when changing usage recording, attribution, time filtering, 
   `ambiguous-match`/`no-tool-ids`/`lookup-unavailable`/`tool-id-unmatched`。`sessions.id` 是**可读 slug**（实测
   `sprout-skull`），不是 UUID。落盘的记录**不带** `sessionId`/`attribution`/`attributionReason`/`messageIds`/`role`：归属每次快照由 `associate` 重算，占位值只是「没人验证过的声明」（实测每行都是 `"attribution":"unassigned","role":"unknown"`，而 `role` 全仓零消费），排障时不要据此判断归属，要看快照或面板。不得用表级 `created_at`、`sessions.model`、全文/任意 metadata 中的 UUID 或未经核实的 `row_id` 只追加假设推测归属；消息角色不等于 Lead/Sidekick。用量主账保留在插件日志，异常计数必须排除并明确披露。
 - 用量时间筛选默认当月，以本机日历边界和请求 `startedAt` 为准，内部区间左闭右开；自定义结束日转到下一日零点，不用 `new Date("YYYY-MM-DD")` 的 UTC 解析或固定 24
-  小时推进日期。前后端复用 `monitor-stats.cjs` 的统计公式，明细/汇总/诊断使用同一记录集；无效区间不得回退全量。最近 5000 条保留记录不保证完整月账单，界面必须明确披露。
+  小时推进日期。前后端复用 `src/monitor/stats.cjs` 的统计公式，明细/汇总/诊断使用同一记录集；无效区间不得回退全量。最近 5000 条保留记录不保证完整月账单，界面必须明确披露。
 - 面板控件的垂直高度统一由 CSS 令牌 `--control-h`（28px）驱动，`button`/`input`/`select` 都引用它，不要再写死各自的高度；同一行必须放下的「input + 按钮」容器用
   `.actions.nowrap`，以免 flex 折行把按钮挤到第二行（折行判定用 hypothetical size，与容器 max-content 宽度不一致是根因）。
 - 三个 webview（`src/panel/view.cjs` 主面板、`goal-view.cjs`、`context-view.cjs`）共用 `src/panel/theme.cjs` 的

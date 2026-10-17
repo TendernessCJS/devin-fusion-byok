@@ -325,7 +325,7 @@ test('backend close waits for the monitor write queue to drain', async t => {
     module, exports: module.exports, __dirname: path.dirname(filename),
     process, Buffer, URL, AbortController, setTimeout, clearTimeout,
     require(name) {
-      if (name === './monitor-store.cjs') return { createMonitor: () => ({
+      if (name === '../monitor/store.cjs') return { createMonitor: () => ({
         record() {},
         async snapshot() { return {}; },
         close() { monitorClosed = true; return new Promise(resolve => { releaseClose = resolve; }); },
@@ -358,7 +358,7 @@ test('close drains in-flight RPCs, keeps health during the monitor flush, then r
     module, exports: module.exports, __dirname: path.dirname(filename),
     process, Buffer, URL, AbortController, setTimeout, clearTimeout,
     require(name) {
-      if (name === './monitor-store.cjs') return { createMonitor: () => ({
+      if (name === '../monitor/store.cjs') return { createMonitor: () => ({
         record() {},
         async snapshot() { return {}; },
         close() { monitorCloseStarted = true; return new Promise(resolve => { releaseMonitor = resolve; }); },
@@ -424,7 +424,7 @@ test('close waits for both the client response and the serveChat handler so late
     module, exports: module.exports, __dirname: path.dirname(filename),
     process, Buffer, URL, AbortController, setTimeout, clearTimeout,
     require(name) {
-      if (name === './monitor-store.cjs') return { createMonitor: () => ({
+      if (name === '../monitor/store.cjs') return { createMonitor: () => ({
         record(data) { events.push('record'); assert.equal(events.includes('monitor-close'), false, 'late metrics must arrive before the monitor closes'); },
         async snapshot() { return {}; },
         close() { events.push('monitor-close'); return Promise.resolve(); },
@@ -464,7 +464,7 @@ test('close waits for both the client response and the serveChat handler so late
   await backend.stopped;
 });
 
-test('same-version monitor-stats changes invalidate the runtime source identity', () => {
+test('same-version monitor stats changes invalidate the runtime source identity', () => {
   const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
   const realRequire = createRequire(filename);
   let statsChanged = false;
@@ -474,7 +474,7 @@ test('same-version monitor-stats changes invalidate the runtime source identity'
     require(name) {
       if (name === 'node:fs') return { ...fs, readFileSync(file, ...options) {
         const original = fs.readFileSync(file, ...options);
-        return statsChanged && path.resolve(file) === path.resolve(__dirname, '../src/monitor-stats.cjs')
+        return statsChanged && path.resolve(file) === path.resolve(__dirname, '../src/monitor/stats.cjs')
           ? Buffer.concat([Buffer.from(original), Buffer.from('\n// synthetic stats change\n')]) : original;
       } };
       return realRequire(name);
@@ -621,7 +621,7 @@ test('a stuck monitor flush cannot block shutdown either', async t => {
     process, Buffer, URL, AbortController, setTimeout, clearTimeout,
     require(name) {
       // A queue that never drains: close() must not inherit its hang.
-      if (name === './monitor-store.cjs') return { createMonitor: () => ({ record() {}, async snapshot() { return {}; }, close: () => new Promise(() => {}) }) };
+      if (name === '../monitor/store.cjs') return { createMonitor: () => ({ record() {}, async snapshot() { return {}; }, close: () => new Promise(() => {}) }) };
       return realRequire(name);
     },
   }, { filename });
