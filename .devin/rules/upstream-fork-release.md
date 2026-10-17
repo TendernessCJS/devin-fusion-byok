@@ -59,7 +59,7 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 | **基线**（我们分叉自，也是最后读到的 upstream 位置） | `5bae0bf` —— `upstream/main`，2026-10-04，`feat: add Fast Context MCP and panel tab in v0.3.42` |
 | **上次读取上游** | 2026-10-17 |
 | **基线以来 upstream 新增提交** | **0**（`upstream/main` 仍停在 `5bae0bf`） |
-| 我们领先基线 | 123 个提交（2026-10-17 实测；重算用 `git rev-list --count "$(git merge-base upstream/main HEAD)..HEAD"`），**从未同步过** |
+| 我们领先基线 | 130 个提交（2026-10-18 实测；重算用 `git rev-list --count "$(git merge-base upstream/main HEAD)..HEAD"`），**从未同步过** |
 
 看上游有没有值得参考的新改动：
 
