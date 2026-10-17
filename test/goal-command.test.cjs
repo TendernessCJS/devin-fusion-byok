@@ -21,12 +21,20 @@ const text = value => [{ type: 'text', text: value }];
 function transportFixture() {
   const api = { registerConnection() { return { dispose() {} }; } };
   const module = { exports: {} };
+  const createRequire = () => () => ({ windsurfAcp: api, CancellationToken: { None: Symbol('None') } });
   const source = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cjs'), 'utf8');
   vm.runInNewContext(source, {
     module, exports: module.exports, setTimeout, clearTimeout,
     require(name) {
       if (name === 'node:crypto') return require('node:crypto');
-      return { createRequire: () => () => ({ windsurfAcp: api, CancellationToken: { None: Symbol('None') } }) };
+      if (name === 'node:module') return { createRequire };
+      if (name === '../runtime/acp-hook.cjs') {
+        const hook = { exports: {} };
+        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+          { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
+        return hook.exports;
+      }
+      assert.fail('unexpected require ' + name);
     }
   }, { filename: 'goal/continue.cjs' });
   const handle = module.exports.installGoalContinue({ nativeMainPath: NATIVE_MAIN, isEnabled: () => true });

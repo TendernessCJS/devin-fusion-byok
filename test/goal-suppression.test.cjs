@@ -13,12 +13,19 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture() {
   const api = { registerConnection() { return { dispose() {} }; } };
   const module = { exports: {} };
+  const createRequire = () => modName => { assert.equal(modName, 'vscode'); return { windsurfAcp: api, CancellationToken: { None: Symbol('None') } }; };
   vm.runInNewContext(source, {
     module, exports: module.exports, setTimeout, clearTimeout,
     require(name) {
       if (name === 'node:crypto') return require('node:crypto');
-      assert.equal(name, 'node:module');
-      return { createRequire: () => modName => { assert.equal(modName, 'vscode'); return { windsurfAcp: api, CancellationToken: { None: Symbol('None') } }; } };
+      if (name === 'node:module') return { createRequire };
+      if (name === './acp-hook.cjs') {
+        const hook = { exports: {} };
+        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+          { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
+        return hook.exports;
+      }
+      assert.fail('unexpected require ' + name);
     }
   }, { filename: 'auto-continue.cjs' });
   return { api, install: options => module.exports.installAutoContinue({ nativeMainPath: NATIVE_MAIN, ...options }) };

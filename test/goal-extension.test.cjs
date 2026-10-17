@@ -18,12 +18,19 @@ const NATIVE_MAIN = '/native/main.js';
 const next = () => new Promise(resolve => setImmediate(resolve));
 
 function loadWithStubbedVscode(source, name, api, extra = {}) {
+  const createRequire = () => () => ({ windsurfAcp: api, CancellationToken: { None: Symbol('None') } });
   const module = { exports: {} };
   vm.runInNewContext(source, {
     module, exports: module.exports, setTimeout, clearTimeout, Date, JSON, Math, Number, String, Promise, Array, Object, Error, Symbol,
     require(request) {
       if (request === 'node:crypto') return require('node:crypto');
-      if (request === 'node:module') return { createRequire: () => () => ({ windsurfAcp: api, CancellationToken: { None: Symbol('None') } }) };
+      if (request === 'node:module') return { createRequire };
+      if (request === './acp-hook.cjs' || request === '../runtime/acp-hook.cjs') {
+        const hook = { exports: {} };
+        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+          { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
+        return hook.exports;
+      }
       if (request === './store.cjs') return realRequire('../src/goal/store.cjs');
       if (request === './prompts.cjs') return realRequire('../src/goal/prompts.cjs');
       if (Object.hasOwn(extra, request)) return extra[request];

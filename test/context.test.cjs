@@ -51,8 +51,15 @@ function fixture(protocolVersion = 1) {
   const registrations = [], registration = { dispose() {} };
   const api = { registerConnection(...args) { registrations.push({ thisArg: this, args }); return registration; } }, original = api.registerConnection;
   const module = { exports: {} };
+  const createRequire = () => () => ({ windsurfAcp: api });
   vm.runInNewContext(fs.readFileSync(require.resolve('../src/runtime/context-observer.cjs'), 'utf8'), { module, exports: module.exports, require(name) {
-    if (name === 'node:module') return { createRequire: () => () => ({ windsurfAcp: api }) };
+    if (name === 'node:module') return { createRequire };
+    if (name === './acp-hook.cjs') {
+      const hook = { exports: {} };
+      vm.runInNewContext(fs.readFileSync(require.resolve('../src/runtime/acp-hook.cjs'), 'utf8'),
+        { module: hook, exports: hook.exports, require: () => ({ createRequire }) });
+      return hook.exports;
+    }
     return { createContextState, usageRejectionReason, USAGE_REJECTIONS };
   } });
   const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion,

@@ -1,6 +1,6 @@
 'use strict';
 
-const { createRequire } = require('node:module');
+const { loadAcpApi, restoreMember } = require('./acp-hook.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.acp-observer.v1');
 const METHODS = new Set(['session/new', 'session/load', 'session/resume']);
@@ -24,12 +24,6 @@ function modelCounts(response, rpc) {
     uniqueModels: unique.length, ownModels: plainModels + fusionModels, plainModels, fusionModels });
 }
 
-function restore(target, key, wrapper, descriptor) {
-  if (target[key] !== wrapper) return;
-  if (descriptor) Object.defineProperty(target, key, descriptor);
-  else delete target[key];
-}
-
 /**
  * Observe future native ACP registrations without issuing agent requests.
  * Logs only method names and model counts; never requests, response bodies,
@@ -39,8 +33,7 @@ function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
   if (typeof nativeMainPath !== 'string' || !nativeMainPath || typeof log !== 'function') {
     throw new TypeError('nativeMainPath and a log function are required');
   }
-  const api = createRequire(nativeMainPath)('vscode').windsurfAcp;
-  if (!api || typeof api.registerConnection !== 'function') throw new Error('Native ACP registration API is unavailable');
+  const api = loadAcpApi(nativeMainPath);
   if (api[INSTANCE]) return api[INSTANCE];
 
   const registrationDescriptor = Object.getOwnPropertyDescriptor(api, 'registerConnection');
@@ -98,9 +91,9 @@ function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
     dispose() {
       if (disposed) return;
       disposed = true;
-      restore(api, 'registerConnection', registerConnection, registrationDescriptor);
+      restoreMember(api, 'registerConnection', registerConnection, registrationDescriptor);
       for (const [connection, record] of records) {
-        try { restore(connection, 'sendRequest', record.sendRequest, record.descriptor); } catch (_) {}
+        try { restoreMember(connection, 'sendRequest', record.sendRequest, record.descriptor); } catch (_) {}
       }
       records.clear();
       if (api[INSTANCE] === handle) delete api[INSTANCE];
@@ -108,7 +101,7 @@ function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
   };
   api.registerConnection = registerConnection;
   try { Object.defineProperty(api, INSTANCE, { value: handle, configurable: true }); }
-  catch (error) { restore(api, 'registerConnection', registerConnection, registrationDescriptor); throw error; }
+  catch (error) { restoreMember(api, 'registerConnection', registerConnection, registrationDescriptor); throw error; }
   return handle;
 }
 

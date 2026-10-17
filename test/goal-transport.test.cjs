@@ -13,18 +13,23 @@ function fixture() {
   const registrations = [], registration = { dispose() {} };
   const api = { registerConnection(...args) { registrations.push({ thisArg: this, args }); return registration; } };
   const original = api.registerConnection;
+  const createRequire = () => modName => {
+    assert.equal(modName, 'vscode');
+    return { windsurfAcp: api, CancellationToken: { None: Symbol('None') } };
+  };
   const module = { exports: {} };
   vm.runInNewContext(source, {
     module, exports: module.exports, setTimeout, clearTimeout,
     require(name) {
       if (name === 'node:crypto') return require('node:crypto');
-      assert.equal(name, 'node:module');
-      return {
-        createRequire: () => modName => {
-          assert.equal(modName, 'vscode');
-          return { windsurfAcp: api, CancellationToken: { None: Symbol('None') } };
-        }
-      };
+      if (name === 'node:module') return { createRequire };
+      if (name === '../runtime/acp-hook.cjs') {
+        const hook = { exports: {} };
+        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+          { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
+        return hook.exports;
+      }
+      assert.fail('unexpected require ' + name);
     }
   }, { filename: 'goal/continue.cjs' });
   return { api, original, logs, registrations, registration, install: options => module.exports.installGoalContinue({ nativeMainPath: NATIVE_MAIN, log: (e, d) => logs.push({ e, d }), ...options }) };

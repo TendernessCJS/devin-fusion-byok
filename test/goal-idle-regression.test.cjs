@@ -16,13 +16,20 @@ function fixture(t, protocolVersion) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'goal-idle-regression-'));
   const api = { registerConnection() { return { dispose() {} }; } };
   const module = { exports: {} };
+  const createRequire = () => () => ({ windsurfAcp: api });
   const source = fs.readFileSync(process.env.GOAL_CONTINUE_TEST_SOURCE || path.resolve(__dirname, '../src/goal/continue.cjs'), 'utf8');
   vm.runInNewContext(source, {
     module, exports: module.exports,
     require(name) {
       if (name === 'node:crypto') return require(name);
-      assert.equal(name, 'node:module');
-      return { createRequire: () => () => ({ windsurfAcp: api }) };
+      if (name === 'node:module') return { createRequire };
+      if (name === '../runtime/acp-hook.cjs') {
+        const hook = { exports: {} };
+        vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+          { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
+        return hook.exports;
+      }
+      assert.fail('unexpected require ' + name);
     }
   }, { filename: 'goal/continue.cjs' });
   const transport = module.exports.installGoalContinue({ nativeMainPath: '/isolated/native.js', isEnabled: () => true });

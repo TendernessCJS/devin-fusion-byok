@@ -16,12 +16,19 @@ function fixture() {
   const disposable = { dispose() {} };
   const api = { registerConnection(...args) { registrations.push({ thisArg: this, args }); return disposable; } };
   const originalRegister = api.registerConnection;
+  const createRequire = nativePath => { paths.push(nativePath); return name => {
+    assert.equal(name, 'vscode'); return { windsurfAcp: api };
+  }; };
   const module = { exports: {} };
   vm.runInNewContext(source, { module, exports: module.exports, require(name) {
-    assert.equal(name, 'node:module');
-    return { createRequire(nativePath) { paths.push(nativePath); return name => {
-      assert.equal(name, 'vscode'); return { windsurfAcp: api };
-    }; } };
+    if (name === 'node:module') return { createRequire };
+    if (name === './acp-hook.cjs') {
+      const hook = { exports: {} };
+      vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+        { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
+      return hook.exports;
+    }
+    assert.fail('unexpected require ' + name);
   } }, { filename: 'acp-observer.cjs' });
   function connection(value) {
     return { sendRequest(...args) { calls.push({ thisArg: this, args }); return value; } };

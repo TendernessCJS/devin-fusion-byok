@@ -1,7 +1,8 @@
 'use strict';
 
-const { createRequire } = require('node:module');
 const { createHash, randomUUID } = require('node:crypto');
+const { createRequire } = require('node:module');
+const { loadAcpApi, restoreMember } = require('./acp-hook.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.auto-continue.v1');
 const ATTACHED = Symbol.for('devin-fusion-byok.auto-continue.attached');
@@ -36,22 +37,9 @@ const RESET_METHODS = new Set([
   '_cognition.ai/session/archive'
 ]);
 
-function restore(target, key, wrapper, descriptor) {
-  if (target[key] !== wrapper) return;
-  if (descriptor) Object.defineProperty(target, key, descriptor);
-  else delete target[key];
-}
-
 function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptions = () => ({ onProviderError: true, untilPlanComplete: false }), log = () => {}, scheduler, isSessionSuppressed, now = Date.now, onStopped = () => {} } = {}) {
-  if (typeof nativeMainPath !== 'string' || !nativeMainPath) {
-    throw new TypeError('nativeMainPath is required');
-  }
-  const nativeRequire = createRequire(nativeMainPath);
-  const vscode = nativeRequire('vscode');
-  const api = vscode?.windsurfAcp;
-  if (!api || typeof api.registerConnection !== 'function') {
-    throw new Error('Native ACP registration API is unavailable');
-  }
+  const api = loadAcpApi(nativeMainPath);
+  const vscode = createRequire(nativeMainPath)('vscode');
   if (api[INSTANCE]) return api[INSTANCE];
 
   const scheduleTimer = scheduler?.setTimeout || setTimeout;
@@ -88,12 +76,12 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
       }
     }
     entry.sessions.clear();
-    restore(connector, 'sendRequest', entry.sendRequestWrapper, entry.sendRequestDescriptor);
-    restore(connector, 'forwardClientRequest', entry.forwardWrapper, entry.forwardDescriptor);
+    restoreMember(connector, 'sendRequest', entry.sendRequestWrapper, entry.sendRequestDescriptor);
+    restoreMember(connector, 'forwardClientRequest', entry.forwardWrapper, entry.forwardDescriptor);
     if (entry.setStatusWrapper) {
-      restore(connector, 'setStatus', entry.setStatusWrapper, entry.setStatusDescriptor);
+      restoreMember(connector, 'setStatus', entry.setStatusWrapper, entry.setStatusDescriptor);
     }
-    if (entry.registration) restore(entry.registration, 'dispose', entry.disposeWrapper, entry.disposeDescriptor);
+    if (entry.registration) restoreMember(entry.registration, 'dispose', entry.disposeWrapper, entry.disposeDescriptor);
     delete connector[ATTACHED];
     connections.delete(connector);
   }
@@ -729,9 +717,9 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
       connector.forwardClientRequest = entry.forwardWrapper;
       connector[ATTACHED] = true;
     } catch (e) {
-      restore(connector, 'sendRequest', entry.sendRequestWrapper, sendRequestDescriptor);
-      restore(connector, 'forwardClientRequest', entry.forwardWrapper, forwardDescriptor);
-      if (originalSetStatus) restore(connector, 'setStatus', entry.setStatusWrapper, setStatusDescriptor);
+      restoreMember(connector, 'sendRequest', entry.sendRequestWrapper, sendRequestDescriptor);
+      restoreMember(connector, 'forwardClientRequest', entry.forwardWrapper, forwardDescriptor);
+      if (originalSetStatus) restoreMember(connector, 'setStatus', entry.setStatusWrapper, setStatusDescriptor);
       delete connector[ATTACHED];
       throw e;
     }
@@ -818,7 +806,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
       if (disposed) return;
       disposed = true;
       handle.reset();
-      restore(api, 'registerConnection', registerWrapper, registrationDescriptor);
+      restoreMember(api, 'registerConnection', registerWrapper, registrationDescriptor);
       for (const connector of [...connections.keys()]) detach(connector);
       delete api[INSTANCE];
     }

@@ -17,13 +17,20 @@ const goalSource = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cj
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function loadModule(source, filename, api) {
+  const createRequire = () => () => ({ windsurfAcp: api, CancellationToken: { None: Symbol('None') } });
   const module = { exports: {} };
   vm.runInNewContext(source, {
     module, exports: module.exports, setTimeout, clearTimeout,
     require(name) {
       if (name === 'node:crypto') return require('node:crypto');
-      assert.equal(name, 'node:module');
-      return { createRequire: () => () => ({ windsurfAcp: api, CancellationToken: { None: Symbol('None') } }) };
+      if (name === 'node:module') return { createRequire };
+      if (name === './acp-hook.cjs' || name === '../runtime/acp-hook.cjs') {
+        const hook = { exports: {} };
+        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+          { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
+        return hook.exports;
+      }
+      assert.fail('unexpected require ' + name);
     }
   }, { filename });
   return module.exports;

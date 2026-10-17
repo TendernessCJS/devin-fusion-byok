@@ -1,6 +1,7 @@
 'use strict';
 const { createRequire } = require('node:module');
 const { createContextState, usageRejectionReason, USAGE_REJECTIONS } = require('./context-state.cjs');
+const { restoreMember } = require('./acp-hook.cjs');
 const KEY = Symbol.for('devin-fusion-byok.context-observer.v1');
 function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
   const api = createRequire(nativeMainPath)('vscode').windsurfAcp;
@@ -16,10 +17,6 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
   const focus = id => { if (id && enabled()) { focusedSessionId = id; focusedAt = Date.now(); } };
   const usageRejections = Object.fromEntries(USAGE_REJECTIONS.map(key => [key, 0]));
   const status = () => ({ state: disposed ? 'disposed' : isEnabled() ? 'observing' : 'disabled', connections: connections.size, registrations, sessionUpdates, usageUpdates, acceptedUsageUpdates, rejectedUsageUpdates, usageRejections: { ...usageRejections } });
-  function restore(object, key, wrapper, previous) {
-    if (object[key] !== wrapper) return;
-    if (previous) Object.defineProperty(object, key, previous); else delete object[key];
-  }
   function enabled() { return !disposed && isEnabled(); }
   function attach(connector) {
     if (connections.size >= 32 || connections.has(connector) || connector?.agentId !== 'devin-cli' || connector.bundled !== true || connector.location?.kind !== 'local' ||
@@ -36,7 +33,7 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
     function safe(fn) { try { if (entry.active && enabled()) fn(); else state.clear(); } catch {} }
     function detach() {
       entry.active = false; state.clear();
-      for (const value of saved.reverse()) restore(connector, value.key, value.wrapper, value.previous);
+      for (const value of saved.reverse()) restoreMember(connector, value.key, value.wrapper, value.previous);
       connections.delete(connector);
     }
     try {
@@ -109,7 +106,7 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
     dispose() {
       if (disposed) return;
       disposed = true;
-      restore(api, 'registerConnection', register, descriptor);
+      restoreMember(api, 'registerConnection', register, descriptor);
       for (const entry of [...connections.values()]) entry.detach();
       if (api[KEY] === handle) delete api[KEY];
     },

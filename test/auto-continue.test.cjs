@@ -15,6 +15,13 @@ function fixture() {
   const disposable = { dispose() {} };
   const api = { registerConnection(...args) { registrations.push({ thisArg: this, args }); return disposable; } };
   const originalRegister = api.registerConnection;
+  const createRequire = () => modName => {
+    assert.equal(modName, 'vscode');
+    return {
+      windsurfAcp: api,
+      CancellationToken: { None: Symbol('CancellationToken.None') }
+    };
+  };
   const module = { exports: {} };
 
   vm.runInNewContext(source, {
@@ -24,18 +31,14 @@ function fixture() {
     clearTimeout,
     require(name) {
       if (name === 'node:crypto') return require('node:crypto');
-      assert.equal(name, 'node:module');
-      return {
-        createRequire(nativePath) {
-          return modName => {
-            assert.equal(modName, 'vscode');
-            return {
-              windsurfAcp: api,
-              CancellationToken: { None: Symbol('CancellationToken.None') }
-            };
-          };
-        }
-      };
+      if (name === 'node:module') return { createRequire };
+      if (name === './acp-hook.cjs') {
+        const hook = { exports: {} };
+        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+          { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
+        return hook.exports;
+      }
+      assert.fail('unexpected require ' + name);
     }
   }, { filename: 'auto-continue.cjs' });
 

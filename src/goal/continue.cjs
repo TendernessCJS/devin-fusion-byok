@@ -1,6 +1,7 @@
 'use strict';
-const { createRequire } = require('node:module');
 const crypto = require('node:crypto');
+const { createRequire } = require('node:module');
+const { loadAcpApi, restoreMember } = require('../runtime/acp-hook.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.goal-continue.v1');
 const ATTACHED = Symbol.for('devin-fusion-byok.goal-continue.attached');
@@ -45,11 +46,6 @@ function withGoalCommand(message) {
   };
 }
 
-function restore(target, key, wrapper, descriptor) {
-  if (target[key] !== wrapper) return;
-  if (descriptor) Object.defineProperty(target, key, descriptor);
-  else delete target[key];
-}
 function sessionIdentifier(value) {
   return typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value)
     ? value : null;
@@ -129,10 +125,8 @@ function createSessionRegistry({ limit = SESSION_LIMIT } = {}) {
 }
 
 function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = () => {}, registry } = {}) {
-  if (typeof nativeMainPath !== 'string' || !nativeMainPath) throw new TypeError('nativeMainPath is required');
+  const api = loadAcpApi(nativeMainPath);
   const vscode = createRequire(nativeMainPath)('vscode');
-  const api = vscode?.windsurfAcp;
-  if (!api || typeof api.registerConnection !== 'function') throw new Error('Native ACP registration API is unavailable');
   if (api[INSTANCE]) return api[INSTANCE];
 
   const sessions = registry || createSessionRegistry();
@@ -184,10 +178,10 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
       if (remaining && remaining.connectors.size === 0) sessions.remove(sessionId);
       notify(sessionId, 'interrupted', { reason: 'detached' });
     }
-    restore(connector, 'forwardClientRequest', entry.forwardWrapper, entry.forwardDescriptor);
-    restore(connector, 'sendRequest', entry.sendRequestWrapper, entry.sendRequestDescriptor);
-    if (entry.setStatusWrapper) restore(connector, 'setStatus', entry.setStatusWrapper, entry.setStatusDescriptor);
-    if (entry.registration) restore(entry.registration, 'dispose', entry.disposeWrapper, entry.disposeDescriptor);
+    restoreMember(connector, 'forwardClientRequest', entry.forwardWrapper, entry.forwardDescriptor);
+    restoreMember(connector, 'sendRequest', entry.sendRequestWrapper, entry.sendRequestDescriptor);
+    if (entry.setStatusWrapper) restoreMember(connector, 'setStatus', entry.setStatusWrapper, entry.setStatusDescriptor);
+    if (entry.registration) restoreMember(entry.registration, 'dispose', entry.disposeWrapper, entry.disposeDescriptor);
     delete connector[ATTACHED];
     connections.delete(connector);
   }
@@ -479,9 +473,9 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
       connector.forwardClientRequest = entry.forwardWrapper;
       connector[ATTACHED] = entry;
     } catch (error) {
-      restore(connector, 'sendRequest', entry.sendRequestWrapper, entry.sendRequestDescriptor);
-      restore(connector, 'forwardClientRequest', entry.forwardWrapper, entry.forwardDescriptor);
-      if (originalSetStatus) restore(connector, 'setStatus', entry.setStatusWrapper, entry.setStatusDescriptor);
+      restoreMember(connector, 'sendRequest', entry.sendRequestWrapper, entry.sendRequestDescriptor);
+      restoreMember(connector, 'forwardClientRequest', entry.forwardWrapper, entry.forwardDescriptor);
+      if (originalSetStatus) restoreMember(connector, 'setStatus', entry.setStatusWrapper, entry.setStatusDescriptor);
       delete connector[ATTACHED];
       throw error;
     }
@@ -626,7 +620,7 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
     dispose() {
       if (disposed) return;
       disposed = true;
-      restore(api, 'registerConnection', registerWrapper, registrationDescriptor);
+      restoreMember(api, 'registerConnection', registerWrapper, registrationDescriptor);
       for (const connector of [...connections]) detach(connector);
       sessions.clear();
       activeRuns.clear();
