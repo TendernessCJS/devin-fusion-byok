@@ -1,6 +1,6 @@
 'use strict';
 const { randomUUID } = require('node:crypto');
-const { buildCatalog, buildRoleLists, refKey } = require('../catalog.cjs');
+const { analyzeRoles, buildCatalog, buildRoleLists, refKey } = require('../catalog.cjs');
 const { discover: discoverModels } = require('../config.cjs');
 const { modelSupportsImages } = require('../model-capabilities.cjs');
 const { normalizeBaseUrlPath } = require('./base-url.cjs');
@@ -90,9 +90,10 @@ function nativeVendor(id, label = '') {
 function publicState(config, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready', cliCache, allowedUids) {
   const allowed = allowedUids instanceof Set ? (allowedUids.size ? allowedUids : null)
     : (Array.isArray(allowedUids) && allowedUids.length ? new Set(allowedUids) : null);
-  const catalog = buildCatalog({ ...config, enabled: true }, nativeModels, allowed);
+  const analysis = analyzeRoles({ ...config, enabled: true }, nativeModels, allowed);
+  const catalog = buildCatalog({ ...config, enabled: true }, nativeModels, allowed, analysis);
   const hidden = new Set(catalog.hiddenNativeModelUids || []);
-  const roleLists = buildRoleLists(config, nativeModels, allowed);
+  const roleLists = buildRoleLists(config, nativeModels, allowed, analysis);
   const eligibleLeads = new Set(roleLists.lead.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
   const eligibleSidekicks = new Set(roleLists.sidekick.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));
   // The settings list groups native entries by the server's family identity:
@@ -266,9 +267,25 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       return state();
     }
     let config = read();
+    // The native observation is pinned to one snapshot per operation so the
+    // candidate checks and the commit-time validation never mix two reads of a
+    // moving catalog. The analysis is bound to the config object it was built
+    // from: a reassigned config (refreshModels) re-analyzes automatically, and
+    // in-place mutations invalidate it explicitly before validation, so the
+    // final buildCatalog always sees the state being written.
+    let observedSnapshot, analysis, analyzedConfig;
+    const observed = () => observedSnapshot ||
+      (observedSnapshot = { models: nativeModels(), allowed: nativeAllowedUids() });
+    const roleAnalysis = () => {
+      if (analyzedConfig !== config) {
+        analysis = analyzeRoles(config, observed().models, observed().allowed);
+        analyzedConfig = config;
+      }
+      return analysis;
+    };
     if (type === 'selectFusion') {
       if (config.enabled === false) fail('请先启用 Fusion BYOK。');
-      if (!own(buildCatalog(config, nativeModels(), nativeAllowedUids()).fusions, payload.uid)) fail('该 Fusion 组合已不可用，请重新选择。');
+      if (!own(buildCatalog(config, observed().models, observed().allowed, roleAnalysis()).fusions, payload.uid)) fail('该 Fusion 组合已不可用，请重新选择。');
       await selectFusion(payload.uid); return state();
     }
     switch (type) {
@@ -336,7 +353,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         const raw = Array.isArray(payload.uids) ? payload.uids : [payload.uid];
         if (!raw.length || raw.length > 256) fail('模型标识无效。');
         const hidden = boolean(payload.hidden, '显示状态');
-        const observedUids = new Set(nativeModels().map(entry => entry?.uid));
+        const observedUids = new Set(observed().models.map(entry => entry?.uid));
         for (const uid of raw) {
           if (typeof uid !== 'string' || !uid || uid.length > 256 || /^(?:fusion-)?dfbyok-/.test(uid)) fail('模型标识无效。');
           if (hidden && !observedUids.has(uid)) fail('该官方模型当前未出现在列表中，请刷新后重试。');
@@ -362,7 +379,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         const key = refKey(model);
         if (!key) fail('模型标识无效。');
 
-        const currentRoles = buildRoleLists(config, nativeModels(), nativeAllowedUids());
+        const currentRoles = buildRoleLists(config, observed().models, observed().allowed, roleAnalysis());
         const candidateList = currentRoles[role] || [];
         const candidate = candidateList.find(item => refKey(item.ref) === key ||
           hasNative && (item.memberUids || []).some(uid => refKey({ nativeUid: uid }) === key));
@@ -431,7 +448,8 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       default: fail('不支持的操作。');
     }
     pruneDanglingRoleRefs(config);
-    buildCatalog(config, nativeModels(), nativeAllowedUids()); // Validate the complete model graph before committing.
+    analyzedConfig = undefined; // The cases above mutated config in place.
+    buildCatalog(config, observed().models, observed().allowed, roleAnalysis()); // Validate the complete model graph before committing.
     write(config);
     if (type === 'importModels') pendingImport = undefined;
     await afterChange(type);

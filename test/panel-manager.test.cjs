@@ -33,6 +33,7 @@ function memory(options = {}) {
     selectFusion: async uid => { selections.push(uid); selected = uid; },
     selectedFusion: () => selected,
     nativeModels: options.nativeModels || (() => []),
+    ...(options.nativeAllowedUids ? { nativeAllowedUids: options.nativeAllowedUids } : {}),
     ...(options.nativeCatalogStatus ? { nativeCatalogStatus: options.nativeCatalogStatus } : {}),
     ...(options.refreshCliCaches ? { refreshCliCaches: options.refreshCliCaches } : {}),
     ...(options.cliCacheStatus ? { cliCacheStatus: options.cliCacheStatus } : {}),
@@ -539,6 +540,42 @@ test('observed native Sidekick eligibility drives state flags, combinations and 
   }
   const included = await f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: true, model: { nativeUid: 'swe-other-harness' } });
   assert.ok(included.roleLists.sidekick.some(item => item.ref.nativeUid === 'swe-other-harness' && item.selected));
+});
+
+test('a mutating dispatch pins one native observation snapshot for checks and validation', async () => {
+  let modelReads = 0, allowedReads = 0;
+  const f = memory({
+    nativeModels: () => { modelReads += 1; return OBSERVED_SWE; },
+    nativeAllowedUids: () => { allowedReads += 1; return new Set(['swe-2-max']); },
+  });
+  await f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: true, model: nativeSidekick });
+  // The role-list lookup and the commit-time catalog validation share one
+  // pinned snapshot; only the returned state() performs a second read.
+  assert.equal(modelReads, 2);
+  assert.equal(allowedReads, 2);
+  modelReads = allowedReads = 0;
+  await f.manager.dispatch('setNativeModelHidden', { uid: 'swe-2-max', hidden: true });
+  assert.equal(modelReads, 2, 'the hidden-membership check and validation share the same snapshot');
+  assert.equal(allowedReads, 2);
+  modelReads = allowedReads = 0;
+  await f.manager.dispatch('setEnabled', { enabled: true });
+  assert.equal(modelReads, 2, 'operations without role lookups still pin a single snapshot for validation');
+  assert.equal(allowedReads, 2);
+});
+
+test('validation runs against the config written by the same dispatch', async () => {
+  const f = memory({ nativeModels: () => OBSERVED_SWE });
+  const before = await f.manager.dispatch('ready');
+  const excluded = await f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: false, model: nativeSidekick });
+  // The exclusion applied by this dispatch must already shape the catalog the
+  // commit-time validation built — the written state, not a pre-mutation
+  // snapshot, is what survives.
+  assert.ok(excluded.fusionCount < before.fusionCount, 'excluding the only sidekick drops combinations in the same dispatch');
+  assert.deepEqual(f.read().roleExclusions.sidekick, [{ nativeUid: 'swe-2-max' }]);
+  assert.ok(!Object.values(buildCatalog(f.read(), OBSERVED_SWE).fusions).some(fusion => fusion.sidekickUid === 'swe-2-max'));
+  const restored = await f.manager.dispatch('setRoleModel', { role: 'sidekick', enabled: true, model: nativeSidekick });
+  assert.equal(restored.fusionCount, before.fusionCount, 're-enabling restores the combinations');
+  assert.deepEqual(f.read().roleInclusions.sidekick, [{ nativeUid: 'swe-2-max' }]);
 });
 
 test('forgetRoleRef clears a dead native ref only once the catalog is ready', async () => {

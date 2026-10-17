@@ -344,13 +344,36 @@ function roleSelected(ref, refs, defaultSelected) {
   return defaultSelected || refs.inclusions.has(key);
 }
 
-function buildRoleLists(config = {}, nativeModels = [], allowedUids = null) {
+// One pure pass over the observation both catalog builders share. It keeps the
+// two hidden-uid semantics the callers use side by side — the catalog reads the
+// direct blacklist while the role list works with the family-expanded one — and
+// caches each builder's official/additional role discovery separately, because
+// the two sets produce different eligibility results. No module-level state:
+// each call recomputes from its arguments and callers reuse the object only
+// within one operation.
+function analyzeRoles(config = {}, nativeModels = [], allowedUids = null) {
   const allowed = normalizeAllowedUids(allowedUids);
-  const hiddenSet = expandHiddenByFamily(
+  const hidden = new Set(Array.isArray(config.hiddenNativeModelUids) ? config.hiddenNativeModelUids : []);
+  const hiddenExpanded = expandHiddenByFamily(hidden, nativeModels, entry => entry && entry.uid, entry => (entry && entry.familyUid) || '');
+  const catalogOfficialRoles = discoverOfficialRoles(nativeModels, hidden, config);
+  const catalogAdditional = discoverAdditionalNativeRoles(nativeModels, hidden, catalogOfficialRoles);
+  const roleOfficialRoles = discoverOfficialRoles(nativeModels, hiddenExpanded, config, allowed);
+  const roleAdditional = discoverAdditionalNativeRoles(nativeModels, hiddenExpanded, roleOfficialRoles, allowed);
+  return {
+    allowed, hidden, hiddenExpanded,
+    catalog: { officialRoles: catalogOfficialRoles, additionalRoles: catalogAdditional },
+    roleList: { officialRoles: roleOfficialRoles, additionalRoles: roleAdditional },
+  };
+}
+
+function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, analysis = null) {
+  const allowed = analysis ? analysis.allowed : normalizeAllowedUids(allowedUids);
+  const hiddenSet = analysis ? analysis.hiddenExpanded : expandHiddenByFamily(
     new Set(Array.isArray(config.hiddenNativeModelUids) ? config.hiddenNativeModelUids : []),
     nativeModels, entry => entry && entry.uid, entry => (entry && entry.familyUid) || '');
-  const officialRoles = discoverOfficialRoles(nativeModels, hiddenSet, config, allowed);
-  const { eligibleNativeLeads, eligibleNativeSidekicks } = discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles, allowed);
+  const officialRoles = analysis ? analysis.roleList.officialRoles : discoverOfficialRoles(nativeModels, hiddenSet, config, allowed);
+  const { eligibleNativeLeads, eligibleNativeSidekicks } = analysis ? analysis.roleList.additionalRoles
+    : discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles, allowed);
   const strictSidekickUids = new Set(officialRoles.eligibleNativeSidekicks.keys());
   const leadRefs = roleRefs(config, 'lead');
   const sidekickRefs = roleRefs(config, 'sidekick');
@@ -506,4 +529,4 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null) {
 }
 
 /** Build a secret-free catalog. Provider credentials stay solely in caller configuration. */
-module.exports = { discoverOfficialRoles, discoverAdditionalNativeRoles, roleRefs, roleSelected, buildRoleLists };
+module.exports = { analyzeRoles, discoverOfficialRoles, discoverAdditionalNativeRoles, roleRefs, roleSelected, buildRoleLists };

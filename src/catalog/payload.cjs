@@ -1,6 +1,7 @@
 'use strict';
 const { parseFields, str, num, m } = require('../protocol/wire.cjs');
 const { concat, ownUid, has, nativeUid } = require('./identity.cjs');
+const { normalizeNativeEntry } = require('../native-entry.cjs');
 
 const OBSERVE_SOURCE = { GetCliModelConfigs: 'cli', GetCascadeModelConfigs: 'cascade', GetCommandModelConfigs: 'command', GetUserStatus: 'entitlement' };
 function rpcShape(rpc) {
@@ -267,7 +268,10 @@ function nativeEntries(entries, isJson, source, pickerLabels) {
       listed = num(entry, 6) === 1;
     }
     if (typeof uid !== 'string' || !uid || uid.length > 256 || ownUid(uid)) continue;
-    seen.push({
+    // The field extraction above keeps each source's own pass-through and
+    // fail-closed semantics (e.g. a non-false JSON `disabled` arrives here
+    // already true); the shared normalizer only re-encodes the canonical shape.
+    const normalized = normalizeNativeEntry({
       uid, label, disabled, harnessUids: meta.harnessUids, isModelRouter: meta.isModelRouter,
       ...(dimension ? { sidekickDimension: dimension } : {}),
       ...(fusionMeta ? { fusionMetadata: fusionMeta } : {}),
@@ -280,6 +284,7 @@ function nativeEntries(entries, isJson, source, pickerLabels) {
       ...(source ? { sources: [source] } : {}),
       ...(pickerLabels ? { pickerListed: pickerLabels.has(label) } : {}),
     });
+    if (normalized) seen.push(normalized);
   }
   return seen;
 }

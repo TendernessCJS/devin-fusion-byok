@@ -3,6 +3,6 @@
 const { buildCatalog } = require('./catalog/build.cjs');
 const { augmentCatalog, collectNativeModels, collectAllowedUids, staleFusionUids } = require('./catalog/augment.cjs');
 const { resolveAssignment } = require('./catalog/assignment.cjs');
-const { buildRoleLists } = require('./catalog/roles.cjs');
+const { analyzeRoles, buildRoleLists } = require('./catalog/roles.cjs');
 const { refKey } = require('./catalog/identity.cjs');
-module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, collectAllowedUids, buildRoleLists, refKey, staleFusionUids };
+module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, collectAllowedUids, analyzeRoles, buildRoleLists, refKey, staleFusionUids };

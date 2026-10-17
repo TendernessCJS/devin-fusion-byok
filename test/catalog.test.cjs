@@ -694,6 +694,27 @@ for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} c
   assert.equal(collectNativeModels(statusFixture().body, { rpc: 'GetAccount', format: proto }).length, 0);
 });
 
+test('collectNativeModels keeps canonical observation fields through the shared normalizer', () => {
+  const entry = { label: 'Full', modelUid: 'swe-full', disabled: false,
+    modelInfo: { harnessUids: ['h'], isModelRouter: false, modelFamilyUid: 'fam-full', maxTokens: 200000 } };
+  const [record] = collectNativeModels({ clientModelConfigs: [entry] }, { rpc: 'GetCliModelConfigs', format: json });
+  assert.equal(record.familyUid, 'fam-full');
+  assert.equal(record.maxTokens, 200000);
+  assert.deepEqual(record.sources, ['cli']);
+  const withPicker = { clientModelSorts: [{ groups: [{ modelLabels: ['Full'] }] }], clientModelConfigs: [entry] };
+  const [picked] = collectNativeModels(withPicker, { rpc: 'GetCascadeModelConfigs', format: json });
+  assert.equal(picked.pickerListed, true, 'a sorts payload yields a positive picker verdict');
+  const unpicked = { clientModelSorts: [{ groups: [{ modelLabels: ['Other'] }] }], clientModelConfigs: [entry] };
+  const [verdict] = collectNativeModels(unpicked, { rpc: 'GetCascadeModelConfigs', format: json });
+  assert.equal(verdict.pickerListed, false, 'absence from the sort groups is a false verdict, not absent');
+  const protoEntry = cat(s(1, 'K'), s(22, 'swe-kind'), v(6, 1), m(23, cat(s(20, 'h'), v(25, 0), v(22, 8), s(23, 'fam-k'))));
+  const [protoRecord] = collectNativeModels(cat(m(1, protoEntry)), { rpc: 'GetCliModelConfigs', format: proto });
+  assert.equal(protoRecord.kind, 8);
+  assert.equal(protoRecord.listed, true);
+  assert.equal(protoRecord.familyUid, 'fam-k');
+  assert.deepEqual(protoRecord.sources, ['cli']);
+});
+
 test('collectNativeModels fails closed on ambiguous or mistyped capability fields', () => {
   const wrap = entry => cat(m(1, entry));
   for (const entry of [

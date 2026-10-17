@@ -3,7 +3,7 @@ const { modelEfforts, modelSupportsImages } = require('../model-capabilities.cjs
 const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, configFor, leadFamilyBase, stableOrders, groupedOrders } = require('./identity.cjs');
 const { discoverOfficialRoles, discoverAdditionalNativeRoles, buildRoleLists } = require('./roles.cjs');
 
-function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
+function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analysis = null) {
   if (config.enabled === false) {
     return { models: [], routes: {}, fusions: {}, sidekicks: [], hiddenNativeModelUids: [], hiddenFusionUids: [] };
   }
@@ -54,9 +54,9 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
     hiddenNativeModelUids.push(uid);
   }
   const hiddenSet = new Set(hiddenNativeModelUids);
-  const officialRoles = discoverOfficialRoles(nativeModels, hiddenSet, config);
-  const { eligibleNativeLeads: additionalNativeLeads, eligibleNativeSidekicks: additionalNativeSidekicks } =
-    discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles);
+  const officialRoles = analysis ? analysis.catalog.officialRoles : discoverOfficialRoles(nativeModels, hiddenSet, config);
+  const { eligibleNativeLeads: additionalNativeLeads, eligibleNativeSidekicks: additionalNativeSidekicks } = analysis
+    ? analysis.catalog.additionalRoles : discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles);
   const { eligibleNativeLeads, eligibleNativeSidekicks, hiddenFusionUids } = officialRoles;
 
   // Labels also identify entries in native sort groups. Disambiguate providers
@@ -74,7 +74,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null) {
       family: { modelFamilyLabel: lead.familyLabel, entries: [{ key: 'Effort', value: effort }] } }));
   }
 
-  const roleSelection = buildRoleLists(config, nativeModels, allowedUids);
+  const roleSelection = buildRoleLists(config, nativeModels, allowedUids, analysis);
   const selectedLeadKeys = new Set(roleSelection.lead.filter(item => item.selected).map(item => refKey(item.ref)));
   const selectedSidekickKeys = new Set(roleSelection.sidekick.filter(item => item.selected).map(item => refKey(item.ref)));
 

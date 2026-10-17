@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const { runtimeIdentity, controlFile, PORT } = require('./backend.cjs');
 const { withConnectionRetry } = require('./retry.cjs');
+const { normalizeNativeEntry, normalizeAllowedUids } = require('../native-entry.cjs');
 // Upstream observations only: our own uids are never part of the native
 // catalog, and the reader rejects a payload containing them outright. Both the
 // reader's validation and the push payload derive from this one predicate so the
@@ -67,11 +68,12 @@ async function readOnce({ root, port, signal, request }) {
       const sources = entry.sources.filter(value => typeof value === 'string' && value.length <= 32).slice(0, 8);
       if (sources.length) next.sources = sources;
     }
-    return next;
+    // The strict checks above decide whether the entry is trusted at all; the
+    // shared normalizer then produces the same canonical shape every other
+    // consumer serves.
+    return normalizeNativeEntry(next);
   });
-  const allowedUids = Array.isArray(data.allowedUids)
-    ? [...new Set(data.allowedUids.filter(uid => isUpstreamUid(uid)))]
-    : [];
+  const allowedUids = normalizeAllowedUids(data.allowedUids);
   return { status: models.length ? 'ready' : 'empty', models, allowedUids };
 }
 async function readNativeModels({ root, port = PORT, signal, request = fetch }) {

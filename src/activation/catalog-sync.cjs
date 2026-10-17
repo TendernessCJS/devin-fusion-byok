@@ -1,6 +1,7 @@
 'use strict';
 const { readNativeModels, pushNativeModels, isUpstreamUid } = require('../runtime/native-models.cjs');
 const { mergeNativeEntry } = require('../runtime/native-cache.cjs');
+const { normalizeNativeEntry } = require('../native-entry.cjs');
 
 function installCatalogSync({ deps, shared }) {
   const { lifecycle, config, log } = deps;
@@ -76,22 +77,8 @@ function installCatalogSync({ deps, shared }) {
     if (!Array.isArray(entries)) return;
     let changed = false;
     for (const entry of entries) {
-      if (!entry || typeof entry.uid !== 'string' || !entry.uid) continue;
-      const dimension = entry.sidekickDimension;
-      const next = { uid: entry.uid, label: typeof entry.label === 'string' ? entry.label : '', disabled: entry.disabled === true,
-        isModelRouter: entry.isModelRouter === true,
-        harnessUids: Array.isArray(entry.harnessUids) ? entry.harnessUids.filter(value => typeof value === 'string') : [],
-        ...(dimension && typeof dimension === 'object'
-          ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } } : {}),
-        ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
-        ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
-        ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
-        ...(entry.supportsImages ? { supportsImages: true } : {}),
-        ...(Number.isSafeInteger(entry.kind) ? { kind: entry.kind } : {}),
-        ...(entry.listed === true ? { listed: true } : {}),
-        ...(typeof entry.pickerListed === 'boolean' ? { pickerListed: entry.pickerListed } : {}),
-        ...(Array.isArray(entry.sources)
-          ? { sources: entry.sources.filter(value => typeof value === 'string' && value.length <= 32).slice(0, 8) } : {}) };
+      const next = normalizeNativeEntry(entry);
+      if (!next) continue;
       const previous = shared.nativeModels.get(next.uid);
       const merged = mergeNativeEntry(previous, next);
       if (!previous || JSON.stringify(previous) !== JSON.stringify(merged)) {

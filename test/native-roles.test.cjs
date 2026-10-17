@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildCatalog, buildRoleLists, resolveAssignment } = require('../src/catalog.cjs');
+const { analyzeRoles, buildCatalog, buildRoleLists, resolveAssignment } = require('../src/catalog.cjs');
 const { createManager } = require('../src/panel/manager.cjs');
 const { fields, str, s } = require('../src/protocol/wire.cjs');
 
@@ -46,6 +46,29 @@ test('standalone unlocked native models are candidates without official Fusion r
     const proto = resolveAssignment(s(2, fusion.uid), {}, included);
     assert.equal(str(fields(proto, 1)[0].value, 2), fusion.leadUid);
   }
+});
+
+test('analyzeRoles feeds both builders identical results to recomputing per call', () => {
+  const observed = [
+    { uid: 'swe-2-max', label: 'SWE-2 Max', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'], familyUid: 'fam-swe' },
+    { uid: 'swe-2-mini', label: 'SWE-2 Mini', disabled: false, isModelRouter: false, harnessUids: ['swe-1p5'], familyUid: 'fam-swe' },
+    { uid: 'outside-allowlist', label: 'Outside', disabled: false, isModelRouter: false, harnessUids: ['odd-harness'] },
+    { uid: 'fusion-lead-a-sidekick-swe-2-max', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'],
+      sidekickDimension: { order: 3, name: 'SWE-2 Max' } },
+  ];
+  const input = config();
+  input.hiddenNativeModelUids = ['swe-2-mini'];
+  input.roleExclusions = { lead: [{ nativeUid: 'swe-2-max' }] };
+  const allowed = new Set(['swe-2-max', 'swe-2-mini']);
+  const analysis = analyzeRoles(input, observed, allowed);
+  // The analysis keeps both hidden semantics: the catalog reads the direct
+  // blacklist, the role list the family-expanded one (swe-2-max joins
+  // swe-2-mini's family).
+  assert.ok(analysis.hidden.has('swe-2-mini') && !analysis.hidden.has('swe-2-max'));
+  assert.ok(analysis.hiddenExpanded.has('swe-2-max'), 'family expansion reaches the sibling uid');
+  assert.ok(analysis.allowed.has('swe-2-max') && !analysis.allowed.has('outside-allowlist'));
+  assert.deepEqual(buildRoleLists(input, observed, allowed, analysis), buildRoleLists(input, observed, allowed));
+  assert.deepEqual(buildCatalog(input, observed, allowed, analysis), buildCatalog(input, observed, allowed));
 });
 
 test('standalone duplicate eligibility conflicts fail closed while identical records remain eligible', () => {

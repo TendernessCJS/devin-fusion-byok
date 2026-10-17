@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const os = require('node:os');
 const { createRequire } = require('node:module');
@@ -208,6 +209,82 @@ test('readNativeModels never retries identity rejections', async t => {
   const request = (url, options) => { calls += 1; return fetch(url, options); };
   await assert.rejects(readNativeModels({ root: f.root + '-other', port: f.backend.port, request }), /native_catalog_identity/);
   assert.equal(calls, 1, 'identity failures are not connection failures and must not be retried');
+});
+
+// A minimal stand-in backend: the real backend only ever serves normalized
+// entries, so proving the reader keeps failing closed on malformed payloads
+// needs a server that can emit them.
+async function fakeCatalogBackend(t, { models, allowedUids }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-fake-'));
+  const identity = runtimeIdentity(root);
+  const instanceId = 'fake-instance';
+  const token = 'f'.repeat(64);
+  fs.writeFileSync(controlFile(root), JSON.stringify({ rootId: identity.rootId, instanceId, sourceId: identity.sourceId, token }));
+  let payload = { instanceId, models, ...(allowedUids ? { allowedUids } : {}) };
+  const server = http.createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ...identity, instanceId, nativeModelsProtocol: 1 }));
+      return;
+    }
+    if (req.url === '/_runtime/native-models' && req.headers.authorization === 'Bearer ' + token) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(payload));
+      return;
+    }
+    res.writeHead(403); res.end();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { server.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  return { root, port: server.address().port, setPayload: next => { payload = { instanceId, ...next }; } };
+}
+
+test('readNativeModels returns canonical observation fields through the shared normalizer', async t => {
+  const backend = await fakeCatalogBackend(t, { models: [
+    { uid: 'swe-full', label: 'SWE Full', disabled: false, isModelRouter: false, harnessUids: ['h1'],
+      familyUid: 'fam-full', kind: 3, listed: true, pickerListed: false, sources: ['cli'],
+      maxTokens: 200000, maxOutputTokens: 4096, supportsImages: true,
+      sidekickDimension: { order: 2, name: 'S', fastModeOrder: 1 },
+      fusionMetadata: [{ key: 'Sidekick', order: 2, name: 'S' }] },
+  ], allowedUids: ['swe-full', 'dfbyok-own', 'swe-full'] });
+  const result = await readNativeModels({ root: backend.root, port: backend.port });
+  assert.equal(result.status, 'ready');
+  const [record] = result.models;
+  assert.equal(record.familyUid, 'fam-full');
+  assert.equal(record.kind, 3);
+  assert.equal(record.listed, true);
+  assert.equal(record.pickerListed, false, 'a false verdict survives the endpoint round trip');
+  assert.deepEqual(record.sources, ['cli']);
+  assert.deepEqual(record.sidekickDimension, { order: 2, name: 'S', fastModeOrder: 1 });
+  assert.deepEqual(record.fusionMetadata, [{ key: 'Sidekick', order: 2, name: 'S', controlType: 0 }]);
+  assert.equal(record.maxTokens, 200000);
+  assert.equal(record.maxOutputTokens, 4096);
+  assert.equal(record.supportsImages, true);
+  assert.deepEqual(result.allowedUids, ['swe-full'], 'the allowlist is deduped, sorted and stripped of own uids');
+});
+
+test('readNativeModels still fails closed on malformed catalog entries', async t => {
+  const f = await fakeCatalogBackend(t, { models: [] });
+  const valid = { uid: 'swe-ok', disabled: false, isModelRouter: false, harnessUids: ['h'] };
+  for (const models of [
+    [{ ...valid, disabled: 'yes' }],
+    [{ ...valid, isModelRouter: 'no' }],
+    [{ ...valid, harnessUids: 'h' }],
+    [{ ...valid, harnessUids: [7] }],
+    [{ uid: 'dfbyok-leftover', disabled: false, isModelRouter: false, harnessUids: [] }],
+    [{ uid: 'x'.repeat(300), disabled: false, isModelRouter: false, harnessUids: [] }],
+    [{ ...valid, fusionMetadata: 'nope' }],
+    [{ ...valid, fusionMetadata: [{ key: 'Sidekick', order: 1 }] }],
+    [{ ...valid, fusionMetadata: [{ key: 'A', order: 1, name: 'a' }, { key: 'A', order: 2, name: 'b' }] }],
+    [valid, { uid: 'bad', disabled: 'maybe', isModelRouter: false, harnessUids: [] }],
+  ]) {
+    f.setPayload({ models });
+    await assert.rejects(readNativeModels({ root: f.root, port: f.port }), /native_catalog_invalid/,
+      'a malformed entry must reject the whole read, not be skipped');
+  }
+  f.setPayload({ models: [valid] });
+  const ok = await readNativeModels({ root: f.root, port: f.port });
+  assert.equal(ok.status, 'ready', 'a structurally valid entry still reads back');
 });
 
 test('readNativeModels passes a valid family uid through and ignores malformed ones', async t => {
