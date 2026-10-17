@@ -50,8 +50,10 @@
 - GPT-5/6、o 系列、Claude Opus/Sonnet/Fable 4.6+ 自动提供 Low～Max 思考档位；实际是否生效取决于供应商。
 - 你在 Fusion 卡片里选的组合会被记住：Devin 让你选中一个锁定的官方组合时，插件用它回退。你自己（或 Devin）在官方卡片里做的选择不会被插件改掉。
 - 状态栏的 **上下文** 入口可以查看所选会话的上下文占用和最近请求的速度。
-- `OpenAI Responses` 供应商会**自动**启用推理状态通道（无开关）：请求带 `store:false` 与 `include:['reasoning.encrypted_content']`，插件把该轮推理/工具输出项经签名通道（ACP 字段 10）随会话带回，下一轮在作用域（供应商/地址/密钥/模型）与内容校验一致时按原序回放。这是官方对无状态多轮推理模型的要求——与 Anthropic 思考签名回放对称。实测：Proxy 是直连官方的转发面；`previous_response_id` 在兼容面上实测 400，因此选择信封通道而非 ID 关联；DeepSeek 的 reasoning item 带 38 字符 `encrypted_content`；Moonshot 的 reasoning item 不带该字段，整轮不合规即不发信封；携带通道实测最高约 42 KB（验证过的最小闭环仅 36 B）。若某网关拒绝这些参数并点名 `store`/`include`，插件会自动去掉该字段重试一次。
-  实测补充：直连官方的转发面（如本机的 Proxy）会返回真实 `encrypted_content`（约 2–3 KB），且其 `store:true` + `previous_response_id` 续轮实测 400，多轮推理延续**只能**靠无状态回放——这类面才是它的目标场景。DeepSeek 也会产出带 `encrypted_content` 的 reasoning item（但仅 38 字符，形似占位），Moonshot 的 reasoning item 则**不带** `encrypted_content`（因此对它整轮都发不出信封）。实测回放与省略推理在 DeepSeek、Proxy 上**均返回 200**，故开启与否不影响可用性，差别在语义对齐；已知风险是携带通道在真实尺寸（最高约 42 KB，已证闭环仅 36 B）上尚未验证，而状态损坏在官方面上的表现是难以归因的 502。
+- `OpenAI Responses` 供应商会**自动**启用推理状态通道（无开关）：请求带 `store:false` 与 `include:['reasoning.encrypted_content']`，插件把该轮推理/工具输出项经签名通道（ACP 字段 10）随会话带回，下一轮在作用域（供应商/地址/密钥/模型）与内容校验一致时按原序回放。这是官方对无状态多轮推理模型的要求——与 Anthropic 思考签名回放对称。若某网关拒绝这些参数并点名 `store`/`include`，插件会自动去掉该字段重试一次。
+- 为什么用信封通道而不是 ID 关联：`previous_response_id` 在本机直连官方的转发面（Proxy）上实测回 400（`store:true` 本身被接受），因此多轮推理延续**只能**靠无状态回放——**直连官方的转发面才是这个通道的目标场景**，它会返回真实 `encrypted_content`（带推理时实测约 3.4–3.6 KB）。
+- 各面的实测差别：DeepSeek 也产出带 `encrypted_content` 的 reasoning item，但仅 **38 字符且 `summary` 为空**，形似占位——回放它既不报错，也不减少推理开销，即在该面上**既无收益也无害**；Moonshot 的 reasoning item **不带** `encrypted_content`，对它整轮都发不出信封。实测「回放」与「省略推理」在 DeepSeek、Proxy 上**均返回 200** 且答案一致，所以这个通道的收益是**语义对齐**，不是修复可用性故障。
+- 已知风险：携带通道在真实尺寸上尚未验证（实测最高约 42 KB，已证闭环仅 36 B），而状态损坏在官方面上的表现是难以归因的 502。
 
 ### 用量监控
 

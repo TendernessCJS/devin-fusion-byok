@@ -137,10 +137,12 @@ const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
 
 随后用户执行 **Developer: Reload Window**。重载后核对：
 
-- `~/.devin/extensions/` 下只剩新版本，旧版本已清理（`.obsolete` 为空）
+- **运行中的 backend 来自新版本目录**（决定性判据）：`ps ax -o command= | grep -a runtime/backend.cjs` 的路径含 `local.devin-fusion-byok-<version>`。
+  **不要拿「旧版本目录已删除」当判据**——实测（2026-10-17，0.3.45 → 0.3.46）重载窗口**不会**删除旧目录，而是把它写进
+  `~/.devin/extensions/.obsolete`（`{"local.devin-fusion-byok-<旧版本>":true}`）；新旧两个目录同时存在是**正常现象**，只要旧版本不再被加载即可。这与第 6 步「`$EXT` 指向已安装的旧版本」是同一事实的两面。
 - `runtime.log` 出现 `ready port 39842 version <version>`
-- `settings.json` 的 `devin.acp.agentEnv` 仍含 `http://127.0.0.1:39842`；模型偏好未被卸载钩子回滚
-- 面板显示「当前 <version> · 已是最新」
+- `settings.json` 的 `devin.acp.agentEnv.devin-cli.WINDSURF_API_SERVER_URL` 仍为 `http://127.0.0.1:39842`；模型偏好未被卸载钩子回滚
+- 面板状态行显示「当前 <version> · 已是最新」；**若该版本尚未发布 Release**，则显示「当前 <version> · 高于最新正式版」——本地未发布版本属正常
 
 ## 本机网络约束（会让验收假失败）
 
@@ -151,7 +153,7 @@ const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
   - 验收片段改用 `HTTPS_PROXY=http://127.0.0.1:7897 NODE_USE_ENV_PROXY=1 NO_PROXY=localhost,127.0.0.1` 让全局 `fetch` 读环境变量（扩展宿主的 `fetch` 默认不读，缺了它就 ECONNRESET，看起来像「发布失败」）。
   - Devin 本体不读 shell 环境：TUN 模式，或以 `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897 NO_PROXY=localhost,127.0.0.1` 启动 Devin。
   - 判定 TUN 是否生效不能看开关，要看实际出口：`route get <api.github.com 的 IP>` 应为 `utun*`（开）或 `en0`（关）；开 TUN 时 DNS 会解析到 fake-IP 段 `198.18.x.x`。TUN 会被用户关掉或断开，验收前先确认。
-- 面板文案对照：「检查失败」= 网络不通或 `updateProxy` 未配置/无效；「比最新正式版还新」= 仍在读旧的上游版本；「已是最新（当前 <刚发布的版本>）」= 完全正常。
+- 面板文案对照（字符串取自 `src/panel/update-view.cjs` 的 `labels`，状态行拼法为 `'当前 ' + currentVersion + ' · ' + labels[phase]`）：「检查失败」= 网络不通或 `updateProxy` 未配置/无效；「当前 <版本> · 高于最新正式版」= 仍在读旧的上游版本（也可能只是本版本尚未发布 Release）；「当前 <版本> · 已是最新」= 完全正常。
 
 ## 验收时的两个坑
 
