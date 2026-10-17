@@ -48,3 +48,8 @@ description: "Apply when changing usage recording, attribution, time filtering, 
   `nativeCatalogStatus === 'ready'` 才放行，防止盲窗期把「还没同步」误删成「真死了」）。配置清理一律走 `src/config.cjs` 的
   `pruneRetiredKeys`（激活期一次性、幂等、键不存在即返回 `false` 不写盘），它现在是**所有退役键的唯一清理路径**：`sidekicks`、`fusionPresets`、
   `defaultFusionUid`、`fusionMatrix` 全在其中（2026-10-16：预设退役迁移已删除，那三个键不再有任何读取方，留着只会让用户配置永久带着删不掉的字段）。
+- **`context-diagnostics` 里的 `zero-size` 计数不是回归信号，唯一判据是「启动后是否继续增长」**。上游在启动阶段会送 `size: 0` 的
+  `usage_update`，被观测器按设计丢弃（不渲染、不参与百分比，也不会出现 NaN%）；0.3.47 / 0.3.48 三次实机验收分别停在 6 / 11 / 12 后
+  不再增长，而 `missing-size` 始终为 0。**启动期一次性突发属正常，不要为它改代码**；只有该计数在启动之后仍持续增长，才值得插桩
+  （记录 `sessionId` / `size` / `modelUid`）定位发射者。`context-state.cjs` 把 `zero-size` 与 `missing-size` 分开计数正是为此——
+  合并成一个 `invalid-size` 曾把启动回放误读成「实时 85% 拒绝率」。
