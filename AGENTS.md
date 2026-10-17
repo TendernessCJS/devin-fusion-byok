@@ -36,7 +36,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 
 | 卷 | 何时必须读 |
 | --- | --- |
-| `.devin/rules/runtime-and-injection.md` | 改 ACP/LS 注入、backend 生命周期与关闭、日志、用户设置写入、重试预算、安全校验、`SOURCE_FILES` |
+| `.devin/rules/runtime-and-injection.md` | 改 ACP/LS 注入、backend 生命周期与关闭、日志、用户设置写入、重试预算、安全校验、`SOURCE_FILES`、`protocol/` 职责划分或 `src/activation/` 编排层 |
 | `.devin/rules/fusion-matrix.md` | 改 Fusion 矩阵 emit 规则、Lead/Sidekick 资格与命名、harness、Fast Mode |
 | `.devin/rules/catalog-and-picker.md` | 改 picker 可见性契约、角色白名单、陈旧条目判定与清理、推送门控、`nativeFamilies`、声明窗口、维度 order |
 | `.devin/rules/native-observation-and-cli-cache.md` | 改原生目录观测与缓存、CLI 缓存原地重写、配置键分类清理 |

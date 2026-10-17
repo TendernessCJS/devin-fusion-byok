@@ -26,15 +26,26 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   `goal/continue.cjs` 观察与包装）、CLI 的 `WINDSURF_API_SERVER_URL` env 覆盖（经 `devin.acp.agentEnv` 受管设置注入，ACP
   通道的实际入口）、Fast Context 的 `GetDevstralStream`（`src/fast-context/protocol.cjs`）。这些接口不稳定，改动附近代码时按「可能失败」处理，
   不要在失败路径上伪装成功。
-- **`src/protocol/` 是三种关注点的混合体，不要按目录名推断文件职责**（5 个文件，2026-10-17 核对）：① 协议转换 —— `acp.cjs`（**Devin 侧**：解析
-  `exa.chat_pb` 原生请求 + 造出站 ACP chunk）、`inference.cjs`（**三协议统一编排**：`serveChat`/`endpoint` 路由/请求体/SSE/有界降级/推理状态通道；
-  **不是 Responses 专用**）、`anthropic.cjs`；② 字节层 —— `wire.cjs` 是**全仓共享**的 proto 读写/framing/gzip 工具，`catalog/*`、`fast-context/`、
+- **`src/protocol/` 是多关注点的混合体，不要按目录名或文件名推断职责**（8 个文件，2026-10-18 拆分后核对）：① 协议转换 —— `acp.cjs`（**Devin 侧**：解析
+  `exa.chat_pb` 原生请求 + 造出站 ACP chunk）、`inference.cjs`（**三协议统一入口**：`serveChat` + `processor` 的流编排/有界降级/推理状态通道衔接；
+  **不是 Responses 专用**）；它的内部职责已按协议语义拆开：`provider-request.cjs`（格式判定/端点/请求体构造，**OpenAI Chat 的请求体在这里**）、
+  `provider-events.cjs`（SSE 解析/用量快照/错误详情）、`state-envelope.cjs`（状态信封前缀、`{scope, items}` 构造与其校验），`anthropic.cjs` 仍是
+  Anthropic Messages 的独立实现。`inference.cjs` 的导出面被下游依赖（`backend.cjs` 取 `serveChat`，测试取 `buildRequestBody`/`parseEvent`/`STATE_PREFIX`），
+  再拆时**保持这四个导出不变**；② 字节层 —— `wire.cjs` 是**全仓共享**的 proto 读写/framing/gzip 工具，`catalog/*`、`fast-context/`、
   `runtime/` 都直接依赖它，**不是协议专用**；③ 埋点 —— `tracker.cjs` 是计量（→ monitor），它落在 `protocol/` 是**依赖图决定而非语义决定**：为消除
   `protocol → runtime` 反向依赖才从 `runtime/monitor.cjs` 移出，**不能搬回 `runtime/`**（`runtime/backend.cjs` 本就 import `protocol/inference.cjs`，
   搬回即成环）。旧名对照：`chat.cjs → acp.cjs`、`responses.cjs → inference.cjs`——旧名正是误读源头（前者与 Chat Completions 无关，OpenAI Chat 的请求体在
-  `inference.cjs`）。**撞名警告**：`src/fast-context/protocol.cjs` 是**另一个** protocol（Fast Context 的 MCP 实现），且它反向 import
+  `provider-request.cjs`）。**撞名警告**：`src/fast-context/protocol.cjs` 是**另一个** protocol（Fast Context 的 MCP 实现），且它反向 import
   `src/protocol/wire.cjs`——两条路径别混。在 `protocol/` 内增删/改名文件时，除 `SOURCE_FILES` 外还要留意**不靠 `require` 的隐式引用**（按模块名打桩的
-  字符串键、`readFileSync` 的路径、`AGENTS.md` 里按路径写的说明），这类漏改不报错、只静默失效。
+  字符串键、`readFileSync` 的路径、`AGENTS.md` 里按路径写的说明），这类漏改不报错、只静默失效——`test/source-identity.test.cjs` 现在会兜住
+  `SOURCE_FILES` 那一半（它要求 `SOURCE_FILES` 与 `backend.cjs` 的 require 闭包双向精确相等），但路径字符串与打桩键它管不到。
+- **扩展宿主编排层在 `src/activation/`**（2026-10-18 从 725 行的 `extension.cjs` 拆出，现 150 行）：`errors`（RuntimeError/`safeError`/`pause`/
+  `compareVersion`/`globalSetting`，零依赖）、`backend-handshake`（`ensureBackend`）、`catalog-sync`（原生目录观测/推送/CLI 缓存触发）、`enable`
+  （受管设置写入 + LS 注入 + startNativeSync）、`commands`（命令注册、Fusion 选择与 `disable` 恢复）、`panel-install`（状态栏/pickerRefresh/
+  `checkCliCaches`/面板控制器/配置监听）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`
+  被测试与 `package.json` 依赖**。这些文件运行在扩展宿主、**不在 backend 里，因此不进 `SOURCE_FILES`**（加了会让 source-identity 测试红）。
+  拆分时的硬约束：共享可变槽必须放进显式传递的 `shared` 对象，**不得**改成模块级单例（会在多次 activate 之间串状态）；
+  `enableQueue`/`reconcileQueue` 这类序列化队列留在各自工厂闭包内；`generation`/abort 判据一处都不能少（`enable()` 里有 4 处）。
 - `AssignModel` 本地应答不含 `assignment_jwt`（官方 `ModelAssignment` 响应带该字段）。当前 CLI（3000.10.48 实测）不校验；若未来版本强制校验，
   本地指派整体失效——届时改为转发上游或显式降级，不得伪造成功。
 - 修改行为时不要放宽现有安全校验（Origin 一律 403、控制令牌 `timingSafeEqual`、webview 只用 `createElement`/`textContent` 不用
