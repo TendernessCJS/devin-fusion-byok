@@ -7,6 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
+const { createSandboxLoader } = require('./helpers/sandbox.cjs');
 
 const filename = path.resolve(__dirname, '../src/extension.cjs');
 const realRequire = createRequire(filename);
@@ -88,7 +89,8 @@ function fixture(t) {
   const overrides = {
     vscode,
     'node:fs': { ...fs, watchFile: (_file, _options, callback) => watchers.push(callback), unwatchFile: () => {} },
-    'node:child_process': { spawn: () => { const child = new EventEmitter(); child.unref = () => {}; return child; } },
+    'node:child_process': { ...require('node:child_process'),
+      spawn: () => { const child = new EventEmitter(); child.unref = () => {}; return child; } },
     './config.cjs': { readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
       writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)),
       defaultConfig: realRequire('./config.cjs').defaultConfig,
@@ -109,17 +111,16 @@ function fixture(t) {
     './runtime/auto-continue.cjs': loadWithStubbedVscode(autoSource, 'auto-continue.cjs', api),
     './panel/manager.cjs': { ...realRequire('./panel/manager.cjs'), createManager: options => realRequire('./panel/manager.cjs').createManager(options) }
   };
-  const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
-    module, exports: module.exports, process, AbortController, AbortSignal, setInterval, clearInterval,
+  const loader = createSandboxLoader({ filename, overrides, globals: {
+    AbortController, AbortSignal, setInterval, clearInterval,
     setTimeout: (fn, _ms) => setTimeout(fn, 0), clearTimeout,
     fetch: async () => new Response(JSON.stringify({ ...identity, draining: false })),
-    require: name => Object.hasOwn(overrides, name) ? overrides[name] : realRequire(name)
-  }, { filename });
+  }, shareGlobals: file => file.includes(path.sep + 'src' + path.sep + 'activation' + path.sep) });
+  const module = loader.module;
   const context = { globalStorageUri: { fsPath: root }, extensionPath, subscriptions,
     globalState: { get: (key, fallback) => state.has(key) ? state.get(key) : fallback,
       update: async (key, value) => value === undefined ? state.delete(key) : state.set(key, value) } };
-  t.after(async () => { await module.exports.deactivate(); subscriptions.forEach(value => value.dispose?.()); });
+  t.after(async () => { await module.exports.deactivate(); subscriptions.forEach(value => value.dispose?.()); loader.assertStubsUsed('goal-extension'); });
   return {
     ...module.exports, context, root, configFile, globals, state, commands, logs, notices, watchers, panels, posts, api, connector,
     cacheChecks: () => cacheChecks,

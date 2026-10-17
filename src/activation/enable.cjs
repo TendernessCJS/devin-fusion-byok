@@ -1,0 +1,95 @@
+'use strict';
+const path = require('node:path');
+const { writeConfig } = require('../config.cjs');
+const { readReceipt, remember, saveReceipt, valueAt } = require('../lifecycle/owned-settings.cjs');
+const { installLsInjection } = require('../runtime/ls-injection.cjs');
+const { createLsBridge } = require('../runtime/bridge.cjs');
+const { installAcpObserver } = require('../runtime/acp-observer.cjs');
+const { PORT } = require('../runtime/backend.cjs');
+const { ensureBackend } = require('./backend-handshake.cjs');
+const { globalSetting, safeError } = require('./errors.cjs');
+
+function installEnable({ deps, shared }) {
+  const { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain } = deps;
+  let enableQueue = Promise.resolve();
+  shared.ensureEnabled = () => {
+    const operation = enableQueue.then(() => {
+      if (lifecycle.activationDisposed || config().enabled === false || lifecycle.connection) return;
+      return enable();
+    });
+    enableQueue = operation.catch(() => {});
+    return operation;
+  };
+  async function enable() {
+    const generation = ++lifecycle.activationGeneration;
+    lifecycle.runtimeWaitAbort?.abort();
+    const waiting = new AbortController(); lifecycle.runtimeWaitAbort = waiting;
+    shared.backendStatus = 'starting';
+    let compatible;
+    const compatibleReady = new Promise(resolve => { compatible = resolve; });
+    const upgrade = ensureBackend({ root: deps.root, extensionPath: context.extensionPath, signal: waiting.signal, log,
+      onCompatibleRuntime: health => {
+        if (waiting.signal.aborted) return;
+        log('runtime-update-pending', { version: health.version });
+        shared.backendStatus = 'running'; void shared.management?.publish()?.catch(() => {});
+        compatible(health);
+      } });
+    void upgrade.finally(() => { if (lifecycle.runtimeWaitAbort === waiting) lifecycle.runtimeWaitAbort = undefined; })
+      .catch(error => { const code = safeError(error).code; if (code !== 'cancelled') log('runtime-upgrade-error', { code }); });
+    upgrade.then(() => { shared.backendStatus = 'running'; void shared.management?.publish()?.catch(() => {}); },
+      error => { const code = safeError(error).code; if (code !== 'cancelled') { shared.backendStatus = code; void shared.management?.publish()?.catch(() => {}); } });
+    await Promise.race([upgrade, compatibleReady]);
+    if (generation !== lifecycle.activationGeneration || config().enabled === false) return;
+    lifecycle.reconcileHalted = false;
+    const settings = vscode.workspace.getConfiguration('devin.acp');
+    const existing = globalSetting(settings, 'agentEnv');
+    const previous = { ...(existing['devin-cli'] || {}) };
+    const desired = { WINDSURF_API_SERVER_URL: 'http://127.0.0.1:' + PORT };
+    const saved = { ...context.globalState.get('savedEnv', {}) }, managed = context.globalState.get('managedEnv', {});
+    const receipt = readReceipt(deps.root, context.extensionPath);
+    // Migrate this extension's experimental proxy settings without changing any
+    // values the user subsequently edited.
+    for (const [key, value] of Object.entries(managed)) if (!(key in desired) && previous[key] === value) {
+      if (saved[key] == null) delete previous[key]; else previous[key] = saved[key];
+    }
+    for (const key of Object.keys(desired)) if (!(key in saved)) saved[key] = previous[key] ?? null;
+    for (const [key, value] of Object.entries(desired)) {
+      const current = valueAt({ 'devin.acp.agentEnv': existing }, ['devin.acp.agentEnv', 'devin-cli', key]);
+      const legacy = managed[key] === current.value && Object.hasOwn(saved, key)
+        ? saved[key] == null ? { exists: false } : { exists: true, value: saved[key] } : undefined;
+      remember(receipt, ['devin.acp.agentEnv', 'devin-cli', key], current, value, legacy);
+    }
+    // Commit recovery information before changing the user's settings.
+    saveReceipt(receipt);
+    await context.globalState.update('savedEnv', saved);
+    await context.globalState.update('managedEnv', desired);
+    const current = config();
+    if (current.inferenceServerUrl !== desired.WINDSURF_API_SERVER_URL) { current.inferenceServerUrl = desired.WINDSURF_API_SERVER_URL; writeConfig(configFile, current); }
+    if (Object.keys(managed).some(k => !(k in desired)) || Object.entries(desired).some(([k, v]) => previous[k] !== v)) await settings.update('agentEnv', { ...existing, 'devin-cli': { ...previous, ...desired } }, vscode.ConfigurationTarget.Global);
+    if (generation !== lifecycle.activationGeneration || config().enabled === false) return;
+    await shared.reconcilePreference();
+    if (generation !== lifecycle.activationGeneration || config().enabled === false) return;
+    const native = vscode.extensions.getExtension('codeium.windsurf');
+    if (!native) throw new Error('未找到 Devin 原生扩展');
+    const injected = await installLsInjection({ nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main),
+      createBridge: port => createLsBridge(port, { getCatalog: catalog, log, onNativeModels: shared.observeNativeModels,
+        onAllowedUids: uids => {
+          const next = new Set(Array.isArray(uids) ? uids.filter(uid => typeof uid === 'string' && uid) : []);
+          if (!next.size || (next.size === shared.nativeAllowedUids.size && [...next].every(uid => shared.nativeAllowedUids.has(uid)))) return;
+          shared.nativeAllowedUids = next;
+          void shared.management?.publish()?.catch(() => {});
+          shared.pushToBackend();
+        } }), log });
+    if (generation !== lifecycle.activationGeneration || config().enabled === false || lifecycle.activationDisposed) {
+      try { await injected.dispose(); } catch {}
+      return;
+    }
+    lifecycle.connection = injected;
+    try { if (nativeMain) { lifecycle.acpObserver?.dispose?.(); lifecycle.acpObserver = installAcpObserver({ nativeMainPath: nativeMain, log, onModels: counts => { shared.acpObservationSeq++; shared.acpOwnModels = counts.ownModels; } }); } }
+    catch { log('acp-observer-error'); }
+    shared.startNativeSync();
+    log('activated', { nativeVersion: native.packageJSON.version, storage: deps.root });
+  }
+}
+
+module.exports = { installEnable };

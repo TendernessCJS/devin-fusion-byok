@@ -8,19 +8,23 @@ const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { createRequire } = require('node:module');
 const { runtimeIdentity, controlFile } = require('../src/runtime/backend.cjs');
+const { createSandboxLoader } = require('./helpers/sandbox.cjs');
 const filename = path.resolve(__dirname, '../src/extension.cjs');
 const realRequire = createRequire(filename);
-const moduleUnderTest = { exports: {} };
 const cacheChecks = [];
 const cliCacheStub = { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
   inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
   refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } };
-vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
-  module: moduleUnderTest, exports: moduleUnderTest.exports, process,
-  AbortController, AbortSignal, setTimeout, clearTimeout,
-  require: name => name === 'vscode' ? {} : name === './runtime/cli-cache.cjs' ? cliCacheStub : realRequire(name),
-}, { filename });
+const loader = createSandboxLoader({ filename,
+  overrides: { 'vscode': {}, './runtime/cli-cache.cjs': cliCacheStub },
+  globals: { AbortController, AbortSignal, setTimeout, clearTimeout },
+  shareGlobals: file => file.includes(path.sep + 'src' + path.sep + 'activation' + path.sep) });
+const moduleUnderTest = loader.module;
 const { ensureBackend, safeError } = moduleUnderTest.exports;
+
+test('every registered stub is actually hit', () => {
+  loader.assertStubsUsed('runtime-manager');
+});
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-manager-test-'));

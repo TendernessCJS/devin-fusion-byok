@@ -7,6 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
+const { createSandboxLoader } = require('./helpers/sandbox.cjs');
 const filename = path.resolve(__dirname, '../src/extension.cjs');
 const realRequire = createRequire(filename);
 const actualBackend = require('../src/runtime/backend.cjs');
@@ -53,7 +54,7 @@ function fixture(t, initial = {}) {
   const overrides = {
     vscode,
     'node:fs': { ...fs, watchFile: (_file, _options, callback) => watchers.push(callback), unwatchFile: () => {} },
-    'node:child_process': { spawn: (file, args, options) => {
+    'node:child_process': { ...require('node:child_process'), spawn: (file, args, options) => {
       spawns.push({ file, args, options });
       const child = new EventEmitter(); child.unref = () => {};
       return child;
@@ -93,19 +94,17 @@ function fixture(t, initial = {}) {
       inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
       refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } },
   };
-  const module = { exports: {} };
-  const sandbox = { module, exports: module.exports, process,
+  const loader = createSandboxLoader({ filename, overrides, globals: {
     AbortController, AbortSignal, setInterval, clearInterval, setTimeout: (fn, _ms) => setTimeout(fn, 0), clearTimeout,
     fetch: (...args) => fetchImpl(...args),
-    require: name => Object.hasOwn(overrides, name) ? overrides[name] : realRequire(name),
-  };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), sandbox, { filename });
+  }, shareGlobals: file => file.includes(path.sep + 'src' + path.sep + 'activation' + path.sep) });
+  const module = loader.module;
   // Realm boundaries break instanceof inside the sandboxed module, so the
   // matrix uid set must be built with the sandbox realm's Set constructor.
-  const vmSet = vm.runInNewContext('Set', sandbox);
+  const vmSet = vm.runInContext('Set', loader.context);
   const context = { globalStorageUri: { fsPath: root }, extensionPath, subscriptions: [],
     globalState: { get: (key, fallback) => state.has(key) ? state.get(key) : fallback, update: async (key, value) => value === undefined ? state.delete(key) : state.set(key, value) } };
-  t.after(async () => { await module.exports.deactivate(); context.subscriptions.forEach(value => value.dispose()); });
+  t.after(async () => { await module.exports.deactivate(); context.subscriptions.forEach(value => value.dispose()); loader.assertStubsUsed('extension-lifecycle'); });
   return { ...module.exports, context, root, configFile, globals, state, commands, logs, notices, watchers, updates, bridges,
     preferenceListeners, managerOptions: () => managerOptions, spawns, autoContinueOptions: () => autoContinueOptions,
     setFetch: impl => { fetchImpl = impl; },
