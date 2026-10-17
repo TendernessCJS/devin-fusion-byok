@@ -22,6 +22,17 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   调度竞态（`missing-report` 误杀 `disabled` 状态）。需要扩范围时先确认真实语义是哪一侧。
 - 每个 fixture 结束要调 `assertStubsUsed()`（`t.after` 里或独立用例）：桩键拼错、或某个桩因为重构而不再被命中，都要能红——否则「桩写了但没接线」和
   「桩正确」长得一模一样，这类失效正是把 11 个桩键从字面量改成路径匹配时最容易被引入的。
+- **装载器改造引入的 realm 保真度变化已逐处核过（2026-10-18）**：非桩模块（`goal/state.cjs`、`panel/controller.cjs`、`picker-refresh.cjs`、
+  `catalog/augment.cjs` 等）现在运行在 VM realm 内，此前是真实 realm。全仓 17 处 `instanceof` 分两类，**都不构成隐患**：① 两侧同 realm（如
+  `activation/errors.cjs` 的 `RuntimeError`、`catalog/*` 之间的 Set）——抽出的模块与它在沙箱内创建的 Set/实例同处一个 realm；② 落在被桩替换的模块里
+  （`panel/manager.cjs` 的 `allowedUids instanceof Set` 在 fixture 里从不真跑）。**但规则仍然成立**：任何**由测试构造、传入沙箱**的对象（如
+  `setMatrixUids` 用 `vm.runInContext('Set', loader.context)` 造的集合）必须用沙箱 realm 的构造器，否则生产代码里的 `instanceof` 在测试中会判假——
+  这类假绿只在测试里出现，生产是单 realm 所以不会暴露。
+- **本次重构（protocol 拆分 + activation 拆分）尚未做真实窗口验收**（2026-10-18 决定暂不打包）：974 条单测跑的是 fixture，覆盖不到「真宿主能否装载
+  `src/activation/`、注入 LS、起 backend、停用后恢复设置」。打包安装后必须核 6 项：`ready` 仅出现 1 次；`activated` 含 `nativeVersion`；
+  `ls bridge ready N -> M`；backend 进程路径指向新版本目录；`runtime-control.json` 的 version/sourceId/rootId 三方一致；monitor 有 HTTP 200 且
+  日志无 `error`/`unhandled`。**预期副作用**：protocol 三个新文件进了 `SOURCE_FILES`，`sourceId` 必变，首次重载会让 backend **重启一次**——这是新代码生效的
+  正确行为，不要误判为重载循环（判据仍是 `ready` 只出现 1 次）。
 - **Goal 与 Fast Context 不在本 fork 的验收范围内**（2026-10-16 决定）：两者是上游自带、由上游验证过的**额外功能**，本机不使用，因此**不要**为它们安排真实 Devin 窗口的端到端验收，也不要因为「只有模拟/合成测试」而把它们列为待补缺口。核心逻辑与上游同源或纯搬迁；fork 只改过它们的视图层（`panel/goal-view.cjs`、`panel/fast-context-view.cjs` 的共享 DOM 助手改造），那部分由本仓自身的视图测试覆盖。**精力投在 BYOK + Fusion 基础功能上。**
 - **`test/sdk-contract.test.cjs` 是防 SDK 漂移的契约测试**（2026-10-16 加）：它**读** `.refs/` 里的官方 SDK 源码，把我们的手写常量与 SDK 字面量做交叉断言——Anthropic `StopReason` 每个成员都必须映射进共享处理器认识的集合、`OutputConfig.effort` 每个取值都必须能到达 `output_config.effort`、`ReasoningEffort` 必须仍覆盖我方取值集合、`ToolChoice` 四个成员接口与出站形状一致、`ThinkingBlockParam.signature` 必须仍是**必需**字段（它一旦变可选，「只在签名在场时回放思考」这条规则就该重审）。
   `.refs/` 被 gitignore，**CI 上不存在**，所以各用例都用 `{ skip: ... }` 在文件缺失时跳过；但「**文件在、却解析不出来**」必须**失败**并提示 layout changed——两者不可混同，否则 SDK 换写法时测试会静默失效。**改这些常量时必须同步跑该文件**，别只看全量计数（CI 上它是 skipped，全绿没有信息量）。
