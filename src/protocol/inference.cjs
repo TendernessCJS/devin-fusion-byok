@@ -211,6 +211,15 @@ function processor(id, uid, chat, emit, scope = null) {
   };
 }
 
+// A transport failure is classified as a bare `upstream_network`, which cannot
+// tell a reset socket from a DNS or TLS failure. Only enumerations are kept:
+// messages can carry host names and tokens, so they never reach the log.
+function transportDetail(err) {
+  const safe = value => typeof value === 'string' && /^[A-Za-z_$][\w$]{0,47}$/.test(value) ? value : null;
+  const parts = [safe(err?.name), safe(err?.cause?.code) || safe(err?.code)];
+  return [...new Set(parts.filter(Boolean))].join('/');
+}
+
 async function serveChat({ request, route, provider, res, signal, log = () => {}, timeouts = {}, onMetrics = () => {} }) {
   const id = randomUUID();
   const metrics = createTracker({ id, route, provider });
@@ -399,7 +408,8 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       if (!res.destroyed && !res.writableEnded) res.destroy();
     }
     outcomeCode = classifiedCode;
-    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}) });
+    const transport = transportDetail(err);
+    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}), ...(transport ? { transport } : {}) });
     return { status, error: true, code: classifiedCode, requestId: id };
   } finally {
     try { onMetrics(metrics.finish(outcome, status, outcomeCode)); } catch {}

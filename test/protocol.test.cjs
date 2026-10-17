@@ -791,6 +791,23 @@ test('firstResponse timeout triggers code 13 and upstream_timeout error', async 
   assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_timeout'));
 });
 
+test('transport failure keeps the generic text but logs a sanitized error code', async t => {
+  const logs = [];
+  const upstream = await server(req => { req.socket.destroy(); }, t);
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(nativeRequest()), route: { model: 'test-model', uid: 'local-cpa-lead', effort: 'high' }, provider: { baseUrl: `${upstream.url}/v1`, apiKey: 'fake-provider-secret', apiFormat: 'openai-responses' }, res, log: event => logs.push(event) });
+  }, t);
+  const result = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Provider response could not be completed.');
+  assert.equal(num(result.messages.at(-1), 5), 13);
+  const errorLog = logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_network');
+  assert.match(errorLog.transport, /^TypeError\//);
+  assert.match(errorLog.transport, /ECONNRESET|EPIPE|UND_ERR_SOCKET/);
+  assert.equal(JSON.stringify(logs).includes('fake-provider-secret'), false);
+  assert.equal(JSON.stringify(logs).includes('127.0.0.1'), false);
+});
+
 test('malformed non-SSE content-type outputs invalid format message', async t => {
   const app = await bridge(t, async (req, res) => {
     res.writeHead(200, { 'content-type': 'text/plain' });
