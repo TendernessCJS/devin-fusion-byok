@@ -1,0 +1,64 @@
+---
+trigger: model_decision
+description: "Apply when changing native catalog observation or its cache, CLI cache in-place rewriting, or config-key cleanup."
+---
+
+# 原生观测与 CLI 缓存（native-observation-and-cli-cache）
+
+原生目录观测与跨进程缓存、两条观测通道的合并、CLI 缓存原地重写、配置键分类清理。
+
+- 原生模型目录靠观测，重启后内存里为空；观测结果经 `<storage root>/native-cache.json` 跨进程缓存（格式 `{version, savedAt, models}`，TTL 7 天，
+  原子写：临时文件 + rename，`0o600`）。它是**观测缓存**、不是用户配置，只含 uid/label/能力标志，绝不落凭证；追加并集语义（与内存一致，不因单批缺席而删条目）。此时角色里的
+  `nativeUid` 解析不到，**不得**断言「已从模型目录移除」——要按 `nativeCatalogStatus` 区分「尚未同步」（`pending`，muted 文案，
+  判定依据为**内存与缓存都没有可用观测**）与「目录就绪但模型确实不在」（真警告）。BYOK 供应商引用写在配置里，解析不到就是真的不可用，不算 pending。
+- 原生目录由空变有（或目录签名变化）→ 触发 `pickerRefresh.changed()`；**当前线上不接任何刷新命令**（`lightCommands: []`，且
+  `createPickerRefresh` 的**默认值本身就是 `[]`**——历史上默认值曾是 `['devin.reloadAcpConnections']`、只有生产显式传空才安全，
+  任何一处漏传就会重新引入风暴，因此默认值必须是安全的那一侧）：`devin.reloadAcpConnections` 实测会断开全部 ACP 连接（用户可见「ACP connection closed」+
+  会话区刷新），且每次执行后 5–35 秒内整个窗口被重载（2026-10-14 真机，reload 循环达每小时十余次）。数据正确性完全由 cli-cache 原地刷新兜底，新会话读到的是新 payload；
+  **不得回退到 `devin.newConversation` 之类开会话的命令**，重新接命令前必须先在真机确认其不会断开 ACP。另：扩展宿主对该窗口反复重启的另一嫌疑是 `saveReceipt`
+  往**安装目录**写 `.fusion-byok-storage.json`（POINTERS）——目录被监视则每次 activate 都触发重启，现已改为 roots 不变则不写；不得往
+  `context.extensionPath` 里新增任何周期性/激活期写文件。
+
+- `augmentLocalModelChoices` 的门控是「Fusion 需要其原生 uid 出现在字段 7 允许列表里、普通 BYOK 不需要」——盲窗（原生观测为空）下 Fusion 整组被丢而普通
+  BYOK 全留，现象会被误读成「非 Fusion 模型缺失」，排障时先看这里而不是重查目录生成。
+- CLI 的模型选择器是「`~/.cache/devin/cli/` 的按身份持久缓存（`user_status`/`model_configs_v5`/`team_settings` 的
+  `.<digest>.bin` JSON 信封，payload 为 base64 proto）∩ 白名单」；配置改动会改普通模型 uid（digest 含
+  `provider.id`/`model.id`/`effort`），缓存陈旧期普通条目整批丢失，而镜像的 `fusion-<lead>-sidekick-<side>` 条目只要两侧 uid 未变就仍能命中。
+  `src/runtime/cli-cache.cjs` 按「payload 含 `dfbyok` 判定我方身份、含 dfbyok 但缺当前 uid 判定陈旧」**原地重写 payload**：改写前先按
+  `CACHE_RPC` 映射缓存名→RPC 路径、经 `augmentCatalog` 重算，且新 payload 必须「不丢任何已出现的期望 uid 且字节有变化」才落盘（否则 `no-improvement`
+  跳过——允许净缩，清陈旧也是改进）；落盘前把原始字节写到 `<file>.bak`（原子写、`0o600`；**每次重写都覆盖，只保留最近一次**，不是首次重写前的原件），envelope 的
+  `version`/`identity_digest`/`fetched_at_secs` 原样保留。**绝不改名、绝不写 `.stale`**——该 CLI 版本不会因文件缺失而补拉
+  `model_configs_v5`，改名会把 picker 打空且不自愈（实测两小时零 `GetCliModelConfigs`）；不碰无 dfbyok 标记的其他身份文件；仅在重写到
+  `model_configs` 时才经 `pickerRefresh.force()` 让 picker 重取（`team_settings`/`user_status` 由 CLI 自身节奏重拉、无需断 ACP
+  即生效），且 `force()` 与 `changed()` 共用 `cliCacheMs` 间隔——刷新风暴不得变成 ACP 断开风暴（实测曾 30 秒内连断 3 次）。Composer
+  模型缺失排障时先看缓存新鲜度，backend 注入日志（`afterOwn`）证明不了 picker 侧可见性。面板「设置 → CLI 缓存 → 刷新缓存」走同一个
+  `checkCliCaches({ force: true })`（`refreshCliCaches` 消息），只做原地重写、不引入新的刷新通道；`cliCacheStatus()` 把最近一次报告交给面板渲染，
+  不要在那里触发写入。**自动检查只看 uid 存在性**（`missing`/`staleProbe`），所以「uid 齐全但条目形态过时」它一律跳过——这正是 `force` 存在的理由：强制模式绕过门控、
+  直接比较 augment 后的字节，只有真差异才落盘（因此连按不churn，实测二次调用即 `no-improvement`）。**重写是「比对后替换」而非盲目覆盖**（2026-10-16）：CLI
+  自己也写这些文件（它经 bridge 拿增强目录再落盘），所以落盘前会重读一次、要求字节与所增强的那份**完全一致**，不一致就跳过（`concurrent-write`，等下一轮自动检查重读）——否则会用「旧
+  payload 的增强结果」覆盖 CLI 刚写入的更新版本，静默丢掉它存的内容；窗口是「重读→rename」之间的几微秒。`.bak` 写的是**所增强的那份原始字节**（不是再次新读的、可能已属新世代的版本）。修
+  emit 形态后**必须**走一次强制刷新或让配置变动触发自动重写，否则旧形态条目会一直留在缓存里（2026-10-14：信息性维度加 `order` 的修复就是这样落地的）。
+  **`GetUserStatus` 有两种载荷形状，按 f1 的 wire type 判别**：响应是 `GetUserStatusResponse` 信封（f1 = `user_status` message，
+  模型列表在其 f33），而 CLI 落盘的缓存是**裸 `UserStatus`**（f1 = `pro` bool，模型列表直接在 payload 的 f33，实测顶层 f33 = 526 条条目 + 3
+  个排序区）。2026-10-16：原地修复路径只认信封形状，裸形状下 `rewriteMessage(data, 1, …)` 抛 `Ambiguous` 被 `catch` 吞掉 → 每次重写都逐字节相同 →
+  记成 `no-improvement` 并**上报成功**（实测 `user_status` 期望 uid 236/456、8 个已退役 fusion uid 滞留，且只认信封的 `staleFusionUids`
+  对同一份 payload 报 0）。修复后对同一份真实缓存的强制刷新：236/456 → 456/456、陈旧 fusion uid 8 → 0，且二次/三次强刷仍为 `no-improvement`（不
+  churn）。`staleFusionUids` 现在扫描 payload 本身 + 它携带的每个 f1 message（覆盖 flat / 信封 / 裸三种形状）。`augmentCatalog` 接受
+  `onSkip(code)`（`shape-unrecognized`/`transform-failed`），**三个 RPC 都接**（`GetCliTeamSettings` 的允许列表改写同样上报，
+  此前它是唯一剩下的静默路径）；`refreshStaleCliCaches` 把「上报了 skip 且期望 uid 仍缺」记为失败码而非
+  `no-improvement`——**静默返回输入等于关掉这条链路的所有自检**，面板据此显示「未改动（原因）」而不是「无需重写」。bridge 侧不要把跳过码按进程去重（扩展宿主长期存活，
+  形状在会话中途变化只会打一次），而是把它作为 `skipped` 字段**搭在每次响应都打的 `catalog` 行**上。回归防线是 `test/cli-cache.test.cjs` 的端到端用例（真实裸形状
+  payload → 真实 `augmentCatalog` → 真实重写链路）：**它在本修复之前必然失败**，而此前分层的单测都放过——catalog 侧用信封形状构造 payload，cache 侧用合成
+  augmenter，缺口正好在接缝上。
+- 加载 `src/extension.cjs` 的测试 fixture 必须 stub `./runtime/cli-cache.cjs`（或把 `dir` 指向临时目录），
+  **绝不可触及真实 `~/.cache/devin/cli`**——历史上未 stub 的 fixture 曾把用户真实缓存改名搬走、清空 picker；
+  `inspectCliCaches`/`refreshStaleCliCaches` 的 `dir` 参数必填（非空字符串，否则抛 `TypeError`）就是为了堵这个口子。
+
+- **原生观测的两条通道必须按「谁更完整」合并，不能后者覆盖**：backend 看的是 CLI 侧流量（CLI 常读自己的缓存、很少重取 → 它的观测可能长期是 seed 的贫化形态），扩展宿主看的是原生扩展 UI
+  侧的流量（带完整 field 30）。`mergeNativeEntry`（`native-cache.cjs`）在合并时保留
+  `sidekickDimension`/`fusionMetadata`/`harnessUids`，缺失的一方不会把完整的一方降级；标量字段（`disabled`/`label`）仍以新到者为准。
+  **一旦被贫化条目覆盖，所有原生 Sidekick 解析不到 → 镜像组合消失 → 又被上一条的清理逻辑删除**，这是级联失效。`refreshNativeModels` 与
+  `observeNativeModels` 都已走该合并。
+
+- backend 的原生缓存落盘条件包含「任一入口的维度变富」，不再只看条目数：seed 已是满员（875）时条目数永不变化，只看数量就永远不会把更完整的观测写回磁盘，每次重启都重新 seed
+  回贫化形态（`runtime.log` 的 `native-observed` 全天只出现 2 次就是这个征兆）。

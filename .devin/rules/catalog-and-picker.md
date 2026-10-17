@@ -1,0 +1,90 @@
+---
+trigger: model_decision
+description: "Apply when changing picker visibility, role allow-lists, stale-entry detection and cleanup, push gating, nativeFamilies, dimension order, or the declared context window."
+---
+
+# 目录与 picker（catalog-and-picker）
+
+picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的判定与清理、推送门控、官方模型显示分组、维度 order、声明窗口。
+
+- 设置页「官方模型显示」的状态键是 **`state.nativeFamilies`（已取代 `nativeModels`）**：按服务器家族分组，`fusion-*` 组合条目**一律剔除**（组合归 Fusion
+  页管，用户明确要求；代价是面板不再有入口单独隐去某条官方组合，`augmentProtoList` 的 hiddenFusion 能力仅剩配置层），`dfbyok-` 同样剔除；无 familyUid
+  的条目回退成单成员族；「已隐藏但已离开观测目录」的 uid 仍保留单成员族以便取消隐藏。渲染为**族行（无成员行、无展开态）**：一族一个开关发 `{ uids: 成员 uid 数组 }` 统一隐藏/开放——用户
+  2026-10-15 明确表示只统一控制，故删除了成员级开关与 `nativeOpen`；`setNativeModelHidden` 在 `manager.cjs` 仍同时接受 `uids` 数组与单个
+  `uid`（能力保留，面板 UI 不再使用单 uid 形态）。族标签取「无标记 uid」成员的 label 剥掉档位/开关尾词（单成员族不剥，故 `SWE-1.6 Fast` 保持原样；
+  **uid 变体后缀词表含 `lightning`**——`swe-2-medium-lightning` 是 fast-mode 变体而非家族名，`Lightning` 不剥 label 是因为
+  `SWE-1.7 Lightning` 本身是家族名），并全局去重。
+- **picker 可见性契约（2026-10-15：先逆向实测、后由 App bundle 源码证实）**：picker 行 = `team_settings` proto
+  **f7 `allowedModelUids` 白名单** ∩ `user_status` f33 **排序组 label 引用** ∩ 非内部 `kind`。内层 f22
+  **就是 proto `DisplayOption` 枚举**（`windsurf-chat-client/index.js` 的 `nuk`/`nuM` + `niH`
+  过滤器坐实）：`0/缺省 UNSPECIFIED → standard-picker`、`8 MODERN_AGENT_CHAT → standard-picker`（非 Devin Local 环境下被
+  `nuj` 强制 disabled + 「Devin Local only」）；`3 MODEL_ROUTER` 仅 arena 关闭时混入（Adaptive/Fusion 条目所在面，`nuq` 的
+  `isFeatured`=整组 MODEL_ROUTER 即官方推荐组）；`1 ARENA`/`4 QUICK_REVIEW` 走各自界面；`2/5/6/7` invisible。桌面端
+  **f7 一次都不被读**——allowlist 是**纯 CLI 侧门控**（`model_configs_v5` 本就是 f7 过滤后的集合）。`GetCascadeModelConfigs`
+  在当前流量里**从未出现**。面板 `internal` 判定链：`isModelRouter || kind≥1&&kind≠8`（Adaptive/Fusion 官方可见但按用户要求折叠）→
+  `uid ∉ allowedUids`（**整集替换**而非并集，否则退役 uid 滞留）→ `pickerListed===false` → 旧启发式兜底（`listed`=顶层 f6、sources、
+  harness/维度）。`pickerListed` 仅在 payload 带排序区时产生（`GetCliModelConfigs` 无排序区 → undefined）。白名单采集点是 bridge
+  `forward` 里 `GetCliTeamSettings` 的**注入前**快照，经 backend 内存 → `native-cache.json`（信封含 `allowedUids`）→ 面板。
+  渲染引擎要点（`nr3`/`nr8`/`nio`）：维度值**按 order 首见去重**（同 order 两名只留先枚举到的）、**「恰好 2 个无名值」即开关**（官方不看 controlType，Fast
+  Mode 只写 order 就是开关）、disabled 家族成员自动落到最近可用兄弟、代表模型按 pinned>选中>isDefaultModelInFamily>首个取。
+  **观测字段在全链路上都有白名单剥失的教训**：`observeNativeModels` 与 `readNativeModels` 的字段重建必须透出
+  `kind/listed/sources/pickerListed`，否则新信号到不了判定层。
+- **角色列表也要过白名单**：`buildRoleLists`/`buildCatalog` 可选第三参 `allowedUids`（非空=权威全集、null/空=未观测不限制），
+  `discoverOfficialRoles` 的两侧 claim 与 `discoverAdditionalNativeRoles` 的候选池都对它求交——白名单外的 uid（如
+  `gpt-5-3-codex-spark-medium`，仅 entitlement 来源）虽然 harness 齐全，但其组合在 `augmentLocalModelChoices` 注册 f7 时必被丢，
+  列出来等于假可选。调用点：面板三处（`publicState`/`setRoleModel`/`selectFusion`）+ 宿主 `catalog()` + backend
+  `getCatalog`/AssignModel；迁移路径 `migrateFusionConfig` 故意不传（不该因资格丢用户既有选择）。
+- **Lead/Sidekick 门槛的机制依据（App bundle proto/schema 坐实）**：官方客户端**不做资格计算**——可选组合就是服务端枚举的 fusion 条目集，picker
+  只做「维度元组→uid」查表（`nr6`，无匹配静默不切换）。AssignModel 双 router 字段：`model_router_uid`（f2）分配 sidekick、
+  `fusion_lead_router_uid`（f6）分配 lead；**组合条目的 `harnessUids` 携带 `['fusion', lead真harness]`——lead 的执行通道由组合条目替它声明**，所以成员 lead 无自带 harness 也可当 lead（实测 29 个），而 sidekick 经独立 router 解析、组合条目不携带其 harness，故必须自带（实测 11/11）。**发射侧与 `resolveAssignment`（AssignModel 路径）必须同规则**：`leadNative ? leadHarnessUids : ['fusion']`（`leadHarnessUids` 在 catalog.cjs 里已含 `'fusion'`）。发射侧此前一律只写 `['fusion']`，与契约不一致，2026-10-16 修正（实测 336 条 native-Lead 组合各补上其 Lead harness、112 条 BYOK-Lead 保持 `['fusion']`；改前实测官方 586 个可解析样本中该规则 **390/390 零例外**）。**改这两处中任意一处，必须同时改另一处**，并跑那条逐条比对的回归断言。ModelInfo 官方 schema：`inferenceServerUrl/harnessUids/displayOption/modelFamilyUid/isModelRouter`——与我方 emit 字段名逐一对齐。**字段级实测（2026-10-16 解 CLI 缓存 `model_configs_v5.*.bin`）**：`f4 = 声明窗口`（官方原生值 262000/1000000/200000 与其真实窗口精确相等；我方 BYOK 发 1024000），它同时就是喂给「context-window-based」压缩默认值的那个数——见「上下文与压缩」一节；`f20 = harnessUids`（repeated，是**候选列表**），assignment 落的是**单个** `harness_uid`（`ModelAssignmentInfo`）；`f25 = isModelRouter`（官方原生不写＝默认 false，我方 fusion 条目写 1）；`f22 = displayOption`；`f23 = familyUid`。**`f5` 是一条「我方永不发、官方部分条目发」的字段**：实测 CLI 缓存 1205 条原生条目中 **234 条**带 f5，值**恒为 `LLAMA_WITH_SPECIAL`**（971 条不带；形态看是提示词模板/分词器类型，字段名未在 bundle 里确证）；我方 `encodeConfig`（catalog.cjs:88-99）**72 条**全部不发。**影响未验证**（可能 harness 已在服务端提供模板故留空无害，也可能客户端回落默认模板），**拿到影响证据前不要改**，也不要写成「官方一律发」。
+
+- **隐藏语义是家族级**：`hiddenNativeModelUids` 仍存 uid，但 `expandHiddenByFamily`（catalog.cjs）在
+  `augmentProtoList`/`augmentJsonList`/`buildRoleLists` 三处把隐藏 uid 连坐到同 `familyUid` 的全部兄弟——官方上新变体不会漏过黑名单；面板
+  `family.hidden = 任一成员隐藏`，`mixed`/`部分隐藏` 状态已移除。
+- **维度 order 的稳定性是可见性命门**：picker（chat client `nr3`）按 `(dim 名, order)` 去重维度值，同 order 不同名只留先枚举到的一个，其余静默消失。
+  自定义维度值一律走 `stableOrders`（`0x10000000 + hash(name)`，同名恒同 order、跨代稳定），**禁止恢复「20+index」式顺序分配**——配置一变 order 全移，
+  陈旧条目与新条目会在同一 order 上互撞（2026-10-14 实测
+  `DeepSeek · deepseek-flash`/`Claude Haiku 5.5`/`Claude Haiku 5.5 Medium` 三名共占 order 20，BYOK lead 被隐藏）。
+- **陈旧 emit 条目的判别指纹**：官方 fusion 条目恒带能力记录（proto field 32，含 `fusion-sidekick-*` 注册条目），我方 emit 永不写 field
+  32——「`fusion-*` uid 且无 f32」即我方条目（含无 `dfbyok` 标记的 native×native 形态，`ownUid`/`matrixUids` 都抓不住它们）。
+  **只有补 field 32 才会破坏该指纹；补 harness 不会**——判别只读条目自身的 f32，而 harness 在 inner message 的 f20（2026-10-16 给组合条目补 Lead
+  harness 后实测陈旧判定零影响，`harnessUids` 与 `maxTokens` 都不参与）。若未来给我方条目补 field 32，必须同步更新该指纹；`team_settings` 白名单里的陈旧
+  uid 是死指针、无对应条目，不清理。
+- **清理条件必须保守：不在 emit 集合里 ≠ 陈旧**。`staleFusionUids` 的完整形态是 `{ emitted, known, excluded }`——只有「uid 拆不出
+  lead/sidekick」「某一侧已不在 `known`（模型消失 / BYOK uid digest 随配置变了）」「某一侧被该角色显式排除」才判为可删。**禁止退回「不在 emitted 就删」**：我们的
+  emit 集合会随原生 Sidekick 维度到达时序在 24↔155 之间波动，按缺席删除一次就静默删掉 131 条有效组合（2026-10-14 实测：`bak` 24 条 vs 现文件 155 条）。
+  角色排除仍会退休条目，否则关掉的模型会继续把自己的维度值喂进 picker。
+  **位置式调用（`staleFusionUids(data, emittedSetOrArray)`）已退役**：它编码的正是这条被禁止的语义，留着就等于把误删开关摆在代码里等人去按（当时它还存在只为兼容 5
+  处旧测试断言）。新增调用一律传对象式，且 `known` 要给出**当前真正在服务的目录**，不要图省事传 `emitted`。
+  **`known` 必填且非空，缺失/空 Set/空数组/字符串一律抛 `TypeError`**（`emitted`、`excluded` 仍可省略——`excluded` 默认 `{}` 本就是保守侧，
+  `emitted` 缺失只是失去短路）：`emitted` 只是短路（命中即跳过），真正的判据只有 `!known.has(uid) || 被排除` 这一条，所以 `known`
+  缺席就是**静默**回到被禁止的缺席语义——已发射的条目仍被短路保住，而所有「payload 里还在、本轮暂时未选中」的条目会全部被判可删（2026-10-15 真机复现：缺 `known` 误判 1 条，三参齐全
+  0 条）。抛错在此是安全方向：`inspectCliCaches` 用 try/catch 包住探针，抛错被吞即空陈旧集合＝一条都不删。
+- **推送的门控必须描述「真正发送的内容」**：宿主的 `pushKey()` 曾以 `localNativeModels`（bridge 观测）计数，而实际发送的是
+  `nativeModels`（合并视图）——两者在激活初期不等价：首次 refresh 时 backend 可能还没就绪、返回空，于是**空载荷占用了 key**，紧接着那次有意义的 refresh
+  被判「未变化」直接跳过，推送静默地从未发生（只在上一轮侥幸的时序下成功过）。现在 key = `local bridge 计数 : 上游载荷条数 : 上游载荷带维度条数`，且**空载荷不占 key**。
+  改这里时务必让门控与实际 payload 同源，否则会退化成「看起来在推、其实没推」。
+
+- **上下文压缩：扩展不是施加者，且声明窗口是唯一杠杆（2026-10-16 定论，含三次自我推翻，别再重走）**。①**扩展从不碰会话历史、也不设任何压缩参数**；我们唯一的杠杆是 ModelInfo 的
+  `f4 = maxTokens`（＝声明窗口）。**实测该声明被采纳且生效**：BYOK `deepseek-flash` 声明 `contextWindow: 1024000`，真实会话跑到
+  **280,819** 而**零压缩**（`monitor.jsonl` 峰值，其中 >262000 共 9 条全 success），证明压缩**不是**按副模型 swe-2 的 262,000 走。
+  ②**压缩由 CLI 的「压缩调度 + 阈值」决定，且调度是云端部署的**：远程 flag `enable-devin-cli-cloud-compaction-schedule=true`（描述原文「gate
+  the deployment of CompactionSchedules and self-compaction for SWE-1.7/2」）、`devin-cli-compaction-threshold`
+  与 `enable-devin-cli-swe2-self-compaction` 均为 `false`；CLI 配置项 `agent.compaction_threshold_tokens`（官方
+  changelog：「trigger automatic compaction **earlier** than the context-window-based default」）只能让它更早，
+  **没有**可靠办法推迟。③**CLI 有专门的 Fusion sidekick 阈值开关**（隐藏、`--help`
+  不列）：`--compaction-thresholds <SPAWN,[APPLY,]HARD>`（示例 `183500,183500,262144`）与
+  `--sidekick-compaction-thresholds`，后者原文「Override the **Local Fusion sidekick chain's** compaction
+  thresholds **independently of the lead's**，未设置时回退到前者」，env 为 `DEVIN_COMPACTION_THRESHOLDS` /
+  `DEVIN_SIDEKICK_COMPACTION_THRESHOLDS`。**但没有任何证据显示这两个开关在默认下把上限压到 sidekick 窗口**——实测已到 280,819 未压缩即反证，勿据此改配置。
+  ④**触发是事件驱动的，不要用「压缩时的 token 数」反推阈值**：把全部真实压缩回溯前序事件，**每一条都紧跟在 `session/load` 之后**（15:21:51←15:19:15、
+  15:33:11←15:32:59、16:00:01←15:59:44、17:00:20←16:59:13、00:26:01←00:23:47、01:43:00←01:39:46、
+  02:08:11←02:07:45），token 数只是当时的规模，因此历史上把 141k/211k 当阈值证据、以及按 `0.7×262k`/`0.8×262k` 推阈值**都是错的**（已被
+  249.9k/280.8k 无压缩直接证伪）。⑤**唯一干净的实验样本**：pid 33561 自 02:07:52 起 `initialize`/`session/load` 计数为 **0**（无重载、
+  无切模型），`Summarize` 仅 02:08:11 一次，`message_nodes.num_tokens_preceding` 单调递增无断层。⑥**排障四个源**（缺一不可，
+  因为压缩**不在对话里显示**——官方 changelog：「Automatic context compaction is no longer surfaced in the scrollback or the
+  ACP conversation view」）：CLI 日志 `Summarize: truncated conversation history from N to M messages`、
+  `message_nodes.num_tokens_preceding` 的断层、`~/.local/share/devin/cli/summaries/` 的新摘要产物、`summaries/sidekick/`
+  与 summary-agent 日志。⑦**不要把面板的 `used` 与 `monitor.jsonl` 的 `inputTokens` 混用**：前者是 Devin 上报值（略高），后者是实际请求量，
+  二者差值可达 5–7k，用它们互相验证会得出假结论。⑧`usageState: 'inconsistent'`（如 `cachedTokens > inputTokens`）与
+  `num_tokens_preceding` 的**常态回落**（实测 484 条请求中 37 次回落、21 次 ≥5,000，最大 −31k 且 24 秒内自愈）都**不是**压缩，别当信号。

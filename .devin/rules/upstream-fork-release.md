@@ -5,7 +5,7 @@ description: "Apply when syncing `upstream`, choosing or bumping the version, pu
 
 ## fork 同步与发布
 
-本仓库是上游 fork。`upstream` 主要作为**参考来源**——看有没有值得借鉴的改动；**行为判断以本机实机调试为准，不以 upstream 的说法为准**（已有多处历史结论因照抄 upstream 祖先状态而被实机推翻，见 `.devin/rules/testing-notes.md` 的「已实测的供应商面行为」）。以下约定是刻意设置，merge 时不要被 upstream 覆盖。
+本仓库是上游 fork。`upstream` 主要作为**参考来源**——看有没有值得借鉴的改动；**行为判断以本机实机调试为准，不以 upstream 的说法为准**（已有多处历史结论因照抄 upstream 祖先状态而被实机推翻，见 `.devin/rules/provider-measurements.md`）。以下约定是刻意设置，merge 时不要被 upstream 覆盖。
 
 ### 同步 upstream
 

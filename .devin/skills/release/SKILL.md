@@ -25,7 +25,7 @@ permissions:
 
 # 发布与自更新验收
 
-覆盖「发一个新版本 → 让插件自更新真正可用 → 验收」全流程。发布契约的权威定义在 `src/update.cjs`（`releaseInfo()` / `verifyPackage()`）与 `AGENTS.md` 的「自更新（发布约束）」节；本 skill 只固化流程与验收方法，规则冲突时以那两处为准。
+覆盖「发一个新版本 → 让插件自更新真正可用 → 验收」全流程。发布契约的权威定义在 `src/update.cjs`（`releaseInfo()` / `verifyPackage()`）与 `.devin/rules/release-contract.md`；本 skill 只固化流程与验收方法，规则冲突时以那两处为准。
 
 ## 0. 先确认你在改什么
 
@@ -33,7 +33,7 @@ permissions:
 | --- | --- |
 | 发布一个已就绪的版本 | 走下面 1→7 |
 | 改动发布契约（资产名 / tag / digest 规则） | 先改 `src/update.cjs` + `test/update.test.cjs` 并补测试，再发布 |
-| 同步 upstream | 见 `AGENTS.md` 的「fork 同步与发布」，不是本 skill |
+| 同步 upstream | 见 `.devin/rules/upstream-fork-release.md`，不是本 skill |
 
 **不要改** `package.json` 的 `name`（`devin-fusion-byok`）与 `publisher`（`local`）：`verifyPackage()` 会校验包内身份，改了就拒绝安装自己的包。
 

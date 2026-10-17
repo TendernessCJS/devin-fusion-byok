@@ -28,3 +28,6 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   **不是**握手 `_meta.api_server_url` 改写——后者的模块已在审查后删除（`acp-injection.cjs` 自 fork 初始提交起从未接线，env 通道作用域严格覆盖它）。排障
   ACP 流量先看 settings.json 的 agentEnv 与 backend 日志，不要去复活握手改写。
 
+- **审「这段代码还活着吗」时，`require` 图会漏掉「路径型入口」**：`src/goal/report.cjs` 没有任何 `require` 指向它，是 `goal/state.cjs`
+  把它的**绝对路径拼进 shell 命令**交给 agent 执行（入口在 `extension.cjs` 的 `reportCliPath`）。纯靠模块依赖图做死代码分析会把它报成死模块（2026-10-15
+  实际误判过一次）。判死前先搜「文件名字符串是否出现在代码里」（`grep -rn "$(basename X)" src/`），再下结论。
