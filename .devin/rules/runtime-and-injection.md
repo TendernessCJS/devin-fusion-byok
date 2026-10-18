@@ -48,7 +48,7 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   `src/protocol/wire.cjs`——两条路径别混。在 `protocol/` 内增删/改名文件时，除 `SOURCE_FILES` 外还要留意**不靠 `require` 的隐式引用**（按模块名打桩的
   字符串键、`readFileSync` 的路径、`AGENTS.md` 里按路径写的说明），这类漏改不报错、只静默失效——`test/source-identity.test.cjs` 现在会兜住
   `SOURCE_FILES` 那一半（它要求 `SOURCE_FILES` 与 `backend.cjs` 的 require 闭包双向精确相等），但路径字符串与打桩键它管不到。
-- **扩展宿主编排层在 `src/activation/`**（2026-10-18 从 725 行的 `extension.cjs` 拆出，现 150 行）：`errors`（RuntimeError/`safeError`/`pause`/
+- **扩展宿主编排层在 `src/activation/`**（2026-10-18 从 725 行的 `extension.cjs` 拆出，现 154 行）：`errors`（RuntimeError/`safeError`/`pause`/
   `compareVersion`/`globalSetting`，零依赖）、`backend-handshake`（`ensureBackend`）、`catalog-sync`（原生目录观测/推送/CLI 缓存触发）、`enable`
   （受管设置写入 + LS 注入 + startNativeSync）、`commands`（命令注册、Fusion 选择与 `disable` 恢复）、`panel-install`（状态栏/pickerRefresh/
   `checkCliCaches`/面板控制器/配置监听）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`
@@ -57,6 +57,9 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   `enableQueue`/`reconcileQueue` 这类序列化队列留在各自工厂闭包内；`generation`/abort 判据一处都不能少（`enable()` 里有 4 处）。
   改激活流程前先确认动的是哪个入口：全仓共 **5 个入口**，其中 3 个（`fast-context/server.cjs`、`goal/report.cjs`、`lifecycle/uninstall.cjs`）
   **从 `extension.cjs` 的 require 图走不到**，清单见 `.devin/rules/retired-and-deadends.md` 的「路径型入口」表。
+- **`src/runtime/health.cjs` 虽在 `runtime/`，却是宿主侧模块、不进 `SOURCE_FILES`**：只有 `activation/panel-install.cjs` require 它，结果经共享槽以
+  `readHealth()` 回调传给 `runtime/context-diagnostics.cjs` 与 `panel/manager.cjs`（backend 里没有任何 require）。放进 `SOURCE_FILES` 会让
+  `source-identity` 测试红，且会让「只在宿主生效」的代码被误当成 backend 代码改动。输出确定性约束见 `monitor-and-panel.md`。
 - `AssignModel` 本地应答不含 `assignment_jwt`（官方 `ModelAssignment` 响应带该字段）。当前 CLI（3000.10.48 实测）不校验；若未来版本强制校验，
   本地指派整体失效——届时改为转发上游或显式降级，不得伪造成功。
 - 修改行为时不要放宽现有安全校验（Origin 一律 403、控制令牌 `timingSafeEqual`、webview 只用 `createElement`/`textContent` 不用

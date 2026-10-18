@@ -63,20 +63,21 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 
 | 项 | 值 |
 | --- | --- |
-| **基线**（真正的 `git merge-base`，本 fork 从未同步过） | `5bae0bf` —— 2026-10-04，`feat: add Fast Context MCP and panel tab in v0.3.42` |
+| **基线**（真正的 `git merge-base`；本 fork 从未 merge 过，2026-10-18 的 v0.4.0 是**手工结构映射移植**（`3d07548`），不产生 merge 提交，故基线仍停在此处） | `5bae0bf` —— 2026-10-04，`feat: add Fast Context MCP and panel tab in v0.3.42` |
 | **上次读取上游** | 2026-10-18 |
-| **`upstream/main` 当前位置（未合并）** | `713836e` —— tag `v0.4.0`，2026-10-17 |
-| **基线以来 upstream 新增提交** | **2**：`58b324b`（web search / 页面读取 / 一键检查，v0.3.43）；`713836e`（v0.4.0：外部 MCP 开关、Goal 开关、稳定 launcher、页面读取、**宿主禁用时恢复自有设置**） |
-| 我们领先基线 | 147 个提交（2026-10-18 实测；重算用 `git rev-list --count "$(git merge-base upstream/main HEAD)..HEAD"`） |
+| **`upstream/main` 当前位置（已移植，未 merge）** | `713836e` —— tag `v0.4.0`，2026-10-17 |
+| **基线以来 upstream 新增提交** | **2（均已移植）**：`58b324b`（web search / 页面读取 / 一键检查，v0.3.43）；`713836e`（v0.4.0：外部 MCP 开关、Goal 开关、稳定 launcher、页面读取、**宿主禁用时恢复自有设置**） |
+| 我们领先基线 | 150 个提交（2026-10-18 移植后实测；每次移植都要重算：`git rev-list --count "$(git merge-base upstream/main HEAD)"..HEAD`） |
 
-**不要把「基线」改成 upstream 的新位置**（与旧版本这节的措辞不同，这是 2026-10-18 的修正）：基线一旦上移，`git log 5bae0bf..upstream/main` 就再也列不出这两个**尚未合并**的提交，追踪证据随之消失。只更新「上次读取」与「当前位置」两格。
+**不要把「基线」改成 upstream 的新位置**（与旧版本这节的措辞不同，这是 2026-10-18 的修正）：基线一旦上移，`git log 5bae0bf..upstream/main` 就再也列不出这两个**已移植但未 merge**的提交，追踪证据随之消失。只更新「上次读取」与「当前位置」两格。
 
-**这 2 个提交的移植判断（2026-10-18 读过）**：
+**这 2 个提交的移植状态（2026-10-18：先读、后按用户决定整体移植）**：
 
-- 结构性冲突：upstream 仍在改**单体** `src/extension.cjs`，而本 fork 已把它拆成 `src/activation/`（`extension.cjs` 仅 150 行）。直接 merge 会在该文件大面积冲突且语义错位，**只能选择性移植**。
-- **值得移植**：① `src/lifecycle/host-disabled.cjs` —— 用户在扩展管理器里禁用插件时恢复自有设置，否则 `WINDSURF_API_SERVER_URL` 会一直指向已死的 backend，把用户的 Devin CLI 打坏（正好命中本仓最重的注入面）；② `config.goalEnabled` 开关 —— Goal 默认关闭，upstream 只加了布尔门控，成本极低。
-- **暂不移植**：外部 MCP（`code_search`/`web_search`/`web_read_url`）、fast-context 的 `launcher.cjs`/`self-check.cjs`/`state.cjs`/`web.cjs` —— 按 `.devin/rules/testing-notes.md` 的既有决定，Goal 与 Fast Context 不在本 fork 的验收范围内。
-- 其余重叠文件（`README.md`、`package.json`、`panel/controller.cjs`、`panel/fast-context-view.cjs`、`panel/model.cjs`、`panel/view.cjs` 及 4 个测试）都属「两边都改」→ 手工判断。
+- 结构性冲突：upstream 仍在改**单体** `src/extension.cjs`，而本 fork 已把它拆成 `src/activation/`（`extension.cjs` 仅 154 行）。直接 merge 会在该文件大面积冲突且语义错位 → **不 merge，按结构映射手工移植**。
+- **5 项全部已移植**（提交 `3d07548`，随后 `d660869` 升 0.3.49 并完成真机验收）：① `src/lifecycle/host-disabled.cjs` —— 用户在扩展管理器里禁用插件时恢复自有设置，否则 `WINDSURF_API_SERVER_URL` 会一直指向已死的 backend，把用户的 Devin CLI 打坏（正好命中本仓最重的注入面）；② `config.goalEnabled` 开关 —— Goal 默认关闭；③ 外部 MCP（`code_search`/`web_search`/`web_read_url` + 账号检测 + 开关，默认关闭）；④ 页面读取（≤5 次 https 重定向、拒私有主机、不执行脚本）；⑤ 稳定 launcher。
+- **结构映射规则（下次照做）**：`panel/model.cjs → panel/manager.cjs`、`runtime/goal-state.cjs → goal/state.cjs`、单体 `extension.cjs → src/activation/*` + `lifecycle` 槽。**不要让上游的旧名文件复活**（会变成没有调用方的孤儿）。
+- **刻意保留的 fork 差异，不要被上游覆盖**：版本号（自管）、`repository` 字段、面板 tab 顺序、`postState` 队列与 `reloadWindow`、DOM 助手前缀（`byId(x,'fc-')`）。
+- **边界**：Goal 与对外 MCP 属**上游拥有**代码，本机不做 e2e 验收（见 `testing-notes.md`）；「仓库测试全绿」不等于「本机验过」。
 
 看上游有没有值得参考的新改动：
 
@@ -85,7 +86,7 @@ git fetch upstream && git log --oneline 5bae0bf..upstream/main   # 新增提交
 git diff --stat 5bae0bf upstream/main                           # 改了哪些文件
 ```
 
-同步（或仅阅读）之后，把上表的**基线**与**上次读取**两格更新为新位置（`git rev-parse --short upstream/main`）、并刷新「新增提交」与「领先」两个计数。
+同步（或仅阅读）之后，只更新上表的**上次读取**与**当前位置**两格（`git rev-parse --short upstream/main`），并刷新「新增提交」与「领先」两个计数；**基线一格不动**（理由见上）。
 
 ### 按需重算差异（不存清单）
 

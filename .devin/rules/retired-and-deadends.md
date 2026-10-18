@@ -31,7 +31,7 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   `GetChatMessage` 都跟随；但它**优先级低于 env**（env=死端口时 CLI 直接对死端口失败、不回退 meta），而扩展拿不到 key，所以
   「env 是唯一可用入口」的结论不变——**别把这条误读成「meta 那条路根本不存在」**。细节见 `runtime-and-injection.md`。
 
-- **审「这段代码还活着吗」时，`require` 图会漏掉「路径型入口」**。本仓有 **5 个入口**，其中 **3 个从 `src/extension.cjs` 的 require 图走不到**：
+- **审「这段代码还活着吗」时，`require` 图会漏掉「路径型入口」**。本仓有 **5 个仓库内入口**，其中 **3 个从 `src/extension.cjs` 的 require 图走不到**，另有 **1 个运行期生成入口不在仓库里**：
 
   | 入口 | 触发方式 |
   | --- | --- |
@@ -40,6 +40,9 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   | `src/fast-context/server.cjs` | `npm run mcp:fast-context`（自带 `require.main` 块） |
   | `src/goal/report.cjs` | `goal/state.cjs` 把绝对路径拼进 shell 命令（`extension.cjs` 的 `reportCliPath`） |
   | `src/lifecycle/uninstall.cjs` | `package.json` 的 `vscode:uninstall`，VS Code 卸载扩展时执行 |
+  | `<globalStorage>/fusion-mcp.cjs`（**运行期生成，仓库里没有**） | `fast-context/launcher.cjs` 写出，外部 MCP 客户端（Claude Code / Codex / Cursor）按面板复制的配置启动它 → 再拉起 `fast-context/server.cjs` 的最新安装副本 |
+
+  最后一行是新形态：入口**不在任何目录里**，它是被生成的。改 `launcher.cjs` 的模板时，已经生成过的旧 `fusion-mcp.cjs` 不会自动更新——判据是用户在面板里重新启用/重载后该文件内容是否变化。
 
   纯靠模块依赖图做死代码分析会把后三个报成死模块：2026-10-15 误判过一次 `goal/report.cjs`；2026-10-18 审查时又差点误判
   `lifecycle/uninstall.cjs`——它**只被测试 require、生产无人引用**，看起来正是「只有测试续命的死代码」，实际是 `vscode:uninstall` 入口。

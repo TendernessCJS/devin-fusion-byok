@@ -28,10 +28,16 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   （`panel/manager.cjs` 的 `allowedUids instanceof Set` 在 fixture 里从不真跑）。**但规则仍然成立**：任何**由测试构造、传入沙箱**的对象（如
   `setMatrixUids` 用 `vm.runInContext('Set', loader.context)` 造的集合）必须用沙箱 realm 的构造器，否则生产代码里的 `instanceof` 在测试中会判假——
   这类假绿只在测试里出现，生产是单 realm 所以不会暴露。
-- **本次重构（protocol 拆分 + activation 拆分）尚未做真实窗口验收**（2026-10-18 决定暂不打包）：974 条单测跑的是 fixture，覆盖不到「真宿主能否装载
-  `src/activation/`、注入 LS、起 backend、停用后恢复设置」。打包安装后必须核 6 项：`ready` 仅出现 1 次；`activated` 含 `nativeVersion`；
-  `ls bridge ready N -> M`；backend 进程路径指向新版本目录；`runtime-control.json` 的 version/sourceId/rootId 三方一致；monitor 有 HTTP 200 且
-  日志无 `error`/`unhandled`。**预期副作用**：protocol 三个新文件进了 `SOURCE_FILES`，`sourceId` 必变，首次重载会让 backend **重启一次**——这是新代码生效的
+- **本次重构（protocol 拆分 + activation 拆分）的真实窗口验收已于 2026-10-18 在 0.3.49 完成**：`ready` 只出现 1 次（port 39842, version 0.3.49）、
+  `activated` 含 `nativeVersion 0.2.0`、`ls bridge ready 64038 -> 64069`、backend 进程路径指向 `local.devin-fusion-byok-0.3.49`、monitor 有 HTTP 200 且
+  无 `error`/`unhandled`、已安装 `src/` 与仓库 `src/` 逐字节一致（`diff -rq`）；并在真机确认 Fusion（BYOK lead + 官方 sidekick）可选可跑。原清单（保留以便下次照抄）：
+  `ready` 仅出现 1 次；`activated` 含 `nativeVersion`；`ls bridge ready N -> M`；backend 进程路径指向新版本目录；`runtime-control.json` 的 version/sourceId/rootId
+  三方一致；monitor 有 HTTP 200 且日志无 `error`/`unhandled`。
+  **两个验收时别误判的现象**：① 重载后出现一次 `startup-error code:port_in_use` 是**良性接管**——`backend.cjs` 对 `EADDRINUSE` 记日志后 **exit 0**，宿主握手探到同
+  `service` 即采用已在跑的那个（backend 因此 `ppid=1`，跨重载存活是本意）；② 流式超时修复的判据在**宿主输出日志**
+  （`~/Library/Application Support/Devin/logs/*/window*/exthost/output_logging_*/1-Devin Fusion BYOK.log`），`runtime.log` 的 `forward-timeout` 不带 `rpc`
+  字段——改前同期 10 分钟 30 条 `phase:body`，改后 0 条。
+  **预期副作用**：protocol 三个新文件进了 `SOURCE_FILES`，`sourceId` 必变，首次重载会让 backend **重启一次**——这是新代码生效的
   正确行为，不要误判为重载循环（判据仍是 `ready` 只出现 1 次）。
 - **Goal 与 Fast Context 不在本 fork 的验收范围内**（2026-10-16 决定）：两者是上游自带、由上游验证过的**额外功能**，本机不使用，因此**不要**为它们安排真实 Devin 窗口的端到端验收，也不要因为「只有模拟/合成测试」而把它们列为待补缺口。核心逻辑与上游同源或纯搬迁；fork 只改过它们的视图层（`panel/goal-view.cjs`、`panel/fast-context-view.cjs` 的共享 DOM 助手改造），那部分由本仓自身的视图测试覆盖。**精力投在 BYOK + Fusion 基础功能上。**
 - **`test/sdk-contract.test.cjs` 是防 SDK 漂移的契约测试**（2026-10-16 加）：它**读** `.refs/` 里的官方 SDK 源码，把我们的手写常量与 SDK 字面量做交叉断言——Anthropic `StopReason` 每个成员都必须映射进共享处理器认识的集合、`OutputConfig.effort` 每个取值都必须能到达 `output_config.effort`、`ReasoningEffort` 必须仍覆盖我方取值集合、`ToolChoice` 四个成员接口与出站形状一致、`ThinkingBlockParam.signature` 必须仍是**必需**字段（它一旦变可选，「只在签名在场时回放思考」这条规则就该重审）。
@@ -39,6 +45,9 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   2026-10-16 扩展四条 Responses 契约：`CustomTool.type` 仍是 `'custom'` 且 `format?` 仍可选、`CustomToolInputFormat.Grammar` 的 `syntax` 仍是 `'lark'|'regex'` 且 `type` 是 `'grammar'`、`ResponseCustomToolCall.input` 必须仍是 `string`（我们「跳过 JSON 校验」完全建立在这条上）、请求参数里 `store` 仍存在且 `ResponseIncludable` 仍含 `'reasoning.encrypted_content'`。四条均已做过变异验证（逐个改坏 `.refs` 对应行 → 恰好该条失败 → `cp`/`diff -q` 逐字节还原），基线 `skipped 0`。
 - **给「防漂移」类测试加断言后，要用变异法证明它真的有牙**（2026-10-16 实测，3/3 命中）：把源码临时改坏（删 `pause_turn` 映射、从 `EFFORTS` 删 `max`、让 `tool_choice` 丢掉 `any`）后逐个跑该测试文件，确认**恰好对应的那一条**失败，再逐字节还原（`cp` 备份 → `diff -q` 校验），最后 `rm` 掉备份。基线要同时确认 `skipped 0`——否则「全绿」可能只是整个文件被跳过。不做这一步时，「断言写得像那么回事但其实恒真」的测试和真测试长得一模一样。
 - 「重启 Devin」触发即退出 Devin，无法在会话内端到端验证；其探测与时序由 `test/app-restart.test.cjs` 的合成 app 覆盖。
+- **一个挂了 3 天的 `npm test` 不是「测试挂死」**（2026-10-18 判定）：`lsof -p <pid> -a -d 1,2` 显示 fd1/2 是 `PIPE` 且 `SIZE/OFF` 恰为 **16384**，
+  即管道缓冲满、进程阻塞在 write；成因是工具调用结束后**读端消失**，而 `node --test` 仍在写 TAP 输出。特征是四层进程全 `S`、0% CPU、**无子进程**、
+  `fd0=/dev/null`（不是等 stdin）。**不要**据此推断测试套件可能不退出，也不要加超时/重试——真实运行是正常退出的。同类现象只按 fd 判定，别按「活着多久」。
 - **`authenticate` 返回 `{}` 不是「CLI 连上了我们的 backend」的判据**（2026-10-18 实测）：只带 `api_server_url`、不带 `api_key` 时，
   CLI 走 PKCE 分支并**同样**返回空结果，且全程零网络——把它当健康信号会得到假阳性。真判据只能是 backend 侧落盘的 `catalog` /
   `assignment` / `inference` 事件。反向也要注意：`AssignModel` **不是必经 RPC**，实测 `GetChatMessage` 可直接落到 api server，
