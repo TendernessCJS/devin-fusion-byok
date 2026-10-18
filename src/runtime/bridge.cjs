@@ -14,6 +14,11 @@ function countOwn(value, depth = 0) {
   return 0;
 }
 const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server_pb\.ApiServerService|seat_management_pb\.SeatManagementService)\/(?:GetUserStatus|GetCliModelConfigs|GetCascadeModelConfigs|GetCommandModelConfigs)$|^\/exa\.seat_management_pb\.SeatManagementService\/GetCliTeamSettings$/;
+// Server-push RPCs (all long-lived pushes are Stream*/HandleStreaming*) sit
+// idle between events by design, so the 120s body idle budget would kill them
+// mid-stream. They get a 30-minute floor instead; connect/headers stay fast.
+const STREAMING_RPC = /\/exa\.[a-z_]+\.[A-Za-z]+Service\/(?:Stream[A-Za-z]*|HandleStreaming[A-Za-z]*)$/;
+const STREAMING_IDLE_LIMIT = 30 * 60 * 1000;
 function cors(request) {
   const origin = request.headers.origin;
   return origin && /^(?:vscode-file:\/\/vscode-app|vscode-webview:\/\/[^/]+|https?:\/\/(?:[a-z0-9.-]+\.)?localhost(?::\d+)?)$/.test(origin)
@@ -29,6 +34,11 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
   for (const [key, name] of [[timeouts.connectMs, 'connect'], [timeouts.firstResponseMs, 'headers'], [timeouts.idleMs, 'body']]) {
     if (Number.isInteger(key) && key > 0 && key <= 2147483647) limits[name] = key;
   }
+  const bodyLimit = STREAMING_RPC.test(target.pathname)
+    ? (Number.isInteger(timeouts.streamingIdleMs) && timeouts.streamingIdleMs > 0
+        ? Math.min(timeouts.streamingIdleMs, 2147483647)
+        : Math.max(limits.body, STREAMING_IDLE_LIMIT))
+    : limits.body;
   const secure = target.protocol === 'https:';
   let connectTimer, headersTimer, bodyTimer, connectSocket, connectListener, stopped = false;
   const stop = () => {
@@ -43,7 +53,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
   const armBody = () => {
     if (stopped) return;
     clearTimeout(bodyTimer);
-    bodyTimer = setTimeout(() => timedOut('body'), limits.body);
+    bodyTimer = setTimeout(() => timedOut('body'), bodyLimit);
   };
   const timedOut = phase => { try { log('forward-timeout', { phase, rpc: target.pathname.split('/').pop() }); } catch {} fail(); };
   let incoming;

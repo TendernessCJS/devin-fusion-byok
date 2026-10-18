@@ -552,3 +552,38 @@ test('a genuinely reused socket still clears the connect budget immediately', as
       'an authorized reused TLS socket skips the connect budget and times out on headers instead');
   } finally { https.request = original; }
 });
+
+test('a streaming RPC idles past the regular body budget and still completes', async t => {
+  const events = [];
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write('first-chunk');
+    setTimeout(() => res.end('last-chunk'), 200);
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+    timeouts: { connectMs: 5000, firstResponseMs: 5000, idleMs: 40, streamingIdleMs: 5000 } });
+  t.after(() => bridge.close());
+  const outcome = await settleWithin(request(bridge.port, '/exa.x_pb.XService/StreamCascadePanelReactiveUpdates'));
+  assert.ok(!outcome.timeout, 'a server-push stream must not be killed by the ordinary idle budget');
+  assert.equal(outcome.value.status, 200);
+  assert.equal(outcome.value.body.toString(), 'first-chunklast-chunk', 'the response completes intact after the idle gap');
+  assert.deepEqual(events.filter(([event]) => event === 'forward-timeout'), []);
+});
+
+test('the same idle gap still times out on a non-streaming path', async t => {
+  const events = [];
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write('first-chunk');
+    setTimeout(() => res.end('last-chunk'), 200);
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+    timeouts: { connectMs: 5000, firstResponseMs: 5000, idleMs: 40, streamingIdleMs: 5000 } });
+  t.after(() => bridge.close());
+  const outcome = await settleWithin(request(bridge.port, LS + 'Heartbeat'));
+  assert.ok(!outcome.timeout);
+  assert.ok(outcome.error, 'the downstream connection is destroyed after the idle budget');
+  assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['body']);
+});
