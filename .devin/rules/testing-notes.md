@@ -39,3 +39,8 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   2026-10-16 扩展四条 Responses 契约：`CustomTool.type` 仍是 `'custom'` 且 `format?` 仍可选、`CustomToolInputFormat.Grammar` 的 `syntax` 仍是 `'lark'|'regex'` 且 `type` 是 `'grammar'`、`ResponseCustomToolCall.input` 必须仍是 `string`（我们「跳过 JSON 校验」完全建立在这条上）、请求参数里 `store` 仍存在且 `ResponseIncludable` 仍含 `'reasoning.encrypted_content'`。四条均已做过变异验证（逐个改坏 `.refs` 对应行 → 恰好该条失败 → `cp`/`diff -q` 逐字节还原），基线 `skipped 0`。
 - **给「防漂移」类测试加断言后，要用变异法证明它真的有牙**（2026-10-16 实测，3/3 命中）：把源码临时改坏（删 `pause_turn` 映射、从 `EFFORTS` 删 `max`、让 `tool_choice` 丢掉 `any`）后逐个跑该测试文件，确认**恰好对应的那一条**失败，再逐字节还原（`cp` 备份 → `diff -q` 校验），最后 `rm` 掉备份。基线要同时确认 `skipped 0`——否则「全绿」可能只是整个文件被跳过。不做这一步时，「断言写得像那么回事但其实恒真」的测试和真测试长得一模一样。
 - 「重启 Devin」触发即退出 Devin，无法在会话内端到端验证；其探测与时序由 `test/app-restart.test.cjs` 的合成 app 覆盖。
+- **`authenticate` 返回 `{}` 不是「CLI 连上了我们的 backend」的判据**（2026-10-18 实测）：只带 `api_server_url`、不带 `api_key` 时，
+  CLI 走 PKCE 分支并**同样**返回空结果，且全程零网络——把它当健康信号会得到假阳性。真判据只能是 backend 侧落盘的 `catalog` /
+  `assignment` / `inference` 事件。反向也要注意：`AssignModel` **不是必经 RPC**，实测 `GetChatMessage` 可直接落到 api server，
+  所以「没有 assignment 就等于没接通」是假阴性。同理，`devin models list` 在 acp 模式下报 "Not logged in" 属正常——ACP 宿主是
+  **唯一**凭据来源，CLI 不读本地 REPL 凭据与 env 里的 key。

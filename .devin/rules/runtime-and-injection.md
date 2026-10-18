@@ -26,6 +26,15 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   `goal/continue.cjs` 观察与包装）、CLI 的 `WINDSURF_API_SERVER_URL` env 覆盖（经 `devin.acp.agentEnv` 受管设置注入，ACP
   通道的实际入口）、Fast Context 的 `GetDevstralStream`（`src/fast-context/protocol.cjs`）。这些接口不稳定，改动附近代码时按「可能失败」处理，
   不要在失败路径上伪装成功。
+- **api server 入口的优先级与凭据策略（2026-10-18 实测，`devin acp` 3000.10.67，六臂对照）**：`authenticate._meta.api_server_url`
+  **也能**重定向 CLI 的 api server 面——控制面（`GetUserStatus`/`GetCliTeamSettings`/`GetCliModelConfigs`）**和推理面 `GetChatMessage` 都在内**；
+  但它**优先级低于** `WINDSURF_API_SERVER_URL` env，两处同时存在时一律走 env 且失败不回退。桌面端每次 `authenticate` 都带官方的
+  `api_server_url`（`getConfig(Config.API_SERVER_URL)`），BYOK 没被它拨回官方正是靠 env 优先。另一条硬约束（CLI 日志原文）：
+  `ACP server credential policy: ACP host is the sole source of credentials. Local CLI credentials (env vars, on-disk REPL store) will NOT be used.`
+  —— acp 子进程不读本地凭据，`meta.api_key` 必须由宿主提供，而扩展拿不到 key，因此**不要试图用 meta 替代 env 注入**。对照事实：
+  env=<X> + meta=死端口 → 命中 X；env=死端口 + meta=<X> → 认证直接对死端口失败、X 零命中；只给 URL 不给 key → `authenticate` 返回 `{}`
+  但**零网络**（走 PKCE 分支），URL 从未被采用。方法：本机起一个只记路径的 HTTP 收集器/透传中继，用临时 `HOME` 与假 key 臂隔离，
+  需要「假 key 也能认证成功」时让中继回放 `~/.cache/devin/cli/*.bin` 里的真实 protobuf。
 - **`src/protocol/` 是多关注点的混合体，不要按目录名或文件名推断职责**（8 个文件，2026-10-18 拆分后核对）：① 协议转换 —— `acp.cjs`（**Devin 侧**：解析
   `exa.chat_pb` 原生请求 + 造出站 ACP chunk）、`inference.cjs`（**三协议统一入口**：`serveChat` + `processor` 的流编排/有界降级/推理状态通道衔接；
   **不是 Responses 专用**）；它的内部职责已按协议语义拆开：`provider-request.cjs`（格式判定/端点/请求体构造，**OpenAI Chat 的请求体在这里**）、
@@ -61,3 +70,6 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   也不 close → `release()` 永不执行 → 排水永不完成 → `close()`/`stopped` 永不 resolve；而 SIGTERM 的处理器本身就在 `await close()`，
   于是**信号变成空操作**，进程只能 SIGKILL（2026-10-14 实测：必须 `kill -9` 才清掉孤儿 backend）。现在三段都用 `drainTimeoutMs` 兜底，超时后
   `closeAllConnections()` 强制收尾并继续走到 `stopped`，保证「关得掉、也杀得掉」。**不要退回无上限等待**，也不要只在超时日志里记录而不强制关闭。
+- **流式 RPC 不接受 120s body 空闲超时**：`/exa.<pkg>.<Name>Service/Stream*` 与 `.../HandleStreaming*` 是长连接推送，事件间隔按分钟计（实测 120s 空闲判据每约 102s 误杀一次
+  `StreamCascade*ReactiveUpdates`）。这类路径的 body 计时器只用 30 分钟兜底（`bridge.cjs` 的 `STREAMING_RPC`/`STREAMING_IDLE_LIMIT`，上限防 socket 泄漏）；
+  `connect`/`headers` 计时器**不变**——不把「上游不可达」拖成永久挂起。改 `forward` 时不得退回对推送流施加普通 idle 超时，也不得放宽前两个阶段的快速失败。

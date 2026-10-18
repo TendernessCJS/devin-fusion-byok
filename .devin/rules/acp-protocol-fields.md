@@ -130,6 +130,13 @@ tail -c +<偏移> <bundle> | head -c 600
 
 ## 已核实的语义结论
 
+- **CLI 侧 `GetUserStatus` 与渲染端不是同一个 service**（2026-10-18 实测）：CLI 打到 api server 的是
+  `exa.seat_management_pb.SeatManagementService/GetUserStatus`（伴随 `SeatManagementService/GetCliTeamSettings` 与
+  `api_server_pb.ApiServerService/GetCliModelConfigs`，一次认证引导共 7 条：`GetUserStatus`×5、其余各 1）；渲染端经 LS 走的是
+  `exa.language_server_pb.LanguageServerService/GetUserStatus`。`bridge.cjs` 的 CATALOG 正则**两者都覆盖**；`cli-cache.cjs` 的
+  `CACHE_RPC.user_status` 写的是 language_server 路径，**这不是 bug**——`catalog/augment.cjs` 的 `rpcShape` 只取路径最后一段方法名。
+  重构时别把两处「统一」成一个路径，那会让其中一侧静默不再被 augment。
+
 - **`cached_tokens` 是 `input_tokens` 的子集（inclusive）**：真机实测 `prompt_cache_hit_tokens:0 + prompt_cache_miss_tokens:7 = prompt_tokens:7`。因此 `ModelUsageStats.input_tokens`（字段 2）永远写含缓存总额，4/5 只是子集分列，**不要**把 input 改成「减缓存」。
 - **思考签名闭环已真机证实**（2026-10-16，真实 Devin 窗口 + 真实 DeepSeek anthropic 端点，经本地反代只记形状）：
 
