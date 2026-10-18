@@ -57,8 +57,9 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   两处事件同名字段但 payload 完全不同（实测桥 `before 47216 → after 1358625`、backend `before 154666 → after 716794`），因此
   **排查「picker 没生效」要看宿主 output channel，排查「CLI 模型列表没生效」要看 `runtime.log`**，反之会得出错误结论。
   backend 的 forward 类事件（`catalog` / `catalog-error` / `forward-timeout`）**带 `peerPort`**（该请求客户端 socket 的 `remotePort`，由
-  `backend.cjs` 的 `forwardLog` 逐请求包装注入；`bridge.cjs` 不参与，桥侧日志没有这个字段）——事后 `lsof -nP -i TCP:<peerPort>` 即可反查 pid，
-  这是区分「扩展宿主打自有端点」与「CLI 打控制面」的唯一直接手段。
+  `backend.cjs` 的 `forwardLog` 逐请求包装注入；`bridge.cjs` 不参与，桥侧日志没有这个字段）——事后 `lsof -nP -i TCP:<peerPort>` 即可反查 pid 定性。
+  **归属已实测坐实（0.3.50 首验）**：`catalog peerPort 55805` 的对端是 `devin acp`（主 agent，`ps eww` 里含 `WINDSURF_API_SERVER_URL`），
+  所以「backend 的 CLI 侧 catalog 转发由 ACP CLI 发起」不再是排除法结论。
   `forward-timeout` 早期条目缺 `rpc` 属**历史**（32 条全在 2026-10-16，之后的代码已带 `rpc` 与 `peerPort`），不要据此判断当前实现丢字段。
 - **LS 进程不是 backend 的客户端**（同上实测）：LS 的 env 没有 `WINDSURF_API_SERVER_URL`、也没有到 39842 的 socket；backend 的客户端只有扩展宿主
   （且只打自有端点：native push / health / monitor）与 `devin` CLI。所以「backend 改写了渲染端的 catalog」是**错的**说法——渲染端那一跳在桥上。
