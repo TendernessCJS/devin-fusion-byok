@@ -47,3 +47,19 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   纯靠模块依赖图做死代码分析会把后三个报成死模块：2026-10-15 误判过一次 `goal/report.cjs`；2026-10-18 审查时又差点误判
   `lifecycle/uninstall.cjs`——它**只被测试 require、生产无人引用**，看起来正是「只有测试续命的死代码」，实际是 `vscode:uninstall` 入口。
   判死前先搜模块名与文件名（`grep -rn "$(basename X)" src/ test/ scripts/ package.json`），**并检查文件末尾有没有 `require.main === module`**。
+
+## 阶段三：评估后不实施（别再重复评估）
+
+以下各项都已在阶段三审查中给出结论，理由是结构性的，再遇到同样现象不要重新立项评估：
+
+- **tps 口径不改**：`tracker.finish()` 的 `tps` 要求 `!hasTools`，实机 4803/5102 为 null 是**结构性**的——agentic 回合几乎都带工具，而
+  `decodeMs`（首字→终止）会把工具参数生成时间算进分母，给带工具的回合算「正文 TPS」只会得到偏低且不可比的数。面板已在标签与提示里写明口径
+  （`正文 TPS（不含工具）`、`含工具回合不计算`），另有 `throughputTps`（含等待）覆盖另一视角。
+- **zero-size 只作基线不作阈值**：0.3.50 重载后实测 `usageRejections.zero-size` 3 / `acceptedUsageUpdates` 40，`missing-size` 为 0；
+  这是启动期用量回放的既有现象。判据是 `missing-size` 是否增长，而不是 zero-size 的占比。
+- **目录载荷放大不改**：桥 `before 47,216 → after 1,358,625`（`GetUserStatus`）。重新压缩属**行为变更**（既有测试刻意断言
+  「去掉陈旧 content-encoding、输出未压缩帧」），而往返在 loopback、实测约 96 次/天，收益远小于风险；保留现有 `before/after` 体积日志即可。
+- **生命周期计数不落诊断**：`close-timeout` / `startup-error` 由**旧进程**写进 `runtime.log`，新进程读不到内存计数；让扩展宿主每 15s 扫日志
+  换一个低频计数不值得。仍以直接查 `runtime.log` 为准。
+- **`response.reasoning.delta` 保留**：非死分支，上游同样处理（`.refs/devin-fusion-byok/src/protocol/responses.cjs:416`），属防御性透传；
+  只有 `retried` 是真死代码（已删）。

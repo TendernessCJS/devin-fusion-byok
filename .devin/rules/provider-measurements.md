@@ -25,7 +25,8 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
   与「假 anthropic 端点」同属静默失败）、缺 `response.reasoning_text.delta`（当前推理正文事件名）、缺三个 `.done` 变体（只发 done 的供应商会丢内容）。
   两个易踩的字段名陷阱：**`response.refusal.done` 带的是 `refusal` 字段而不是 `text`**（`output_text.done`/`reasoning_text.done` 才是 `text`）；
   `reasoning.generate_summary` 是**被废弃**的旧名，现名是 `summary`（别被「更新」的直觉带反）。同一事件的 `delta` 与 `done` 必须在 `text()` 里用**同一个 key**
-  （done 走 `complete=true` 会校验前缀，key 不一致会抛 `upstream_invalid_json`）。
+  （done 走 `complete=true` 会校验前缀，key 不一致会抛 `upstream_text_mismatch`——注意这与「SSE 行本身不是合法 JSON」的
+  `upstream_invalid_json`（`provider-events.cjs`）是两个不同的码，不要混用）。
 - **「HTTP 200 + text/event-stream」不足以判定供应商可用**：中转/网关会给不存在的路径返回 200 的 HTML 兜底页，甚至把 anthropic 路径**透传**成
   Responses 格式（`object:"response"`、id 前缀 `resp_`、SSE 首帧 `response.created`）——此时传输层全部正常，只是我们的 anthropic 适配器不认这些事件名，
   于是**状态 200、日志 chat-complete、回答为空**。判据只能是**响应体形状**（事件名/字段），不是状态码或 content-type。
@@ -33,3 +34,9 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
   且整条流从未产生任何文本/思考」→ 抛错并在流里输出 `Provider returned no output.`。这是**通用兜底**：未来任何事件名变更或未知供应商行为都会
   变成响亮错误而不是静默空回答。截断（`response.incomplete`）与 content_filter 不触发。给供应商加新事件时，`tracker.cjs` 的 `semanticOutput()`
   要同步，否则面板的 `firstOutputMs`/吞吐统计会漏。
+- **注解事件不处理是刻意的**：`response.output_text.annotation.added`、`response.content_part.done` 不进 `switch`；完整正文随
+  `response.completed.output` 的 message parts 到达（走 `item(..., true)` 的 `complete=true` 前缀校验），而 ACP 侧没有引用/注解的载荷表示。
+  只有当出现「上游只在 annotation 里给正文」的实测证据时才处理。
+- **状态信封不支持 `custom_tool_call` 是刻意的**：`validStateItem`（`state-envelope.cjs`）拒绝它——自定义工具参数是原始串，
+  `replayMatches` 的 JSON 规范化校验不适用。现在 `finish()` 会因此在 `runtime.log` 记一条 `state-envelope-skipped`（`reason` 为
+  `custom-tool` 或 `invalid-item`，每次请求最多一条）。这是可观测性，不是新故障——看到该日志不等于回放坏了。
