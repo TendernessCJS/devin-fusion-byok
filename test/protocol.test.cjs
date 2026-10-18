@@ -382,6 +382,56 @@ test('completed without any content reports upstream_empty_output but truncation
   assert.equal(truncatedMetrics[0].status, 'success');
 });
 
+test('a done text that contradicts the streamed deltas reports upstream_text_mismatch', async t => {
+  const metrics = [];
+  const proxy = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'hello' },
+      { type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'world' },
+    ].map(event).join(''));
+  }, 'openai-responses', {}, value => metrics.push(value));
+  const output = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+  assert.match(output.messages.map(m => str(m, 3)).join(''), /inconsistent/i);
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].status, 'error');
+  assert.equal(metrics[0].code, 'upstream_text_mismatch');
+});
+
+test('a malformed SSE data line still reports upstream_invalid_json', async t => {
+  const metrics = [];
+  const proxy = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end('data: {not json\n\n');
+  }, 'openai-responses', {}, value => metrics.push(value));
+  await fetch(proxy.url);
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].status, 'error');
+  assert.equal(metrics[0].code, 'upstream_invalid_json');
+});
+
+test('a custom tool call skips the state envelope once and still completes', async t => {
+  const metrics = [];
+  const customCall = { type: 'custom_tool_call', id: 'ct_1', call_id: 'call_ct', name: 'shell', input: 'ls' };
+  const proxy = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.output_item.added', output_index: 0, item: { ...customCall, input: '' } },
+      { type: 'response.custom_tool_call_input.delta', output_index: 0, item_id: 'ct_1', delta: 'ls' },
+      { type: 'response.custom_tool_call_input.done', output_index: 0, item_id: 'ct_1', input: 'ls' },
+      { type: 'response.output_item.done', output_index: 0, item: customCall },
+      { type: 'response.completed', response: { status: 'completed', output: [customCall] } },
+    ].map(event).join(''));
+  }, 'openai-responses', {}, value => metrics.push(value));
+  const output = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+  assert.ok(output.messages.length, 'the tool call itself is still emitted');
+  const skips = proxy.logs.filter(entry => entry.event === 'state-envelope-skipped');
+  assert.equal(skips.length, 1);
+  assert.equal(skips[0].reason, 'custom-tool');
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].status, 'success');
+});
+
 test('Responses usage carries cached tokens as cache_read_tokens', async t => {
   const proxy = await bridge(t, async (req, res) => {
     res.writeHead(200, { 'content-type': 'text/event-stream' });

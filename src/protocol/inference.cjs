@@ -15,7 +15,7 @@ const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem } = require('.
 const { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody } = require('./provider-request.cjs');
 const { readErrorDetail, parseEvent, events, usageSnapshot } = require('./provider-events.cjs');
 
-function processor(id, uid, chat, emit, scope = null) {
+function processor(id, uid, chat, emit, scope = null, onSkip = () => {}) {
   const calls = new Map();
   const itemIndexes = new Map();
   const stateItems = new Map();
@@ -42,7 +42,7 @@ function processor(id, uid, chat, emit, scope = null) {
     const previous = texts.get(key) || '';
     if (complete && !value.startsWith(previous)) {
       const err = new Error('Inconsistent completed text');
-      err.code = 'upstream_invalid_json';
+      err.code = 'upstream_text_mismatch';
       throw err;
     }
     const delta = complete ? value.slice(previous.length) : value;
@@ -203,6 +203,8 @@ function processor(id, uid, chat, emit, scope = null) {
         if (items.length && items.every(validStateItem)) {
           const envelope = STATE_PREFIX + Buffer.from(JSON.stringify({ scope, items })).toString('base64url');
           if (Buffer.byteLength(envelope) <= MAX_STATE_BYTES) await emit(signatureChunk(id, envelope));
+        } else if (items.length) {
+          onSkip(items.some(item => item?.type === 'custom_tool_call') ? 'custom-tool' : 'invalid-item');
         }
       }
       await emit(stopChunk(id, tools.length ? 10 : reason, uid));
@@ -286,7 +288,6 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     // honour forced choices keep them, and one retry bounds the cost. The
     // provider's own message must name tool_choice, so a 400 about anything
     // else (context length, bad parameters) still surfaces unchanged.
-    let retried = false;
     if (!upstream.ok && upstream.status === 400) {
       // The response body is read exactly once and shared by both degrade
       // rules — getReader() fails on a consumed stream, so a second read would
@@ -297,13 +298,11 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
           ? { type: 'auto', ...(body.tool_choice?.disable_parallel_tool_use ? { disable_parallel_tool_use: true } : {}) }
           : 'auto' };
         upstream = await send(body);
-        retried = true;
       } else if (('store' in body || 'include' in body)
           && /store|include|reasoning\.encrypted_content/i.test(detail)) {
         const { store: _store, include: _include, ...stripped } = body;
         body = stripped;
         upstream = await send(body);
-        retried = true;
         record({ event: 'provider-degraded', model: route.model, reason: 'responses-state' });
       }
     }
@@ -344,7 +343,8 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       }
     }
 
-    const stream = processor(id, route.uid || request.modelUid, chat, write, !chat ? stateScope(provider, route) : null);
+    const stream = processor(id, route.uid || request.modelUid, chat, write, !chat ? stateScope(provider, route) : null,
+      reason => record({ event: 'state-envelope-skipped', model: route.model, reason }));
     try {
       const adapt = anthropic ? createAnthropicAdapter() : event => [event];
       upstream: for await (const raw of events(rawChunksWithTimeout(upstream.body))) {
@@ -359,7 +359,8 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
         const allowedCodes = new Set([
           'upstream_timeout', 'upstream_http', 'upstream_content_type',
           'upstream_stream_error', 'upstream_stream_incomplete',
-          'upstream_invalid_tool', 'upstream_invalid_json', 'upstream_network', 'upstream_empty_output'
+          'upstream_invalid_tool', 'upstream_invalid_json', 'upstream_network', 'upstream_empty_output',
+          'upstream_text_mismatch'
         ]);
         classifiedCode = allowedCodes.has(err?.code) ? err.code : 'upstream_stream_error';
       }
@@ -371,7 +372,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       toolNames = await stream.finish();
     } catch (err) {
       const code = err?.code;
-      classifiedCode = code === 'upstream_invalid_tool' || code === 'upstream_empty_output' ? code : 'upstream_stream_incomplete';
+      classifiedCode = ['upstream_invalid_tool', 'upstream_empty_output', 'upstream_text_mismatch'].includes(code) ? code : 'upstream_stream_incomplete';
       throw err;
     }
 
@@ -399,6 +400,8 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       errorText = 'Provider response format is invalid.';
     } else if (classifiedCode === 'upstream_empty_output') {
       errorText = 'Provider returned no output.';
+    } else if (classifiedCode === 'upstream_text_mismatch') {
+      errorText = 'Provider response was inconsistent.';
     }
 
     try {
