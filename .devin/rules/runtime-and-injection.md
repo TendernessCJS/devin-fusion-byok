@@ -35,6 +35,19 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   env=<X> + meta=死端口 → 命中 X；env=死端口 + meta=<X> → 认证直接对死端口失败、X 零命中；只给 URL 不给 key → `authenticate` 返回 `{}`
   但**零网络**（走 PKCE 分支），URL 从未被采用。方法：本机起一个只记路径的 HTTP 收集器/透传中继，用临时 `HOME` 与假 key 臂隔离，
   需要「假 key 也能认证成功」时让中继回放 `~/.cache/devin/cli/*.bin` 里的真实 protobuf。
+- **`agentEnv` 按 connector id 取，只覆盖主 agent——summarizer 实例拿不到**（2026-10-18 真机，0.3.49）。`RegistryAcpConnector.get env()` 是
+  `getWindsurfOrDevinConfiguration('acp.agentEnv').get(this.id)`，桌面端同时跑两个 `devin acp`：主 agent（connector `devin-cli`）与
+  `devin acp --agent-type summarizer`（CLI 原生 agent 类型，`man devin-acp`：无工具、把摘要写到 `~/.local/share/devin/summaries/`）。实测后者 env 只有
+  内置的 `WINDSURF_IDE_TYPE`/`WINDSURF_EXT_HOST_PID`、**没有任何 TCP 套接字**，因此它的推理走官方、**不进 monitor 账本**。
+  **这不是注入失败**：`devin.acp.enabledAgents` 里只有 `devin-cli` 与 `__cascade__`，没有 summarizer 的键。要覆盖它得先弄清它挂在哪个 connector id
+  （`__cascade__` 是**未验证的假设**），且把 Devin 自己的 cascade 面拨到本地 backend 风险明显更高——不做之前别写成「覆盖不全的 bug」。
+- **验证注入是否真的生效，判据是进程 env + socket，不是 settings.json**（2026-10-18）：`ps eww -p <pid> | tr ' ' '\n' | grep -a '^WINDSURF_API_SERVER_URL='`
+  只输出该变量（**别直接打印 `ps eww` 全量输出，里面有权钥**），再用 `lsof -a -nP -p <pid> -iTCP` 确认它确实连到 backend 端口。`lsof` 的 `-p` 与 `-i`
+  默认是**或**关系，缺 `-a` 会把全机 TCP socket 都列出来（会误读成「这个进程连了一堆端口」）。
+- **`remote_config` 每 60–70 秒超时一次，两侧都有 ⇒ 不要归因 backend**（2026-10-18）：主 agent（已注入）与 summarizer（未注入）的 CLI 日志各出现
+  `remote config revalidation failed, keeping last-good value: fetch timed out after 5000ms`，且在 `authenticate`/`session/new`/`user_status_refresh`
+  的关键路径上各算 2–5 秒。**未注入的那一侧同样报**，说明是本机到官方 remote-config 端点的网络问题，有 last-good 兜底、非致命。做归因前先比对
+  一个未注入实例，否则很容易把它误判成「BYOK 后台拖慢了会话创建」。
 - **`src/protocol/` 是多关注点的混合体，不要按目录名或文件名推断职责**（8 个文件，2026-10-18 拆分后核对）：① 协议转换 —— `acp.cjs`（**Devin 侧**：解析
   `exa.chat_pb` 原生请求 + 造出站 ACP chunk）、`inference.cjs`（**三协议统一入口**：`serveChat` + `processor` 的流编排/有界降级/推理状态通道衔接；
   **不是 Responses 专用**）；它的内部职责已按协议语义拆开：`provider-request.cjs`（格式判定/端点/请求体构造，**OpenAI Chat 的请求体在这里**）、
