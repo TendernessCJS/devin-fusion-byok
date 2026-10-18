@@ -661,3 +661,14 @@ test('a disabled plugin never pushes', async t => {
   await new Promise(resolve => setTimeout(resolve, 250));
   assert.deepEqual(f.pushes(), []);
 });
+
+test('activation wires the injection health snapshot into panel state', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  const manager = realRequire('./panel/manager.cjs').createManager(f.managerOptions());
+  const health = manager.state().health;
+  assert.ok(health && Array.isArray(health.items), 'panel state carries the health snapshot');
+  assert.equal(health.items.length, 5, 'backend, bridge, env, cache and acp are always reported');
+  assert.equal(health.items.map(item => item.id).join(','), 'backend,bridge,env,cache,acp',
+    'the sandboxed manager crosses realms, so compare the id list as a string');
+});

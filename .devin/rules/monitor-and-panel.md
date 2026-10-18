@@ -53,3 +53,6 @@ description: "Apply when changing usage recording, attribution, time filtering, 
   不再增长，而 `missing-size` 始终为 0。**启动期一次性突发属正常，不要为它改代码**；只有该计数在启动之后仍持续增长，才值得插桩
   （记录 `sessionId` / `size` / `modelUid`）定位发射者。`context-state.cjs` 把 `zero-size` 与 `missing-size` 分开计数正是为此——
   合并成一个 `invalid-size` 曾把启动回放误读成「实时 85% 拒绝率」。
+- **面板 `health` 字段必须完全确定、不含时间戳**：它走同一条 `postState` JSON 去重，任何每次调用都变的字段会让面板每 3 秒重渲染并杀掉搜索焦点（同 `at` 事故的机制）。
+  `checkInjectionHealth` 的输入只取自既有共享槽（backendStatus/bridgeState/env/cliCache/acp 计数），返回值由输入唯一决定。ACP 信号必须**三态**：首个
+  `session/new` 观测（`acpObserved > 0`）之前判 `unknown`，否则每次窗口重载都会误报「会话无本插件条目」。

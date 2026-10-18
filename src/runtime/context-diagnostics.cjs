@@ -22,7 +22,7 @@ function isRunning(pid) {
   try { process.kill(pid, 0); return true; }
   catch (error) { return error?.code === 'EPERM'; }
 }
-function createContextDiagnostics({ root, version, readStatus, snapshot, pid = process.pid, intervalMs = WRITE_INTERVAL_MS }) {
+function createContextDiagnostics({ root, version, readStatus, snapshot, readHealth = () => null, pid = process.pid, intervalMs = WRITE_INTERVAL_MS }) {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new TypeError('Invalid process ID');
   const directory = path.join(root, 'context-diagnostics');
   const file = path.join(directory, `${pid}.json`), temporary = file + '.tmp';
@@ -49,6 +49,13 @@ function createContextDiagnostics({ root, version, readStatus, snapshot, pid = p
       }));
       data.subagentDetailsTruncated = withSubagents.length > SUBAGENT_SESSION_LIMIT ||
         withSubagents.some(session => session.subagents.length > SUBAGENT_ROW_LIMIT);
+      // Health stays ids-and-states only: labels/hints are display strings for
+      // the panel, and anything beyond the verdict invites stale reads.
+      const health = readHealth();
+      if (health && typeof health === 'object') {
+        data.health = { ok: !!health.ok,
+          items: (Array.isArray(health.items) ? health.items : []).map(({ id, state }) => ({ id, state })) };
+      }
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       if (fs.lstatSync(directory).isSymbolicLink()) return false;
       const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW, 0o600);

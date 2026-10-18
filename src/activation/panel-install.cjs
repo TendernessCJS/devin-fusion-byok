@@ -9,6 +9,8 @@ const { createPickerRefresh } = require('../runtime/picker-refresh.cjs');
 const { defaultDir: cliCacheDir, refreshStaleCliCaches } = require('../runtime/cli-cache.cjs');
 const { safeError } = require('./errors.cjs');
 const { teardown } = require('./teardown.cjs');
+const { checkInjectionHealth } = require('../runtime/health.cjs');
+const { PORT } = require('../runtime/backend.cjs');
 
 function installPanel({ deps, shared }) {
   const { lifecycle, config, configFile, vscode, context, log, catalog } = deps;
@@ -101,11 +103,21 @@ function installPanel({ deps, shared }) {
     return report;
   };
   shared.checkCliCaches();
+  const readHealth = () => checkInjectionHealth({
+    enabled: config().enabled !== false,
+    backendStatus: shared.backendStatus,
+    bridgeState: lifecycle.connection?.status?.state,
+    envValue: (() => { try { return vscode.workspace.getConfiguration('devin.acp').get('agentEnv')?.['devin-cli']?.WINDSURF_API_SERVER_URL ?? null; } catch { return null; } })(),
+    expectedEnv: 'http://127.0.0.1:' + PORT,
+    cliCache: shared.cliCacheReport,
+    acpObserved: shared.acpObservationSeq,
+    acpOwnModels: shared.acpOwnModels,
+  });
   shared.manager = createManager({ read: config, write: current => writeConfig(configFile, current),
     nativeModels: () => [...shared.nativeModels.values()], nativeAllowedUids: () => shared.nativeAllowedUids, refreshNativeModels: shared.refreshNativeModels, nativeCatalogStatus: () => shared.nativeCatalogStatus,
     backendStatus: () => shared.backendStatus,
     autoContinueStatus: () => shared.autoContinue ? (shared.autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
-    refreshCliCaches, cliCacheStatus: () => shared.cliCacheReport,
+    refreshCliCaches, cliCacheStatus: () => shared.cliCacheReport, health: readHealth,
     selectFusion: shared.saveFusionChoice,
     afterChange: async type => {
       if (type === 'setEnabled' && config().enabled === false) await shared.disable();
@@ -139,7 +151,7 @@ function installPanel({ deps, shared }) {
   } catch { log('context-observer-unavailable'); }
   context.subscriptions.push(require('../runtime/context-diagnostics.cjs').createContextDiagnostics({
     root: deps.root, version: require('../../package.json').version,
-    readStatus: () => shared.contextObserver?.status(), snapshot: () => shared.contextObserver?.snapshot() || []
+    readStatus: () => shared.contextObserver?.status(), snapshot: () => shared.contextObserver?.snapshot() || [], readHealth
   }));
   try {
     require('../panel/goal-view.cjs').createGoalUi({ vscode, context,

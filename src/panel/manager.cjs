@@ -87,7 +87,7 @@ function nativeVendor(id, label = '') {
   }
   return { name: OTHER_VENDOR, rank: NATIVE_VENDORS.length };
 }
-function publicState(config, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready', cliCache, allowedUids) {
+function publicState(config, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready', cliCache, allowedUids, health = null) {
   const allowed = allowedUids instanceof Set ? (allowedUids.size ? allowedUids : null)
     : (Array.isArray(allowedUids) && allowedUids.length ? new Set(allowedUids) : null);
   const analysis = analyzeRoles({ ...config, enabled: true }, nativeModels, allowed);
@@ -238,9 +238,10 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     autoContinueUntilPlanComplete: config.autoContinueUntilPlanComplete === true,
     autoContinueStatus: typeof autoContinueStatus === 'string' ? autoContinueStatus : 'unavailable',
     updateProxy: maskProxy(config.updateProxy),
+    health,
   };
 }
-function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown' }) {
+function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown', health = () => null }) {
   let queue = Promise.resolve();
   let pendingImport;
   const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey]);
@@ -249,6 +250,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
     const result = publicState(config, nativeModels(), autoContinueStatus(), status, cliCacheStatus(), nativeAllowedUids());
     result.nativeCatalogStatus = status;
     result.backendStatus = backendStatus();
+    result.health = health();
     const provider = config.providers.find(p => p.id === pendingImport?.providerId);
     result.importCandidates = provider && signature(provider) === pendingImport.signature ? {
       providerId: provider.id, token: pendingImport.token,

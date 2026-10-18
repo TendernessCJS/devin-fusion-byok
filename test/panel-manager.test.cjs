@@ -91,6 +91,21 @@ test('public state carries the last CLI cache report for the settings tab', () =
   assert.equal(publicState(fixture(), [], 'unavailable', 'ready', 'nonsense').cliCache, null);
 });
 
+test('public state passes the injection health snapshot through unchanged', () => {
+  const health = { ok: true, items: [{ id: 'backend', label: '后台服务', state: 'ok', hint: 'x' }] };
+  assert.deepEqual(publicState(fixture(), [], 'unavailable', 'ready', null, null, health).health, health);
+  assert.equal(publicState(fixture(), [], 'unavailable', 'ready').health, null,
+    'without the optional argument the field stays null and the rest of the state is untouched');
+});
+
+test('manager state reads injection health through the health callback', () => {
+  const health = { ok: false, items: [{ id: 'env', label: '推理入口', state: 'bad', hint: 'x' }] };
+  const f = memory();
+  const manager = createManager({ read: f.read, write: () => {}, health: () => health });
+  assert.deepEqual(manager.state().health, health);
+  assert.equal(f.manager.state().health, null, 'managers wired without health keep reporting null');
+});
+
 test('public panel state exposes multiple providers and combinations without API credentials', async () => {
   const f = memory({ nativeModels: () => OBSERVED_SWE });
   const state = await f.manager.dispatch('ready');

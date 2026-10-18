@@ -466,6 +466,15 @@ function panelClient(modelSupportsImages, vscode, normalizeBaseUrlPath, modelEff
     const catalogText = { ready: '已同步', loading: '同步中', empty: '未同步' }[state.nativeCatalogStatus]
       || `异常（${state.nativeCatalogStatus || '未知'}）`;
     container.append(element('p', { class: 'hint', text: `运行状态：后台服务 ${backendText} · 官方目录 ${catalogText}` }));
+    const health = state.health;
+    if (health && Array.isArray(health.items)) {
+      container.append(element('p', { class: 'hint',
+        text: `注入健康：${health.items.map(item => `${item.label} ${({ ok: '✓', bad: '✗', unknown: '待验证' })[item.state]}`).join(' · ')}` }));
+      if (health.ok === false) {
+        const hints = health.items.filter(item => item.state === 'bad' && item.hint).map(item => item.hint).join(' ');
+        if (hints) container.append(element('p', { class: 'warn mt', text: hints }));
+      }
+    }
     const setting = (title, sub, control) => element('div', { class: 'setting' },
       element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: title }), sub ? element('span', { class: 'row-sub', text: sub }) : null), control);
     const status = state.autoContinueStatus === 'attached' ? null
