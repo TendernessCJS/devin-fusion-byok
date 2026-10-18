@@ -63,10 +63,20 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 
 | 项 | 值 |
 | --- | --- |
-| **基线**（我们分叉自，也是最后读到的 upstream 位置） | `5bae0bf` —— `upstream/main`，2026-10-04，`feat: add Fast Context MCP and panel tab in v0.3.42` |
-| **上次读取上游** | 2026-10-17 |
-| **基线以来 upstream 新增提交** | **0**（`upstream/main` 仍停在 `5bae0bf`） |
-| 我们领先基线 | 130 个提交（2026-10-18 实测；重算用 `git rev-list --count "$(git merge-base upstream/main HEAD)..HEAD"`），**从未同步过** |
+| **基线**（真正的 `git merge-base`，本 fork 从未同步过） | `5bae0bf` —— 2026-10-04，`feat: add Fast Context MCP and panel tab in v0.3.42` |
+| **上次读取上游** | 2026-10-18 |
+| **`upstream/main` 当前位置（未合并）** | `713836e` —— tag `v0.4.0`，2026-10-17 |
+| **基线以来 upstream 新增提交** | **2**：`58b324b`（web search / 页面读取 / 一键检查，v0.3.43）；`713836e`（v0.4.0：外部 MCP 开关、Goal 开关、稳定 launcher、页面读取、**宿主禁用时恢复自有设置**） |
+| 我们领先基线 | 147 个提交（2026-10-18 实测；重算用 `git rev-list --count "$(git merge-base upstream/main HEAD)..HEAD"`） |
+
+**不要把「基线」改成 upstream 的新位置**（与旧版本这节的措辞不同，这是 2026-10-18 的修正）：基线一旦上移，`git log 5bae0bf..upstream/main` 就再也列不出这两个**尚未合并**的提交，追踪证据随之消失。只更新「上次读取」与「当前位置」两格。
+
+**这 2 个提交的移植判断（2026-10-18 读过）**：
+
+- 结构性冲突：upstream 仍在改**单体** `src/extension.cjs`，而本 fork 已把它拆成 `src/activation/`（`extension.cjs` 仅 150 行）。直接 merge 会在该文件大面积冲突且语义错位，**只能选择性移植**。
+- **值得移植**：① `src/lifecycle/host-disabled.cjs` —— 用户在扩展管理器里禁用插件时恢复自有设置，否则 `WINDSURF_API_SERVER_URL` 会一直指向已死的 backend，把用户的 Devin CLI 打坏（正好命中本仓最重的注入面）；② `config.goalEnabled` 开关 —— Goal 默认关闭，upstream 只加了布尔门控，成本极低。
+- **暂不移植**：外部 MCP（`code_search`/`web_search`/`web_read_url`）、fast-context 的 `launcher.cjs`/`self-check.cjs`/`state.cjs`/`web.cjs` —— 按 `.devin/rules/testing-notes.md` 的既有决定，Goal 与 Fast Context 不在本 fork 的验收范围内。
+- 其余重叠文件（`README.md`、`package.json`、`panel/controller.cjs`、`panel/fast-context-view.cjs`、`panel/model.cjs`、`panel/view.cjs` 及 4 个测试）都属「两边都改」→ 手工判断。
 
 看上游有没有值得参考的新改动：
 
