@@ -3,6 +3,7 @@ const { writeConfig } = require('../config.cjs');
 const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } = require('../lifecycle/owned-settings.cjs');
 const { globalSetting } = require('./errors.cjs');
 const { teardown } = require('./teardown.cjs');
+const { isHostDisabled } = require('../lifecycle/host-disabled.cjs');
 
 function installCommands({ deps, shared }) {
   const { lifecycle, config, configFile, vscode, context, log, catalog, run } = deps;
@@ -68,11 +69,9 @@ function installCommands({ deps, shared }) {
     vscode.window.showInformationMessage('Fusion 模型已保存，请新建 Devin Local 会话。');
   })));
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.status', () => { log('status', { runtime: lifecycle.connection?.status, models: config().providers.map(p => ({ name: p.name, models: p.models.length })) }); deps.output.show(true); }));
-  shared.disable = async () => {
-    try { lifecycle.goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); }
-    shared.backendStatus = 'stopped';
-    const current = config(); current.enabled = false; writeConfig(configFile, current);
-    await teardown(lifecycle);
+  // Restores only the settings values this extension wrote and the user has not
+  // changed since, using the receipt. Does not touch the plugin's own enabled flag.
+  const restoreOwnedSettings = async () => {
     const settings = vscode.workspace.getConfiguration('devin.acp');
     const snapshot = { 'devin.acp.agentEnv': globalSetting(settings, 'agentEnv'), 'devin.acp.agentPreferences': globalSetting(settings, 'agentPreferences') };
     const receipt = readReceipt(deps.root, context.extensionPath);
@@ -93,7 +92,23 @@ function installCommands({ deps, shared }) {
     receipt.changes = []; saveReceipt(receipt);
     await context.globalState.update('savedEnv', undefined);
     await context.globalState.update('managedEnv', undefined);
+  };
+  shared.disable = async () => {
+    try { lifecycle.goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); }
+    shared.backendStatus = 'stopped';
+    const current = config(); current.enabled = false; writeConfig(configFile, current);
+    await teardown(lifecycle);
+    await restoreOwnedSettings();
     vscode.window.showInformationMessage('Fusion BYOK 已停用，原生连接已恢复。');
+  };
+  // Disabling in the extension manager restarts the extension host and never runs
+  // the disable command; without this the native CLI keeps pointing at a runtime
+  // that no longer starts. A plain reload or quit keeps the shared settings.
+  // deactivate() only reaches `lifecycle`, so the hook lives on that slot.
+  lifecycle.restoreOnHostDisable = async () => {
+    if (!isHostDisabled({ storageRoot: deps.root })) return;
+    await restoreOwnedSettings();
+    log('host-disabled-settings-restored');
   };
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.disable', run(shared.disable)));
   shared.reconcileSelection = async () => {

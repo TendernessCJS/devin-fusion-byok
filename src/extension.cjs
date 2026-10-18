@@ -18,6 +18,7 @@ const { teardown } = require('./activation/teardown.cjs');
 const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
   cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
   connection: undefined, acpObserver: undefined, runtimeWaitAbort: undefined,
+  restoreOnHostDisable: undefined,
   activationGeneration: 0, reconcileHalted: true, activationDisposed: true };
 
 async function activate(context) {
@@ -39,9 +40,10 @@ async function activate(context) {
   const installContinuation = () => {
     try {
       if (nativeMain) {
+        // Goal mode is opt-in: /goal is neither advertised nor intercepted until the user turns it on.
         shared.goalContinue = installGoalContinue({
           nativeMainPath: nativeMain,
-          isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false
+          isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false && config().goalEnabled === true
         });
         shared.autoContinue = installAutoContinue({
           nativeMainPath: nativeMain,
@@ -76,7 +78,7 @@ async function activate(context) {
               return shared.goalContinue.setGoalOwned(sessionId, owned);
             }
           },
-          isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false,
+          isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false && config().goalEnabled === true,
           isTrusted: () => vscode.workspace.isTrusted !== false,
           reportCliPath: path.join(context.extensionPath, 'src/goal/report.cjs'),
           log
@@ -145,6 +147,8 @@ async function deactivate() {
   lifecycle.stopAutoContinue?.(); lifecycle.stopAutoContinue = undefined;
   lifecycle.stopGoalContinue?.(); lifecycle.stopGoalContinue = undefined;
   await teardown(lifecycle);
+  const restore = lifecycle.restoreOnHostDisable; lifecycle.restoreOnHostDisable = undefined;
+  try { await restore?.(); } catch {}
 }
 
 module.exports = { activate, deactivate, ensureBackend, safeError };

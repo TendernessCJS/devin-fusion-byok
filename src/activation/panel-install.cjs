@@ -121,6 +121,7 @@ function installPanel({ deps, shared }) {
     selectFusion: shared.saveFusionChoice,
     afterChange: async type => {
       if (type === 'setEnabled' && config().enabled === false) await shared.disable();
+      else if (type === 'setGoalEnabled') { if (config().goalEnabled !== true) { try { lifecycle.goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); } } }
       else if (type === 'setAutoContinue' || type === 'setAutoContinueUntilPlanComplete') lifecycle.resetAutoContinue?.();
       else if (type === 'setUpdateProxy') {}
       else if (config().enabled !== false) { await shared.ensureEnabled(); await shared.reconcileSelection(); }

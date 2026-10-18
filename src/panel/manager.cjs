@@ -234,6 +234,7 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     fusionCount: catalog.matrixUids.size,
     lastFusion,
     cliCache: cliCache && typeof cliCache === 'object' ? cliCache : null,
+    goalEnabled: config.goalEnabled === true,
     autoContinueOnProviderError: config.autoContinueOnProviderError === true,
     autoContinueUntilPlanComplete: config.autoContinueUntilPlanComplete === true,
     autoContinueStatus: typeof autoContinueStatus === 'string' ? autoContinueStatus : 'unavailable',
@@ -433,6 +434,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         break;
       }
       case 'setEnabled': config.enabled = boolean(payload.enabled, '启用状态'); break;
+      case 'setGoalEnabled': config.goalEnabled = boolean(payload.enabled, '目标模式'); break;
       case 'setAutoContinue': config.autoContinueOnProviderError = boolean(payload.enabled, '自动继续'); break;
       case 'setAutoContinueUntilPlanComplete': config.autoContinueUntilPlanComplete = boolean(payload.enabled, '完成待办时自动继续'); break;
       case 'setUpdateProxy': {
