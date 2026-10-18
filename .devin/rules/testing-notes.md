@@ -33,7 +33,7 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   无 `error`/`unhandled`、已安装 `src/` 与仓库 `src/` 逐字节一致（`diff -rq`）；并在真机确认 Fusion（BYOK lead + 官方 sidekick）可选可跑。原清单（保留以便下次照抄）：
   `ready` 仅出现 1 次；`activated` 含 `nativeVersion`；`ls bridge ready N -> M`；backend 进程路径指向新版本目录；`runtime-control.json` 的 version/sourceId/rootId
   三方一致；monitor 有 HTTP 200 且日志无 `error`/`unhandled`。
-  **两个验收时别误判的现象**：① 重载后出现一次 `startup-error code:port_in_use` 是**良性接管**——`backend.cjs` 对 `EADDRINUSE` 记日志后 **exit 0**，宿主握手探到同
+  **两个验收时别误判的现象**：① 重载后出现一次 `backend-adopted`（0.3.50 之前叫 `startup-error code:port_in_use`，名字误导且已改）是**良性接管**——`backend.cjs` 对 `EADDRINUSE` 记日志后 **exit 0**，宿主握手探到同
   `service` 即采用已在跑的那个（backend 因此 `ppid=1`，跨重载存活是本意）；② 流式超时修复的判据在**宿主输出日志**
   （`~/Library/Application Support/Devin/logs/*/window*/exthost/output_logging_*/1-Devin Fusion BYOK.log`），`runtime.log` 的 `forward-timeout` 不带 `rpc`
   字段——改前同期 10 分钟 30 条 `phase:body`，改后 0 条。

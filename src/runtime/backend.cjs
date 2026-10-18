@@ -331,6 +331,9 @@ if (require.main === module) {
   startBackend({ root, log }).then(backend => {
     backend.stopped.then(() => process.exit(0));
     for (const name of ['SIGTERM', 'SIGINT']) process.on(name, () => backend.close().then(() => process.exit(0)));
-  }).catch(error => { log('startup-error', { code: error.code === 'EADDRINUSE' ? 'port_in_use' : 'startup_failed' }); process.exit(error.code === 'EADDRINUSE' ? 0 : 1); });
+  }).catch(error => {
+    if (error.code === 'EADDRINUSE') { log('backend-adopted', { code: 'port_in_use' }); process.exit(0); }
+    log('startup-error', { code: 'startup_failed' }); process.exit(1);
+  });
 }
 module.exports = { startBackend, runtimeIdentity, controlFile, PORT, VERSION, MANAGEMENT_PROTOCOL };
