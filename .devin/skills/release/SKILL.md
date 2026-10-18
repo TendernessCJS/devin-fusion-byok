@@ -150,8 +150,12 @@ const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
 随后用户执行 **Developer: Reload Window**。重载后核对：
 
 - **运行中的 backend 来自新版本目录**（决定性判据）：`ps ax -o command= | grep -a runtime/backend.cjs` 的路径含 `local.devin-fusion-byok-<version>`。
-  **不要拿「旧版本目录已删除」当判据**——实测（2026-10-17，0.3.45 → 0.3.46）重载窗口**不会**删除旧目录，而是把它写进
-  `~/.devin/extensions/.obsolete`（`{"local.devin-fusion-byok-<旧版本>":true}`）；新旧两个目录同时存在是**正常现象**，只要旧版本不再被加载即可。这与第 6 步「`$EXT` 指向已安装的旧版本」是同一事实的两面。
+  **不要拿「旧版本目录已删除」当判据**——重载窗口**不会**删除旧目录，新旧两个目录同时存在是**正常现象**，只要旧版本不再被加载即可（这与第 6 步
+  「`$EXT` 指向已安装的旧版本」是同一事实的两面）。
+  也不要拿 `.obsolete` 当判据：实测（2026-10-18，0.3.48→0.3.51 连续三轮升级后）该文件是 **0 字节空文件**、mtime 就是当次安装时刻，旧目录仍在磁盘上。
+  唯一可靠的判据组合是 **`extensions.json` 里只剩新版一条** + **运行进程路径指向新版**。
+- **旧扩展目录需手动清理**（每次升级留一个，约 950 KB）：注册表已不引用、无进程句柄，`rm -rf ~/.devin/extensions/local.devin-fusion-byok-<旧版本>` 安全。
+  删除后复核：`/health` 的 pid 不变、`runtime.log` 继续 `chat-complete status:200`、`extensions.json` 仍只有新版。
 - `runtime.log` 出现 `ready port 39842 version <version>`
 - `settings.json` 的 `devin.acp.agentEnv.devin-cli.WINDSURF_API_SERVER_URL` 仍为 `http://127.0.0.1:39842`；模型偏好未被卸载钩子回滚
 - 面板状态行显示「当前 <version> · 已是最新」；**若该版本尚未发布 Release**，则显示「当前 <version> · 高于最新正式版」——本地未发布版本属正常
