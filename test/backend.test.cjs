@@ -46,6 +46,7 @@ async function fixture(t) {
   const held = new Map();
   let hold = false;
   let natives = null;
+  let forwardHook;
   const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
   const realRequire = createRequire(filename);
   const module = { exports: {} };
@@ -58,6 +59,7 @@ async function fixture(t) {
         async forward(req, res, target, options) {
           const body = options.body ?? await collect(req);
           forwarded.push({ target: target.href, body });
+          forwardHook?.(req, options);
           if (natives && /ModelConfigs|GetUserStatus/.test(req.url)) options.onNativeModels?.(natives);
           if (hold) held.set(req.url, res);
           else { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('official'); }
@@ -78,7 +80,8 @@ async function fixture(t) {
   const control = () => JSON.parse(fs.readFileSync(actualBackend.controlFile(root), 'utf8'));
   const shutdown = (token = control().token) => fetch(base + '/_runtime/shutdown', { method: 'POST', headers: { authorization: 'Bearer ' + token } });
   return { root, config, backend, base, health, control, shutdown, forwarded, chats, logs, held,
-    setHold: value => { hold = value; }, setNatives: value => { natives = value; } };
+    setHold: value => { hold = value; }, setNatives: value => { natives = value; },
+    setForwardHook: value => { forwardHook = value; } };
 }
 
 test('runtime health exposes ownership and source identity without exposing its private control token', async t => {
@@ -171,6 +174,31 @@ test('native model requests, unknown model IDs and wrong RPC services never sele
     assert.equal(f.forwarded.at(-1).target, 'https://server.codeium.com' + rpc);
   }
   assert.deepEqual(f.chats, []);
+});
+
+test('forwarded catalog logs carry the client peer port', async t => {
+  const f = await fixture(t);
+  // The real bridge emits `catalog` through the log handle it is handed; here the
+  // stub drives the same handle so the test sees exactly what the wrapper adds.
+  f.setForwardHook((req, options) => options.log('catalog', { rpc: req.url.split('/').pop() }));
+  const rpc = '/exa.seat_management_pb.SeatManagementService/GetUserStatus';
+  let localPort;
+  await new Promise((resolve, reject) => {
+    const req = http.request(f.base + rpc, { method: 'POST' }, res => {
+      res.resume();
+      res.on('end', resolve);
+    });
+    req.on('socket', socket => {
+      if (!socket.connecting) localPort = socket.localPort;
+      else socket.once('connect', () => { localPort = socket.localPort; });
+    });
+    req.on('error', reject);
+    req.end('probe');
+  });
+  const entries = f.logs.filter(([event]) => event === 'catalog').map(([, fields]) => fields);
+  assert.ok(entries.length, 'the forwarded request produced a catalog log line');
+  assert.ok(Number.isInteger(entries.at(-1).peerPort), 'peerPort is an integer');
+  assert.equal(entries.at(-1).peerPort, localPort, 'peerPort identifies the connecting client socket');
 });
 
 test('disabled configuration forwards even an otherwise valid custom model to the native backend', async t => {

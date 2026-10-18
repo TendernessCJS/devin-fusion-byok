@@ -209,8 +209,11 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     const incoming = new URL(request.url, 'https://server.codeium.com');
     const rpc = incoming.pathname;
     const target = new URL(rpc + incoming.search, 'https://server.codeium.com');
+    // Forwarded traffic shares the process log; the client port lets each event
+    // be traced back to the connecting process afterwards (lsof -i TCP:<port>).
+    const forwardLog = (event, fields) => log(event, { ...fields, peerPort: request.socket?.remotePort });
     if (request.method !== 'POST' || ![API_PREFIX + 'AssignModel', API_PREFIX + 'GetChatMessage'].includes(rpc)) {
-      forward(request, response, target, { getCatalog, log, onFusionStatus, onNativeModels, onAllowedUids }); return;
+      forward(request, response, target, { getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids }); return;
     }
     let body;
     try {
@@ -246,7 +249,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
       if (response.headersSent) { response.end(); return; }
       // Malformed data must never select a default provider.
     }
-    if (body) forward(request, response, target, { body, getCatalog, log, onFusionStatus, onNativeModels, onAllowedUids });
+    if (body) forward(request, response, target, { body, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids });
     else { response.writeHead(502); response.end(); }
   };
   const server = http.createServer((request, response) => {
