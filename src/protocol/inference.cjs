@@ -110,7 +110,7 @@ function processor(id, uid, chat, emit, scope = null) {
           }
           for (const tool of delta.tool_calls || []) {
             const call = getCall(tool.index ?? 0);
-            if (tool.id) call.id += tool.id;
+            if (tool.id && !call.id) call.id = tool.id;
             if (tool.function?.name) call.name += tool.function.name;
             if (typeof tool.function?.arguments === 'string') call.arguments += tool.function.arguments;
           }
@@ -140,13 +140,14 @@ function processor(id, uid, chat, emit, scope = null) {
         case 'response.refusal.done': await text(`refusal:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.refusal, true); break;
         case 'response.completed':
           if (scope && Array.isArray(data.response?.output)) finalItems = data.response.output;
-          if (data.response?.status && data.response.status !== 'completed') {
+          if (data.response?.status && data.response.status !== 'completed' && data.response.status !== 'incomplete') {
             const err = new Error('Unexpected completion status');
             err.code = 'upstream_stream_error';
             throw err;
           }
           for (const [index, value] of (data.response?.output || []).entries()) await item(value, index, true);
           terminal = true;
+          if (data.response?.status === 'incomplete') reason = data.response?.incomplete_details?.reason === 'content_filter' ? 11 : 3;
           break;
         case 'response.incomplete':
           if (scope && Array.isArray(data.response?.output)) finalItems = data.response.output;

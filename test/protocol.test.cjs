@@ -1267,3 +1267,45 @@ test('a 400 naming both tool_choice and store retries once via tool_choice', asy
   assert.equal('include' in app.requests[1].body, true);
   assert.equal(app.logs.find(entry => entry.event === 'provider-degraded'), undefined, 'tool_choice degrade records nothing extra');
 });
+
+test('Chat Completions keeps the first tool call id when a gateway resends it', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'sidekick', arguments: '{"prompt":' } }] } }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', function: { arguments: '"task"}' } }] }, finish_reason: 'tool_calls' }] },
+    ].map(event).join('') + 'data: [DONE]\n\n');
+  }, 'openai-chat-completions');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  const tools = result.messages.flatMap(message => fields(message, 6));
+  assert.equal(tools.length, 1);
+  assert.equal(str(tools[0].value, 1), 'call_1', 'a resent id is kept as-is, not concatenated per delta');
+  assert.equal(str(tools[0].value, 2), 'sidekick');
+  assert.equal(str(tools[0].value, 3), '{"prompt":"task"}');
+  assert.equal(num(result.messages.at(-1), 5), 10);
+});
+
+test('response.completed with status incomplete finishes cleanly and preserves emitted text', async t => {
+  const metrics = [];
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'partial answer' },
+      { type: 'response.completed', response: { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] } },
+    ].map(event).join(''));
+  }, 'openai-responses', {}, value => metrics.push(value));
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'partial answer', 'text emitted before the incomplete status is not lost');
+  assert.equal(num(result.messages.at(-1), 5), 3, 'incomplete without content_filter maps to the length stop reason');
+  assert.equal(metrics[0].status, 'success');
+});
+
+test('response.completed with status failed still raises upstream_stream_error', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(event({ type: 'response.completed', response: { status: 'failed', output: [] } }));
+  });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(num(result.messages.at(-1), 5), 13);
+  assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_stream_error'));
+});
