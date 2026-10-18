@@ -11,11 +11,11 @@ const { frame } = require('./wire.cjs');
 const { textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk } = require('./acp.cjs');
 const { createTracker } = require('./tracker.cjs');
 const { anthropicHeaders, createAnthropicAdapter } = require('./anthropic.cjs');
-const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem } = require('./state-envelope.cjs');
+const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem, sizeBucket } = require('./state-envelope.cjs');
 const { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody } = require('./provider-request.cjs');
 const { readErrorDetail, parseEvent, events, usageSnapshot } = require('./provider-events.cjs');
 
-function processor(id, uid, chat, emit, scope = null, onSkip = () => {}) {
+function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onStateSize = () => {}) {
   const calls = new Map();
   const itemIndexes = new Map();
   const stateItems = new Map();
@@ -202,7 +202,9 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}) {
           .sort(([left], [right]) => typeof left === 'number' && typeof right === 'number' ? left - right : 0).map(([, value]) => value);
         if (items.length && items.every(validStateItem)) {
           const envelope = STATE_PREFIX + Buffer.from(JSON.stringify({ scope, items })).toString('base64url');
-          if (Buffer.byteLength(envelope) <= MAX_STATE_BYTES) await emit(signatureChunk(id, envelope));
+          const bytes = Buffer.byteLength(envelope);
+          if (bytes <= MAX_STATE_BYTES) { onStateSize({ bytes }); await emit(signatureChunk(id, envelope)); }
+          else onStateSize({ bytes, dropped: true });
         } else if (items.length) {
           onSkip(items.some(item => item?.type === 'custom_tool_call') ? 'custom-tool' : 'invalid-item');
         }
@@ -264,7 +266,13 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
 
   try {
     const { url, chat, anthropic } = endpoint(provider);
-    let body = buildRequestBody(request, route, provider);
+    const replay = { replayed: 0, bytes: 0, items: 0, mismatch: 0, unparsable: 0, oversize: 0 };
+    let body = buildRequestBody(request, route, provider, stat => {
+      if (stat.outcome === 'replayed') { replay.replayed += 1; replay.bytes = Math.max(replay.bytes, stat.bytes); replay.items = Math.max(replay.items, stat.items || 0); }
+      else if (stat.outcome in replay) replay[stat.outcome] += 1;
+    });
+    if (replay.replayed) record({ event: 'state-envelope-replayed', model: route.model, bytes: replay.bytes, bucket: sizeBucket(replay.bytes), items: replay.items });
+    if (replay.mismatch + replay.unparsable + replay.oversize > 0) record({ event: 'state-envelope-replay-failed', model: route.model, mismatch: replay.mismatch, unparsable: replay.unparsable, oversize: replay.oversize });
     const headers = {
       'content-type': 'application/json',
       accept: 'text/event-stream',
@@ -344,7 +352,10 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     }
 
     const stream = processor(id, route.uid || request.modelUid, chat, write, !chat ? stateScope(provider, route) : null,
-      reason => record({ event: 'state-envelope-skipped', model: route.model, reason }));
+      reason => record({ event: 'state-envelope-skipped', model: route.model, reason }),
+      ({ bytes, dropped }) => dropped
+        ? record({ event: 'state-envelope-oversize', model: route.model, bytes, limit: MAX_STATE_BYTES })
+        : record({ event: 'state-envelope-size', model: route.model, bytes, bucket: sizeBucket(bytes) }));
     try {
       const adapt = anthropic ? createAnthropicAdapter() : event => [event];
       upstream: for await (const raw of events(rawChunksWithTimeout(upstream.body))) {

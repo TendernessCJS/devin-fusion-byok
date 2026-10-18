@@ -1088,10 +1088,11 @@ async function upstreamFixture(t, events) {
   return { bodies, baseUrl: `${upstream.url}/v1` };
 }
 
-async function stateSession(t, provider, request, fixture) {
+async function stateSession(t, provider, request, fixture, logs = []) {
   const proxy = await server((req, res) => {
     serveChat({ request: parseChat(request), route: { model: 'm', uid: 'u' },
-      provider: { ...provider, baseUrl: fixture.baseUrl, apiKey: provider.apiKey || 'k' }, res });
+      provider: { ...provider, baseUrl: fixture.baseUrl, apiKey: provider.apiKey || 'k' }, res,
+      log: event => logs.push(event) });
   }, t);
   const response = await fetch(proxy.url);
   return unpack(Buffer.from(await response.arrayBuffer()));
@@ -1358,4 +1359,83 @@ test('response.completed with status failed still raises upstream_stream_error',
   const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
   assert.equal(num(result.messages.at(-1), 5), 13);
   assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_stream_error'));
+});
+
+test('size bucket maps envelope sizes at the enforcement boundary', () => {
+  const { sizeBucket } = require('../src/protocol/state-envelope.cjs');
+  assert.equal(sizeBucket(687), '1k');
+  assert.equal(sizeBucket(1024), '1k');
+  assert.equal(sizeBucket(1025), '4k');
+  assert.equal(sizeBucket(43228), '64k');
+  assert.equal(sizeBucket(262144), '256k');
+  assert.equal(sizeBucket(262145), 'over-max');
+});
+
+test('every emitted state envelope logs its size bucket', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(TURN_EVENTS.join(''));
+  });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  const sizes = app.logs.filter(entry => entry.event === 'state-envelope-size');
+  assert.equal(sizes.length, 1);
+  assert.equal(sizes[0].model, 'test-model');
+  assert.equal(sizes[0].bucket, '1k');
+  const emitted = result.messages.map(message => str(message, 10)).find(Boolean);
+  assert.ok(emitted, 'a signature chunk was emitted');
+  assert.equal(sizes[0].bytes, Buffer.byteLength(emitted), 'the logged size is the emitted envelope size');
+});
+
+test('an oversized envelope is logged instead of silently dropped', async t => {
+  const bigItem = { ...MESSAGE_ITEM, content: [{ type: 'output_text', text: 'x'.repeat(300 * 1024) }] };
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(event({ type: 'response.completed', response: { status: 'completed', output: [bigItem] } }));
+  });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 10)).filter(Boolean).length, 0, 'oversized envelope is still not emitted');
+  assert.equal(app.logs.filter(entry => entry.event === 'state-envelope-size').length, 0);
+  const oversize = app.logs.filter(entry => entry.event === 'state-envelope-oversize');
+  assert.equal(oversize.length, 1);
+  assert.equal(oversize[0].limit, 256 * 1024);
+  assert.ok(oversize[0].bytes > oversize[0].limit);
+});
+
+test('a replayed envelope logs its size', async t => {
+  const provider = { id: 'p1', apiFormat: 'openai-responses' };
+  const fixture = await upstreamFixture(t, TURN_EVENTS);
+  const first = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), fixture);
+  const envelope = decodeSignature(first.messages).sigs[0];
+  const logs = [];
+  await stateSession(t, provider, Buffer.concat([
+    s(21, 'local-model'), nativeMessage(1, 'user'),
+    nativeMessage(2, 'done', [s(12, envelope)]),
+    nativeMessage(1, 'again'),
+  ]), fixture, logs);
+  const replayed = logs.filter(entry => entry.event === 'state-envelope-replayed');
+  assert.equal(replayed.length, 1);
+  assert.equal(replayed[0].bucket, '1k');
+  assert.equal(replayed[0].items, 2);
+  assert.equal(replayed[0].bytes, Buffer.byteLength(envelope));
+  assert.equal(logs.filter(entry => entry.event === 'state-envelope-replay-failed').length, 0);
+});
+
+test('a content-drifted envelope reports a replay failure', async t => {
+  const provider = { id: 'p1', apiFormat: 'openai-responses' };
+  const fixture = await upstreamFixture(t, TURN_EVENTS);
+  const first = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), fixture);
+  const envelope = decodeSignature(first.messages).sigs[0];
+  const logs = [];
+  await stateSession(t, provider, Buffer.concat([
+    s(21, 'local-model'), nativeMessage(1, 'user'),
+    nativeMessage(2, 'done differently', [s(12, envelope)]),
+    nativeMessage(1, 'again'),
+  ]), fixture, logs);
+  const failed = logs.filter(entry => entry.event === 'state-envelope-replay-failed');
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].mismatch, 1);
+  assert.equal(failed[0].unparsable, 0);
+  assert.equal(failed[0].oversize, 0);
+  assert.equal(logs.filter(entry => entry.event === 'state-envelope-replayed').length, 0);
+  assert.equal(fixture.bodies.at(-1).input.filter(item => item?.type === 'reasoning').length, 0, 'content drift still disables replay');
 });

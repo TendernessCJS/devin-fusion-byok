@@ -4,6 +4,12 @@ const { createHash } = require('node:crypto');
 
 const STATE_PREFIX = 'dfbyok-responses-v1:';
 const MAX_STATE_BYTES = 256 * 1024;
+const SIZE_BUCKETS = [1024, 4096, 16384, 65536, MAX_STATE_BYTES];
+const SIZE_BUCKET_LABELS = ['1k', '4k', '16k', '64k', '256k'];
+function sizeBucket(bytes) {
+  const index = SIZE_BUCKETS.findIndex(limit => bytes <= limit);
+  return index === -1 ? 'over-max' : SIZE_BUCKET_LABELS[index];
+}
 
 function stateScope(provider, route) {
   return createHash('sha256').update(JSON.stringify([provider.id || '', provider.baseUrl || '', provider.apiKey || '', route.model])).digest('hex');
@@ -48,4 +54,4 @@ function validStateItem(item) {
   return false;
 }
 
-module.exports = { STATE_PREFIX, MAX_STATE_BYTES, stateScope, canonicalize, sameArguments, replayMatches, validStateItem };
+module.exports = { STATE_PREFIX, MAX_STATE_BYTES, stateScope, canonicalize, sameArguments, replayMatches, validStateItem, sizeBucket };

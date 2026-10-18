@@ -39,7 +39,7 @@ function contentOf(message, chat) {
   return parts;
 }
 
-function buildRequestBody(request, route, provider) {
+function buildRequestBody(request, route, provider, onState = () => {}) {
   if (isAnthropicFormat(provider.apiFormat)) return buildAnthropicBody(request, route, provider);
   const chat = isChatFormat(provider.apiFormat);
   const messages = [];
@@ -57,10 +57,19 @@ function buildRequestBody(request, route, provider) {
     } else {
       if (message.role === 'assistant' &&
           typeof message.signature === 'string' && message.signature.startsWith(STATE_PREFIX) &&
-          Buffer.byteLength(message.signature) <= MAX_STATE_BYTES && !message.images?.length) {
+          !message.images?.length) {
+        const bytes = Buffer.byteLength(message.signature);
         let state = null;
-        try { state = JSON.parse(Buffer.from(message.signature.slice(STATE_PREFIX.length), 'base64url').toString('utf8')); } catch {}
-        if (state && state.scope === stateScope(provider, route) && Array.isArray(state.items) && state.items.length && replayMatches(state, message)) {
+        if (bytes <= MAX_STATE_BYTES) {
+          try { state = JSON.parse(Buffer.from(message.signature.slice(STATE_PREFIX.length), 'base64url').toString('utf8')); } catch {}
+        }
+        const outcome = bytes > MAX_STATE_BYTES ? 'oversize'
+          : !state ? 'unparsable'
+          : state.scope !== stateScope(provider, route) ? 'scope'
+          : (!Array.isArray(state.items) || !state.items.length) ? 'invalid'
+          : replayMatches(state, message) ? 'replayed' : 'mismatch';
+        onState(outcome === 'replayed' ? { outcome, bytes, items: state.items.length } : { outcome, bytes });
+        if (outcome === 'replayed') {
           messages.push(...state.items);
           continue;
         }
