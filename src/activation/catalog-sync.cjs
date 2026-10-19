@@ -11,6 +11,26 @@ function installCatalogSync({ deps, shared }) {
   // backend accepted. A failed or skipped attempt therefore retries on the
   // next refresh instead of silently pinning the revision it claimed.
   const pushPayload = () => [...shared.nativeModels.values()].filter(entry => isUpstreamUid(entry?.uid));
+  // This host's own observations, kept across refreshes. The published view
+  // (shared.nativeModels) is rebuilt from this pool plus the backend's copy on
+  // every refresh, so the view stays derived instead of becoming a second
+  // store that can drift from the channel that produced it.
+  const observed = new Map();
+  // One fan-out for "the published catalog changed". Both channels must go
+  // through it: a hand-rolled subset is how the `native-sync` size log ended up
+  // missing on the observation channel while the refresh channel logged it,
+  // which made that counter under-report.
+  const commit = ({ bumpRevision }) => {
+    if (lifecycle.activationDisposed) return Promise.resolve();
+    if (bumpRevision) shared.nativeRevision += 1;
+    const published = Promise.resolve(shared.management?.publish()).catch(() => {});
+    shared.updateStatusBar();
+    if (shared.nativeModels.size !== shared.nativeSyncSize) { shared.nativeSyncSize = shared.nativeModels.size; log('native-sync', { count: shared.nativeSyncSize }); }
+    shared.pickerRefresh?.changed?.();
+    shared.checkCliCaches?.();
+    shared.pushToBackend();
+    return published;
+  };
   shared.pushToBackend = () => {
     if (lifecycle.activationDisposed || config().enabled === false || shared.pushTimer !== undefined) return;
     // Nothing to offer yet: an empty payload must not advance the pushed
@@ -58,7 +78,7 @@ function installCatalogSync({ deps, shared }) {
       // extension's — and their copies are not equally complete. Merge instead
       // of letting the last one win: a dimension-less copy makes every native
       // Sidekick unresolvable and the mirrored combinations vanish.
-      for (const entry of shared.localNativeModels.values()) shared.nativeModels.set(entry.uid, entry);
+      for (const entry of observed.values()) shared.nativeModels.set(entry.uid, entry);
       for (const entry of result.models) shared.nativeModels.set(entry.uid, mergeNativeEntry(shared.nativeModels.get(entry.uid), entry));
       let changed = shared.nativeModels.size !== previousByUid.size;
       if (!changed) {
@@ -73,13 +93,7 @@ function installCatalogSync({ deps, shared }) {
           changed = true;
         }
       }
-      if (changed) shared.nativeRevision += 1;
-      try { await shared.management?.publish(); } catch {}
-      shared.updateStatusBar();
-      if (shared.nativeModels.size !== shared.nativeSyncSize) { shared.nativeSyncSize = shared.nativeModels.size; log('native-sync', { count: shared.nativeSyncSize }); }
-      shared.pickerRefresh?.changed?.();
-      shared.checkCliCaches?.();
-      shared.pushToBackend();
+      await commit({ bumpRevision: changed });
     })().finally(() => { if (shared.syncAbort === abort) { shared.syncAbort = undefined; shared.syncPending = undefined; } });
     return shared.syncPending;
   };
@@ -99,14 +113,10 @@ function installCatalogSync({ deps, shared }) {
       const previous = shared.nativeModels.get(next.uid);
       const merged = mergeNativeEntry(previous, next);
       if (!previous || JSON.stringify(previous) !== JSON.stringify(merged)) {
-        shared.localNativeModels.set(next.uid, merged); shared.nativeModels.set(next.uid, merged); changed = true;
+        observed.set(next.uid, merged); shared.nativeModels.set(next.uid, merged); changed = true;
       }
     }
-    if (changed && !lifecycle.activationDisposed) try {
-      shared.nativeRevision += 1;
-      void shared.management?.publish()?.catch(() => {}); shared.updateStatusBar(); shared.pickerRefresh?.changed?.(); shared.checkCliCaches?.();
-      shared.pushToBackend();
-    } catch {}
+    if (changed && !lifecycle.activationDisposed) try { void commit({ bumpRevision: true }); } catch {}
   };
 }
 

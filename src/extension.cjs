@@ -100,7 +100,7 @@ async function activate(context) {
   // live in this activate scope, not inside any single installer.
   const shared = {
     goalContinue: undefined, autoContinue: undefined,
-    nativeModels: new Map(), localNativeModels: new Map(),
+    nativeModels: new Map(),
     // Complete-set verdict from team settings: whichever observation arrived
     // last decides which official uids the account may actually select.
     nativeAllowedUids: new Set(),

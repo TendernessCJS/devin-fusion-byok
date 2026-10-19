@@ -287,6 +287,54 @@ test('readNativeModels still fails closed on malformed catalog entries', async t
   assert.equal(ok.status, 'ready', 'a structurally valid entry still reads back');
 });
 
+// Minimal installCatalogSync harness: only ../runtime/native-models.cjs is
+// stubbed, so the push/read paths never reach a real backend.
+function syncFixture({ read = async () => ({ status: 'ready', models: [] }) } = {}) {
+  const logs = [], pushes = [];
+  const filename = path.resolve(__dirname, '../src/activation/catalog-sync.cjs');
+  const realRequire = createRequire(filename);
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports,
+    AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
+    require(name) {
+      if (name === '../runtime/native-models.cjs') return {
+        isUpstreamUid: realRequire('../runtime/native-models.cjs').isUpstreamUid,
+        readNativeModels: read,
+        pushNativeModels: options => { pushes.push(options); return Promise.resolve({ pushed: 0, reason: 'unavailable' }); },
+      };
+      if (name.startsWith('.') || name.startsWith('node:')) return realRequire(name);
+      assert.fail('unexpected require ' + name);
+    },
+  }, { filename });
+  const lifecycle = { activationDisposed: false, activationGeneration: 0 };
+  const shared = {
+    nativeModels: new Map(), nativeAllowedUids: new Set(),
+    nativeRevision: 0, lastPushedRevision: 0, lastPushAt: 0, nativeSyncSize: -1,
+    updateStatusBar: () => {},
+  };
+  module.exports.installCatalogSync({ deps: { lifecycle, config: () => ({}), log: (event, data) => logs.push({ event, data }), root: '/nonexistent' }, shared });
+  return { shared, logs, pushes };
+}
+
+const OBSERVED_ENTRY = { uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] };
+
+test('the observation channel reports the synced catalog size too', () => {
+  const f = syncFixture();
+  f.shared.observeNativeModels([OBSERVED_ENTRY]);
+  const entry = f.logs.find(line => line.event === 'native-sync');
+  assert.ok(entry, 'observeNativeModels must log native-sync just like refresh does');
+  assert.equal(entry.data.count, 1);
+});
+
+test('local observations survive a backend-empty refresh in the published view', async () => {
+  const f = syncFixture();
+  f.shared.observeNativeModels([OBSERVED_ENTRY]);
+  await f.shared.refreshNativeModels();
+  assert.ok(f.shared.nativeModels.has('swe-2-high'),
+    'the retained observation pool must repopulate the rebuilt view');
+});
+
 test('readNativeModels passes a valid family uid through and ignores malformed ones', async t => {
   const f = await backendFixture(t, { natives: { clientModelConfigs: [
     { modelUid: 'glm-5-2', label: 'GLM', disabled: false, modelInfo: { harnessUids: ['h'], isModelRouter: false, modelFamilyUid: 'glm-5.2' } },
