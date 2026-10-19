@@ -138,12 +138,16 @@ test('a third-party wrapper on top of a fully removed registry stays resident wi
   f.api.registerConnection(f.connector);
 
   // Foreign override that chains into our wrapper, as real extensions do.
+  const registry = createAcpRegistry(f.api);
+  assert.equal(registry.shadowed(), false);
   const foreignCalls = [];
   const ours = f.api.registerConnection;
   const foreign = function (...args) { foreignCalls.push(args[0]); return ours.apply(this, args); };
   f.api.registerConnection = foreign;
+  assert.equal(registry.shadowed(), true);
   first.remove();
   assert.equal(f.api.registerConnection, foreign);
+  assert.equal(registry.shadowed(), true);
 
   // Re-adding a layer must not re-wrap: our registerConnection stays buried
   // under the foreign one and keeps attaching layers to new connectors.
@@ -159,6 +163,40 @@ test('a third-party wrapper on top of a fully removed registry stays resident wi
   assert.deepEqual(createAcpRegistry(f.api).inspect(),
     [{ id: 'acp-observer', priority: 30, connectors: 1, attached: true }]);
   second.remove();
+});
+
+test('shadowed reports false while our wrapper stays on top or is fully removed', () => {
+  const f = fixture();
+  const registry = createAcpRegistry(f.api);
+  assert.equal(registry.shadowed(), false, 'no layers installed yet');
+  const layer = f.layer('goal-continue', 20);
+  f.api.registerConnection(f.connector);
+  assert.equal(registry.shadowed(), false);
+  layer.remove();
+  assert.equal(registry.shadowed(), false, 'our wrapper was uninstalled cleanly');
+  assert.equal(f.api.registerConnection, f.originalRegister);
+});
+
+test('a logger passed to a later createAcpRegistry call still receives the shadowed report once', () => {
+  const f = fixture();
+  // Production order: goal/auto create the registry first without a logger,
+  // then the observer supplies one.
+  createAcpRegistry(f.api);
+  const events = [];
+  const registry = createAcpRegistry(f.api, { log: event => events.push(event) });
+  assert.equal(registry.addLogger('not a function'), undefined);
+  const layer = f.layer('goal-continue', 20);
+  f.api.registerConnection(f.connector);
+  const ours = f.api.registerConnection;
+  f.api.registerConnection = function (...args) { return ours.apply(this, args); };
+  layer.remove();
+  assert.deepEqual(events, ['acp-registry-shadowed']);
+  // A second shadowing path must not re-report.
+  const again = f.layer('acp-observer', 30);
+  const stillOurs = f.api.registerConnection;
+  f.api.registerConnection = function (...args) { return stillOurs.apply(this, args); };
+  again.remove();
+  assert.deepEqual(events, ['acp-registry-shadowed']);
 });
 
 test('inspect reports layer priority, activity and connector counts', () => {

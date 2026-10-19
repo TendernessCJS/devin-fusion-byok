@@ -36,13 +36,17 @@ function restoreMember(target, key, wrapper, descriptor) {
 const REGISTRY = Symbol.for('devin-fusion-byok.acp-registry.v1');
 const REGISTRIES = new WeakMap();
 
-function createAcpRegistry(api) {
+function createAcpRegistry(api, { log } = {}) {
   const existing = api[REGISTRY] || REGISTRIES.get(api);
-  if (existing) return existing;
+  // Later installers may carry the logger even when an earlier one created
+  // the registry (goal/auto install before the observer in production).
+  if (existing) { existing.addLogger(log); return existing; }
 
+  const loggers = new Set();
   const layers = new Map();
   const attachments = new Map();
   let wrapped = false;
+  let shadowReported = false;
   let registrationDescriptor = null;
   let originalRegister = null;
 
@@ -57,7 +61,15 @@ function createAcpRegistry(api) {
     // rather than re-wrapping on the next addLayer (which would capture the
     // foreign wrapper — itself chained back into us — as originalRegister and
     // recurse forever). Do not add retry-uninstall logic here.
-    if (api.registerConnection !== registerConnection) return;
+    if (api.registerConnection !== registerConnection) {
+      if (!shadowReported) {
+        shadowReported = true;
+        for (const logger of loggers) {
+          try { logger('acp-registry-shadowed'); } catch {}
+        }
+      }
+      return;
+    }
     restoreMember(api, 'registerConnection', registerConnection, registrationDescriptor);
     wrapped = api.registerConnection === registerConnection;
   }
@@ -139,6 +151,9 @@ function createAcpRegistry(api) {
   }
 
   const registry = {
+    addLogger(logger) {
+      if (typeof logger === 'function') loggers.add(logger);
+    },
     addLayer({ id, priority = 0, attach, detach } = {}) {
       if (layers.has(id)) throw new Error(`Duplicate ACP injection layer id: ${id}`);
       if (typeof attach !== 'function' || typeof detach !== 'function') {
@@ -168,6 +183,11 @@ function createAcpRegistry(api) {
         connectors: layer.connectors.size, attached: layer.active,
       }));
     },
+    // True while our registerConnection wrapper is installed but a third
+    // party has wrapped over it: the registry is live yet cannot unwind.
+    shadowed() {
+      return wrapped && api.registerConnection !== registerConnection;
+    },
   };
 
   try {
@@ -175,6 +195,7 @@ function createAcpRegistry(api) {
   } catch {
     REGISTRIES.set(api, registry);
   }
+  registry.addLogger(log);
   return registry;
 }
 

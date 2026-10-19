@@ -74,7 +74,8 @@ test('observes future registrations while preserving all native call arguments a
 test('never inspects authentication params or logs unrelated methods', async () => {
   const f = fixture(), handle = f.install(), connection = f.connection(Promise.resolve(response()));
   f.api.registerConnection(connection);
-  for (const method of ['authenticate', 'initialize', 'session/prompt', 'session/set_config_option']) {
+  // session/set_config_option is deliberately absent: it is an observed method.
+  for (const method of ['authenticate', 'initialize', 'session/prompt', 'session/cancel']) {
     const request = { method, get params() { throw new Error('Request body must remain unread'); } };
     await connection.sendRequest(request);
   }
@@ -174,7 +175,9 @@ test('dispose preserves wrappers installed by others and makes retained observer
   const later = f.connection(null), original = later.sendRequest;
   f.api.registerConnection(later);
   assert.equal(later.sendRequest, original);
-  assert.equal(f.logs.length, 0);
+  // The foreign wrapper on registerConnection forces the registry to stay
+  // resident, which reports the shadowing exactly once.
+  assert.deepEqual(f.logs.map(entry => entry.event), ['acp-registry-shadowed']);
 });
 
 test('unwritable connectors still register successfully without observation', () => {
@@ -191,4 +194,51 @@ test('counts remain immutable and expose no model values or response metadata', 
   assert.ok(Object.isFrozen(handle.status.last));
   assert.throws(() => { handle.status.last.ownModels = 1000; }, TypeError);
   assert.ok(!JSON.stringify(handle.status).includes('dfbyok-one'));
+});
+
+test('config_option_update notifications are counted and set_config_option responses are observed', async () => {
+  const f = fixture(), handle = f.install();
+  const forwarded = [];
+  const connection = {
+    sendRequest() { return Promise.resolve(response()); },
+    forwardClientRequest(...args) { forwarded.push(args); return 'private-forward-result'; },
+  };
+  const originalForward = connection.forwardClientRequest;
+  const forwardDescriptor = Object.getOwnPropertyDescriptor(connection, 'forwardClientRequest');
+  f.api.registerConnection(connection);
+  const notification = { method: 'session/update', params: { sessionId: 'private-session', update: {
+    sessionUpdate: 'config_option_update', configOptions: response().configOptions } } };
+  assert.equal(connection.forwardClientRequest(notification), 'private-forward-result');
+  assert.deepEqual(forwarded.map(args => args[0]), [notification]);
+  await tick();
+  assert.deepEqual(clone(f.logs), [{ event: 'acp-models', counts: { rpc: 'config_option_update', configOptions: 2,
+    modelSelectors: 1, models: 4, uniqueModels: 3, ownModels: 2, plainModels: 1, fusionModels: 1 } }]);
+  assert.equal(handle.status.lastUpdate, 'config_option_update');
+  await connection.sendRequest({ method: 'session/set_config_option' });
+  await tick();
+  assert.equal(f.logs.at(-1).counts.rpc, 'session/set_config_option');
+  assert.equal(handle.status.lastUpdate, 'session/set_config_option');
+  handle.dispose();
+  assert.equal(connection.forwardClientRequest, originalForward);
+  assert.deepEqual({ ...Object.getOwnPropertyDescriptor(connection, 'forwardClientRequest') }, { ...forwardDescriptor });
+  assert.ok(!JSON.stringify({ logs: f.logs, status: handle.status }).includes('private'));
+});
+
+test('unrelated session/update notifications pass through without observation or payload reads', async () => {
+  const f = fixture(), handle = f.install();
+  const connection = {
+    sendRequest() { return Promise.resolve({}); },
+    forwardClientRequest(...args) { return args[0]; },
+  };
+  f.api.registerConnection(connection);
+  const chunk = { method: 'session/update', params: { sessionId: 'private-session', update: {
+    sessionUpdate: 'agent_message_chunk',
+    get configOptions() { throw new Error('Notification payload must remain unread'); },
+  } } };
+  assert.equal(connection.forwardClientRequest(chunk), chunk);
+  await tick();
+  assert.equal(f.logs.length, 0);
+  assert.equal(handle.status.responses, 0);
+  assert.equal(handle.status.lastUpdate, null);
+  handle.dispose();
 });
