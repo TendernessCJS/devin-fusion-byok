@@ -335,6 +335,37 @@ test('local observations survive a backend-empty refresh in the published view',
     'the retained observation pool must repopulate the rebuilt view');
 });
 
+test('a failed read keeps the published catalog instead of wiping it', async () => {
+  const BACKEND_ENTRY = { uid: 'gpt-5-6-luna-high', label: 'L', disabled: false, isModelRouter: false, harnessUids: ['gpt-5p6'] };
+  let result = { status: 'ready', models: [BACKEND_ENTRY] };
+  const f = syncFixture({ read: async () => result });
+  await f.shared.refreshNativeModels();
+  assert.ok(f.shared.nativeModels.has('gpt-5-6-luna-high'));
+  const revision = f.shared.nativeRevision;
+  result = { status: 'unavailable', models: [] };
+  await f.shared.refreshNativeModels();
+  assert.ok(f.shared.nativeModels.has('gpt-5-6-luna-high'),
+    'an unavailable read must not wipe backend-sourced entries');
+  assert.equal(f.shared.nativeCatalogStatus, 'unavailable');
+  assert.equal(f.shared.nativeRevision, revision,
+    'retaining the view must not advance the revision');
+  assert.ok(f.logs.some(line => line.event === 'native-refresh-retained'),
+    'the guard must be observable in logs');
+});
+
+test('an authoritative empty answer still clears backend-sourced entries', async () => {
+  const BACKEND_ENTRY = { uid: 'gpt-5-6-luna-high', label: 'L', disabled: false, isModelRouter: false, harnessUids: ['gpt-5p6'] };
+  let result = { status: 'ready', models: [BACKEND_ENTRY] };
+  const f = syncFixture({ read: async () => result });
+  await f.shared.refreshNativeModels();
+  assert.ok(f.shared.nativeModels.has('gpt-5-6-luna-high'));
+  result = { status: 'empty', models: [] };
+  await f.shared.refreshNativeModels();
+  assert.equal(f.shared.nativeModels.has('gpt-5-6-luna-high'), false,
+    'an authoritative empty answer is stale-entry cleanup and must still clear');
+  assert.equal(f.shared.nativeCatalogStatus, 'empty');
+});
+
 test('readNativeModels passes a valid family uid through and ignores malformed ones', async t => {
   const f = await backendFixture(t, { natives: { clientModelConfigs: [
     { modelUid: 'glm-5-2', label: 'GLM', disabled: false, modelInfo: { harnessUids: ['h'], isModelRouter: false, modelFamilyUid: 'glm-5.2' } },

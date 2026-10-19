@@ -68,6 +68,17 @@ function installCatalogSync({ deps, shared }) {
       catch { result = { status: 'unavailable', models: [] }; }
       if (abort.signal.aborted || generation !== lifecycle.activationGeneration || lifecycle.activationDisposed || config().enabled === false) return;
       shared.nativeCatalogStatus = result.status;
+      // A failed read is not an empty catalog. Rebuilding from an unavailable
+      // answer publishes 0 entries for as long as a backend swap takes
+      // (measured 12s across a source-identity change), which the picker and
+      // the status bar render as "no models". Only an authoritative answer
+      // (ready/empty/unsupported) may replace the view; the entries at risk are
+      // the backend-sourced ones, since locally observed ones are re-added below.
+      if (result.status === 'unavailable' && shared.nativeModels.size) {
+        log('native-refresh-retained', { status: result.status, count: shared.nativeModels.size });
+        await commit({ bumpRevision: false });
+        return;
+      }
       // A refresh rebuilds the merged view from scratch, so the revision bump
       // needs a content comparison against the previous map — same
       // JSON.stringify yardstick observeNativeModels already uses.
