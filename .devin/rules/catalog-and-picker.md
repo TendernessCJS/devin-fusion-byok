@@ -33,7 +33,7 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
   `discoverOfficialRoles` 的两侧 claim 与 `discoverAdditionalNativeRoles` 的候选池都对它求交——白名单外的 uid（如
   `gpt-5-3-codex-spark-medium`，仅 entitlement 来源）虽然 harness 齐全，但其组合在 `augmentLocalModelChoices` 注册 f7 时必被丢，
   列出来等于假可选。调用点：面板三处（`publicState`/`setRoleModel`/`selectFusion`）+ 宿主 `catalog()` + backend
-  `getCatalog`/AssignModel；迁移路径 `migrateFusionConfig` 故意不传（不该因资格丢用户既有选择）。
+  `getCatalog`/AssignModel；历史上的迁移路径 `migrateFusionConfig` 同样不传——该函数已随预设管线删除（见 `retired-and-deadends.md`），保留这条只为锁住判据：**不该因资格丢用户既有选择**。
 - **Lead/Sidekick 门槛的机制依据（App bundle proto/schema 坐实）**：官方客户端**不做资格计算**——可选组合就是服务端枚举的 fusion 条目集，picker
   只做「维度元组→uid」查表（`nr6`，无匹配静默不切换）。AssignModel 双 router 字段：`model_router_uid`（f2）分配 sidekick、
   `fusion_lead_router_uid`（f6）分配 lead；**组合条目的 `harnessUids` 携带 `['fusion', lead真harness]`——lead 的执行通道由组合条目替它声明**，所以成员 lead 无自带 harness 也可当 lead（实测 29 个），而 sidekick 经独立 router 解析、组合条目不携带其 harness，故必须自带（实测 11/11）。**发射侧与 `resolveAssignment`（AssignModel 路径）必须同规则**：`leadNative ? leadHarnessUids : ['fusion']`（`leadHarnessUids` 在 catalog.cjs 里已含 `'fusion'`）。发射侧此前一律只写 `['fusion']`，与契约不一致，2026-10-16 修正（实测 336 条 native-Lead 组合各补上其 Lead harness、112 条 BYOK-Lead 保持 `['fusion']`；改前实测官方 586 个可解析样本中该规则 **390/390 零例外**）。**改这两处中任意一处，必须同时改另一处**，并跑那条逐条比对的回归断言。ModelInfo 官方 schema：`inferenceServerUrl/harnessUids/displayOption/modelFamilyUid/isModelRouter`——与我方 emit 字段名逐一对齐。**字段级实测（2026-10-16 解 CLI 缓存 `model_configs_v5.*.bin`）**：`f4 = 声明窗口`（官方原生值 262000/1000000/200000 与其真实窗口精确相等；我方 BYOK 发 1024000），它同时就是喂给「context-window-based」压缩默认值的那个数——见「上下文与压缩」一节；`f20 = harnessUids`（repeated，是**候选列表**），assignment 落的是**单个** `harness_uid`（`ModelAssignmentInfo`）；`f25 = isModelRouter`（官方原生不写＝默认 false，我方 fusion 条目写 1）；`f22 = displayOption`；`f23 = familyUid`。**`f5` 是一条「我方永不发、官方部分条目发」的字段**：实测 CLI 缓存 1205 条原生条目中 **234 条**带 f5，值**恒为 `LLAMA_WITH_SPECIAL`**（971 条不带；形态看是提示词模板/分词器类型，字段名未在 bundle 里确证）；我方 `encodeConfig`（catalog.cjs:88-99）**72 条**全部不发。**影响未验证**（可能 harness 已在服务端提供模板故留空无害，也可能客户端回落默认模板），**拿到影响证据前不要改**，也不要写成「官方一律发」。
@@ -60,10 +60,7 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
   `emitted` 缺失只是失去短路）：`emitted` 只是短路（命中即跳过），真正的判据只有 `!known.has(uid) || 被排除` 这一条，所以 `known`
   缺席就是**静默**回到被禁止的缺席语义——已发射的条目仍被短路保住，而所有「payload 里还在、本轮暂时未选中」的条目会全部被判可删（2026-10-15 真机复现：缺 `known` 误判 1 条，三参齐全
   0 条）。抛错在此是安全方向：`inspectCliCaches` 用 try/catch 包住探针，抛错被吞即空陈旧集合＝一条都不删。
-- **推送的门控必须描述「真正发送的内容」**：宿主的 `pushKey()` 曾以 `localNativeModels`（bridge 观测）计数，而实际发送的是
-  `nativeModels`（合并视图）——两者在激活初期不等价：首次 refresh 时 backend 可能还没就绪、返回空，于是**空载荷占用了 key**，紧接着那次有意义的 refresh
-  被判「未变化」直接跳过，推送静默地从未发生（只在上一轮侥幸的时序下成功过）。现在 key = `local bridge 计数 : 上游载荷条数 : 上游载荷带维度条数`，且**空载荷不占 key**。
-  改这里时务必让门控与实际 payload 同源，否则会退化成「看起来在推、其实没推」。
+- **推送门控必须描述「真正发送的内容」，且只描述它**：旧实现是 `pushKey()`——把「本地桥计数 : 上游载荷条数 : 上游载荷带维度条数」拼成字符串的启发式，它在激活初期不等价（首次 refresh 时 backend 可能未就绪、返回空），于是**空载荷占用了 key**，紧接着那次有意义的 refresh 被判「未变化」，推送静默地从未发生（只在上一轮侥幸的时序下成功过）。2026-10-19 起改为 **revision 门控**：`shared.nativeRevision` 只在目录/白名单**实际变化**时自增（`commit({ bumpRevision })` 是唯一写入口，refresh 与观测两条通道共用），发送条件为 `shared.nativeRevision > shared.lastPushedRevision`，且 `lastPushedRevision` 仅在后端**接受**该 revision 后才推进——失败或跳过的尝试会在下一次 refresh 重试，不会把声称过的 revision 固化住。**空载荷不推进 `lastPushedRevision`，因此不消耗门控**。`pushKey` 与 `localNativeModels` 都已删除（后者改名为 `catalog-sync` 闭包内的 `observed`），别按它们的旧语义去「修复」。
 
 - **上下文压缩：扩展不是施加者，且声明窗口是唯一杠杆（2026-10-16 定论，含三次自我推翻，别再重走）**。①**扩展从不碰会话历史、也不设任何压缩参数**；我们唯一的杠杆是 ModelInfo 的
   `f4 = maxTokens`（＝声明窗口）。**实测该声明被采纳且生效**：BYOK `deepseek-flash` 声明 `contextWindow: 1024000`，真实会话跑到

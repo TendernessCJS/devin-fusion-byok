@@ -67,7 +67,7 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 | **上次读取上游** | 2026-10-18 |
 | **`upstream/main` 当前位置（已移植，未 merge）** | `713836e` —— tag `v0.4.0`，2026-10-17 |
 | **基线以来 upstream 新增提交** | **2（均已移植）**：`58b324b`（web search / 页面读取 / 一键检查，v0.3.43）；`713836e`（v0.4.0：外部 MCP 开关、Goal 开关、稳定 launcher、页面读取、**宿主禁用时恢复自有设置**） |
-| 我们领先基线 | 150 个提交（2026-10-18 移植后实测；每次移植都要重算：`git rev-list --count "$(git merge-base upstream/main HEAD)"..HEAD`） |
+| 我们领先基线 | 173 个提交（2026-10-19 实测；每次移植都要重算：`git rev-list --count "$(git merge-base upstream/main HEAD)"..HEAD`） |
 
 **不要把「基线」改成 upstream 的新位置**（与旧版本这节的措辞不同，这是 2026-10-18 的修正）：基线一旦上移，`git log 5bae0bf..upstream/main` 就再也列不出这两个**已移植但未 merge**的提交，追踪证据随之消失。只更新「上次读取」与「当前位置」两格。
 

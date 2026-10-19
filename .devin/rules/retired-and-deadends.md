@@ -63,7 +63,7 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   且保留上游 `content-encoding: gzip` 只是恢复透传语义而非新增行为。
 - **生命周期计数不落诊断**：`close-timeout` / `startup-error` 由**旧进程**写进 `runtime.log`，新进程读不到内存计数；让扩展宿主每 15s 扫日志
   换一个低频计数不值得。仍以直接查 `runtime.log` 为准。
-- **`response.reasoning.delta` 保留**：非死分支，上游同样处理（`.refs/devin-fusion-byok/src/protocol/responses.cjs:416`），属防御性透传；
+- **`response.reasoning.delta` 保留**：非死分支，上游同样处理（`.refs/devin-fusion-byok/src/protocol/responses.cjs:416`；`.refs/` 在 `.gitignore` 里**未入库**，该行号仅本机可核），属防御性透传；
   只有 `retried` 是真死代码（已删）。
 - **受管 env 不加 `NO_PROXY`（2026-10-19 真机实测，触发条件不成立）**：目标曾是"`http.proxy` 配置时给 `devin-cli` 子进程加回环豁免"
   （`test/proxy-env.test.cjs:97` 那条 `todo`）。取证：Devin 主进程 env 无 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`、`settings.json` 的
