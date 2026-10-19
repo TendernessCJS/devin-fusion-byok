@@ -39,4 +39,33 @@ function normalizeAllowedUids(uids) {
   return [...seen].sort();
 }
 
-module.exports = { normalizeNativeEntry, normalizeAllowedUids };
+// The same uid arrives through several channels (the persisted cache, the CLI's
+// traffic, the native extension's traffic) and their entries are not equally
+// complete: a seeded entry predates whatever the next observation learned, and
+// the channels disagree about which fields carry the Fusion family metadata.
+// Keeping the richer form prevents a stale copy from silently downgrading the
+// catalog — a dimension-less entry makes every native Sidekick unresolvable, so
+// the mirrored combinations disappear from the picker and the CLI cache refresh
+// then deletes them as unemitted (2026-10-14).
+function mergeNativeEntry(prior, incoming) {
+  if (!prior) return incoming;
+  if (!incoming) return prior;
+  const carried = {};
+  if (prior.sidekickDimension && !incoming.sidekickDimension) carried.sidekickDimension = prior.sidekickDimension;
+  if (prior.fusionMetadata && !incoming.fusionMetadata) carried.fusionMetadata = prior.fusionMetadata;
+  if (prior.harnessUids?.length && !incoming.harnessUids?.length) carried.harnessUids = prior.harnessUids;
+  if (prior.familyUid && !incoming.familyUid) carried.familyUid = prior.familyUid;
+  if (prior.kind !== undefined && incoming.kind === undefined) carried.kind = prior.kind;
+  if (prior.listed === true && incoming.listed !== true) carried.listed = prior.listed;
+  // A sorts-carrying observation delivers a fresh verdict (listed or not); a
+  // flat-catalog observation leaves the prior verdict untouched.
+  if (prior.pickerListed !== undefined && incoming.pickerListed === undefined) carried.pickerListed = prior.pickerListed;
+  const merged = Object.keys(carried).length ? { ...incoming, ...carried } : { ...incoming };
+  // Observation sources accumulate: a uid seen through any catalog keeps every
+  // surface it was ever observed on, so picker classification stays truthful.
+  const sources = new Set([...(prior.sources || []), ...(incoming.sources || [])]);
+  if (sources.size) merged.sources = [...sources].slice(0, 8);
+  return merged;
+}
+
+module.exports = { normalizeNativeEntry, normalizeAllowedUids, mergeNativeEntry };

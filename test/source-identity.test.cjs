@@ -1,15 +1,16 @@
 'use strict';
-// SOURCE_FILES is a manual list, but its required content is not a matter of
-// opinion: it must describe exactly the modules backend.cjs loads, because it is
-// what sourceId() hashes to decide whether a same-version install needs a
-// backend restart. A missing entry means new code never runs; a stale entry
-// means an unrelated edit forces a needless restart. Both failures are silent,
-// so the contract is asserted mechanically in both directions.
+// backend.cjs derives its restart-hash input from the literal require graph at
+// load time, so the contract is mechanical rather than editorial: the walk must
+// reach every module backend.cjs can load and nothing outside it, every hashed
+// entry must be a real file inside the repository, and the digest must be
+// stable across calls. A missed module means new code never restarts the
+// backend; a stale one forces needless restarts. Both failures are silent, so
+// the equivalence is asserted with an independent reference walk here.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 
 const srcRoot = path.resolve(__dirname, '../src');
 const backendFile = path.join(srcRoot, 'runtime/backend.cjs');
@@ -19,17 +20,7 @@ const REQUIRE_LITERAL = /\brequire\(\s*(['"])([^'"]+)\1\s*\)/g;
 // statically, which is what this whole contract rests on.
 const REQUIRE_ANY = /\brequire\(/g;
 
-function hashedFiles() {
-  const text = fs.readFileSync(backendFile, 'utf8');
-  const literal = text.match(/const SOURCE_FILES = (\[[\s\S]*?\]);/);
-  assert.ok(literal, 'backend.cjs must declare SOURCE_FILES as a single array literal');
-  const names = vm.runInNewContext('(' + literal[1] + ')');
-  assert.ok(Array.isArray(names) && names.length > 0, 'SOURCE_FILES must be a non-empty array');
-  for (const name of names) assert.equal(typeof name, 'string');
-  assert.equal(new Set(names).size, names.length, 'SOURCE_FILES must not repeat a file');
-  return new Set(names.map(name => path.resolve(path.dirname(backendFile), name)));
-}
-
+// Reference implementation of backend.cjs's own derivation walk.
 function reachableModules() {
   const seen = new Set();
   const queue = [backendFile];
@@ -52,20 +43,43 @@ function reachableModules() {
   return { files: seen, unparseable };
 }
 
-test('SOURCE_FILES lists exactly the modules backend.cjs loads', () => {
-  const hashed = hashedFiles();
+function hashedFiles() {
+  const dir = path.dirname(backendFile);
+  return [...reachableModules().files].map(file => path.relative(dir, file)).sort();
+}
+
+function expectedSourceId() {
+  const dir = path.dirname(backendFile);
+  const hash = crypto.createHash('sha256');
+  for (const name of hashedFiles()) hash.update(name).update('\0').update(fs.readFileSync(path.resolve(dir, name))).update('\0');
+  return hash.digest('hex');
+}
+
+test('the hashed set covers exactly the modules backend.cjs loads', () => {
+  const hashed = new Set(hashedFiles().map(name => path.resolve(path.dirname(backendFile), name)));
   const { files } = reachableModules();
   const missing = [...files].filter(file => !hashed.has(file));
   const stale = [...hashed].filter(file => !files.has(file));
   assert.deepEqual(missing.map(file => path.relative(repoRoot, file)), [],
-    'these modules are loaded by backend.cjs but absent from SOURCE_FILES, so editing them never restarts the backend');
+    'these modules are loaded by backend.cjs but absent from the hashed set, so editing them never restarts the backend');
   assert.deepEqual(stale.map(file => path.relative(repoRoot, file)), [],
-    'these files are hashed by SOURCE_FILES but backend.cjs never loads them, so editing them forces a needless restart');
-
+    'these files are hashed but backend.cjs never loads them, so editing them forces a needless restart');
 });
 
-test('every SOURCE_FILES entry resolves to a file inside the repository', () => {
-  for (const file of hashedFiles()) {
+test('the derived digest matches the module and stays stable across calls', () => {
+  const { runtimeIdentity } = require('../src/runtime/backend.cjs');
+  const first = runtimeIdentity(repoRoot).sourceId;
+  assert.equal(first, expectedSourceId(),
+    'runtimeIdentity must hash exactly the derived closure, nothing more or less');
+  assert.equal(runtimeIdentity(repoRoot).sourceId, first, 'a second call must reuse the loaded digest');
+  assert.equal(runtimeIdentity(repoRoot, true).sourceId, first, 'a fresh re-read must reproduce the same digest');
+});
+
+test('every hashed entry resolves to a file inside the repository', () => {
+  const names = hashedFiles();
+  assert.ok(names.includes('../../package.json'), 'the package manifest carries the version into the hash');
+  for (const name of names) {
+    const file = path.resolve(path.dirname(backendFile), name);
     assert.ok(file.startsWith(repoRoot + path.sep), file + ' must live inside the repository');
     assert.ok(fs.statSync(file).isFile(), file + ' must exist and be a file');
   }
@@ -74,8 +88,9 @@ test('every SOURCE_FILES entry resolves to a file inside the repository', () => 
 test('src uses only static require specifiers, so this contract stays decidable', () => {
   const { unparseable } = reachableModules();
   assert.deepEqual(unparseable, [],
-    'these modules require a non-literal specifier, which hides dependencies from the SOURCE_FILES contract');
-  for (const file of hashedFiles()) {
+    'these modules require a non-literal specifier, which would make the source derivation throw');
+  for (const name of hashedFiles()) {
+    const file = path.resolve(path.dirname(backendFile), name);
     if (!file.startsWith(srcRoot + path.sep)) continue;
     const text = fs.readFileSync(file, 'utf8');
     const literals = [...text.matchAll(REQUIRE_LITERAL)].length;

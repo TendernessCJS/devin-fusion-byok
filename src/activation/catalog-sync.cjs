@@ -1,7 +1,6 @@
 'use strict';
 const { readNativeModels, pushNativeModels, isUpstreamUid } = require('../runtime/native-models.cjs');
-const { mergeNativeEntry } = require('../runtime/native-cache.cjs');
-const { normalizeNativeEntry } = require('../native-entry.cjs');
+const { mergeNativeEntry, normalizeNativeEntry } = require('../native-entry.cjs');
 
 function installCatalogSync({ deps, shared }) {
   const { lifecycle, config, log } = deps;
