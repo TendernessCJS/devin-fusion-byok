@@ -577,6 +577,27 @@ test('a push is refused when identity, capability or the payload do not line up'
     { pushed: 0, reason: 'unsupported' });
 });
 
+test('the ingest endpoint validates and echoes the push revision', async t => {
+  const f = await fixture(t);
+  const { pushNativeModels } = require('../src/runtime/native-models.cjs');
+  const endpoint = f.base + '/_runtime/native-models';
+  const models = [{ uid: 'swe-2-high', label: 'F', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }];
+  const post = body => fetch(endpoint, { method: 'POST',
+    headers: { authorization: 'Bearer ' + f.control().token, 'content-type': 'application/json' },
+    body: JSON.stringify(body) });
+  // A revision, when present, must be a non-negative safe integer.
+  for (const bad of [-1, 1.5, 'v2', Number.MAX_SAFE_INTEGER + 1, null]) {
+    assert.equal((await post({ models, revision: bad })).status, 400, `revision ${bad} is refused`);
+  }
+  const pushed = await pushNativeModels({ root: f.root, port: f.backend.port, models, revision: 3 });
+  assert.equal(pushed.pushed, 1);
+  assert.equal(pushed.revision, 3, 'the backend echoes the sent revision');
+  // An older host may omit it entirely and still ingest.
+  const plain = await post({ models });
+  assert.equal(plain.status, 200);
+  assert.equal((await plain.json()).revision, undefined);
+});
+
 // A half-read SSE stream can leave a response that is neither finished nor
 // closed, so release() never runs and an unbounded drain never completes. That
 // made close() hang, which in turn made SIGTERM a no-op (its handler awaits

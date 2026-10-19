@@ -88,7 +88,7 @@ async function readNativeModels({ root, port = PORT, signal, request = fetch }) 
 // loses every native Sidekick pairing until the host rewrites the cache.
 // Best-effort by design: the caller treats any failure as "not pushed" and keeps
 // relying on its own view, which is already the richer one.
-async function pushNativeModels({ root, models, allowedUids, port = PORT, signal, request = fetch }) {
+async function pushNativeModels({ root, models, allowedUids, revision, port = PORT, signal, request = fetch }) {
   if (!Array.isArray(models) || !models.length) return { pushed: 0, reason: 'empty' };
   const timeout = signal ? AbortSignal.any([signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000);
   const base = 'http://127.0.0.1:' + port;
@@ -113,12 +113,13 @@ async function pushNativeModels({ root, models, allowedUids, port = PORT, signal
       method: 'POST', signal: timeout, redirect: 'error',
       headers: { authorization: 'Bearer ' + control.token, 'content-type': 'application/json' },
       body: JSON.stringify({ models: payload,
+        ...(Number.isSafeInteger(revision) && revision >= 0 ? { revision } : {}),
         ...(Array.isArray(allowedUids) && allowedUids.length ? { allowedUids: allowedUids.filter(uid => isUpstreamUid(uid)) } : {}) }),
     });
     if (!response.ok) return { pushed: 0, reason: 'rejected' };
     const result = await response.json();
     if (result.instanceId !== health.instanceId) return { pushed: 0, reason: 'identity' };
-    return { pushed: payload.length, count: result.count, improved: result.improved === true };
+    return { pushed: payload.length, count: result.count, improved: result.improved === true, revision: result.revision };
   } catch { return { pushed: 0, reason: 'unavailable' }; }
 }
 module.exports = { readNativeModels, pushNativeModels, isUpstreamUid };

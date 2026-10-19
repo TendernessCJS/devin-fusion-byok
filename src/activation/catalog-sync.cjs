@@ -6,32 +6,33 @@ const { normalizeNativeEntry } = require('../native-entry.cjs');
 function installCatalogSync({ deps, shared }) {
   const { lifecycle, config, log } = deps;
   const PUSH_INTERVAL_MS = 5 * 1000;
-  // The gate must describe what is actually sent, not some proxy for it. Keying
-  // it off the local bridge observations looked equivalent but was not: on the
-  // first refresh the backend can answer with nothing yet, so an empty payload
-  // claimed the key and the immediately following meaningful refresh was then
-  // judged "unchanged" and skipped — the push silently never happened (only the
-  // previous successful push, whose timing differed, hid it).
+  // The push gate tracks what was actually accepted, not what was attempted:
+  // shared.nativeRevision increments whenever the local catalog or the allowed
+  // uid set changes, and lastPushedRevision advances only after a push the
+  // backend accepted. A failed or skipped attempt therefore retries on the
+  // next refresh instead of silently pinning the revision it claimed.
   const pushPayload = () => [...shared.nativeModels.values()].filter(entry => isUpstreamUid(entry?.uid));
-  const pushKey = () => shared.localNativeModels.size + ':' + pushPayload().length + ':' + shared.nativeAllowedUids.size + ':' +
-    pushPayload().filter(entry => entry.sidekickDimension || entry.fusionMetadata).length;
   shared.pushToBackend = () => {
     if (lifecycle.activationDisposed || config().enabled === false || shared.pushTimer !== undefined) return;
-    // Nothing to offer yet: do not spend the key on an empty payload, or the
-    // first useful observation will look unchanged.
+    // Nothing to offer yet: an empty payload must not advance the pushed
+    // revision, or the first useful observation will look unchanged.
     if (!pushPayload().length) return;
-    const key = pushKey();
-    if (key === shared.lastPushKey) return;
+    if (!(shared.nativeRevision > shared.lastPushedRevision)) return;
     const wait = Math.max(0, shared.lastPushAt + PUSH_INTERVAL_MS - Date.now());
     shared.pushTimer = setTimeout(() => {
       shared.pushTimer = undefined;
       if (lifecycle.activationDisposed || config().enabled === false) return;
       shared.lastPushAt = Date.now();
-      shared.lastPushKey = key;
-      pushNativeModels({ root: deps.root, models: pushPayload(), allowedUids: [...shared.nativeAllowedUids] })
+      const revision = shared.nativeRevision;
+      pushNativeModels({ root: deps.root, models: pushPayload(), allowedUids: [...shared.nativeAllowedUids], revision })
         .then(result => {
-          if (result?.pushed) log('native-push', { pushed: result.pushed, count: result.count, improved: result.improved === true });
-          else if (result?.reason && result.reason !== 'empty') log('native-push-skip', { reason: result.reason });
+          if (result?.pushed) {
+            if (revision > shared.lastPushedRevision) shared.lastPushedRevision = revision;
+            if (result.revision !== undefined && result.revision !== revision) {
+              log('native-push-revision-mismatch', { sent: revision, echoed: result.revision });
+            }
+            log('native-push', { pushed: result.pushed, count: result.count, improved: result.improved === true });
+          } else if (result?.reason && result.reason !== 'empty') log('native-push-skip', { reason: result.reason });
         })
         .catch(() => {});
     }, wait);
@@ -48,6 +49,10 @@ function installCatalogSync({ deps, shared }) {
       catch { result = { status: 'unavailable', models: [] }; }
       if (abort.signal.aborted || generation !== lifecycle.activationGeneration || lifecycle.activationDisposed || config().enabled === false) return;
       shared.nativeCatalogStatus = result.status;
+      // A refresh rebuilds the merged view from scratch, so the revision bump
+      // needs a content comparison against the previous map — same
+      // JSON.stringify yardstick observeNativeModels already uses.
+      const previousByUid = new Map([...shared.nativeModels].map(([uid, entry]) => [uid, JSON.stringify(entry)]));
       shared.nativeModels.clear();
       // Both channels observe the same upstream catalog from different sides —
       // the backend sees the CLI's traffic, this host sees the native
@@ -56,7 +61,20 @@ function installCatalogSync({ deps, shared }) {
       // Sidekick unresolvable and the mirrored combinations vanish.
       for (const entry of shared.localNativeModels.values()) shared.nativeModels.set(entry.uid, entry);
       for (const entry of result.models) shared.nativeModels.set(entry.uid, mergeNativeEntry(shared.nativeModels.get(entry.uid), entry));
-      if (Array.isArray(result.allowedUids) && result.allowedUids.length) shared.nativeAllowedUids = new Set(result.allowedUids);
+      let changed = shared.nativeModels.size !== previousByUid.size;
+      if (!changed) {
+        for (const [uid, entry] of shared.nativeModels) {
+          if (previousByUid.get(uid) !== JSON.stringify(entry)) { changed = true; break; }
+        }
+      }
+      if (Array.isArray(result.allowedUids) && result.allowedUids.length) {
+        const next = new Set(result.allowedUids);
+        if (next.size !== shared.nativeAllowedUids.size || [...next].some(uid => !shared.nativeAllowedUids.has(uid))) {
+          shared.nativeAllowedUids = next;
+          changed = true;
+        }
+      }
+      if (changed) shared.nativeRevision += 1;
       try { await shared.management?.publish(); } catch {}
       shared.updateStatusBar();
       if (shared.nativeModels.size !== shared.nativeSyncSize) { shared.nativeSyncSize = shared.nativeModels.size; log('native-sync', { count: shared.nativeSyncSize }); }
@@ -86,6 +104,7 @@ function installCatalogSync({ deps, shared }) {
       }
     }
     if (changed && !lifecycle.activationDisposed) try {
+      shared.nativeRevision += 1;
       void shared.management?.publish()?.catch(() => {}); shared.updateStatusBar(); shared.pickerRefresh?.changed?.(); shared.checkCliCaches?.();
       shared.pushToBackend();
     } catch {}

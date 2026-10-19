@@ -606,6 +606,9 @@ const waitFor = async (check, ms = 1000) => {
 
 test('the host pushes its richer observations to the backend once they grow', async t => {
   const f = fixture(t);
+  // The push must actually land: under the revision gate a failed push
+  // legitimately retries on every refresh.
+  f.setPushResult({ pushed: 1, count: 1 });
   f.setNativeRead(async () => ({ status: 'ready', models: [{ uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }] }));
   await f.activate(f.context);
   assert.ok(await waitFor(() => f.pushes().length >= 1), 'activation already offers what it has');
@@ -642,6 +645,56 @@ test('a failing push is logged and never disturbs the activation flow', async t 
   assert.ok(await waitFor(() => f.logs.some(line => line.includes('native-push-skip'))), 'the skip is reported');
   assert.equal(f.counts().installed, 1);
   assert.ok(f.logs.every(line => !line.includes('"event":"error"')));
+});
+
+test('a failed push does not consume the revision and the next refresh retries it', async t => {
+  const f = fixture(t);
+  const rich = [{ uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }];
+  f.setNativeRead(async () => ({ status: 'ready', models: rich }));
+  f.setPushResult({ pushed: 0, reason: 'unavailable' });
+  await f.activate(f.context);
+  assert.ok(await waitFor(() => f.pushes().length >= 1), 'the first refresh pushes');
+  assert.equal(f.pushes().at(-1).revision, 1, 'the push carries the local revision');
+  assert.ok(await waitFor(() => f.logs.some(line => line.includes('native-push-skip'))), 'the failure is reported');
+  const failed = f.pushes().length;
+  // The failure claimed nothing: the same unchanged view is retried once the
+  // throttle window has passed.
+  f.setPushResult({ pushed: 2, count: 1, revision: 99 });
+  await f.managerOptions().refreshNativeModels();
+  assert.ok(await waitFor(() => f.pushes().length > failed, 7000), 'an unchanged view retries a failed push');
+  assert.equal(f.pushes().at(-1).revision, 1, 'the retry sends the same revision');
+  assert.ok(f.logs.some(line => line.includes('native-push-revision-mismatch')),
+    'a mismatched echo is logged as a diagnostic only');
+  await f.managerOptions().refreshNativeModels();
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(f.pushes().length, failed + 1, 'a success settles the revision despite the echo mismatch');
+});
+
+test('catalog and allowedUids changes raise the revision and re-push', async t => {
+  const f = fixture(t);
+  const rich = [{ uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }];
+  let allowed;
+  f.setNativeRead(async () => ({ status: 'ready', models: rich, allowedUids: allowed }));
+  f.setPushResult({ pushed: 1, count: 1 });
+  await f.activate(f.context);
+  assert.ok(await waitFor(() => f.pushes().length >= 1));
+  await f.managerOptions().refreshNativeModels();
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(f.pushes().length, 1, 'an unchanged view after a success is not re-sent');
+  // A changed allowlist is part of the revision, not a silent resend.
+  allowed = ['swe-2-high'];
+  await f.managerOptions().refreshNativeModels();
+  assert.ok(await waitFor(() => f.pushes().length >= 2, 7000), 'an allowedUids change re-pushes');
+  assert.equal(f.pushes().at(-1).revision, 2);
+  // The payload crosses the sandbox realm, so compare serialized values.
+  assert.deepEqual(JSON.parse(JSON.stringify(f.pushes().at(-1).allowedUids)), ['swe-2-high']);
+  // A changed catalog bumps the revision again.
+  f.setNativeRead(async () => ({ status: 'ready', allowedUids: allowed,
+    models: [...rich, { uid: 'swe-2-max', label: 'M', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }] }));
+  await f.managerOptions().refreshNativeModels();
+  assert.ok(await waitFor(() => f.pushes().length >= 3, 7000), 'a catalog change re-pushes');
+  assert.equal(f.pushes().at(-1).revision, 3);
+  assert.equal(f.pushes().at(-1).models.length, 2);
 });
 
 // The gate used to key off the local bridge observations while sending the

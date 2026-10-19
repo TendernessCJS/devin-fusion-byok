@@ -108,7 +108,7 @@ async function activate(context) {
     nativeCatalogStatus: 'loading', backendStatus: 'stopped',
     syncPending: undefined, syncAbort: undefined, syncTimer: undefined,
     acpObservationSeq: 0, acpOwnModels: 0,
-    pushTimer: undefined, lastPushAt: 0, lastPushKey: '',
+    pushTimer: undefined, lastPushAt: 0, nativeRevision: 0, lastPushedRevision: 0,
     nativeSyncSize: -1, cliCacheReport: null, contextObserver: undefined,
     lastAutoError: undefined, lastAutoPlan: undefined,
     pushToBackend: undefined, refreshNativeModels: undefined,

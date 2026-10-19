@@ -40,11 +40,18 @@ function createRuntimeControl({ identity, instanceId, controlToken, managementPr
       collect(request).then(body => {
         if (body.length > MAX_BODY_BYTES) throw new Error('too_large');
         const payload = JSON.parse(body.toString('utf8'));
+        // The revision is an advisory monotonic marker from the pushing host;
+        // when present it must be a non-negative safe integer and is echoed
+        // back so the host can detect a mismatched ingest.
+        if (payload?.revision !== undefined && !(Number.isSafeInteger(payload.revision) && payload.revision >= 0)) {
+          throw new Error('invalid');
+        }
         const result = ingest(payload?.models);
         if (result && Array.isArray(payload?.allowedUids)) onAllowedUids(payload.allowedUids);
         if (!result) throw new Error('invalid');
         response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        response.end(JSON.stringify({ instanceId, ...result }));
+        response.end(JSON.stringify({ instanceId, ...result,
+          ...(payload.revision !== undefined ? { revision: payload.revision } : {}) }));
       }).catch(() => {
         if (response.destroyed) return;
         response.writeHead(400, { 'content-type': 'application/json' });
