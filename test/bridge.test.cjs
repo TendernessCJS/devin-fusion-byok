@@ -46,7 +46,7 @@ test('LS bridge preserves native RPC bytes, query, CSRF, streaming response and 
   assert.deepEqual(response.body, payload);
 });
 
-test('catalog augmentation decodes gzip and publishes headers matching the plain output', async t => {
+test('catalog augmentation preserves upstream gzip and re-compresses the rewritten payload', async t => {
   const original = { clientModelConfigs: [{ modelUid: 'official', label: 'Official' }] };
   const native = await listen((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
@@ -57,13 +57,31 @@ test('catalog augmentation decodes gzip and publishes headers matching the plain
   t.after(() => bridge.close());
   const response = await request(bridge.port, LS + 'GetCliModelConfigs');
   assert.equal(response.status, 200);
-  assert.equal(response.headers['content-encoding'], undefined);
+  assert.equal(response.headers['content-encoding'], 'gzip');
   assert.equal(response.headers['transfer-encoding'], undefined);
   assert.equal(Number(response.headers['content-length']), response.body.length);
-  const json = JSON.parse(response.body);
+  const json = JSON.parse(zlib.gunzipSync(response.body).toString('utf8'));
   assert.deepEqual(json.clientModelConfigs.slice(0, catalog.models.length).map(model => model.modelUid), catalog.models.map(model => model.uid));
   assert.equal(json.clientModelConfigs.at(-1).modelUid, 'official');
   assert.equal(json.clientModelConfigs.length, 1 + catalog.models.length);
+});
+
+test('catalog augmentation of an uncompressed upstream stays plain', async t => {
+  const original = { clientModelConfigs: [{ modelUid: 'official', label: 'Official' }] };
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(original));
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog });
+  t.after(() => bridge.close());
+  const response = await request(bridge.port, LS + 'GetCliModelConfigs');
+  assert.equal(response.status, 200);
+  assert.equal(response.headers['content-encoding'], undefined);
+  assert.equal(Number(response.headers['content-length']), response.body.length);
+  const json = JSON.parse(response.body);
+  assert.equal(json.clientModelConfigs.length, 1 + catalog.models.length);
+  assert.equal(json.clientModelConfigs.at(-1).modelUid, 'official');
 });
 
 test('compressed Connect catalog emits uncompressed frames without stale encoding headers', async t => {

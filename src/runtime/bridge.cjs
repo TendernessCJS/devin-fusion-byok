@@ -103,8 +103,12 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         let skipped;
         const augmented = augmentCatalog(format.data, { rpc: target.pathname, format, catalog, onFusionStatus,
           onSkip: code => { skipped ??= code; } });
-        outgoing = wire.encode(augmented, { ...format, gzip: false, compressed: false });
-        delete outgoingHeaders['content-encoding']; delete outgoingHeaders['connect-content-encoding'];
+        // Preserve transport gzip: a compressed upstream is re-compressed so
+        // the rewritten catalog does not balloon on the wire. Per-message
+        // compression (connect-content-encoding) stays flattened as before.
+        outgoing = wire.encode(augmented, { ...format, compressed: false });
+        if (!format.gzip) delete outgoingHeaders['content-encoding'];
+        delete outgoingHeaders['connect-content-encoding'];
         delete outgoingHeaders['transfer-encoding']; outgoingHeaders['content-length'] = String(outgoing.length);
         log('catalog', { rpc: target.pathname.split('/').pop(), models: catalog.models.length, matrix: catalog.matrixUids?.size ?? 0, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented), ...(skipped ? { skipped } : {}) });
       } catch { log('catalog-error', { code: 'catalog_transform_failed' }); }
@@ -129,7 +133,9 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
   if (body !== undefined) outbound.end(body); else request.pipe(outbound);
 }
 async function createLsBridge(originalPort, options) {
+  const onActivity = options?.onActivity;
   const server = http.createServer((request, response) => {
+    try { onActivity?.(); } catch {}
     if (request.method === 'OPTIONS') {
       response.writeHead(204, { ...cors(request), 'access-control-allow-methods': 'POST, GET, OPTIONS',
         'access-control-allow-headers': request.headers['access-control-request-headers'] || 'content-type,x-codeium-csrf-token,connect-protocol-version', 'access-control-max-age': '600' });

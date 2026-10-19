@@ -1,10 +1,10 @@
 'use strict';
 
-// R0 structural guardrail for the LS injection bridge. The current
-// implementation manages exactly one bridge: observing a new native LS port
-// swaps the bridge and closes the predecessor. The multi-instance design (one
-// bridge per observed port plus a child-LS rewrite through
-// setChildLanguageServerInfo) is marked todo until R3 lands.
+// R3 structural guardrail for the LS injection bridge pool. Each observed
+// native LS port — the main port (setPort / Heartbeat) and every child LS port
+// (setChildLanguageServerInfo) — gets its own bridge in a shared map; ports
+// observed concurrently stay alive side by side and idle bridges are reclaimed
+// only after their TTL expires.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -18,7 +18,29 @@ const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/w
 const HEARTBEAT = '/exa.language_server_pb.LanguageServerService/Heartbeat';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-function fixture() {
+function fakeClock() {
+  let current = 0;
+  let sequence = 0;
+  const timers = new Map();
+  return {
+    now: () => current,
+    setTimeout: (fn, ms) => {
+      const id = ++sequence;
+      timers.set(id, { fn, at: current + ms });
+      return { id, unref() {} };
+    },
+    clearTimeout: handle => timers.delete(handle?.id ?? handle),
+    advance(ms) {
+      current += ms;
+      for (const [id, timer] of [...timers]) {
+        if (timer.at <= current) { timers.delete(id); timer.fn(); }
+      }
+    },
+    pending: () => timers.size,
+  };
+}
+
+function fixture({ clock, ttlMs } = {}) {
   const requests = [];
   const setters = [];
   const closed = [];
@@ -54,57 +76,117 @@ function fixture() {
     return http.request(`http://${host}:${port}${HEARTBEAT}`, { method: 'POST' });
   }
   function install(options = {}) {
-    return module.exports.installLsInjection({ nativeMainPath: NATIVE_MAIN, createBridge, ...options });
+    return module.exports.installLsInjection({ nativeMainPath: NATIVE_MAIN, createBridge, clock, ttlMs, ...options });
   }
   return { http, api, requests, setters, closed, created, childCalls, childSetter, beat, install };
 }
 
-// Characterizes today's single-slot bridge: a newer port wins and the previous
-// bridge is closed eagerly. R3 replaces that eager close with an idle TTL, so
-// this expectation is expected to change with the implementation (the todo case
-// below states the target). Do not "restore" eager closing to keep this green.
-test('observing a second LS port redirects setPort to the new bridge and closes the old one', async () => {
-  const f = fixture();
+test('a second observed port gets its own bridge and the first is only closed at TTL', async () => {
+  const clock = fakeClock();
+  const f = fixture({ clock, ttlMs: 1000 });
   const handle = await f.install();
   f.beat(4567);
   await tick();
   assert.deepEqual(f.created, [4567]);
   assert.deepEqual(f.setters.map(call => call[0]), [14567]);
 
+  clock.advance(500);
   f.beat(7890);
   await tick();
   assert.deepEqual(f.created, [4567, 7890]);
   assert.deepEqual(f.setters.map(call => call[0]), [14567, 17890]);
+  assert.deepEqual(f.closed, []);
+  assert.equal(handle.status.bridges, 2);
+
+  // One ms before the first bridge's TTL: both still alive.
+  clock.advance(499);
+  await tick();
+  assert.deepEqual(f.closed, []);
+  // At expiry only the idle 4567 bridge is reclaimed; 7890 is now the
+  // current main bridge, which the TTL never reclaims.
+  clock.advance(1);
+  await tick();
   assert.deepEqual(f.closed, [14567]);
+  assert.equal(handle.status.bridges, 1);
+  clock.advance(60 * 1000);
+  await tick();
+  assert.deepEqual(f.closed, [14567]);
+  assert.equal(handle.status.bridges, 1);
+  assert.equal(handle.status.proxyPort, 17890);
   await handle.dispose();
 });
 
-test('setChildLanguageServerInfo stays the native function while installed and after dispose', async () => {
+test('setChildLanguageServerInfo rewrites the port to the bridge without mutating the payload', async () => {
   const f = fixture();
   const handle = await f.install();
   f.beat(4567);
   await tick();
-  assert.equal(f.api.setChildLanguageServerInfo, f.childSetter);
+  assert.notEqual(f.api.setChildLanguageServerInfo, f.childSetter);
+
+  const info = { workspaceUri: 'file:///a', port: 4567, csrfToken: 'private-csrf', other: 'kept' };
+  const extra = { marker: true };
+  assert.equal(f.api.setChildLanguageServerInfo(info, extra), 'native-child');
+  const forwarded = f.childCalls.at(-1)[0];
+  assert.notEqual(forwarded, info);
+  assert.equal(forwarded.port, 14567);
+  assert.equal(forwarded.csrfToken, 'private-csrf');
+  assert.equal(forwarded.other, 'kept');
+  assert.equal(info.port, 4567);
+  assert.equal(f.childCalls.at(-1)[1], extra);
+
+  // Invalid ports are passed through untouched and never create bridges.
+  const before = f.created.length;
+  const raw = { workspaceUri: 'file:///b', port: 'not-a-port' };
+  f.api.setChildLanguageServerInfo(raw);
+  assert.equal(f.childCalls.at(-1)[0], raw);
+  assert.equal(f.created.length, before);
+  assert.equal(f.created.length, 1);
+
   await handle.dispose();
   assert.equal(f.api.setChildLanguageServerInfo, f.childSetter);
 });
 
-// R3 turns the bridge into a per-port multi-instance pool:
-// setChildLanguageServerInfo({ workspaceUri, port, csrfToken }) is rewritten to
-// that workspace's bridge port, simultaneous bridges each serve their own
-// requests, and a superseded bridge is reclaimed by an idle TTL instead of
-// being closed eagerly.
-test('child LS info is rewritten per bridge and idle bridges expire via TTL',
-  { todo: 'R3 multi-instance LS bridge: per-port bridges, child-LS rewrite, idle-TTL reclaim' },
-  async () => {
-    const f = fixture();
-    const handle = await f.install();
-    f.beat(4567);
-    f.beat(7890);
-    await tick();
-    assert.notEqual(f.api.setChildLanguageServerInfo, f.childSetter);
-    f.api.setChildLanguageServerInfo({ workspaceUri: 'file:///a', port: 4567, csrfToken: 't' });
-    assert.equal(f.childCalls.at(-1)[0].port, 14567);
-    assert.deepEqual(f.closed, []);
-    await handle.dispose();
-  });
+test('the current main bridge never idles out while a child bridge expires by TTL', async () => {
+  const clock = fakeClock();
+  const f = fixture({ clock, ttlMs: 1000 });
+  const handle = await f.install();
+  f.beat(4567);
+  await tick();
+  f.api.setChildLanguageServerInfo({ workspaceUri: 'file:///a', port: 7890 });
+  await tick();
+  assert.equal(handle.status.bridges, 2);
+
+  clock.advance(999);
+  await tick();
+  assert.deepEqual(f.closed, []);
+  clock.advance(1);
+  await tick();
+  // The child bridge hit its TTL; the main bridge is re-armed, not reclaimed.
+  assert.deepEqual(f.closed, [17890]);
+  assert.equal(handle.status.bridges, 1);
+  assert.equal(handle.status.proxyPort, 14567);
+
+  // Advancing far past the TTL still never expires the main bridge.
+  clock.advance(60 * 1000);
+  await tick();
+  assert.deepEqual(f.closed, [17890]);
+  assert.equal(handle.status.bridges, 1);
+  assert.equal(handle.status.proxyPort, 14567);
+  await handle.dispose();
+});
+
+test('two active ports each rewrite to their own bridge', async () => {
+  const f = fixture();
+  const handle = await f.install();
+  f.beat(4567);
+  await tick();
+  f.beat(7890);
+  await tick();
+  f.api.setChildLanguageServerInfo({ workspaceUri: 'file:///a', port: 4567 });
+  f.api.setChildLanguageServerInfo({ workspaceUri: 'file:///b', port: 7890 });
+  assert.equal(f.childCalls.at(-2)[0].port, 14567);
+  assert.equal(f.childCalls.at(-1)[0].port, 17890);
+  assert.deepEqual(f.closed, []);
+  await handle.dispose();
+  assert.deepEqual(f.closed, [14567, 17890]);
+});

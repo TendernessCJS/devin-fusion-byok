@@ -87,9 +87,10 @@ test('late activation learns the running native LS from Heartbeat and preserves 
   assert.equal(handle.status.originalPort, 4567);
   assert.equal(handle.status.proxyPort, 14567);
   assert.deepEqual(f.paths, [NATIVE_MAIN]);
-  assert.equal(f.api.setChildLanguageServerInfo, f.childSetter);
+  assert.notEqual(f.api.setChildLanguageServerInfo, f.childSetter);
   assert.ok(f.logs.every(line => !line.includes('private-csrf')));
   await handle.dispose();
+  assert.equal(f.api.setChildLanguageServerInfo, f.childSetter);
 });
 
 test('early activation wraps setPort without changing return value, this, or extra arguments', async () => {

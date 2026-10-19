@@ -72,7 +72,7 @@ function installEnable({ deps, shared }) {
     const native = vscode.extensions.getExtension('codeium.windsurf');
     if (!native) throw new Error('未找到 Devin 原生扩展');
     const injected = await installLsInjection({ nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main),
-      createBridge: port => createLsBridge(port, { getCatalog: catalog, log, onNativeModels: shared.observeNativeModels,
+      createBridge: (port, extra) => createLsBridge(port, { ...extra, getCatalog: catalog, log, onNativeModels: shared.observeNativeModels,
         onAllowedUids: uids => {
           const next = new Set(Array.isArray(uids) ? uids.filter(uid => typeof uid === 'string' && uid) : []);
           if (!next.size || (next.size === shared.nativeAllowedUids.size && [...next].every(uid => shared.nativeAllowedUids.has(uid)))) return;
