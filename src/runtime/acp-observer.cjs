@@ -1,6 +1,6 @@
 'use strict';
 
-const { loadAcpApi, restoreMember } = require('./acp-hook.cjs');
+const { loadAcpApi, restoreMember, createAcpRegistry } = require('./acp-hook.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.acp-observer.v1');
 const METHODS = new Set(['session/new', 'session/load', 'session/resume']);
@@ -36,8 +36,6 @@ function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
   const api = loadAcpApi(nativeMainPath);
   if (api[INSTANCE]) return api[INSTANCE];
 
-  const registrationDescriptor = Object.getOwnPropertyDescriptor(api, 'registerConnection');
-  const originalRegister = api.registerConnection;
   const records = new Map();
   let disposed = false, responses = 0, last = null;
 
@@ -76,13 +74,21 @@ function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
     } catch (_) { /* A frozen native connector can still register normally. */ }
   }
 
-  function registerConnection(...args) {
-    const result = Reflect.apply(originalRegister, this, args);
-    if (!disposed) {
-      try { wrapConnection(args[0]); } catch (_) { /* Registration is never blocked by observation. */ }
-    }
-    return result;
-  }
+  const layer = createAcpRegistry(api).addLayer({
+    id: 'acp-observer',
+    priority: 30,
+    attach(connection) {
+      if (records.has(connection)) return null;
+      wrapConnection(connection);
+      return records.has(connection) ? connection : null;
+    },
+    detach(connection) {
+      const record = records.get(connection);
+      if (!record) return;
+      try { restoreMember(connection, 'sendRequest', record.sendRequest, record.descriptor); } catch (_) {}
+      records.delete(connection);
+    },
+  });
 
   const handle = {
     get status() {
@@ -91,17 +97,12 @@ function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
     dispose() {
       if (disposed) return;
       disposed = true;
-      restoreMember(api, 'registerConnection', registerConnection, registrationDescriptor);
-      for (const [connection, record] of records) {
-        try { restoreMember(connection, 'sendRequest', record.sendRequest, record.descriptor); } catch (_) {}
-      }
-      records.clear();
+      layer.remove();
       if (api[INSTANCE] === handle) delete api[INSTANCE];
     },
   };
-  api.registerConnection = registerConnection;
   try { Object.defineProperty(api, INSTANCE, { value: handle, configurable: true }); }
-  catch (error) { restoreMember(api, 'registerConnection', registerConnection, registrationDescriptor); throw error; }
+  catch (error) { layer.remove(); throw error; }
   return handle;
 }
 

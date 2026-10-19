@@ -2,7 +2,7 @@
 
 const { createHash, randomUUID } = require('node:crypto');
 const { createRequire } = require('node:module');
-const { loadAcpApi, restoreMember } = require('./acp-hook.cjs');
+const { loadAcpApi, restoreMember, createAcpRegistry } = require('./acp-hook.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.auto-continue.v1');
 const ATTACHED = Symbol.for('devin-fusion-byok.auto-continue.attached');
@@ -45,8 +45,6 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
   const scheduleTimer = scheduler?.setTimeout || setTimeout;
   const clearTimer = scheduler?.clearTimeout || clearTimeout;
 
-  const registrationDescriptor = Object.getOwnPropertyDescriptor(api, 'registerConnection');
-  const originalRegister = api.registerConnection;
   const connections = new Map();
   const autoAttempts = new WeakMap();
   let disposed = false;
@@ -81,7 +79,6 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
     if (entry.setStatusWrapper) {
       restoreMember(connector, 'setStatus', entry.setStatusWrapper, entry.setStatusDescriptor);
     }
-    if (entry.registration) restoreMember(entry.registration, 'dispose', entry.disposeWrapper, entry.disposeDescriptor);
     delete connector[ATTACHED];
     connections.delete(connector);
   }
@@ -729,34 +726,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
     return entry;
   }
 
-  function registerWrapper(connector, ...rest) {
-    let entry;
-    try {
-      entry = attach(connector);
-    } catch {}
-    let registration;
-    try {
-      registration = Reflect.apply(originalRegister, this, [connector, ...rest]);
-    } catch (err) {
-      if (entry) detach(connector);
-      throw err;
-    }
-    if (entry && registration && typeof registration.dispose === 'function') {
-      entry.registration = registration;
-      try {
-        entry.disposeDescriptor = Object.getOwnPropertyDescriptor(registration, 'dispose');
-        const originalDispose = registration.dispose;
-        entry.disposeWrapper = function (...disposeArgs) {
-          detach(connector);
-          return Reflect.apply(originalDispose, this, disposeArgs);
-        };
-        registration.dispose = entry.disposeWrapper;
-      } catch { detach(connector); }
-    }
-    return registration;
-  }
-
-  api.registerConnection = registerWrapper;
+  const layer = createAcpRegistry(api).addLayer({
+    id: 'auto-continue', priority: 10, attach, detach });
 
   const handle = {
     status() {
@@ -806,8 +777,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
       if (disposed) return;
       disposed = true;
       handle.reset();
-      restoreMember(api, 'registerConnection', registerWrapper, registrationDescriptor);
-      for (const connector of [...connections.keys()]) detach(connector);
+      layer.remove();
       delete api[INSTANCE];
     }
   };

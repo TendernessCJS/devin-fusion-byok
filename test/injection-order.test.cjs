@@ -127,18 +127,17 @@ test('acp-observer dispose is idempotent and does not disturb a restored API', (
 });
 
 // deactivate() tears down auto-continue and goal-continue before the
-// acp-observer; each layer then finds a foreign wrapper on top of its own and
-// restoreMember correctly refuses to remove it, but the wrapper stays behind.
-// R1's unified registry will dispose strictly LIFO, flipping this green.
-test('deactivate-order dispose (auto -> goal -> observer) also restores all patches',
-  { todo: 'R1 injection orchestration: unified LIFO registry makes out-of-order dispose safe' },
-  () => {
-    const f = fixture();
-    const { goalHandle, autoHandle, observerHandle } = f.installAll();
-    f.api.registerConnection(f.connector);
-    autoHandle.dispose();
-    goalHandle.dispose();
-    observerHandle.dispose();
-    assertRegisterRestored(f.api, f);
-    assert.equal(f.connector.sendRequest, f.originalSend);
-  });
+// acp-observer. The unified registry detaches strictly in reverse attach
+// order per connector and drains inactive layers as they reach the top, so
+// even this order restores every patch.
+test('deactivate-order dispose (auto -> goal -> observer) also restores all patches', () => {
+  const f = fixture();
+  const { goalHandle, autoHandle, observerHandle } = f.installAll();
+  f.api.registerConnection(f.connector);
+  autoHandle.dispose();
+  goalHandle.dispose();
+  observerHandle.dispose();
+  assertRegisterRestored(f.api, f);
+  assert.equal(f.connector.sendRequest, f.originalSend);
+  assert.equal(f.connector.forwardClientRequest, f.originalForward);
+});

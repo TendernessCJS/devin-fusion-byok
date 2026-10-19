@@ -1,7 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { createRequire } = require('node:module');
-const { loadAcpApi, restoreMember } = require('../runtime/acp-hook.cjs');
+const { loadAcpApi, restoreMember, createAcpRegistry } = require('../runtime/acp-hook.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.goal-continue.v1');
 const ATTACHED = Symbol.for('devin-fusion-byok.goal-continue.attached');
@@ -130,8 +130,6 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
   if (api[INSTANCE]) return api[INSTANCE];
 
   const sessions = registry || createSessionRegistry();
-  const registrationDescriptor = Object.getOwnPropertyDescriptor(api, 'registerConnection');
-  const originalRegister = api.registerConnection;
   const connections = new Set();
   const goalRequests = new WeakSet();
   const activeRuns = new Map();
@@ -181,7 +179,6 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
     restoreMember(connector, 'forwardClientRequest', entry.forwardWrapper, entry.forwardDescriptor);
     restoreMember(connector, 'sendRequest', entry.sendRequestWrapper, entry.sendRequestDescriptor);
     if (entry.setStatusWrapper) restoreMember(connector, 'setStatus', entry.setStatusWrapper, entry.setStatusDescriptor);
-    if (entry.registration) restoreMember(entry.registration, 'dispose', entry.disposeWrapper, entry.disposeDescriptor);
     delete connector[ATTACHED];
     connections.delete(connector);
   }
@@ -484,24 +481,8 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
     return entry;
   }
 
-  function registerWrapper(connector, ...rest) {
-    let entry;
-    try { entry = attach(connector); } catch {}
-    let registration;
-    try { registration = Reflect.apply(originalRegister, this, [connector, ...rest]); }
-    catch (error) { if (entry) detach(connector); throw error; }
-    if (entry && registration && typeof registration.dispose === 'function') {
-      entry.registration = registration;
-      try {
-        entry.disposeDescriptor = Object.getOwnPropertyDescriptor(registration, 'dispose');
-        const originalDispose = registration.dispose;
-        entry.disposeWrapper = function (...disposeArgs) { detach(connector); return Reflect.apply(originalDispose, this, disposeArgs); };
-        registration.dispose = entry.disposeWrapper;
-      } catch { detach(connector); }
-    }
-    return registration;
-  }
-  api.registerConnection = registerWrapper;
+  const layer = createAcpRegistry(api).addLayer({
+    id: 'goal-continue', priority: 20, attach, detach });
 
   function mirrorUserMessage(connector, sessionId, clientMessageId, runsStarted) {
     const isV2 = connector.protocolVersion >= 2;
@@ -620,8 +601,7 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
     dispose() {
       if (disposed) return;
       disposed = true;
-      restoreMember(api, 'registerConnection', registerWrapper, registrationDescriptor);
-      for (const connector of [...connections]) detach(connector);
+      layer.remove();
       sessions.clear();
       activeRuns.clear();
       runGenerations.clear();
