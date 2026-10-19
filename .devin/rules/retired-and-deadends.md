@@ -57,8 +57,10 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   （`正文 TPS（不含工具）`、`含工具回合不计算`），另有 `throughputTps`（含等待）覆盖另一视角。
 - **zero-size 只作基线不作阈值**：0.3.50 重载后实测 `usageRejections.zero-size` 3 / `acceptedUsageUpdates` 40，`missing-size` 为 0；
   这是启动期用量回放的既有现象。判据是 `missing-size` 是否增长，而不是 zero-size 的占比。
-- **目录载荷放大不改**：桥 `before 47,216 → after 1,358,625`（`GetUserStatus`）。重新压缩属**行为变更**（既有测试刻意断言
-  「去掉陈旧 content-encoding、输出未压缩帧」），而往返在 loopback、实测约 96 次/天，收益远小于风险；保留现有 `before/after` 体积日志即可。
+- **目录载荷放大已于 2026-10-19 实施 gzip 保留**：桥侧 `GetUserStatus` 由 `before 47,222 → after 1,358,627`（28.77×）降到
+  `after 73,935`（1.566×）。残留 1.57× 是真实新增条目（`afterOwn 629`、`beforeOwn 0`），非编码膨胀。
+  原「不改」的理由是往返走 loopback、实测约 96 次/天、收益小于风险；推翻依据是同为 loopback 但每次往返省约 1.28MB，
+  且保留上游 `content-encoding: gzip` 只是恢复透传语义而非新增行为。
 - **生命周期计数不落诊断**：`close-timeout` / `startup-error` 由**旧进程**写进 `runtime.log`，新进程读不到内存计数；让扩展宿主每 15s 扫日志
   换一个低频计数不值得。仍以直接查 `runtime.log` 为准。
 - **`response.reasoning.delta` 保留**：非死分支，上游同样处理（`.refs/devin-fusion-byok/src/protocol/responses.cjs:416`），属防御性透传；

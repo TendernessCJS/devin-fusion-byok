@@ -24,6 +24,13 @@ test('pruneRetiredKeys removes every retired key but keeps live role lists', () 
   assert.ok(Object.hasOwn(config, 'roleInclusions'), 'non-empty role lists survive');
   assert.equal(pruneRetiredKeys({ enabled: true, providers: [] }), false, 'a clean config is untouched');
   assert.equal(pruneRetiredKeys({ roleInclusions: 'garbage' }), true, 'non-map role values are pruned too');
+  const { BACKEND_URL } = require('../src/runtime/port.cjs');
+  const derived = { inferenceServerUrl: BACKEND_URL };
+  assert.equal(pruneRetiredKeys(derived), true, 'a persisted copy of the derived url is redundant');
+  assert.equal(Object.hasOwn(derived, 'inferenceServerUrl'), false);
+  const override = { inferenceServerUrl: 'http://10.0.0.9:1234' };
+  assert.equal(pruneRetiredKeys(override), false, 'a divergent value is a deliberate manual override');
+  assert.equal(override.inferenceServerUrl, 'http://10.0.0.9:1234');
   assert.deepEqual(config.roleInclusions, { lead: [{ providerId: 'cpa', model: 'x' }] }, 'live refs are preserved verbatim');
 });
 

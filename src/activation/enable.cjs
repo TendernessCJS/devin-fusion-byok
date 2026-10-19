@@ -1,16 +1,15 @@
 'use strict';
 const path = require('node:path');
-const { writeConfig } = require('../config.cjs');
 const { readReceipt, remember, saveReceipt, valueAt } = require('../lifecycle/owned-settings.cjs');
 const { installLsInjection } = require('../runtime/ls-injection.cjs');
 const { createLsBridge } = require('../runtime/bridge.cjs');
 const { installAcpObserver } = require('../runtime/acp-observer.cjs');
-const { PORT } = require('../runtime/backend.cjs');
+const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
 const { globalSetting, safeError } = require('./errors.cjs');
 
 function installEnable({ deps, shared }) {
-  const { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain } = deps;
+  const { lifecycle, config, vscode, context, log, catalog, nativeMain } = deps;
   let enableQueue = Promise.resolve();
   shared.ensureEnabled = () => {
     const operation = enableQueue.then(() => {
@@ -44,7 +43,7 @@ function installEnable({ deps, shared }) {
     const settings = vscode.workspace.getConfiguration('devin.acp');
     const existing = globalSetting(settings, 'agentEnv');
     const previous = { ...(existing['devin-cli'] || {}) };
-    const desired = { WINDSURF_API_SERVER_URL: 'http://127.0.0.1:' + PORT };
+    const desired = { WINDSURF_API_SERVER_URL: BACKEND_URL };
     const saved = { ...context.globalState.get('savedEnv', {}) }, managed = context.globalState.get('managedEnv', {});
     const receipt = readReceipt(deps.root, context.extensionPath);
     // Migrate this extension's experimental proxy settings without changing any
@@ -63,8 +62,6 @@ function installEnable({ deps, shared }) {
     saveReceipt(receipt);
     await context.globalState.update('savedEnv', saved);
     await context.globalState.update('managedEnv', desired);
-    const current = config();
-    if (current.inferenceServerUrl !== desired.WINDSURF_API_SERVER_URL) { current.inferenceServerUrl = desired.WINDSURF_API_SERVER_URL; writeConfig(configFile, current); }
     if (Object.keys(managed).some(k => !(k in desired)) || Object.entries(desired).some(([k, v]) => previous[k] !== v)) await settings.update('agentEnv', { ...existing, 'devin-cli': { ...previous, ...desired } }, vscode.ConfigurationTarget.Global);
     if (generation !== lifecycle.activationGeneration || config().enabled === false) return;
     await shared.reconcilePreference();

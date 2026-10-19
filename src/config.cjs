@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { directFetch } = require('./proxy.cjs');
+const { BACKEND_URL } = require('./runtime/port.cjs');
 
 function readConfig(file) { return JSON.parse(fs.readFileSync(file, 'utf8')); }
 function writeConfig(file, config) {
@@ -32,6 +33,10 @@ function pruneRetiredKeys(config) {
     const roles = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
     if (!roles || Object.values(roles).every(list => !Array.isArray(list) || list.length === 0)) { delete config[key]; changed = true; }
   }
+  // inferenceServerUrl is derived from the runtime port, so a persisted copy
+  // equal to the derived value is redundant and pruned; a different value is a
+  // deliberate manual override and must survive.
+  if (config.inferenceServerUrl === BACKEND_URL) { delete config.inferenceServerUrl; changed = true; }
   return changed;
 }
 // Model lists arrive in one of two shapes: the OpenAI body itself, or that body

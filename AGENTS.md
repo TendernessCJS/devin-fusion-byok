@@ -19,7 +19,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 
 - **不动 Devin 本体**：不修改/不重签名 Devin.app、不安装证书、不改系统代理。
 - **不放宽现有安全校验**：Origin 一律 403、控制令牌用 `timingSafeEqual`、webview 只用 `createElement`/`textContent`。
-- **新增 backend 运行时模块必须同时加进 `backend.cjs` 的 `SOURCE_FILES`**——漏加会让同版本重装不重启 backend，新代码永不生效。
+- **backend 代码禁用动态 require**——`sourceId()` 的哈希输入是加载期从字面量 require 图自动推导的，动态 specifier 会让推导直接抛错、backend 起不来。
 - **不要让任何人「恢复」`message_nodes` 按 `message_id` 反查归属**（实测 31 秒全表扫描）；归属只查 `tool_call_state`。
 - **不要恢复任何 picker 刷新命令**（`lightCommands` 必须保持 `[]`；曾导致每 5–35 秒重载整个窗口）。
 - **CLI 缓存绝不改名、绝不写 `.stale`**（该 CLI 版本不会因文件缺失补拉，改名会把 picker 打空且不自愈）。

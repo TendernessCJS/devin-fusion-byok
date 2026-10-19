@@ -149,7 +149,10 @@ test('explicit inference server override applies to own models and leaves native
     assert.equal(model.json.modelInfo.inferenceServerUrl, input.inferenceServerUrl);
     assert.equal(str(getNested(model.raw, 23), 18), input.inferenceServerUrl);
   }
-  for (const model of catalog.models) assert.equal(model.json.modelInfo.inferenceServerUrl, 'https://server.codeium.com');
+  // The default inference URL must be the local runtime address: it is the
+  // routing target of every BYOK/combination entry, so falling back to the
+  // hosted API would silently 404 every BYOK request.
+  for (const model of catalog.models) assert.equal(model.json.modelInfo.inferenceServerUrl, require('../src/runtime/port.cjs').BACKEND_URL);
   assert.deepEqual(Object.keys(overridden.routes), Object.keys(catalog.routes));
   const fixture = statusFixture();
   const output = augmentCatalog(fixture.body, { rpc: lsStatus, format: proto, catalog: overridden });

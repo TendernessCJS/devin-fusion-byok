@@ -1,4 +1,5 @@
 'use strict';
+const { BACKEND_URL } = require('../runtime/port.cjs');
 const { modelEfforts, modelSupportsImages } = require('../model-capabilities.cjs');
 const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, configFor, leadFamilyBase, stableOrders, groupedOrders } = require('./identity.cjs');
 const { discoverOfficialRoles, discoverAdditionalNativeRoles, buildRoleLists } = require('./roles.cjs');
@@ -8,7 +9,11 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
     return { models: [], routes: {}, fusions: {}, sidekicks: [], hiddenNativeModelUids: [], hiddenFusionUids: [] };
   }
   const models = [], routes = {}, fusions = {}, leads = [];
-  const inferenceServerUrl = config.inferenceServerUrl || 'https://server.codeium.com';
+  // The fallback must never point at the hosted API: this value becomes the
+  // inference address of every BYOK/combination entry, so pointing it at
+  // Codeium means every BYOK request silently 404s. The local runtime is the
+  // only correct default.
+  const inferenceServerUrl = config.inferenceServerUrl || BACKEND_URL;
   const inferenceUrl = new URL(inferenceServerUrl);
   if (!['http:', 'https:'].includes(inferenceUrl.protocol) || inferenceUrl.username || inferenceUrl.password) {
     throw new Error('Invalid inference server URL');

@@ -65,12 +65,12 @@ function fixture(t, { httpConfig = {} } = {}) {
   const deps = { lifecycle, config, configFile, vscode, context, log: () => {},
     catalog: () => ({ models: [] }), nativeMain: '/native/main.js', root, extensionPath };
 
+  // enable.cjs derives the managed env from runtime/port.cjs now, which loads
+  // for real here (a leaf module with the same 39842 constant).
   const loader = createSandboxLoader({ filename, overrides: {
-    '../config.cjs': { writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)) },
     '../runtime/ls-injection.cjs': { installLsInjection: async () => ({ dispose: async () => {} }) },
     '../runtime/bridge.cjs': { createLsBridge: async () => ({ port: 4567, close() {} }) },
     '../runtime/acp-observer.cjs': { installAcpObserver: () => ({ dispose() {} }) },
-    '../runtime/backend.cjs': { PORT },
     './backend-handshake.cjs': { ensureBackend: ({ onCompatibleRuntime }) => {
       onCompatibleRuntime?.({ version: 'test' });
       return Promise.resolve();

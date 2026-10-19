@@ -260,6 +260,13 @@ test('activation prunes every retired config key', async t => {
   }
   assert.deepEqual(written.providers, [{ id: 'cpa', name: 'CPA', models: [] }], 'nothing else in the config is touched');
 });
+test('enable no longer persists the derived inference server url', async t => {
+  const f = fixture(t, { config: { inferenceServerUrl: 'http://127.0.0.1:39842' } });
+  await f.activate(f.context);
+  const written = JSON.parse(fs.readFileSync(f.configFile, 'utf8'));
+  assert.ok(!Object.hasOwn(written, 'inferenceServerUrl'),
+    'the value is derived from the runtime port, so a persisted equal copy is pruned and never re-written');
+});
 test('cli cache checks are confined to the stubbed directory and see every own uid', async t => {
   const f = fixture(t);
   await f.activate(f.context);
