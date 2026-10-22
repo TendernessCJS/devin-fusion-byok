@@ -1,5 +1,5 @@
 'use strict';
-const { writeConfig } = require('../config.cjs');
+const { updateConfig } = require('../config-store.cjs');
 const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } = require('../lifecycle/owned-settings.cjs');
 const { globalSetting } = require('./errors.cjs');
 const { teardown } = require('./teardown.cjs');
@@ -29,11 +29,12 @@ function installCommands({ deps, shared }) {
   // recording it never re-writes the preference itself.
   const rememberFusion = uid => {
     if (!Object.hasOwn(catalog().fusions, uid)) return false;
-    const current = config();
-    if (current.lastFusionSelection === uid) return false;
-    current.lastFusionSelection = uid;
-    writeConfig(configFile, current);
-    return true;
+    const { changed } = updateConfig(configFile, current => {
+      if (current.lastFusionSelection === uid) return false;
+      current.lastFusionSelection = uid;
+      return true;
+    });
+    return changed;
   };
   // The remembered combination is also the fallback served when a locked
   // official Fusion entry is selected, so it is kept only while it resolves.
@@ -96,7 +97,7 @@ function installCommands({ deps, shared }) {
   shared.disable = async () => {
     try { lifecycle.goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); }
     shared.backendStatus = 'stopped';
-    const current = config(); current.enabled = false; writeConfig(configFile, current);
+    updateConfig(configFile, current => { if (current.enabled === false) return false; current.enabled = false; return true; });
     await teardown(lifecycle);
     await restoreOwnedSettings();
     vscode.window.showInformationMessage('Fusion BYOK 已停用，原生连接已恢复。');

@@ -1,17 +1,9 @@
 'use strict';
 const fs = require('node:fs');
-const path = require('node:path');
-const crypto = require('node:crypto');
 const { directFetch } = require('./proxy.cjs');
 const { BACKEND_URL } = require('./runtime/port.cjs');
 
 function readConfig(file) { return JSON.parse(fs.readFileSync(file, 'utf8')); }
-function writeConfig(file, config) {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = file + '.' + crypto.randomBytes(8).toString('hex');
-  fs.writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600, flag: 'wx' });
-  fs.renameSync(tmp, file);
-}
 function defaultConfig() { return { enabled: true, providers: [] }; }
 // Retired keys: everything the named-preset pipeline used to own, plus empty
 // role override maps. The one-shot migration that lifted saved presets into
@@ -90,4 +82,4 @@ async function discover(provider, { request = directFetch } = {}) {
   });
   return provider.models.length;
 }
-module.exports = { readConfig, writeConfig, defaultConfig, pruneRetiredKeys, discover };
+module.exports = { readConfig, defaultConfig, pruneRetiredKeys, discover };

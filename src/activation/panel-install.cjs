@@ -2,7 +2,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
-const { writeConfig } = require('../config.cjs');
+const { updateConfig, applyKeyDelta } = require('../config-store.cjs');
 const { staleFusionUids, augmentCatalog } = require('../catalog.cjs');
 const { createManager } = require('../panel/manager.cjs');
 const { createPickerRefresh } = require('../runtime/picker-refresh.cjs');
@@ -113,7 +113,7 @@ function installPanel({ deps, shared }) {
     acpObserved: shared.acpObservationSeq,
     acpOwnModels: shared.acpOwnModels,
   });
-  shared.manager = createManager({ read: config, write: current => writeConfig(configFile, current),
+  shared.manager = createManager({ read: config, write: (next, baseline) => updateConfig(configFile, doc => applyKeyDelta(doc, next, baseline)),
     nativeModels: () => [...shared.nativeModels.values()], nativeAllowedUids: () => shared.nativeAllowedUids, refreshNativeModels: shared.refreshNativeModels, nativeCatalogStatus: () => shared.nativeCatalogStatus,
     backendStatus: () => shared.backendStatus,
     autoContinueStatus: () => shared.autoContinue ? (shared.autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',

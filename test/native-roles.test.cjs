@@ -9,7 +9,7 @@ const ref = (model, effort = null) => ({ providerId: 'p', model, effort });
 const config = () => ({ providers: [{ id: 'p', name: 'Provider', apiKey: 'SECRET', models: [{ id: 'a', efforts: ['low', 'high'] }, { id: 'b' }] }] });
 // The writer replaces the stored config rather than merging into it, so a key
 // the manager deletes (a pruned role list, a retired preset field) really goes
-// away — which is what writeConfig does on disk.
+// away — which is what updateConfig + applyKeyDelta do on disk.
 const managerFor = (current, nativeModels) => {
   const holder = { config: current };
   return { manager: createManager({ read: () => structuredClone(holder.config), write: next => { holder.config = structuredClone(next); }, nativeModels: () => nativeModels }), holder };

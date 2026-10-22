@@ -270,6 +270,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       return state();
     }
     let config = read();
+    let baseline = structuredClone(config);
     // The native observation is pinned to one snapshot per operation so the
     // candidate checks and the commit-time validation never mix two reads of a
     // moving catalog. The analysis is bound to the config object it was built
@@ -312,7 +313,8 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         pendingImport = undefined;
         await discover(fetched);
         // Read again after the network request so another window's edits survive.
-        config = read(); const current = providerAt(config, payload.providerId);
+        config = read(); baseline = structuredClone(config);
+        const current = providerAt(config, payload.providerId);
         if (signature(current) !== signature(original)) fail('供应商配置刚刚发生变化，请重新刷新模型。');
         // Validate a private candidate catalog, without changing saved models.
         buildCatalog({ ...config, providers: [{ ...current, enabled: true, models: fetched.models }] });
@@ -454,7 +456,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
     pruneDanglingRoleRefs(config);
     analyzedConfig = undefined; // The cases above mutated config in place.
     buildCatalog(config, observed().models, observed().allowed, roleAnalysis()); // Validate the complete model graph before committing.
-    write(config);
+    write(config, baseline);
     if (type === 'importModels') pendingImport = undefined;
     await afterChange(type);
     return state();

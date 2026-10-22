@@ -2,7 +2,8 @@
 const vscode = require('vscode');
 const fs = require('node:fs');
 const path = require('node:path');
-const { defaultConfig, pruneRetiredKeys, readConfig, writeConfig } = require('./config.cjs');
+const { defaultConfig, pruneRetiredKeys, readConfig } = require('./config.cjs');
+const { readDoc, updateConfig, archiveCorrupt, recoverFromBackup } = require('./config-store.cjs');
 const { buildCatalog } = require('./catalog.cjs');
 const { installAutoContinue } = require('./runtime/auto-continue.cjs');
 const { installGoalContinue } = require('./goal/continue.cjs');
@@ -28,7 +29,24 @@ async function activate(context) {
   const log = (event, data) => output.appendLine(JSON.stringify({ time: new Date().toISOString(), event, ...(data || {}) }));
   const root = context.globalStorageUri.fsPath, configFile = path.join(root, 'config.json');
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  if (!fs.existsSync(configFile)) writeConfig(configFile, defaultConfig());
+  if (!fs.existsSync(configFile)) updateConfig(configFile, doc => Object.assign(doc, defaultConfig()));
+  try {
+    readDoc(configFile);
+  } catch (error) {
+    if (error?.code !== 'config_corrupt') throw error;
+    const recovered = recoverFromBackup(configFile);
+    if (recovered) {
+      const { configRevision: _ignored, ...rest } = recovered.doc;
+      const result = updateConfig(configFile, doc => Object.assign(doc, rest), { fromEmpty: true });
+      log('config-recovered-from-backup', { revision: result.revision });
+      vscode.window.showWarningMessage('Fusion BYOK：配置文件已损坏，已从备份恢复。');
+    } else {
+      archiveCorrupt(configFile);
+      updateConfig(configFile, doc => Object.assign(doc, defaultConfig()), { fromEmpty: true });
+      log('config-reset-corrupt');
+      vscode.window.showErrorMessage('Fusion BYOK：配置文件已损坏，已重置为默认配置。');
+    }
+  }
   const config = () => readConfig(configFile);
   const nativeMain = (() => {
     try {
@@ -123,8 +141,7 @@ async function activate(context) {
   const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...shared.nativeModels.values()], shared.nativeAllowedUids); };
   const pruneConfig = () => {
     try {
-      const current = config();
-      if (pruneRetiredKeys(current)) { writeConfig(configFile, current); log('config-pruned'); }
+      if (updateConfig(configFile, current => pruneRetiredKeys(current)).changed) log('config-pruned');
     } catch { log('config-prune-failed'); }
   };
   pruneConfig();
