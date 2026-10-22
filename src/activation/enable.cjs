@@ -8,6 +8,20 @@ const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
 const { globalSetting, safeError } = require('./errors.cjs');
 
+// A configured http.proxy routes this window, so the managed CLI env must exempt
+// loopback or devin-cli cannot reach the local backend or the LS bridge. Read
+// the global value first: merged workspace settings are never copied into global
+// settings, and the effective value is only a fallback for the window case.
+function loopbackExemption(vscode) {
+  let proxy;
+  try {
+    const http = vscode.workspace.getConfiguration('http');
+    proxy = http?.inspect?.('proxy')?.globalValue;
+    if (typeof proxy !== 'string' || !proxy.trim()) proxy = http?.get?.('proxy');
+  } catch {}
+  return typeof proxy === 'string' && proxy.trim() ? '127.0.0.1,localhost,::1' : null;
+}
+
 function installEnable({ deps, shared }) {
   const { lifecycle, config, vscode, context, log, catalog, nativeMain } = deps;
   let enableQueue = Promise.resolve();
@@ -44,6 +58,8 @@ function installEnable({ deps, shared }) {
     const existing = globalSetting(settings, 'agentEnv');
     const previous = { ...(existing['devin-cli'] || {}) };
     const desired = { WINDSURF_API_SERVER_URL: BACKEND_URL };
+    const noProxy = loopbackExemption(vscode);
+    if (noProxy) desired.NO_PROXY = noProxy;
     const saved = { ...context.globalState.get('savedEnv', {}) }, managed = context.globalState.get('managedEnv', {});
     const receipt = readReceipt(deps.root, context.extensionPath);
     // Migrate this extension's experimental proxy settings without changing any

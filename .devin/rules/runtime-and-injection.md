@@ -14,6 +14,7 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
 - 面向供应商的发现与推理请求必须带 `redirect: 'error'`，避免密钥和对话被重定向到其他地址。
 - 写用户设置（`devin.acp.agentEnv` / `devin.acp.agentPreferences`）必须走 `src/lifecycle/owned-settings.cjs` 的 receipt
   流程，且 key 需在 `permitted()` 白名单内，保证可回滚。不要直接写 `settings.json`。
+  已配置 `http.proxy` 时 `enable()` 还会经同一 receipt 写入 `NO_PROXY=127.0.0.1,localhost,::1` 回环豁免，代理清空后由迁移分支自动还原。
 - 服务商错误自动继续的连续预算是 **5 次自动重试 / 10 分钟窗口**；触顶必须停止、结算等待中的请求并提示用户。待办无进展停止规则与 Goal 的预算独立，不能互相绕过。
 
 - `SOURCE_FILES` 已**不再是手工清单**（R2b-1）：`backend.cjs` 加载期从字面量 require 图自动推导 `sourceId()` 的哈希输入。
