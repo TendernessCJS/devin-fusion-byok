@@ -65,7 +65,7 @@ test('normalizeNativeEntry keeps only the documented capability fields', () => {
   assert.equal(normalizeNativeEntry(entry()).supportsImages, undefined);
 });
 
-const EMPTY = { models: [], allowedUids: [] };
+const EMPTY = { models: [], allowedUids: [], allowedMode: 'restricted' };
 
 test('loadNativeCache returns nothing for missing, malformed or mismatched files', () => {
   const missing = () => { throw new Error('ENOENT'); };

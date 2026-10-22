@@ -252,8 +252,13 @@ function collectNativeModels(data, { rpc, format = {} } = {}) {
 // 7, JSON allowedModelUids) — the authoritative gate for whether an official
 // model appears in a picker at all. Catalog payloads keep retired models and
 // even reference them from sort groups, so catalog presence alone cannot tell
-// a picker row from a dangling entitlement leftover. Returns null when the
-// payload carries no restriction: an absent or empty list means unrestricted.
+// a picker row from a dangling entitlement leftover.
+// The result is three-state: { kind: 'restricted', uids } for a non-empty legal
+// list, { kind: 'unrestricted' } when the payload is confirmed to be this RPC
+// yet carries no entries, and null for any other RPC or a malformed shape.
+// "Empty" is a weak signal — proto3 repeated fields cannot distinguish absent
+// from present-but-empty — so callers must debounce it rather than clearing on
+// a single observation.
 function collectAllowedUids(data, { rpc, format = {} } = {}) {
   let value = typeof rpc === 'string' ? rpc : rpc?.path || rpc?.name || '';
   try { if (value.includes('://')) value = new URL(value).pathname; } catch { return null; }
@@ -262,10 +267,12 @@ function collectAllowedUids(data, { rpc, format = {} } = {}) {
     if (format.json === true) {
       if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
       const key = jsonKey(data, 'allowedModelUids', 'allowed_model_uids');
+      if (!has(data, key)) return { kind: 'unrestricted' };
       const list = data[key];
-      if (!Array.isArray(list) || !list.length) return null;
+      if (!Array.isArray(list)) return null;
+      if (!list.length) return { kind: 'unrestricted' };
       const uids = list.filter(uid => typeof uid === 'string' && uid && uid.length <= 256);
-      return uids.length === list.length ? uids : null;
+      return uids.length === list.length ? { kind: 'restricted', uids } : null;
     }
     if (!Buffer.isBuffer(data)) return null;
     const uids = [];
@@ -274,7 +281,7 @@ function collectAllowedUids(data, { rpc, format = {} } = {}) {
       if (field.wire !== 2) return null;
       uids.push(field.value.toString('utf8'));
     }
-    return uids.length ? uids : null;
+    return uids.length ? { kind: 'restricted', uids } : { kind: 'unrestricted' };
   } catch { return null; }
 }
 

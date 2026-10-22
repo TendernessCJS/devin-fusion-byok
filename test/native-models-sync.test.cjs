@@ -11,7 +11,9 @@ const { startBackend, controlFile, runtimeIdentity } = require('../src/runtime/b
 const { readNativeModels } = require('../src/runtime/native-models.cjs');
 const { collect } = require('../src/runtime/bridge.cjs');
 const { createManager } = require('../src/panel/manager.cjs');
-const { buildCatalog, buildRoleLists } = require('../src/catalog.cjs');
+const { buildCatalog, buildRoleLists, collectAllowedUids } = require('../src/catalog.cjs');
+const { loadNativeCache } = require('../src/runtime/native-cache.cjs');
+const { s, v } = require('../src/protocol/wire.cjs');
 const API = '/exa.api_server_pb.ApiServerService/';
 
 const fixtureJson = JSON.parse(fs.readFileSync(__dirname + '/fixtures/real-picker-0.3.11.json', 'utf8'));
@@ -384,7 +386,7 @@ test('readNativeModels passes a valid family uid through and ignores malformed o
 
 test('a stale backend allowlist echo cannot overwrite the host set', async () => {
   const f = syncFixture({ read: async () => ({ status: 'ready', models: [], allowedUids: ['A1'] }) });
-  f.shared.observeAllowedUids(['A1', 'A2']);
+  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1', 'A2'] });
   const revision = f.shared.nativeRevision;
   await f.shared.refreshNativeModels();
   assert.deepEqual([...f.shared.nativeAllowedUids].sort(), ['A1', 'A2'],
@@ -427,7 +429,7 @@ test('backend-only entries are still adopted into the published view', async () 
 test('a backend that lost the allowlist is force-pushed the host set', async () => {
   const f = syncFixture({ read: async () => ({ status: 'ready', models: [], allowedUids: [] }) });
   f.shared.observeNativeModels([OBSERVED_ENTRY]);
-  f.shared.observeAllowedUids(['A1', 'A2']);
+  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1', 'A2'] });
   await new Promise(resolve => setTimeout(resolve, 30));
   const before = f.pushes.length;
   f.shared.lastPushedRevision = f.shared.nativeRevision;
@@ -439,4 +441,115 @@ test('a backend that lost the allowlist is force-pushed the host set', async () 
   assert.ok(f.pushes.length > before, 'the forced push must fire even when the revision gate has nothing new');
   assert.deepEqual([...f.pushes.at(-1).allowedUids].sort(), ['A1', 'A2'],
     'the repush carries the host allowlist, not the backend echo');
+});
+
+test('three consecutive unrestricted observations flip the mode and push it', async () => {
+  const f = syncFixture();
+  f.shared.observeNativeModels([OBSERVED_ENTRY]);
+  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1', 'A2'] });
+  for (let i = 0; i < 3; i++) f.shared.observeAllowedUids({ kind: 'unrestricted' });
+  assert.equal(f.shared.nativeAllowedMode, 'unrestricted');
+  assert.equal(f.shared.nativeAllowedUids.size, 0, 'flipping clears the restricted set');
+  assert.equal(f.logs.filter(line => line.event === 'native-allowed-cleared').length, 1);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(f.pushes.at(-1).allowedMode, 'unrestricted', 'the push carries the lifted restriction');
+});
+
+test('two consecutive unrestricted observations do not flip', () => {
+  const f = syncFixture();
+  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1'] });
+  f.shared.observeAllowedUids({ kind: 'unrestricted' });
+  f.shared.observeAllowedUids({ kind: 'unrestricted' });
+  assert.equal(f.shared.nativeAllowedMode, 'restricted');
+  assert.ok(f.shared.nativeAllowedUids.has('A1'), 'the weak empty signal stays debounced');
+});
+
+test('an unrestricted backend echo against an unrestricted host is agreement, not loss', async () => {
+  const f = syncFixture({ read: async () => ({ status: 'ready', models: [], allowedUids: [], allowedMode: 'unrestricted' }) });
+  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1'] });
+  for (let i = 0; i < 3; i++) f.shared.observeAllowedUids({ kind: 'unrestricted' });
+  await f.shared.refreshNativeModels();
+  assert.equal(f.logs.some(line => line.event === 'native-allowed-backend-lost'), false,
+    'an empty echo consistent with the host mode must not arm the repush');
+  assert.equal(f.shared.nativeAllowedMode, 'unrestricted');
+});
+
+test('a single restricted observation restores restricted mode without debounce', async () => {
+  const f = syncFixture();
+  f.shared.observeNativeModels([OBSERVED_ENTRY]);
+  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1'] });
+  for (let i = 0; i < 3; i++) f.shared.observeAllowedUids({ kind: 'unrestricted' });
+  assert.equal(f.shared.nativeAllowedMode, 'unrestricted');
+  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['B1'] });
+  assert.equal(f.shared.nativeAllowedMode, 'restricted', 'the first restricted verdict restores immediately');
+  assert.deepEqual([...f.shared.nativeAllowedUids], ['B1']);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const push = f.pushes.at(-1);
+  assert.equal(push.allowedMode, 'restricted');
+  assert.deepEqual(JSON.parse(JSON.stringify(push.allowedUids)), ['B1']);
+});
+
+test('a host that never observed a restricted verdict ignores unrestricted streaks', () => {
+  const f = syncFixture();
+  for (let i = 0; i < 3; i++) f.shared.observeAllowedUids({ kind: 'unrestricted' });
+  assert.equal(f.shared.nativeAllowedMode, 'restricted',
+    'without a prior restricted observation the weak signal never flips');
+  assert.equal(f.logs.some(line => line.event === 'native-allowed-cleared'), false);
+});
+
+test('the control endpoint validates the mode before mutating state', async t => {
+  const f = await backendFixture(t);
+  const control = JSON.parse(fs.readFileSync(controlFile(f.root), 'utf8'));
+  const auth = { authorization: 'Bearer ' + control.token };
+  const entry = { uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['h'] };
+  const post = payload => fetch(f.base + '/_runtime/native-models', { method: 'POST',
+    headers: { ...auth, 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+  const get = async () => (await fetch(f.base + '/_runtime/native-models', { headers: auth })).json();
+  let response = await post({ models: [entry], allowedMode: 'unrestricted', allowedUids: ['sneaky'] });
+  assert.equal(response.status, 400, 'unrestricted plus a uid list is an inconsistent payload');
+  let body = await get();
+  assert.equal(body.allowedMode, 'restricted', 'the rejected payload never reached the allowlist');
+  response = await post({ models: [entry], allowedMode: 'bogus' });
+  assert.equal(response.status, 400);
+  response = await post({ models: [entry], allowedMode: 'unrestricted' });
+  assert.equal(response.status, 200);
+  body = await get();
+  assert.equal(body.allowedMode, 'unrestricted');
+  assert.deepEqual(body.allowedUids, []);
+});
+
+test('a legacy cache without allowedMode stays restricted and legacy posts still work', async t => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-cache-')), 'native-cache.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), models: [], allowedUids: ['a1', 'a2'] }));
+  const seeded = loadNativeCache(file);
+  assert.equal(seeded.allowedMode, 'restricted', 'a missing key can never lift a restriction');
+  assert.deepEqual(seeded.allowedUids, ['a1', 'a2']);
+  const f = await backendFixture(t);
+  const control = JSON.parse(fs.readFileSync(controlFile(f.root), 'utf8'));
+  const entry = { uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['h'] };
+  const response = await fetch(f.base + '/_runtime/native-models', { method: 'POST',
+    headers: { authorization: 'Bearer ' + control.token, 'content-type': 'application/json' },
+    body: JSON.stringify({ models: [entry], allowedUids: ['swe-2-high'] }) });
+  assert.equal(response.status, 200, 'an old client without a mode field posts restricted as before');
+  const body = await (await fetch(f.base + '/_runtime/native-models', { headers: { authorization: 'Bearer ' + control.token } })).json();
+  assert.equal(body.allowedMode, 'restricted');
+  assert.deepEqual(body.allowedUids, ['swe-2-high']);
+});
+
+test('collectAllowedUids reports a three-state verdict', () => {
+  const seat = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
+  const proto = {};
+  assert.deepEqual(collectAllowedUids(s(1, 'other'), { rpc: seat, format: proto }), { kind: 'unrestricted' },
+    'a parsed payload without field 7 is confirmed unrestricted');
+  assert.equal(collectAllowedUids(Buffer.concat([s(7, 'a'), v(7, 1)]), { rpc: seat, format: proto }), null,
+    'a non-length-delimited field 7 is malformed');
+  assert.equal(collectAllowedUids(s(7, 'a'), { rpc: 'GetCliModelConfigs', format: proto }), null, 'other RPCs report nothing');
+  assert.equal(collectAllowedUids('not-a-buffer', { rpc: seat, format: proto }), null);
+  const json = { json: true };
+  assert.deepEqual(collectAllowedUids({}, { rpc: seat, format: json }), { kind: 'unrestricted' });
+  assert.deepEqual(collectAllowedUids({ allowedModelUids: [] }, { rpc: seat, format: json }), { kind: 'unrestricted' });
+  assert.equal(collectAllowedUids({ allowedModelUids: ['ok', 1] }, { rpc: seat, format: json }), null,
+    'illegal elements still read as a malformed shape');
+  assert.deepEqual(collectAllowedUids({ allowedModelUids: ['a', 'b'] }, { rpc: seat, format: json }),
+    { kind: 'restricted', uids: ['a', 'b'] });
 });

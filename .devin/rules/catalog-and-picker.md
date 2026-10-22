@@ -85,3 +85,12 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
   与 summary-agent 日志。⑦**不要把面板的 `used` 与 `monitor.jsonl` 的 `inputTokens` 混用**：前者是 Devin 上报值（略高），后者是实际请求量，
   二者差值可达 5–7k，用它们互相验证会得出假结论。⑧`usageState: 'inconsistent'`（如 `cachedTokens > inputTokens`）与
   `num_tokens_preceding` 的**常态回落**（实测 484 条请求中 37 次回落、21 次 ≥5,000，最大 −31k 且 24 秒内自愈）都**不是**压缩，别当信号。
+
+## allowlist 三态与 restricted→unrestricted 链路
+
+`collectAllowedUids` 返回三态：`{kind:'restricted',uids}` / `{kind:'unrestricted'}` / `null`（非该 RPC 或形状坏）。
+proto3 repeated 无法区分「存在但空」与「不存在」，**空是弱信号**：宿主侧 `observeAllowedUids` 要连续
+**3 次** unrestricted 才翻转（`native-allowed-cleared`），反向一次 restricted 观测**立即恢复**；从未观测过
+受限集合的宿主不翻转（只能由 backend 冷启动回显 `allowedMode:'unrestricted'` 解除）。unrestricted 时
+`allowedUids` 为空**仍要推**（push 带 `allowedMode`），POST 校验在 ingest 前（unrestricted+非空 uids=400）。
+旧缓存缺 `allowedMode` 键一律读作 restricted；`saveNativeCache` 只写 unrestricted 值。

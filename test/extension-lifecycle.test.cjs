@@ -758,20 +758,20 @@ test('a bridge allowedUids update goes through the shared revision and push path
   const baseline = f.pushes().length;
   const baseRevision = f.pushes().at(-1).revision;
 
-  f.bridges.at(-1).onAllowedUids(['swe-2-max', 'swe-2-high']);
+  f.bridges.at(-1).onAllowedUids({ kind: 'restricted', uids: ['swe-2-max', 'swe-2-high'] });
   assert.ok(await waitFor(() => f.pushes().length > baseline, 7000), 'the allowlist change schedules a push');
   assert.equal(f.pushes().at(-1).revision, baseRevision + 1);
   assert.deepEqual(JSON.parse(JSON.stringify(f.pushes().at(-1).allowedUids)), ['swe-2-high', 'swe-2-max']);
 
   const settled = f.pushes().length;
   const checks = f.cacheChecks().length;
-  f.bridges.at(-1).onAllowedUids(['swe-2-high', 'swe-2-max', 'swe-2-high']);
+  f.bridges.at(-1).onAllowedUids({ kind: 'restricted', uids: ['swe-2-high', 'swe-2-max', 'swe-2-high'] });
   await new Promise(resolve => setTimeout(resolve, 250));
   assert.equal(f.pushes().length, settled, 'an identical set causes no extra push or revision');
   assert.equal(f.cacheChecks().length, checks, 'and no fan-out at all');
 
-  f.bridges.at(-1).onAllowedUids([]);
-  f.bridges.at(-1).onAllowedUids(['dfbyok-own']);
+  f.bridges.at(-1).onAllowedUids({ kind: 'restricted', uids: [] });
+  f.bridges.at(-1).onAllowedUids({ kind: 'restricted', uids: ['dfbyok-own'] });
   f.bridges.at(-1).onAllowedUids('not-an-array');
   await new Promise(resolve => setTimeout(resolve, 250));
   assert.equal(f.pushes().length, settled);
@@ -790,7 +790,7 @@ test('the bridge allowedUids callback is inert once disabled or unloaded', async
   const bridge = f.bridges.at(-1);
   f.managerOptions().write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: false });
   await f.managerOptions().afterChange('setEnabled');
-  bridge.onAllowedUids(['swe-2-high']);
+  bridge.onAllowedUids({ kind: 'restricted', uids: ['swe-2-high'] });
   await new Promise(resolve => setTimeout(resolve, 250));
   assert.equal(f.managerOptions().nativeAllowedUids().size, 0, 'a disabled plugin ignores the update');
   assert.deepEqual(f.pushes(), []);
@@ -800,7 +800,7 @@ test('the bridge allowedUids callback is inert once disabled or unloaded', async
   await g.activate(g.context);
   const unloaded = g.bridges.at(-1);
   await g.deactivate();
-  unloaded.onAllowedUids(['swe-2-high']);
+  unloaded.onAllowedUids({ kind: 'restricted', uids: ['swe-2-high'] });
   await new Promise(resolve => setTimeout(resolve, 250));
   assert.equal(g.managerOptions().nativeAllowedUids().size, 0, 'an unloaded plugin ignores the update');
   assert.deepEqual(g.pushes(), []);

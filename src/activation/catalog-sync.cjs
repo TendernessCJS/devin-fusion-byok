@@ -5,6 +5,9 @@ const { mergeNativeEntry, normalizeNativeEntry, normalizeAllowedUids } = require
 function installCatalogSync({ deps, shared }) {
   const { lifecycle, config, log } = deps;
   const PUSH_INTERVAL_MS = 5 * 1000;
+  const ALLOWED_UNRESTRICTED_STREAK = 3;
+  shared.nativeAllowedMode = 'restricted';
+  shared.nativeAllowedEmptyStreak = 0;
   // The push gate tracks what was actually accepted, not what was attempted:
   // shared.nativeRevision increments whenever the local catalog or the allowed
   // uid set changes, and lastPushedRevision advances only after a push the
@@ -45,7 +48,7 @@ function installCatalogSync({ deps, shared }) {
       shared.lastPushAt = Date.now();
       shared.nativePushStale = false;
       const revision = shared.nativeRevision;
-      pushNativeModels({ root: deps.root, models: pushPayload(), allowedUids: [...shared.nativeAllowedUids], revision })
+      pushNativeModels({ root: deps.root, models: pushPayload(), allowedUids: [...shared.nativeAllowedUids], allowedMode: shared.nativeAllowedMode, revision })
         .then(result => {
           if (result?.pushed) {
             if (revision > shared.lastPushedRevision) shared.lastPushedRevision = revision;
@@ -112,11 +115,13 @@ function installCatalogSync({ deps, shared }) {
       // divergence spell; an empty echo additionally means the backend lost the
       // list, which arms a forced repush.
       if (Array.isArray(result.allowedUids)) {
+        const echoMode = result.allowedMode === 'unrestricted' ? 'unrestricted' : 'restricted';
         const next = new Set(result.allowedUids);
         const same = next.size === shared.nativeAllowedUids.size && ![...next].some(uid => !shared.nativeAllowedUids.has(uid));
         if (shared.nativeAllowedObserved === true) {
-          if (next.size === 0) {
-            if (shared.nativeAllowedUids.size > 0 && shared.nativePushStale !== true) {
+          if (echoMode === 'restricted' && next.size === 0) {
+            // Unrestricted hosts read an empty echo as agreement, not loss.
+            if (shared.nativeAllowedMode === 'restricted' && shared.nativeAllowedUids.size > 0 && shared.nativePushStale !== true) {
               shared.nativePushStale = true;
               log('native-allowed-backend-lost', { count: shared.nativeAllowedUids.size });
             }
@@ -127,6 +132,11 @@ function installCatalogSync({ deps, shared }) {
               log('native-allowed-diverged', { host: shared.nativeAllowedUids.size, backend: next.size });
             }
           } else shared.nativeAllowedDiverged = false;
+        } else if (echoMode === 'unrestricted') {
+          if (shared.nativeAllowedMode !== 'unrestricted' || shared.nativeAllowedUids.size) changed = true;
+          shared.nativeAllowedMode = 'unrestricted';
+          shared.nativeAllowedUids = new Set();
+          shared.nativeAllowedObserved = true;
         } else if (next.size) {
           if (!same) { shared.nativeAllowedUids = next; changed = true; }
           shared.nativeAllowedObserved = true;
@@ -143,10 +153,30 @@ function installCatalogSync({ deps, shared }) {
     shared.syncTimer = setInterval(() => { void shared.refreshNativeModels(); }, 3000); shared.syncTimer.unref?.();
     void shared.refreshNativeModels();
   };
-  shared.observeAllowedUids = uids => {
+  shared.observeAllowedUids = observation => {
     if (lifecycle.activationDisposed || config().enabled === false) return;
-    const normalized = normalizeAllowedUids(uids);
+    if (observation?.kind === 'unrestricted') {
+      // "Empty" is a weak signal (proto3 cannot tell absent from present-but-
+      // empty), so flipping to unrestricted requires a streak; a restricted
+      // observation below restores in a single pass. A host that never saw a
+      // restricted verdict ignores the streak entirely — the backend's
+      // cold-start echo is its only way to learn it is unrestricted.
+      if (shared.nativeAllowedMode === 'unrestricted') return;
+      shared.nativeAllowedEmptyStreak += 1;
+      if (shared.nativeAllowedObserved !== true || shared.nativeAllowedEmptyStreak < ALLOWED_UNRESTRICTED_STREAK) return;
+      shared.nativeAllowedEmptyStreak = 0;
+      const cleared = shared.nativeAllowedUids.size;
+      shared.nativeAllowedUids = new Set();
+      shared.nativeAllowedMode = 'unrestricted';
+      shared.nativeAllowedObserved = true;
+      log('native-allowed-cleared', { cleared });
+      void commit({ bumpRevision: true });
+      return;
+    }
+    shared.nativeAllowedEmptyStreak = 0;
+    const normalized = normalizeAllowedUids(observation?.uids || []);
     if (!normalized.length) return;
+    if (shared.nativeAllowedMode === 'unrestricted') shared.nativeAllowedMode = 'restricted';
     if (normalized.length === shared.nativeAllowedUids.size && normalized.every(uid => shared.nativeAllowedUids.has(uid))) return;
     shared.nativeAllowedUids = new Set(normalized);
     shared.nativeAllowedObserved = true;

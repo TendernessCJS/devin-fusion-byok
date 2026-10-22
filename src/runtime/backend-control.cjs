@@ -5,7 +5,7 @@ const { collect } = require('./bridge.cjs');
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 function createRuntimeControl({ identity, instanceId, controlToken, managementProtocol, nativeModelsProtocol, nativeModelsIngest, monitorProtocol,
-  getActiveRequests, getDraining, setDraining, monitor, getNativeModels, getAllowedUids, ingest, onAllowedUids, close }) {
+  getActiveRequests, getDraining, setDraining, monitor, getNativeModels, getAllowedUids, getAllowedMode, ingest, onAllowedUids, close }) {
   const authorized = request => {
     const provided = typeof request.headers.authorization === 'string' ? request.headers.authorization : '';
     const expected = 'Bearer ' + controlToken;
@@ -32,7 +32,7 @@ function createRuntimeControl({ identity, instanceId, controlToken, managementPr
     if (request.method === 'GET' && request.url === '/_runtime/native-models') {
       if (!authorized(request)) { response.writeHead(403); response.end(); return true; }
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify({ instanceId, models: getNativeModels(), allowedUids: getAllowedUids() }));
+      response.end(JSON.stringify({ instanceId, models: getNativeModels(), allowedUids: getAllowedUids(), allowedMode: getAllowedMode() }));
       return true;
     }
     if (request.method === 'POST' && request.url === '/_runtime/native-models') {
@@ -46,8 +46,16 @@ function createRuntimeControl({ identity, instanceId, controlToken, managementPr
         if (payload?.revision !== undefined && !(Number.isSafeInteger(payload.revision) && payload.revision >= 0)) {
           throw new Error('invalid');
         }
+        // The mode is validated before ingest so a malformed payload cannot
+        // modify state on its way to a 400.
+        const allowedMode = payload?.allowedMode === undefined ? 'restricted' : payload.allowedMode;
+        if (allowedMode !== 'restricted' && allowedMode !== 'unrestricted') throw new Error('invalid');
+        if (allowedMode === 'unrestricted' && Array.isArray(payload?.allowedUids) && payload.allowedUids.length) throw new Error('invalid');
         const result = ingest(payload?.models);
-        if (result && Array.isArray(payload?.allowedUids)) onAllowedUids(payload.allowedUids);
+        if (result) {
+          if (allowedMode === 'unrestricted') onAllowedUids({ kind: 'unrestricted' });
+          else if (Array.isArray(payload?.allowedUids)) onAllowedUids({ kind: 'restricted', uids: payload.allowedUids });
+        }
         if (!result) throw new Error('invalid');
         response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         response.end(JSON.stringify({ instanceId, ...result,

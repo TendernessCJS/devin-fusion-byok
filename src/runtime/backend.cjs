@@ -93,18 +93,20 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
   const config = () => readConfig(configFile);
   const observedNatives = new Map();
   const allowedUids = new Set();
+  let allowedMode = 'restricted';
   const nativeCacheFile = path.join(root, 'native-cache.json');
   let observedSize = 0;
   try {
     const seeded = loadNativeCache(nativeCacheFile);
     for (const entry of seeded.models) observedNatives.set(entry.uid, entry);
-    for (const uid of seeded.allowedUids) allowedUids.add(uid);
+    allowedMode = seeded.allowedMode === 'unrestricted' ? 'unrestricted' : 'restricted';
+    if (allowedMode !== 'unrestricted') for (const uid of seeded.allowedUids) allowedUids.add(uid);
     if (seeded.models.length) { observedSize = observedNatives.size; log('native-cache-load', { count: observedSize, allowed: allowedUids.size }); }
   } catch {}
   let cacheTimer;
   function flushNativeCache() {
     if (cacheTimer !== undefined) { clearTimeout(cacheTimer); cacheTimer = undefined; }
-    try { saveNativeCache(nativeCacheFile, [...observedNatives.values()], { allowedUids: [...allowedUids] }); } catch {}
+    try { saveNativeCache(nativeCacheFile, [...observedNatives.values()], { allowedUids: [...allowedUids], allowedMode }); } catch {}
   }
   // Waiting for a drain is not the same as being able to wait forever. A
   // half-read SSE stream can leave a request that never settles — the response
@@ -168,16 +170,18 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
   // Team settings publish the account's selectable uid set. It is a complete
   // list, so each observation replaces the previous one outright — a retired
   // model (o3 next to GPT-4.1) must drop out rather than linger in a union.
-  const onAllowedUids = uids => {
-    const next = normalizeAllowedUids(uids);
-    if (!next.length) return;
-    if (next.length === allowedUids.size && next.every(uid => allowedUids.has(uid))) return;
+  const onAllowedUids = observation => {
+    const mode = observation?.kind === 'unrestricted' ? 'unrestricted' : 'restricted';
+    const next = normalizeAllowedUids(observation?.uids || []);
+    if (mode === 'restricted' && !next.length) return;
+    if (mode === allowedMode && next.length === allowedUids.size && next.every(uid => allowedUids.has(uid))) return;
+    allowedMode = mode;
     allowedUids.clear();
     for (const uid of next) allowedUids.add(uid);
-    log('native-allowed', { count: allowedUids.size });
+    log('native-allowed', { count: allowedUids.size, mode: allowedMode });
     scheduleNativeCacheSave();
   };
-  const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedUids); };
+  const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedMode === 'unrestricted' ? null : allowedUids); };
   // Official Fusion uids observed as disabled in catalog responses. Entries
   // that later appear enabled are removed so Pro accounts keep native Fusion.
   // Persisted so a saved locked preference still redirects when a fresh
@@ -234,7 +238,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     managementProtocol: MANAGEMENT_PROTOCOL, nativeModelsProtocol: 1, nativeModelsIngest: NATIVE_MODELS_INGEST,
     monitorProtocol: monitor ? 1 : 0,
     getActiveRequests: () => activeRequests, getDraining: () => draining, setDraining: value => { draining = value; },
-    monitor, getNativeModels: () => [...observedNatives.values()], getAllowedUids: () => [...allowedUids].sort(),
+    monitor, getNativeModels: () => [...observedNatives.values()], getAllowedUids: () => [...allowedUids].sort(), getAllowedMode: () => allowedMode,
     ingest, onAllowedUids, close,
   });
   const handle = async (request, response) => {
@@ -251,7 +255,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     try {
       body = await collect(request);
       const format = wire.decode(body, request.headers);
-      const current = config(), catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedUids);
+      const current = config(), catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedMode === 'unrestricted' ? null : allowedUids);
       if (rpc.endsWith('/AssignModel')) {
         const resolved = resolveAssignment(format.data, format, catalog, lockedFusion);
         if (resolved) {

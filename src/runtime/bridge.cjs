@@ -93,8 +93,8 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         const format = wire.decode(original, upstream.headers);
         const observed = collectNativeModels(format.data, { rpc: target.pathname, format });
         if (observed.length) try { onNativeModels?.(observed); } catch {}
-        const allowedUids = collectAllowedUids(format.data, { rpc: target.pathname, format });
-        if (allowedUids) try { onAllowedUids?.(allowedUids); } catch {}
+        const observation = collectAllowedUids(format.data, { rpc: target.pathname, format });
+        if (observation) try { onAllowedUids?.(observation); } catch {}
         const catalog = getCatalog();
         // A skip means the payload went back untouched, which otherwise reads
         // exactly like "nothing to do". It rides on the `catalog` line, which is
