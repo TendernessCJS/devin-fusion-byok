@@ -36,12 +36,14 @@ function installCatalogSync({ deps, shared }) {
     // Nothing to offer yet: an empty payload must not advance the pushed
     // revision, or the first useful observation will look unchanged.
     if (!pushPayload().length) return;
-    if (!(shared.nativeRevision > shared.lastPushedRevision)) return;
+    const forced = shared.nativePushStale === true;
+    if (!forced && !(shared.nativeRevision > shared.lastPushedRevision)) return;
     const wait = Math.max(0, shared.lastPushAt + PUSH_INTERVAL_MS - Date.now());
     shared.pushTimer = setTimeout(() => {
       shared.pushTimer = undefined;
       if (lifecycle.activationDisposed || config().enabled === false) return;
       shared.lastPushAt = Date.now();
+      shared.nativePushStale = false;
       const revision = shared.nativeRevision;
       pushNativeModels({ root: deps.root, models: pushPayload(), allowedUids: [...shared.nativeAllowedUids], revision })
         .then(result => {
@@ -90,18 +92,44 @@ function installCatalogSync({ deps, shared }) {
       // of letting the last one win: a dimension-less copy makes every native
       // Sidekick unresolvable and the mirrored combinations vanish.
       for (const entry of observed.values()) shared.nativeModels.set(entry.uid, entry);
-      for (const entry of result.models) shared.nativeModels.set(entry.uid, mergeNativeEntry(shared.nativeModels.get(entry.uid), entry));
+      // Uids this host observed itself are decided by the host copy: the
+      // backend's older entry must not downgrade label/disabled. Backend-only
+      // entries are adopted with the backend copy as incoming, so fields the
+      // host never saw (kind/familyUid/sources) are still carried.
+      for (const entry of result.models) {
+        const prior = shared.nativeModels.get(entry.uid);
+        shared.nativeModels.set(entry.uid, observed.has(entry.uid) ? mergeNativeEntry(entry, prior) : mergeNativeEntry(prior, entry));
+      }
       let changed = shared.nativeModels.size !== previousByUid.size;
       if (!changed) {
         for (const [uid, entry] of shared.nativeModels) {
           if (previousByUid.get(uid) !== JSON.stringify(entry)) { changed = true; break; }
         }
       }
-      if (Array.isArray(result.allowedUids) && result.allowedUids.length) {
+      // Once this host has an authoritative allowlist (its own observation, or
+      // one cold-start adoption below), a backend echo is advisory only: an
+      // older copy must not roll the set back. A mismatch is logged once per
+      // divergence spell; an empty echo additionally means the backend lost the
+      // list, which arms a forced repush.
+      if (Array.isArray(result.allowedUids)) {
         const next = new Set(result.allowedUids);
-        if (next.size !== shared.nativeAllowedUids.size || [...next].some(uid => !shared.nativeAllowedUids.has(uid))) {
-          shared.nativeAllowedUids = next;
-          changed = true;
+        const same = next.size === shared.nativeAllowedUids.size && ![...next].some(uid => !shared.nativeAllowedUids.has(uid));
+        if (shared.nativeAllowedObserved === true) {
+          if (next.size === 0) {
+            if (shared.nativeAllowedUids.size > 0 && shared.nativePushStale !== true) {
+              shared.nativePushStale = true;
+              log('native-allowed-backend-lost', { count: shared.nativeAllowedUids.size });
+            }
+          } else shared.nativePushStale = false;
+          if (!same) {
+            if (shared.nativeAllowedDiverged !== true) {
+              shared.nativeAllowedDiverged = true;
+              log('native-allowed-diverged', { host: shared.nativeAllowedUids.size, backend: next.size });
+            }
+          } else shared.nativeAllowedDiverged = false;
+        } else if (next.size) {
+          if (!same) { shared.nativeAllowedUids = next; changed = true; }
+          shared.nativeAllowedObserved = true;
         }
       }
       await commit({ bumpRevision: changed });
@@ -121,6 +149,7 @@ function installCatalogSync({ deps, shared }) {
     if (!normalized.length) return;
     if (normalized.length === shared.nativeAllowedUids.size && normalized.every(uid => shared.nativeAllowedUids.has(uid))) return;
     shared.nativeAllowedUids = new Set(normalized);
+    shared.nativeAllowedObserved = true;
     void commit({ bumpRevision: true });
   };
   shared.observeNativeModels = entries => {

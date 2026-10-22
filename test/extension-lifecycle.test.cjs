@@ -592,12 +592,17 @@ test('a poorer backend sync never downgrades the richer bridge observation', asy
   assert.deepEqual(find().sidekickDimension, rich.sidekickDimension, 'the sync kept the richer copy');
   assert.deepEqual(find().fusionMetadata, rich.fusionMetadata);
   assert.equal(find().disabled, false);
-  // A genuine capability change still lands, so the merge never hides state.
-  f.setNativeRead(async () => ({ status: 'ready', models: [{ ...poor, disabled: true }] }));
+  // For a uid this host observed itself the host copy is authoritative, so a
+  // divergent backend scalar is masked; a genuine change still lands for uids
+  // only the backend saw, so the merge never hides state.
+  const backendOnly = { uid: 'backend-only-model', label: 'B', disabled: true, isModelRouter: false, harnessUids: ['h'] };
+  f.setNativeRead(async () => ({ status: 'ready', models: [{ ...poor, disabled: true }, backendOnly] }));
   await f.managerOptions().refreshNativeModels();
   await f.settle();
-  assert.equal(find().disabled, true, 'fresher scalar fields are not masked');
+  assert.equal(find().disabled, false, 'a stale backend scalar cannot downgrade the host-observed uid');
   assert.deepEqual(find().sidekickDimension, rich.sidekickDimension, 'and the dimensions survive it');
+  assert.equal(JSON.parse(JSON.stringify(f.managerOptions().nativeModels().find(entry => entry.uid === backendOnly.uid))).disabled, true,
+    'backend-only uids still adopt backend scalar changes');
 });
 // The push runs on a real timer, so settling by microtask/setImmediate rounds is
 // not enough to observe it: wait for the effect with a deadline instead of

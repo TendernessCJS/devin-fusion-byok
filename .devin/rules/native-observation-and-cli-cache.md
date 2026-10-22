@@ -71,4 +71,21 @@ description: "Apply when changing native catalog observation or its cache, CLI c
 - backend 的原生缓存落盘条件包含「任一入口的维度变富」，不再只看条目数：seed 已是满员（875）时条目数永不变化，只看数量就永远不会把更完整的观测写回磁盘，每次重启都重新 seed
   回贫化形态（`runtime.log` 的 `native-observed` 全天只出现 2 次就是这个征兆）。
 
-- LS 观测到的允许集变更必须经 `catalog-sync` 的 `observeAllowedUids` 进入统一 commit：推进 `nativeRevision`，并触发面板、picker、缓存与 backend 推送；不得只替换集合后调用 `pushToBackend`（revision 已追平时会被门控挡住，随后被旧 backend 快照覆盖）。同集合的重排/重复值不算变更；停用/销毁后不接收回调。本补丁保留空集忽略策略，**未解决** restricted → unrestricted 的三态表达或两路观测乱序问题。
+- LS 观测到的允许集变更必须经 `catalog-sync` 的 `observeAllowedUids` 进入统一 commit：推进 `nativeRevision`，并触发面板、picker、缓存与 backend 推送；不得只替换集合后调用 `pushToBackend`（revision 已追平时会被门控挡住，随后被旧 backend 快照覆盖）。同集合的重排/重复值不算变更；停用/销毁后不接收回调。本补丁保留空集忽略策略，**未解决** restricted → unrestricted 的三态表达问题（C3）；两路观测的时序问题已改为宿主权威，见下节「双观测通道的权威归属」。
+
+## 双观测通道的权威归属（allowlist 与条目合并）
+
+原生目录有两条观测通道（LS 桥 → `observeAllowedUids`/`observeNativeModels`；backend → `refreshNativeModels` 的 `GET /_runtime/native-models` 回显），且无版本/时序字段——**旧副本不能靠到达顺序赢**。
+
+- **allowlist：宿主一经观测即为权威**。`observeAllowedUids` 接受非空集合后置 `nativeAllowedObserved`；
+  此后 backend 回显永不覆盖本地集合（只记日志）。backend 回显仅用于**冷启动采纳一次**（宿主还没观测过时），
+  采纳后置同一标志。
+- **条目合并按 uid 分方向**：`refreshNativeModels` 对 `observed`（本会话宿主观测过）的 uid 用
+  `mergeNativeEntry(backendEntry, hostEntry)`——宿主值为 incoming 胜出标量字段，backend 独缺的
+  `kind`/`familyUid`/`sources` 由 carrying 保留；backend 独有的 uid 仍以 backend 为 incoming 采纳。
+- **诊断**：`native-allowed-diverged`＝宿主已观测但 backend 回显与本地不一致（只记条数，去重，集合重新相等时复位）；
+  `native-allowed-backend-lost`＝backend 回显空 allowlist 而宿主有非空集合，置 `nativePushStale` 强制下一次
+  `pushToBackend` 绕过 revision 门控重推（空 payload 仍不推）。
+- **已知代价（有意取舍，勿回退）**：若某次 allowlist 变化只被 CLI 通道看到而宿主通道没看到，宿主保持旧集合
+  并留下 `diverged` 日志，直到宿主自己观测到。这是为避免「旧副本覆盖新事实」，**不要**在后继改动里悄悄恢复
+  「最后到达者赢」。

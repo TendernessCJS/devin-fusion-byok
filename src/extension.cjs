@@ -122,6 +122,7 @@ async function activate(context) {
     // Complete-set verdict from team settings: whichever observation arrived
     // last decides which official uids the account may actually select.
     nativeAllowedUids: new Set(),
+    nativeAllowedObserved: false, nativeAllowedDiverged: false,
     management: undefined, manager: undefined,
     nativeCatalogStatus: 'loading', backendStatus: 'stopped',
     syncPending: undefined, syncAbort: undefined, syncTimer: undefined,

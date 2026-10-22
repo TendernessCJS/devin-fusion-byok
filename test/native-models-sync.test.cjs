@@ -381,3 +381,62 @@ test('readNativeModels passes a valid family uid through and ignores malformed o
   assert.equal(result.models.find(e => e.uid === 'swe-x')?.familyUid, undefined,
     'non-string family ids are dropped, not thrown');
 });
+
+test('a stale backend allowlist echo cannot overwrite the host set', async () => {
+  const f = syncFixture({ read: async () => ({ status: 'ready', models: [], allowedUids: ['A1'] }) });
+  f.shared.observeAllowedUids(['A1', 'A2']);
+  const revision = f.shared.nativeRevision;
+  await f.shared.refreshNativeModels();
+  assert.deepEqual([...f.shared.nativeAllowedUids].sort(), ['A1', 'A2'],
+    'an older backend echo must not roll back the host-observed allowlist');
+  assert.equal(f.shared.nativeRevision, revision, 'an advisory echo must not advance the revision');
+});
+
+test('the first backend allowlist echo is adopted once, then the host stays authoritative', async () => {
+  let result = { status: 'ready', models: [], allowedUids: ['A1'] };
+  const f = syncFixture({ read: async () => result });
+  await f.shared.refreshNativeModels();
+  assert.deepEqual([...f.shared.nativeAllowedUids], ['A1'], 'cold start adopts the backend verdict once');
+  result = { status: 'ready', models: [], allowedUids: ['A2'] };
+  await f.shared.refreshNativeModels();
+  assert.deepEqual([...f.shared.nativeAllowedUids], ['A1'], 'a later divergent echo does not replace the adopted set');
+  assert.ok(f.logs.some(line => line.event === 'native-allowed-diverged'),
+    'the divergence must be observable in logs');
+});
+
+test('a host-observed uid wins label and disabled over a stale backend copy', async () => {
+  const f = syncFixture({ read: async () => ({ status: 'ready', models: [
+    { uid: 'swe-2-high', label: 'Stale', disabled: true, isModelRouter: false, harnessUids: ['swe-1p6'], familyUid: 'fam' }] }) });
+  f.shared.observeNativeModels([{ uid: 'swe-2-high', label: 'Host', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }]);
+  await f.shared.refreshNativeModels();
+  const entry = f.shared.nativeModels.get('swe-2-high');
+  assert.equal(entry.label, 'Host', 'the host observation wins scalar fields');
+  assert.equal(entry.disabled, false, 'a stale disabled flag must not downgrade the host copy');
+  assert.equal(entry.familyUid, 'fam', 'fields the host never saw are still carried from the backend copy');
+});
+
+test('backend-only entries are still adopted into the published view', async () => {
+  const f = syncFixture({ read: async () => ({ status: 'ready', models: [
+    { uid: 'swe-2-max', label: 'B', disabled: false, isModelRouter: false, harnessUids: ['h'] }] }) });
+  f.shared.observeNativeModels([OBSERVED_ENTRY]);
+  await f.shared.refreshNativeModels();
+  assert.ok(f.shared.nativeModels.has('swe-2-max'), 'a uid the host never observed still comes in from the backend');
+  assert.ok(f.shared.nativeModels.has('swe-2-high'));
+});
+
+test('a backend that lost the allowlist is force-pushed the host set', async () => {
+  const f = syncFixture({ read: async () => ({ status: 'ready', models: [], allowedUids: [] }) });
+  f.shared.observeNativeModels([OBSERVED_ENTRY]);
+  f.shared.observeAllowedUids(['A1', 'A2']);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const before = f.pushes.length;
+  f.shared.lastPushedRevision = f.shared.nativeRevision;
+  f.shared.lastPushAt = 0;
+  await f.shared.refreshNativeModels();
+  assert.equal(f.shared.nativePushStale, true, 'an empty echo against a host-observed set arms the forced repush');
+  assert.ok(f.logs.some(line => line.event === 'native-allowed-backend-lost'));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.ok(f.pushes.length > before, 'the forced push must fire even when the revision gate has nothing new');
+  assert.deepEqual([...f.pushes.at(-1).allowedUids].sort(), ['A1', 'A2'],
+    'the repush carries the host allowlist, not the backend echo');
+});
