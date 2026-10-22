@@ -56,6 +56,17 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
 - **签名闭环只在有签名的厂商成立**：DeepSeek 返回 36 字符签名且原样回放 200；Moonshot 不返回签名，所以续轮只能省略 signed thinking 块（`FOREIGN_STATE_PREFIX` 之外，脱敏数据另有 `dfbyok-redacted-v1:` 通道，见 `acp-protocol-fields.md`）。缺签名不等于工具多轮不可用，需厂商专项测试再下结论。**补测（2026-10-22）：把 `signature` 删掉再回放，DeepSeek 仍返回 200**——它不校验签名，所以
   「签名回放 200」不能证明我们保真，只有真 Anthropic 端点能戳穿；同理，本地全绿也不代表签名通道正确。
 
+## Chat 面（`apiFormat: 'openai'`）实测（2026-10-22 DeepSeek `/v1`）
+
+- `/models`、`/chat/completions` 均 200；`tool_calls`/强制 `tool_choice` 完整；`reasoning_effort`、`max_completion_tokens`
+  被**静默接受**——接受不等于生效。
+- **思考 token 有无取决于"面"，不取决于厂商**：同一 `deepseek-flash`，Chat 面给
+  `completion_tokens_details.reasoning_tokens`（15/17 >0），Anthropic 面给 `thinking_tokens`（0/34）。掉列先看路由。
+- `tps` 仅 `hasTools === false` 时计算（`monitor/store.cjs`）；Chat 至今每请求都带工具 → 全 `null` 是**设计**。
+- `effort` 来自 provider 配置而非模型名：`efforts: []` + `manual` → 单档 `null`，不发 `reasoning_effort`。
+- **判路由两条通道**：`monitor.jsonl` 每行有 `providerId`（`runtime.log` 的 `inference` 没有）＝谁真服务了请求；
+  `acp-messages/*.db` 的 `sessions.model` ＝用户选中哪个。两者互证。
+
 ## 附件走 `resource_link`，不是 document（2026-10-22 桌面客户端实测）
 
 - **桌面客户端不内联文档字节**：一份 61,341 B 的 PDF 以 `chisel/acp-content-blocks` 里的 `resource_link` 进入消息
