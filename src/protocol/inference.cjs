@@ -37,6 +37,11 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
     if (!calls.has(key)) calls.set(key, { id: '', name: '', arguments: '', complete: undefined });
     return calls.get(key);
   };
+  const setName = (call, name) => {
+    if (!name) return;
+    if (call.name && call.name !== name) { const err = new Error('Tool call name changed mid-stream'); err.code = 'upstream_invalid_tool'; err.detail = 'changed-name'; throw err; }
+    call.name = name;
+  };
   const text = async (key, value, complete = false, thinking = false) => {
     if (typeof value !== 'string') return;
     const previous = texts.get(key) || '';
@@ -105,13 +110,13 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
           if (delta.function_call) {
             const call = getCall('function_call');
             call.id = call.id || `${id}:0`;
-            if (delta.function_call.name) call.name += delta.function_call.name;
+            if (delta.function_call.name) setName(call, delta.function_call.name);
             if (typeof delta.function_call.arguments === 'string') call.arguments += delta.function_call.arguments;
           }
           for (const tool of delta.tool_calls || []) {
             const call = getCall(tool.index ?? 0);
             if (tool.id && !call.id) call.id = tool.id;
-            if (tool.function?.name) call.name += tool.function.name;
+            if (tool.function?.name) setName(call, tool.function.name);
             if (typeof tool.function?.arguments === 'string') call.arguments += tool.function.arguments;
           }
           if (choice.finish_reason) {
@@ -188,7 +193,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
           err.detail = 'invalid-json';
           throw err;
         }
-        tools.push({ id: call.id, name: call.name, arguments: args });
+        tools.push({ id: call.id, name: call.name, arguments: args, isCustomToolCall: Boolean(call.custom) });
       }
       if (reason === 2 && !tools.length && !texts.size) {
         const err = new Error('Upstream completed without output');
@@ -322,23 +327,48 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       });
     };
     let upstream = await send(body);
-    // Thinking-mode providers (DeepSeek) answer a forced/required tool_choice
-    // with HTTP 400 — "Thinking mode does not support this tool_choice" —
-    // instead of ignoring it, so a forced choice turns a working request into a
-    // hard failure. Degrade to `auto` only on that refusal: providers that do
-    // honour forced choices keep them, and one retry bounds the cost. The
-    // provider's own message must name tool_choice, so a 400 about anything
-    // else (context length, bad parameters) still surfaces unchanged.
+    // Thinking-mode providers (DeepSeek, Moonshot) answer a forced/required
+    // tool_choice with HTTP 400 — "Thinking mode does not support this
+    // tool_choice" — instead of ignoring it, so a forced choice turns a working
+    // request into a hard failure. Two bounded steps: on the Anthropic format,
+    // first retry with thinking disabled so the caller's forced choice survives;
+    // only if that also fails, degrade the choice to `auto`. The provider's own
+    // message must name tool_choice, so a 400 about anything else (context
+    // length, bad parameters) still surfaces unchanged.
     if (!upstream.ok && upstream.status === 400) {
       // The response body is read exactly once and shared by both degrade
       // rules — getReader() fails on a consumed stream, so a second read would
       // silently see an empty string and skip a recoverable retry.
       const detail = await readErrorDetail(upstream);
       if (forcedToolChoice(body) && /tool_choice/i.test(detail)) {
-        body = { ...body, tool_choice: anthropic
-          ? { type: 'auto', ...(body.tool_choice?.disable_parallel_tool_use ? { disable_parallel_tool_use: true } : {}) }
-          : 'auto' };
-        upstream = await send(body);
+        const hadThinking = body.thinking !== undefined;
+        // Degrading drops an injected `thinking` flag: if the provider refused
+        // that field too, carrying it into the final retry would fail again.
+        const degradeChoice = next => {
+          const degraded = { ...next, tool_choice: anthropic
+            ? { type: 'auto', ...(next.tool_choice?.disable_parallel_tool_use ? { disable_parallel_tool_use: true } : {}) }
+            : 'auto' };
+          if (!hadThinking) delete degraded.thinking;
+          return degraded;
+        };
+        if (anthropic && !hadThinking) {
+          // Thinking mode is what refuses a forced choice, so disabling it is
+          // the cheaper retry; degrading the choice is only the fallback.
+          body = { ...body, thinking: { type: 'disabled' } };
+          upstream = await send(body);
+          if (upstream.ok) {
+            record({ event: 'provider-degraded', model: route.model, reason: 'thinking-disabled' });
+          } else {
+            await readErrorDetail(upstream);
+            body = degradeChoice(body);
+            upstream = await send(body);
+            record({ event: 'provider-degraded', model: route.model, reason: 'tool-choice' });
+          }
+        } else {
+          body = degradeChoice(body);
+          upstream = await send(body);
+          record({ event: 'provider-degraded', model: route.model, reason: 'tool-choice' });
+        }
       } else if (('store' in body || 'include' in body)
           && /store|include|reasoning\.encrypted_content/i.test(detail)) {
         const { store: _store, include: _include, ...stripped } = body;
@@ -405,7 +435,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
           'upstream_timeout', 'upstream_http', 'upstream_content_type',
           'upstream_stream_error', 'upstream_stream_incomplete',
           'upstream_invalid_tool', 'upstream_invalid_json', 'upstream_network', 'upstream_empty_output',
-          'upstream_text_mismatch'
+          'upstream_text_mismatch', 'attachment_unsupported'
         ]);
         classifiedCode = allowedCodes.has(err?.code) ? err.code : 'upstream_stream_error';
       }
@@ -438,6 +468,9 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       return { status, aborted: true };
     }
 
+    // buildRequestBody throws before any response arrives, so its code never
+    // passed through the stream catch — adopt it here for the error text.
+    if (err?.code === 'attachment_unsupported') classifiedCode = 'attachment_unsupported';
     let errorText = 'Provider response could not be completed.';
     if (classifiedCode === 'upstream_http' && status >= 400) {
       errorText = `Provider returned HTTP ${status}.`;
@@ -447,6 +480,8 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       errorText = 'Provider returned no output.';
     } else if (classifiedCode === 'upstream_text_mismatch') {
       errorText = 'Provider response was inconsistent.';
+    } else if (classifiedCode === 'attachment_unsupported') {
+      errorText = 'Attached media is not supported by this provider protocol.';
     }
 
     try {

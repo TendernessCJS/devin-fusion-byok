@@ -115,7 +115,7 @@ test('Anthropic strict tools and disable_parallel_tool_use reach the wire body o
   assert.equal(plain.tool_choice, undefined);
 });
 
-test('Anthropic forced tool_choice degrades only after a tool_choice refusal', async t => {
+test('Anthropic forced tool_choice retries with thinking disabled before degrading to auto', async t => {
   const tool = m(10, Buffer.concat([s(1, 'shell_command'), s(2, 'Run'), s(3, '{}')]));
   const requestWith = choice => Buffer.concat([s(21, 'local-claude'), nativeMessage(1, 'hi'), tool, ...(choice ? [choice] : [])]);
   const success = [
@@ -125,13 +125,13 @@ test('Anthropic forced tool_choice degrades only after a tool_choice refusal', a
     sse('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } }),
     sse('message_stop', {}),
   ];
-  async function runBoundary(request, failWith, succeedAfter) {
+  async function runBoundary(request, failWith, failCount = 0) {
     const requests = [], metrics = [];
     const upstream = await server(async (req, res) => {
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
       requests.push(JSON.parse(Buffer.concat(chunks)));
-      if (succeedAfter && requests.length > 1) { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(success.join('')); return; }
+      if (requests.length > failCount) { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(success.join('')); return; }
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { message: failWith } }));
     }, t);
@@ -143,19 +143,25 @@ test('Anthropic forced tool_choice degrades only after a tool_choice refusal', a
   }
 
   const refusal = 'tool_choice is not supported by this endpoint';
-  const forced = await runBoundary(requestWith(m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')]))), refusal, true);
+  const forced = await runBoundary(requestWith(m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')]))), refusal, 1);
   assert.equal(forced.requests.length, 2, 'forced choice retries once after the refusal');
-  assert.deepEqual(forced.requests[1].tool_choice, { type: 'auto' });
+  assert.deepEqual(forced.requests[1].thinking, { type: 'disabled' }, 'the first retry turns thinking off');
+  assert.deepEqual(forced.requests[1].tool_choice, { type: 'tool', name: 'shell_command' }, 'the forced choice survives that retry');
   assert.equal(forced.messages.map(message => str(message, 3)).join(''), 'ok');
   assert.equal(forced.metrics[0].status, 'success');
 
+  const twice = await runBoundary(requestWith(m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')]))), refusal, 2);
+  assert.equal(twice.requests.length, 3, 'a second refusal falls through to the auto degrade');
+  assert.deepEqual(twice.requests[2].tool_choice, { type: 'auto' });
+  assert.equal('thinking' in twice.requests[2], false, 'the injected thinking flag does not leak into the degrade');
+
   for (const type of ['auto', 'none']) {
-    const passive = await runBoundary(requestWith(m(12, s(1, type))), refusal, true);
+    const passive = await runBoundary(requestWith(m(12, s(1, type))), refusal, 1);
     assert.equal(passive.requests.length, 1, `${type} is not forced and never retries`);
     assert.equal(passive.metrics[0].code, 'upstream_http');
   }
 
-  const other = await runBoundary(requestWith(m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')]))), 'context length exceeded', true);
+  const other = await runBoundary(requestWith(m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')]))), 'context length exceeded', 1);
   assert.equal(other.requests.length, 1, 'a 400 unrelated to tool_choice never retries');
   assert.equal(other.metrics[0].code, 'upstream_http');
 
@@ -163,9 +169,9 @@ test('Anthropic forced tool_choice degrades only after a tool_choice refusal', a
     s(21, 'local-claude'), nativeMessage(1, 'hi'),
     m(10, Buffer.concat([s(1, 'shell_command'), s(2, 'Run'), s(3, '{}')])),
     m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')])), v(11, 1),
-  ]), refusal, true);
-  assert.equal(serialized.requests.length, 2);
-  assert.deepEqual(serialized.requests[1].tool_choice, { type: 'auto', disable_parallel_tool_use: true },
+  ]), refusal, 2);
+  assert.equal(serialized.requests.length, 3);
+  assert.deepEqual(serialized.requests[2].tool_choice, { type: 'auto', disable_parallel_tool_use: true },
     'the degrade-to-auto retry preserves disable_parallel_tool_use');
 });
 
@@ -366,4 +372,100 @@ test('Anthropic model discovery pages with x-api-key and keeps reported limits',
     [['/v1/models', null, 'fake-anthropic-key', undefined], ['/v1/models', 'claude-opus-5-5', 'fake-anthropic-key', undefined]]);
   assert.deepEqual(provider.models.map(model => [model.id, model.contextWindow, model.maxOutputTokens]),
     [['claude-opus-5-5', 1000000, 128000], ['claude-haiku-4-5', 200000, 64000]]);
+});
+
+test('a forced choice first retries with thinking disabled, then degrades to auto', async t => {
+  const tool = m(10, Buffer.concat([s(1, 'shell_command'), s(2, 'Run'), s(3, '{}')]));
+  const request = Buffer.concat([s(21, 'local-claude'), nativeMessage(1, 'hi'), tool, m(12, Buffer.concat([s(1, 'tool'), s(2, 'shell_command')]))]);
+  const success = [
+    sse('message_start', { message: { usage: { input_tokens: 5, output_tokens: 1 } } }),
+    sse('content_block_start', { index: 0, content_block: { type: 'text', text: 'ok' } }),
+    sse('content_block_stop', { index: 0 }),
+    sse('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } }),
+    sse('message_stop', {}),
+  ];
+  const refusal = JSON.stringify({ error: { message: 'tool_choice is not supported by this endpoint' } });
+  async function runRetry(failCount) {
+    const requests = [];
+    const upstream = await server(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      requests.push(JSON.parse(Buffer.concat(chunks)));
+      if (requests.length > failCount) { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(success.join('')); return; }
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(refusal);
+    }, t);
+    const proxy = await server((req, res) => {
+      serveChat({ request: parseChat(request), route: { model: 'claude-opus-5-5', uid: 'local-claude' },
+        provider: { baseUrl: `${upstream}/v1`, apiKey: 'k', apiFormat: 'anthropic' }, res });
+    }, t);
+    await (await fetch(proxy)).arrayBuffer();
+    return requests;
+  }
+
+  const disabled = await runRetry(1);
+  assert.equal(disabled.length, 2);
+  assert.deepEqual(disabled[1].thinking, { type: 'disabled' }, 'the first retry turns thinking off');
+  assert.deepEqual(disabled[1].tool_choice, { type: 'tool', name: 'shell_command' }, 'the forced choice survives that retry');
+
+  const degraded = await runRetry(2);
+  assert.equal(degraded.length, 3);
+  assert.deepEqual(degraded[2].tool_choice, { type: 'auto' }, 'the fallback degrades the choice to auto');
+});
+
+test('Anthropic thinking_tokens map to reasoning tokens in usage and metrics', async t => {
+  const result = await run(t, [
+    sse('message_start', { message: { usage: { input_tokens: 10, output_tokens: 0 } } }),
+    sse('content_block_start', { index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    sse('content_block_delta', { index: 0, delta: { type: 'thinking_delta', thinking: 'T' } }),
+    sse('content_block_stop', { index: 0 }),
+    sse('content_block_start', { index: 1, content_block: { type: 'text', text: 'ok' } }),
+    sse('content_block_stop', { index: 1 }),
+    sse('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 20, output_tokens_details: { thinking_tokens: 12 } } }),
+    sse('message_stop', {}),
+  ]);
+  assert.equal(result.metrics[0].reasoningTokens, 12);
+  assert.equal(result.metrics[0].visibleTokens, 8);
+  assert.equal(result.metrics[0].outputTokens, 20);
+});
+
+test('redacted thinking data round-trips through the signature lane', () => {
+  const adapter = createAnthropicAdapter();
+  const first = adapter({ type: 'content_block_start', data: { index: 0, content_block: { type: 'redacted_thinking', data: 'opaque-1' } } });
+  assert.equal(first.length, 1);
+  assert.equal(first[0].data.choices[0].delta.thinking_redacted, true);
+  assert.equal(first[0].data.choices[0].delta.signature, 'dfbyok-redacted-v1:opaque-1');
+  const second = adapter({ type: 'content_block_start', data: { index: 1, content_block: { type: 'redacted_thinking', data: 'opaque-2' } } });
+  assert.equal(second[0].data.choices[0].delta.thinking_redacted, true);
+  assert.equal(second[0].data.choices[0].delta.signature, undefined, 'a second redacted block carries no data');
+  const body = buildRequestBody(parseChat(Buffer.concat([
+    s(21, 'local-claude'), nativeMessage(2, 'ANSWER', [s(12, 'dfbyok-redacted-v1:opaque-1')]), nativeMessage(1, 'next'),
+  ])), { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  assert.deepEqual(body.messages[0].content[0], { type: 'redacted_thinking', data: 'opaque-1' });
+  assert.ok(!body.messages[0].content.some(block => block.type === 'thinking'), 'no fabricated thinking block');
+});
+
+test('Anthropic request body maps document attachments and rejects unsupported media', () => {
+  const request = docs => parseChat({ prompt: 'sys', chatMessagePrompts: [{ source: 1, prompt: 'see doc', ...docs }] });
+  const pdf = buildRequestBody(request({ documents: [{ base64Data: 'QUJD', mimeType: 'application/pdf', filename: 'doc.pdf' }] }),
+    { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  assert.deepEqual(pdf.messages[0].content, [
+    { type: 'text', text: 'see doc' },
+    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'QUJD' } }]);
+  const plain = buildRequestBody(request({ documents: [{ base64Data: 'aGVsbG8=', mimeType: 'text/plain', filename: 'note.txt' }] }),
+    { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  assert.deepEqual(plain.messages[0].content[1], { type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'hello' } });
+  let err;
+  try {
+    buildRequestBody(request({ documents: [{ base64Data: 'QUJD', mimeType: 'application/msword', filename: 'doc.doc' }] }),
+      { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  } catch (thrown) { err = thrown; }
+  assert.equal(err?.code, 'attachment_unsupported');
+  err = undefined;
+  try {
+    buildRequestBody(request({ videos: [{ base64Data: 'QUJD', mimeType: 'video/mp4' }] }),
+      { model: 'claude-opus-5-5' }, { apiFormat: 'anthropic' });
+  } catch (thrown) { err = thrown; }
+  assert.equal(err?.code, 'attachment_unsupported');
+  assert.equal(err?.detail, 'video');
 });

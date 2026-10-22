@@ -11,11 +11,22 @@ const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 // there. Never replay a foreign envelope as a thinking signature — Anthropic
 // requires the original signature verbatim, and a foreign string earns a 400.
 const FOREIGN_STATE_PREFIX = 'dfbyok-';
+// ACP has only a boolean redacted marker (field 11); the opaque data rides the
+// signature channel (field 10) under this prefix — same lane as the Responses
+// state envelope, distinguished by prefix.
+const REDACTED_PREFIX = 'dfbyok-redacted-v1:';
 
 function isAnthropicFormat(format = '') { return format === 'anthropic'; }
 
 function anthropicHeaders(apiKey) {
   return { 'anthropic-version': ANTHROPIC_VERSION, ...(apiKey ? { 'x-api-key': apiKey } : {}) };
+}
+
+function attachmentUnsupported(detail) {
+  const err = new Error('Attachments are not supported by this protocol');
+  err.code = 'attachment_unsupported';
+  err.detail = detail;
+  return err;
 }
 
 function textBlocks(message) {
@@ -25,6 +36,14 @@ function textBlocks(message) {
     blocks.push({ type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.base64 } });
     if (image.caption) blocks.push({ type: 'text', text: image.caption });
   }
+  for (const doc of message.documents || []) {
+    if (doc.base64 && doc.mimeType === 'application/pdf') {
+      blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: doc.base64 } });
+    } else if (doc.base64 && doc.mimeType === 'text/plain') {
+      blocks.push({ type: 'document', source: { type: 'text', media_type: 'text/plain', data: Buffer.from(doc.base64, 'base64').toString('utf8') } });
+    } else throw attachmentUnsupported(doc.mimeType || 'document');
+  }
+  if (message.videos?.length) throw attachmentUnsupported('video');
   return blocks;
 }
 
@@ -55,8 +74,11 @@ function buildAnthropicBody(request, route, provider) {
     } else if (message.role === 'assistant') {
       // Claude requires the original thinking block, signature included, to be
       // replayed verbatim once extended thinking is used together with tools.
-      const thinking = message.signature && !message.signature.startsWith(FOREIGN_STATE_PREFIX)
-        ? [{ type: 'thinking', thinking: message.thinking || '', signature: message.signature }] : [];
+      // A redacted-prefixed signature instead replays the redacted block itself.
+      const thinking = message.signature?.startsWith(REDACTED_PREFIX)
+        ? [{ type: 'redacted_thinking', data: message.signature.slice(REDACTED_PREFIX.length) }]
+        : message.signature && !message.signature.startsWith(FOREIGN_STATE_PREFIX)
+          ? [{ type: 'thinking', thinking: message.thinking || '', signature: message.signature }] : [];
       push('assistant', [...thinking, ...textBlocks(message),
         ...(message.toolCalls || []).map(tool => ({ type: 'tool_use', id: tool.id, name: tool.name, input: toolInput(tool.arguments) }))]);
     } else {
@@ -92,13 +114,15 @@ const FINISH = { max_tokens: 'length', model_context_window_exceeded: 'length', 
 
 function createAnthropicAdapter() {
   const blocks = new Map();
-  const usage = { input: null, cacheRead: 0, cacheCreate: 0, output: null };
+  let redactedSent = false;
+  const usage = { input: null, cacheRead: 0, cacheCreate: 0, output: null, thinking: null };
   const readUsage = value => {
     if (!value || typeof value !== 'object') return;
     if (Number.isSafeInteger(value.input_tokens)) usage.input = value.input_tokens;
     if (Number.isSafeInteger(value.cache_read_input_tokens)) usage.cacheRead = value.cache_read_input_tokens;
     if (Number.isSafeInteger(value.cache_creation_input_tokens)) usage.cacheCreate = value.cache_creation_input_tokens;
     if (Number.isSafeInteger(value.output_tokens)) usage.output = value.output_tokens;
+    if (Number.isSafeInteger(value.output_tokens_details?.thinking_tokens)) usage.thinking = value.output_tokens_details.thinking_tokens;
   };
   const chunk = (type, delta, extra = {}) => ({ type, data: { choices: [{ index: 0, delta, ...extra }] } });
   const toolDelta = (type, index, call) => chunk(type, { tool_calls: [{ index, ...call }] });
@@ -115,8 +139,15 @@ function createAnthropicAdapter() {
         const index = data.index ?? 0;
         if (block.type === 'text') return block.text ? [chunk(event.type, { content: block.text })] : [];
         if (block.type === 'thinking') return block.thinking ? [chunk(event.type, { reasoning_content: block.thinking })] : [];
-        // Redacted thinking carries no payload field, only the marker can pass through.
-        if (block.type === 'redacted_thinking') return [chunk(event.type, { thinking_redacted: true })];
+        // Only the first redacted block per response carries its data on the
+        // signature lane; later blocks degrade to the bare marker.
+        if (block.type === 'redacted_thinking') {
+          if (typeof block.data === 'string' && block.data && !redactedSent) {
+            redactedSent = true;
+            return [chunk(event.type, { thinking_redacted: true, signature: REDACTED_PREFIX + block.data })];
+          }
+          return [chunk(event.type, { thinking_redacted: true })];
+        }
         if (block.type !== 'tool_use') return [];
         const input = block.input && typeof block.input === 'object' && Object.keys(block.input).length ? JSON.stringify(block.input) : '';
         blocks.set(index, { streamed: false, input });
@@ -150,7 +181,8 @@ function createAnthropicAdapter() {
           result.data.usage = { prompt_tokens: usage.input + usage.cacheRead + usage.cacheCreate, completion_tokens: usage.output,
             // `cache_creation_tokens` inside prompt_tokens_details is our own
             // internal convention between this adapter and usageSnapshot().
-            prompt_tokens_details: { cached_tokens: usage.cacheRead, cache_creation_tokens: usage.cacheCreate } };
+            prompt_tokens_details: { cached_tokens: usage.cacheRead, cache_creation_tokens: usage.cacheCreate },
+            ...(Number.isSafeInteger(usage.thinking) ? { completion_tokens_details: { reasoning_tokens: usage.thinking } } : {}) };
         }
         return [result];
       }

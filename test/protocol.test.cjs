@@ -7,7 +7,7 @@ const { once } = require('node:events');
 const zlib = require('node:zlib');
 const { createHash } = require('node:crypto');
 const wire = require('../src/protocol/wire.cjs');
-const { parseChat } = require('../src/protocol/acp.cjs');
+const { parseChat, toolChunk } = require('../src/protocol/acp.cjs');
 const { serveChat, buildRequestBody } = require('../src/protocol/inference.cjs');
 const { s, v, m, str, num, fields } = wire;
 
@@ -1316,7 +1316,7 @@ test('a 400 naming both tool_choice and store retries once via tool_choice', asy
   assert.equal(app.requests[1].body.tool_choice, 'auto', 'the tool_choice branch wins');
   assert.equal('store' in app.requests[1].body, true, 'the store branch does not also fire');
   assert.equal('include' in app.requests[1].body, true);
-  assert.equal(app.logs.find(entry => entry.event === 'provider-degraded'), undefined, 'tool_choice degrade records nothing extra');
+  assert.equal(app.logs.find(entry => entry.event === 'provider-degraded')?.reason, 'tool-choice', 'the tool_choice degrade is the recorded reason');
 });
 
 test('Chat Completions keeps the first tool call id when a gateway resends it', async t => {
@@ -1536,4 +1536,111 @@ test('chat-error drops frame names outside the frame vocabulary', async t => {
   const errorLog = app.logs.find(entry => entry.event === 'chat-error');
   assert.equal(errorLog.code, 'upstream_stream_error');
   assert.deepEqual(errorLog.frames, ['error']);
+});
+
+test('document attachments map to protocol file parts and videos fail loudly', () => {
+  const request = parseChat({ prompt: 'sys', chatMessagePrompts: [{ source: 1, prompt: 'see doc',
+    documents: [{ base64Data: 'QUJD', mimeType: 'application/pdf', filename: 'doc.pdf' }] }] });
+  assert.deepEqual(request.messages[0].documents, [{ base64: 'QUJD', mimeType: 'application/pdf', filename: 'doc.pdf', url: '' }]);
+  const responsesBody = buildRequestBody(request, { model: 'm' }, { apiFormat: 'responses' });
+  assert.deepEqual(responsesBody.input.at(-1).content, [
+    { type: 'input_text', text: 'see doc' },
+    { type: 'input_file', file_data: 'QUJD', filename: 'doc.pdf' }]);
+  const chatBody = buildRequestBody(request, { model: 'm' }, { apiFormat: 'chat-completions' });
+  assert.deepEqual(chatBody.messages.at(-1).content, [
+    { type: 'text', text: 'see doc' },
+    { type: 'file', file: { file_data: 'QUJD', filename: 'doc.pdf' } }]);
+  const withVideo = parseChat({ chatMessagePrompts: [{ source: 1, prompt: 'v',
+    videos: [{ base64Data: 'QUJD', mimeType: 'video/mp4' }] }] });
+  let err;
+  try { buildRequestBody(withVideo, { model: 'm' }, { apiFormat: 'responses' }); } catch (thrown) { err = thrown; }
+  assert.equal(err?.code, 'attachment_unsupported');
+  assert.equal(err?.detail, 'video');
+});
+
+test('native parser maps document and video attachment fields', () => {
+  const request = parseChat(Buffer.concat([
+    nativeMessage(1, 'attach', [
+      m(20, Buffer.concat([s(1, 'QUJD'), s(2, 'video/mp4'), s(3, 'https://x.invalid/v')])),
+      m(21, Buffer.concat([s(1, 'QUJD'), s(2, 'application/pdf'), s(3, 'doc.pdf'), s(4, 'https://x.invalid/d')])),
+    ]),
+  ]));
+  assert.deepEqual(request.messages[0].videos, [{ base64: 'QUJD', mimeType: 'video/mp4', url: 'https://x.invalid/v' }]);
+  assert.deepEqual(request.messages[0].documents, [{ base64: 'QUJD', mimeType: 'application/pdf', filename: 'doc.pdf', url: 'https://x.invalid/d' }]);
+});
+
+test('a video attachment fails with a visible unsupported error without calling upstream', async t => {
+  let upstreamCalls = 0;
+  const upstream = await server((req, res) => { upstreamCalls++; res.end(); }, t);
+  const request = parseChat({ chatMessagePrompts: [{ source: 1, prompt: 'see video',
+    videos: [{ base64Data: 'QUJD', mimeType: 'video/mp4' }] }] });
+  const logs = [];
+  const proxy = await server((req, res) => {
+    serveChat({ request, route: { model: 'm', uid: 'u' },
+      provider: { baseUrl: `${upstream.url}/v1`, apiKey: 'k', apiFormat: 'responses' }, res, log: e => logs.push(e) });
+  }, t);
+  const out = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+  assert.equal(out.messages.map(m => str(m, 3)).join(''), 'Attached media is not supported by this provider protocol.');
+  assert.equal(upstreamCalls, 0, 'the request fails before any upstream call');
+  assert.equal(logs.find(e => e.event === 'chat-error')?.code, 'attachment_unsupported');
+});
+
+test('custom tool calls round-trip through selector, history replay and the ACP chunk', () => {
+  const request = parseChat(Buffer.concat([
+    s(21, 'local-cpa-lead'),
+    nativeMessage(1, 'run'),
+    nativeMessage(2, '', [
+      m(6, Buffer.concat([s(1, 'cc1'), s(2, 'apply_patch'), s(3, '*** Begin Patch'), v(6, 1)])),
+      m(6, Buffer.concat([s(1, 'f1'), s(2, 'sidekick'), s(3, '{"a":1}')]))]),
+    nativeMessage(4, 'done', [s(7, 'cc1')]),
+    nativeMessage(4, 'f done', [s(7, 'f1')]),
+    m(10, Buffer.concat([s(1, 'apply_patch'), s(2, 'patch'), s(3, '{}'), v(9, 1)])),
+    m(10, Buffer.concat([s(1, 'sidekick'), s(2, 'fn'), s(3, '{}')])),
+    m(12, Buffer.concat([s(1, 'tool'), s(2, 'apply_patch')])),
+  ]));
+  const body = buildRequestBody(request, { model: 'm' }, { apiFormat: 'responses' });
+  assert.deepEqual(body.tool_choice, { type: 'custom', name: 'apply_patch' });
+  assert.deepEqual(body.input.at(-4), { type: 'custom_tool_call', call_id: 'cc1', name: 'apply_patch', input: '*** Begin Patch' });
+  assert.deepEqual(body.input.at(-3), { type: 'function_call', call_id: 'f1', name: 'sidekick', arguments: '{"a":1}' });
+  assert.deepEqual(body.input.at(-2), { type: 'custom_tool_call_output', call_id: 'cc1', output: 'done' });
+  assert.deepEqual(body.input.at(-1), { type: 'function_call_output', call_id: 'f1', output: 'f done' });
+  const chunk = toolChunk('id', [
+    { id: 'cc1', name: 'apply_patch', arguments: '*** Begin Patch', isCustomToolCall: true },
+    { id: 'f1', name: 'sidekick', arguments: '{}' }]);
+  const calls = fields(chunk, 6).map(field => field.value);
+  assert.equal(num(calls[0], 6), 1, 'custom call carries the field-6 marker');
+  assert.equal(fields(calls[1], 6).length, 0, 'a plain function call has no marker');
+});
+
+test('Chat stream tool names are set once and reject mid-stream changes', async t => {
+  const frames = names => [
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: names[0], arguments: '{"a":' } }] } }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { name: names[1], arguments: '1}' } }] }, finish_reason: 'tool_calls' }] },
+  ].map(event).join('') + 'data: [DONE]\n\n';
+  const same = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(frames(['echo', 'echo']));
+  }, 'openai');
+  const ok = unpack(Buffer.from(await (await fetch(same.url)).arrayBuffer()));
+  assert.deepEqual(ok.messages.flatMap(m => fields(m, 6)).map(f => str(f.value, 2)), ['echo']);
+
+  const changed = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(frames(['echo', 'evil']));
+  }, 'openai');
+  unpack(Buffer.from(await (await fetch(changed.url)).arrayBuffer()));
+  const errorLog = changed.logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_invalid_tool');
+  assert.equal(errorLog.detail, 'changed-name');
+});
+
+test('prompt_cache_key reaches the provider body only when set', () => {
+  const withKey = parseChat({ prompt: 'sys', chatMessagePrompts: [{ source: 1, prompt: 'hi' }], promptCacheKey: 'key-1' });
+  const plain = parseChat({ prompt: 'sys', chatMessagePrompts: [{ source: 1, prompt: 'hi' }] });
+  for (const apiFormat of ['responses', 'chat-completions']) {
+    assert.equal(buildRequestBody(withKey, { model: 'm' }, { apiFormat }).prompt_cache_key, 'key-1');
+    assert.equal('prompt_cache_key' in buildRequestBody(plain, { model: 'm' }, { apiFormat }), false);
+  }
+  const proto = parseChat(Buffer.concat([s(2, 'sys'), s(21, 'uid'), nativeMessage(1, 'hi'), s(27, 'proto-key')]));
+  assert.equal(buildRequestBody(proto, { model: 'm' }, { apiFormat: 'responses' }).prompt_cache_key, 'proto-key');
 });

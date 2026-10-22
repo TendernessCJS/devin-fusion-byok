@@ -20,9 +20,11 @@ function protoMessage(data) {
   return {
     role: SOURCE_ROLE[source], source,
     messageId: str(data, 1), content: str(data, 3),
-    toolCalls: fields(data, 6).map(({ value }) => ({ id: str(value, 1), name: str(value, 2), arguments: str(value, 3) })),
+    toolCalls: fields(data, 6).map(({ value }) => ({ id: str(value, 1), name: str(value, 2), arguments: str(value, 3), isCustomToolCall: Boolean(num(value, 6)) })),
     toolCallId: str(data, 7), toolResultIsError: Boolean(num(data, 9)),
     images: fields(data, 10).map(({ value }) => ({ base64: str(value, 1), mimeType: str(value, 2) || 'image/png', caption: str(value, 3) })),
+    videos: fields(data, 20).map(({ value }) => ({ base64: str(value, 1), mimeType: str(value, 2), url: str(value, 3) })),
+    documents: fields(data, 21).map(({ value }) => ({ base64: str(value, 1), mimeType: str(value, 2) || 'application/octet-stream', filename: str(value, 3), url: str(value, 4) })),
     thinking: str(data, 11), signature: str(data, 12),
   };
 }
@@ -43,10 +45,12 @@ function jsonMessage(message) {
   return {
     role, source, messageId: camel(message, 'messageId', 'message_id') || '',
     content: message.prompt ?? message.content ?? '',
-    toolCalls: (camel(message, 'toolCalls', 'tool_calls') || []).map(call => ({ id: call.id || '', name: call.name || '', arguments: camel(call, 'argumentsJson', 'arguments_json') ?? call.arguments ?? '' })),
+    toolCalls: (camel(message, 'toolCalls', 'tool_calls') || []).map(call => ({ id: call.id || '', name: call.name || '', arguments: camel(call, 'argumentsJson', 'arguments_json') ?? call.arguments ?? '', isCustomToolCall: Boolean(camel(call, 'isCustomToolCall', 'is_custom_tool_call')) })),
     toolCallId: camel(message, 'toolCallId', 'tool_call_id') || '',
     toolResultIsError: Boolean(camel(message, 'toolResultIsError', 'tool_result_is_error')),
     images: (message.images || []).map(image => ({ base64: camel(image, 'base64Data', 'base64_data') || image.base64 || '', mimeType: camel(image, 'mimeType', 'mime_type') || 'image/png', caption: image.caption || '' })),
+    documents: (message.documents || []).map(d => ({ base64: camel(d, 'base64Data', 'base64_data') || '', mimeType: camel(d, 'mimeType', 'mime_type') || 'application/octet-stream', filename: camel(d, 'filename', 'fileName') || '', url: camel(d, 'url') || '' })),
+    videos: (message.videos || []).map(d => ({ base64: camel(d, 'base64Data', 'base64_data') || '', mimeType: camel(d, 'mimeType', 'mime_type') || '', url: camel(d, 'url') || '' })),
     thinking: message.thinking || '', signature: message.signature || '',
   };
 }
@@ -58,6 +62,7 @@ function parseChat(data) {
       modelUid: camel(data, 'chatModelUid', 'chat_model_uid') ?? camel(data, 'modelUid', 'model_uid') ?? '',
       modelEnum: camel(data, 'internalChatModel', 'internal_chat_model') ?? data.model ?? 0,
       systemPrompt: data.prompt ?? camel(data, 'systemPrompt', 'system_prompt') ?? '',
+      promptCacheKey: camel(data, 'promptCacheKey', 'prompt_cache_key') || '',
       messages: (camel(data, 'chatMessagePrompts', 'chat_message_prompts') ?? data.messages ?? data.prompts ?? []).map(jsonMessage),
       tools: (data.tools || []).map(tool => ({ name: tool.name, description: tool.description || '', parameters: schema(camel(tool, 'jsonSchemaString', 'json_schema_string') ?? camel(tool, 'parametersJson', 'parameters_json') ?? camel(tool, 'inputSchema', 'input_schema') ?? tool.parameters), strict: Boolean(tool.strict),
         isCustomTool: Boolean(camel(tool, 'isCustomTool', 'is_custom_tool')),
@@ -71,6 +76,7 @@ function parseChat(data) {
   const choice = fields(data, 12).find(field => field.wire === 2)?.value;
   return {
     modelUid: str(data, 21), modelEnum: num(data, 6), systemPrompt: str(data, 2),
+    promptCacheKey: str(data, 27),
     messages: fields(data, 3).map(field => protoMessage(field.value)),
     tools: fields(data, 10).map(({ value }) => ({ name: str(value, 1), description: str(value, 2), parameters: schema(str(value, 3)), strict: Boolean(num(value, 12)),
       isCustomTool: num(value, 9) === 1, customToolGrammar: str(value, 10), customToolGrammarSyntax: str(value, 11) })),
@@ -89,7 +95,7 @@ function thinkingChunk(id, text) { return Buffer.concat([...prefix(id), s(9, tex
 function signatureChunk(id, signature) { return Buffer.concat([...prefix(id), s(10, signature)]); }
 function redactedThinkingChunk(id) { return Buffer.concat([...prefix(id), v(11, 1)]); }
 function toolChunk(id, tools) {
-  return Buffer.concat([...prefix(id), ...tools.map(tool => m(6, Buffer.concat([s(1, tool.id), s(2, tool.name), s(3, tool.arguments ?? tool.arguments_json ?? '')])))]);
+  return Buffer.concat([...prefix(id), ...tools.map(tool => m(6, Buffer.concat([s(1, tool.id), s(2, tool.name), s(3, tool.arguments ?? tool.arguments_json ?? ''), ...(tool.isCustomToolCall === true ? [v(6, 1)] : [])])))]);
 }
 function stopChunk(id, reason = 2, modelUid = '') { return Buffer.concat([...prefix(id), v(5, reason), ...(modelUid ? [s(23, modelUid)] : [])]); }
 function usageChunk(id, modelUid, usage) {

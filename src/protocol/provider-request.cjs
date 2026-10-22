@@ -27,14 +27,33 @@ function forcedToolChoice(body) {
   return type !== undefined && type !== 'auto' && type !== 'none';
 }
 
+// A request carrying an attachment type the target protocol cannot express
+// fails loudly instead of silently dropping the user's file.
+function attachmentUnsupported(detail) {
+  const err = new Error('Attachments are not supported by this protocol');
+  err.code = 'attachment_unsupported';
+  err.detail = detail;
+  return err;
+}
+
 function contentOf(message, chat) {
-  if (!message.images?.length) return message.content;
+  if (!message.images?.length && !message.documents?.length && !message.videos?.length) return message.content;
+  if (message.videos?.length) throw attachmentUnsupported('video');
   const parts = [];
   if (message.content !== '') parts.push(chat ? { type: 'text', text: message.content } : { type: 'input_text', text: message.content });
   for (const image of message.images) {
     const url = `data:${image.mimeType};base64,${image.base64}`;
     parts.push(chat ? { type: 'image_url', image_url: { url } } : { type: 'input_image', image_url: url });
     if (image.caption) parts.push(chat ? { type: 'text', text: image.caption } : { type: 'input_text', text: image.caption });
+  }
+  for (const doc of message.documents) {
+    if (chat) {
+      if (!doc.base64) throw attachmentUnsupported('document');
+      parts.push({ type: 'file', file: { file_data: doc.base64, ...(doc.filename ? { filename: doc.filename } : {}) } });
+    } else {
+      if (!doc.base64 && !doc.url) throw attachmentUnsupported('document');
+      parts.push({ type: 'input_file', ...(doc.base64 ? { file_data: doc.base64 } : {}), ...(doc.url ? { file_url: doc.url } : {}), ...(doc.filename ? { filename: doc.filename } : {}) });
+    }
   }
   return parts;
 }
@@ -43,10 +62,17 @@ function buildRequestBody(request, route, provider, onState = () => {}) {
   if (isAnthropicFormat(provider.apiFormat)) return buildAnthropicBody(request, route, provider);
   const chat = isChatFormat(provider.apiFormat);
   const messages = [];
+  // History tool calls flagged custom must round-trip as custom_tool_call items,
+  // and their outputs join them by call id.
+  const customCalls = new Set();
+  for (const message of request.messages) for (const tool of message.toolCalls || []) if (tool.isCustomToolCall && tool.id) customCalls.add(tool.id);
   if (request.systemPrompt !== '') messages.push({ role: chat ? 'system' : 'developer', content: request.systemPrompt });
   for (const message of request.messages) {
     if (message.role === 'tool') {
-      messages.push(chat ? { role: 'tool', tool_call_id: message.toolCallId, content: message.content } : { type: 'function_call_output', call_id: message.toolCallId, output: message.content });
+      messages.push(chat ? { role: 'tool', tool_call_id: message.toolCallId, content: message.content }
+        : customCalls.has(message.toolCallId)
+          ? { type: 'custom_tool_call_output', call_id: message.toolCallId, output: message.content }
+          : { type: 'function_call_output', call_id: message.toolCallId, output: message.content });
       continue;
     }
     const content = contentOf(message, chat);
@@ -77,7 +103,9 @@ function buildRequestBody(request, route, provider, onState = () => {}) {
       // A native message stores text before its repeated tool calls. Preserve
       // that sequence and keep every system message at its original position.
       if (content !== '' || !message.toolCalls?.length) messages.push({ role: message.role === 'system' ? 'developer' : message.role, content });
-      for (const tool of message.toolCalls || []) messages.push({ type: 'function_call', call_id: tool.id, name: tool.name, arguments: tool.arguments });
+      for (const tool of message.toolCalls || []) messages.push(tool.isCustomToolCall
+        ? { type: 'custom_tool_call', call_id: tool.id, name: tool.name, input: tool.arguments }
+        : { type: 'function_call', call_id: tool.id, name: tool.name, arguments: tool.arguments });
     }
   }
   const body = { model: route.model, [chat ? 'messages' : 'input']: messages, stream: true };
@@ -86,6 +114,7 @@ function buildRequestBody(request, route, provider, onState = () => {}) {
     body.store = false;
     body.include = ['reasoning.encrypted_content'];
   }
+  if (request.promptCacheKey) body.prompt_cache_key = request.promptCacheKey;
   if (request.disableParallelToolCalls === true) body.parallel_tool_calls = false;
   const maxTokens = request.maxTokens ?? route.maxOutputTokens ?? route.maxTokens ?? provider.maxOutputTokens ?? provider.maxTokens;
   if (Number.isSafeInteger(maxTokens) && maxTokens > 0) body[chat ? 'max_completion_tokens' : 'max_output_tokens'] = maxTokens;
@@ -98,7 +127,8 @@ function buildRequestBody(request, route, provider, onState = () => {}) {
     // false are indistinguishable; always send the boolean, because omitting it
     // lets a Responses server auto-enable strict validation on a compatible schema.
     body.tools = request.tools.map(tool => {
-      // Chat Completions has no custom tool type; custom tools stay function-shaped.
+      // Upstream Chat Completions now supports custom tools too, but we still
+      // declare and select them function-shaped to keep the compatibility surface.
       if (chat) return { type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters, strict: tool.strict === true } };
       if (tool.isCustomTool === true) {
         const custom = { type: 'custom', name: tool.name };
@@ -110,7 +140,9 @@ function buildRequestBody(request, route, provider, onState = () => {}) {
       return { type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters, strict: tool.strict === true };
     });
     const choice = request.toolChoice;
-    if (choice?.name) body.tool_choice = chat ? { type: 'function', function: { name: choice.name } } : { type: 'function', name: choice.name };
+    const customNames = new Set(request.tools.filter(tool => tool.isCustomTool === true).map(tool => tool.name));
+    if (choice?.name) body.tool_choice = chat ? { type: 'function', function: { name: choice.name } }
+      : customNames.has(choice.name) ? { type: 'custom', name: choice.name } : { type: 'function', name: choice.name };
     else if (choice) {
       const type = typeof choice === 'string' ? choice : choice.type;
       if (['auto', 'none', 'required', 'any'].includes(type)) body.tool_choice = type === 'any' ? 'required' : type;
