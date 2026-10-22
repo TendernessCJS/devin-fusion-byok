@@ -39,7 +39,7 @@ tail -c +<偏移> <bundle> | head -c 600
 | 8 | `redact` | bool | — |
 | 9 | `delta_thinking` | string | ✓ `thinkingChunk` |
 | 10 | `delta_signature` | string | ✓ `signatureChunk`（anthropic `signature_delta`） |
-| 11 | `thinking_redacted` | bool | ✓ `redactedThinkingChunk`，**无载荷字段** |
+| 11 | `thinking_redacted` | bool | ✓ `redactedThinkingChunk`，本字段只是标志；脱敏数据走字段 10，见「脱敏思考」条 |
 | 12 | `latency` | double | — |
 | 13 | `completion_profile` | CompletionProfile | — |
 | 14 | `credit_cost` | double | — |
@@ -88,7 +88,7 @@ tail -c +<偏移> <bundle> | head -c 600
   - `strict`：OpenAI 两路（`openai` / `openai-responses`）**始终**写布尔 `strict: tool.strict === true`。理由是官方 Responses SDK 明说「省略 `strict` 时会尝试启用严格校验」（`strict?: boolean \| null` 的注释原文），所以「省略」≠「原生 false」，无法表达原生意图；Anthropic 仍只在 `true` 时写顶层 `strict:true`（Anthropic 没有这种「省略即自动严格」的语义）。
   - `disable_parallel_tool_calls`：**只透传显式 `true`**，默认/未设置时不在 body 里写厂商字段，保持对老网关的兼容。
 - 实测（2026-10-16，真实端点）：`strict:false` 与省略 strict 两种写法在 DeepSeek `deepseek-flash`（responses）与 Moonshot `kimi-k2.6`（chat）上**都是 200**，参数键均为 `["source"]` 且无空串值（`{path, source}` 二选一 schema）。
-- `ChatToolDefinition` **字段 9/10/11 自定义工具**（2026-10-16 登记）：`{no:9,name:"is_custom_tool",kind:"scalar",T:8,opt:!0}`、`{no:10,name:"custom_tool_grammar",T:9,opt:!0}`、`{no:11,name:"custom_tool_grammar_syntax",T:9,opt:!0}`——**三者都带 `opt:!0`**（可选），与上面无 `opt` 的 `strict` 不同：`is_custom_tool` 是 optional bool，两字符串字段缺省为 `''`（JSON/proto 两侧归一为 `isCustomTool`/`customToolGrammar`/`customToolGrammarSyntax`，字符串缺席落 `''` 以保 parity）。出站：仅 `openai-responses` 且 `isCustomTool === true` → `{type:'custom',name,[description]}`；`grammar` 与 `syntax` **同时存在**且 syntax 恰为 `'lark'`/`'regex'` 时才附 `format:{type:'grammar',definition,syntax}`，否则无 `format`（官方 SDK 默认无约束文本，不猜默认值）；`openai`/`anthropic` 无此类型，仍为 function 形态。响应侧 `custom_tool_call` 的 `input` 是**原始字符串**（非 JSON），`response.custom_tool_call_input.delta`（`delta` 字段）/`.done`（`input` 字段）只按字符串校验、跳过 `JSON.parse`，原样进 ACP 工具块。
+- `ChatToolDefinition` **字段 9/10/11 自定义工具**（2026-10-16 登记）：`{no:9,name:"is_custom_tool",kind:"scalar",T:8,opt:!0}`、`{no:10,name:"custom_tool_grammar",T:9,opt:!0}`、`{no:11,name:"custom_tool_grammar_syntax",T:9,opt:!0}`——**三者都带 `opt:!0`**（可选），与上面无 `opt` 的 `strict` 不同：`is_custom_tool` 是 optional bool，两字符串字段缺省为 `''`（JSON/proto 两侧归一为 `isCustomTool`/`customToolGrammar`/`customToolGrammarSyntax`，字符串缺席落 `''` 以保 parity）。出站：仅 `openai-responses` 且 `isCustomTool === true` → `{type:'custom',name,[description]}`；`grammar` 与 `syntax` **同时存在**且 syntax 恰为 `'lark'`/`'regex'` 时才附 `format:{type:'grammar',definition,syntax}`，否则无 `format`（官方 SDK 默认无约束文本，不猜默认值）；`anthropic` 无此类型，仍为 function 形态（tool_choice 保持 `{type:'tool',name}`）；`openai`（Chat）**上游 SDK 已支持** `{type:'custom',custom:{name}}`，但本仓仍按 function 声明与选择，刻意保持兼容面一致——要改必须同时改声明与选择，否则两者不自洽。**强制选择必须跟着工具类型走**：Responses 下命中 `isCustomTool === true` 的同名工具要发 `{type:'custom',name}`，发成 `{type:'function',name}` 与声明矛盾（2026-10-22 修正）。响应侧 `custom_tool_call` 的 `input` 是**原始字符串**（非 JSON），`response.custom_tool_call_input.delta`（`delta` 字段）/`.done`（`input` 字段）只按字符串校验、跳过 `JSON.parse`，原样进 ACP 工具块。
 
 ## ⚠️ 陷阱：`CompletionDelta` 是**另一个消息**，字段号整体错位
 
@@ -125,7 +125,7 @@ tail -c +<偏移> <bundle> | head -c 600
 
 ## `ChatToolCall` 与 `StopReason`
 
-- `ChatToolCall`：`1=id`、`2=name`、`3=arguments_json`。
+- `ChatToolCall`：`1=id`、`2=name`、`3=arguments_json`、**`6=is_custom_tool_call`（bool）**。字段 6 双向都要处理：入站读成 `isCustomToolCall` 决定历史按 `custom_tool_call`/`custom_tool_call_output` 回放，出站 `toolChunk` 对 custom 调用写 `v(6,1)`。**普通 function 调用不要写 0**——proto3 未设置即 false，写 0 只增加字节。
 - `StopReason`：`2=STOP_PATTERN`、`3=MAX_TOKENS`、`10=FUNCTION_CALL`、`11=CONTENT_FILTER`、`13=ERROR`（bundle 字段表逐项核对一致）。
 
 ## 已核实的语义结论
@@ -148,7 +148,7 @@ tail -c +<偏移> <bundle> | head -c 600
 
   证据链：第 1 轮响应 `signature_delta` 1 次（**36 字符**）→ 第 2 轮请求新增助手轮块类型 `["thinking","tool_use"]`、`signedThinkingBlocks: 1`、签名长度 `[36]` → 第 3 轮 `[36, 36]` → 第 4 轮 `[36, 36, 36]`，**逐轮累积且长度逐字一致**。因此「客户端读字段 10 并写回请求字段 12」成立，捕获与回传两半都可达。
 - **字段 21 `delta_signature_type` 不需要发**：上述闭环在**完全不发字段 21** 的情况下成立，所以「取值未知」不再阻塞任何事。`signatureType` 在 JS 里只被初始化为 `""`、无消费逻辑；除非未来真机出现签名回放失败，再考虑补它。
-- **脱敏思考无法往返**：`redacted_thinking` 在请求（字段 13）与响应（字段 11）两侧都只有 bool 标志、没有任何载荷字段，所以本仓只透传 `thinking_redacted=true`，不做载荷回传。
+- **脱敏思考靠签名通道往返**（2026-10-22 修正上一条旧结论）：`redacted_thinking` 在请求（字段 13）与响应（字段 11）两侧确实只有 bool、没有载荷，但 SDK 的 `RedactedThinkingBlock.data` 是**必填且要求续轮原样回传**，丢弃它等于放弃多轮连续性。本仓把数据挂在**字段 10** 上，用独立前缀 `dfbyok-redacted-v1:` 与 Responses 信封（`dfbyok-responses-v1:`）区分；回放时先判该前缀（**必须先于 `FOREIGN_STATE_PREFIX`**，因为后者也覆盖 `dfbyok-`），命中就发 `{type:'redacted_thinking',data}`，不伪造 thinking 块。已知上限：ACP 每轮只有一个 signature 槽，所以**同一条消息里只有第一个脱敏块能带数据**，之后只发 marker；thinking 签名与脱敏数据同时存在时后者覆盖前者。
 - Anthropic 侧 `ThinkingBlockParam.signature` 是**必需字段**：assistant 回传思考块仅在签名在场时进行，否则整块省略。
 - **验证方法（可复用）**：把临时 `apiFormat: anthropic` 供应商指向本地反代，反代只记录形状（块类型/签名长度/布尔），**不记正文与密钥**；跑一轮带工具回合即可看到回传。注意 baseUrl 会被规范化成 `<host>/anthropic/v1`，客户端再拼 `/messages`。
 
@@ -158,3 +158,11 @@ tail -c +<偏移> <bundle> | head -c 600
   数量偏高是因为每个面板/子会话各建一次。基线随窗口活动变化，但**量级关系**（list ≫ new > prompt）可用于识别「谁在刷 ACP」。
 - **一条已知但不致命的 ACP 警告**：`ext_method{cognition.ai/revert/listSteps}` 对已不在活跃集合的会话会得到
   `ACP revert: session <id> not in active sessions`（窗口重载后渲染端仍持有旧会话 id 时出现）。单次出现属竞态，不要据此认定会话损坏。
+
+## 附件与缓存键字段（2026-10-22 实证补齐）
+
+`ChatMessagePrompt` 此前只解析 `images`（10），`videos`（20）与 `documents`（21）**静默丢弃**。内层形状：`VideoData`=`1 base64_data/2 mime_type/3 url`；`DocumentData`=`1 base64_data/2 mime_type/3 filename/4 url`（是 `filename`，JSON 侧曾误拼 `fileName`）。
+
+出站映射（**失败要响亮，不许退回静默丢**）：文档在 Responses 走 `{type:'input_file',file_data|file_url,filename}`（`file_data` 是**原始 base64**）、Chat 走 `{type:'file',file:{file_data,filename}}`（Chat **没有** URL 形态）、Anthropic 走 `{type:'document',source:{type:'base64',media_type:'application/pdf'}}`，`text/plain` 用 `{type:'text',media_type:'text/plain',data:<base64 解码后的原文>}`。**视频三种协议都无载荷**，直接抛 `attachment_unsupported`（detail `video`）；Anthropic 上 pdf/text-plain 之外的文档 mime 同样抛。该码已进 `allowedCodes`，文案是 `Attached media is not supported by this provider protocol.`；`buildRequestBody` 在取响应之前抛，外层 catch 必须单独认领，否则会被归成 `upstream_network`。
+
+`GetChatMessageRequest` **字段 27 `prompt_cache_key`**：原生已带，此前不读。现读成 `request.promptCacheKey`，Responses 与 Chat 原样写 `body.prompt_cache_key`；**Anthropic 不发**（它要的是分段 `cache_control`）。省略该键不等于自动缓存失效，别据此判命中率。
