@@ -216,12 +216,17 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
   };
 }
 
+// Only enumerations reach the log: messages can carry prompt text, host names and tokens.
+const enumValue = value => typeof value === 'string' && /^[A-Za-z_$][\w$]{0,47}$/.test(value) ? value : null;
+// SSE frame names are lowercase vocabulary (`response.output_text.delta`), so the dot is
+// allowed only here and only in that shape.
+const frameName = value => typeof value === 'string' && value.length <= 64 && /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)*$/.test(value) ? value : null;
+
 // A transport failure is classified as a bare `upstream_network`, which cannot
 // tell a reset socket from a DNS or TLS failure. Only enumerations are kept:
 // messages can carry host names and tokens, so they never reach the log.
 function transportDetail(err) {
-  const safe = value => typeof value === 'string' && /^[A-Za-z_$][\w$]{0,47}$/.test(value) ? value : null;
-  const parts = [safe(err?.name), safe(err?.cause?.code) || safe(err?.code)];
+  const parts = [enumValue(err?.name), enumValue(err?.cause?.code) || enumValue(err?.code)];
   return [...new Set(parts.filter(Boolean))].join('/');
 }
 
@@ -248,6 +253,34 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
   let status = 0;
   let classifiedCode = 'upstream_network';
   const record = event => { try { log(event); } catch { /* Diagnostics cannot fail a model request. */ } };
+  const frames = [];
+  let lastEvent = null;
+  const noteFrame = event => {
+    lastEvent = event;
+    const name = frameName(event?.type);
+    if (name && frames.length < 8 && !frames.includes(name)) frames.push(name);
+  };
+  const failureShape = () => {
+    const data = lastEvent?.data;
+    const response = data?.response;
+    const providerError = data?.error && typeof data.error === 'object'
+      ? data.error
+      : (response?.error && typeof response.error === 'object' ? response.error : null);
+    const fields = {};
+    const failFrame = frameName(lastEvent?.type);
+    if (failFrame) fields.failFrame = failFrame;
+    // A Responses `error` event carries `code` at the top level, not under `error`.
+    const errorCode = enumValue(providerError?.code) || enumValue(data?.code);
+    if (errorCode) fields.errorCode = errorCode;
+    const errorType = enumValue(providerError?.type);
+    if (errorType) fields.errorType = errorType;
+    const responseStatus = enumValue(response?.status);
+    if (responseStatus) fields.responseStatus = responseStatus;
+    const incompleteReason = enumValue(response?.incomplete_details?.reason);
+    if (incompleteReason) fields.incompleteReason = incompleteReason;
+    if (frames.length) fields.frames = [...frames];
+    return fields;
+  };
 
   const firstResponseLimit = Number.isSafeInteger(timeouts?.firstResponseMs) && timeouts.firstResponseMs > 0
     ? Math.min(timeouts.firstResponseMs, 2147483647) : 120000;
@@ -360,6 +393,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       const adapt = anthropic ? createAnthropicAdapter() : event => [event];
       upstream: for await (const raw of events(rawChunksWithTimeout(upstream.body))) {
         for (const event of adapt(raw)) {
+          noteFrame(event);
           metrics.event(event, chat);
           await stream.event(event);
           if (event.type === 'done' || (!chat && stream.terminal)) break upstream;
@@ -424,7 +458,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     }
     outcomeCode = classifiedCode;
     const transport = transportDetail(err);
-    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}), ...(transport ? { transport } : {}) });
+    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}), ...(transport ? { transport } : {}), ...failureShape() });
     return { status, error: true, code: classifiedCode, requestId: id };
   } finally {
     try { onMetrics(metrics.finish(outcome, status, outcomeCode)); } catch {}

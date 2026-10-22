@@ -1439,3 +1439,101 @@ test('a content-drifted envelope reports a replay failure', async t => {
   assert.equal(logs.filter(entry => entry.event === 'state-envelope-replayed').length, 0);
   assert.equal(fixture.bodies.at(-1).input.filter(item => item?.type === 'reasoning').length, 0, 'content drift still disables replay');
 });
+
+test('chat-error logs the shape of a top-level error frame without leaking content', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'response.created', response: {} }));
+    res.write(event({ type: 'error', error: { code: 'insufficient_quota', type: 'api_error', message: 'secret user content here' } }));
+    res.end();
+  });
+  await (await fetch(app.url)).arrayBuffer();
+  const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_stream_error');
+  assert.equal(errorLog.failFrame, 'error');
+  assert.equal(errorLog.errorCode, 'insufficient_quota');
+  assert.equal(errorLog.errorType, 'api_error');
+  assert.deepEqual(errorLog.frames, ['response.created', 'error']);
+  const serialized = JSON.stringify(app.logs);
+  assert.equal(serialized.includes('secret'), false);
+  assert.equal(serialized.includes('User message'), false);
+});
+
+test('chat-error drops non-enumeration values but keeps the failing frame', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(event({ type: 'error', error: { code: 'has space', type: 'x'.repeat(80) } }));
+  });
+  await (await fetch(app.url)).arrayBuffer();
+  const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_stream_error');
+  assert.equal(errorLog.failFrame, 'error');
+  assert.equal('errorCode' in errorLog, false);
+  assert.equal('errorType' in errorLog, false);
+});
+
+test('chat-error logs the shape of a response.failed frame', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'response.created', response: {} }));
+    res.write(event({ type: 'response.failed', response: { status: 'failed', error: { code: 'server_error', type: 'api_error' } } }));
+    res.end();
+  });
+  await (await fetch(app.url)).arrayBuffer();
+  const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_stream_error');
+  assert.equal(errorLog.failFrame, 'response.failed');
+  assert.equal(errorLog.responseStatus, 'failed');
+  assert.equal(errorLog.errorCode, 'server_error');
+  assert.equal(errorLog.errorType, 'api_error');
+  assert.deepEqual(errorLog.frames, ['response.created', 'response.failed']);
+});
+
+test('chat-error caps recorded frames at eight', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    for (const value of [
+      { type: 'response.created', response: {} },
+      { type: 'response.in_progress', response: {} },
+      { type: 'response.queued', response: {} },
+      { type: 'response.output_item.added', output_index: 0, item: {} },
+      { type: 'response.content_part.added', output_index: 0, content_index: 0, part: {} },
+      { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'a' },
+      { type: 'response.reasoning_text.delta', output_index: 0, content_index: 0, delta: 'b' },
+      { type: 'response.output_text.annotation.added', output_index: 0, content_index: 0, annotation: {} },
+    ]) res.write(event(value));
+    res.end(event({ type: 'error', error: { code: 'server_error' } }));
+  });
+  await (await fetch(app.url)).arrayBuffer();
+  const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_stream_error');
+  assert.equal(errorLog.frames.length, 8);
+  assert.equal(errorLog.frames[7], 'response.output_text.annotation.added');
+});
+
+test('chat-error reads the SDK-shaped error event code from the top level', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(event({ type: 'error', code: 'invalid_prompt', message: 'secret user content here', param: null, sequence_number: 1 }));
+  });
+  await (await fetch(app.url)).arrayBuffer();
+  const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_stream_error');
+  assert.equal(errorLog.failFrame, 'error');
+  assert.equal(errorLog.errorCode, 'invalid_prompt');
+  assert.equal('errorType' in errorLog, false);
+  assert.equal(JSON.stringify(app.logs).includes('secret'), false);
+});
+
+test('chat-error drops frame names outside the frame vocabulary', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'Not A Frame' }));
+    res.write(event({ type: 'x'.repeat(80) }));
+    res.end(event({ type: 'error', code: 'server_error' }));
+  });
+  await (await fetch(app.url)).arrayBuffer();
+  const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_stream_error');
+  assert.deepEqual(errorLog.frames, ['error']);
+});
