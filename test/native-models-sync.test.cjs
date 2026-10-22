@@ -553,3 +553,113 @@ test('collectAllowedUids reports a three-state verdict', () => {
   assert.deepEqual(collectAllowedUids({ allowedModelUids: ['a', 'b'] }, { rpc: seat, format: json }),
     { kind: 'restricted', uids: ['a', 'b'] });
 });
+
+test('a same-value host observation still establishes source authority', async () => {
+  const HOST = { uid: 'swe-2-high', label: 'Host', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] };
+  let result = { status: 'ready', models: [{ ...HOST }] };
+  const f = syncFixture({ read: async () => result });
+  await f.shared.refreshNativeModels();
+  const revision = f.shared.nativeRevision;
+  f.shared.observeNativeModels([{ ...HOST }]);
+  assert.equal(f.shared.nativeRevision, revision, 'an unchanged observation must not bump the revision');
+  result = { status: 'ready', models: [
+    { uid: 'swe-2-high', label: 'Stale', disabled: true, isModelRouter: false, harnessUids: ['swe-1p6'], familyUid: 'fam' }] };
+  await f.shared.refreshNativeModels();
+  const entry = f.shared.nativeModels.get('swe-2-high');
+  assert.equal(entry.label, 'Host', 'the host observation is authoritative even when it matched the backend copy');
+  assert.equal(entry.disabled, false);
+  assert.equal(entry.familyUid, 'fam');
+});
+
+// Real backend + real forward, with only the upstream URL swapped to a local
+// server: exercises the raw CLI allowlist channel end to end, including the
+// debounce and failure-reset semantics the mock-forward fixture cannot reach.
+async function rawForwardFixture(t, respond) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-raw-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  const realBridge = realRequire('./bridge.cjs');
+  const module = { exports: {} };
+  const upstream = http.createServer(async (req, res) => {
+    req.resume();
+    try { await respond(req, res); } catch { if (!res.headersSent) res.writeHead(500); res.end(); }
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout,
+    require(name) {
+      if (name === './bridge.cjs') return {
+        collect: realBridge.collect,
+        forward: (request, response, target, options) =>
+          realBridge.forward(request, response, new URL(request.url, 'http://127.0.0.1:' + upstream.address().port), options),
+      };
+      return realRequire(name);
+    },
+  }, { filename });
+  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  t.after(async () => {
+    await backend.close();
+    await new Promise(resolve => upstream.close(resolve));
+    upstream.closeAllConnections();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const base = 'http://127.0.0.1:' + backend.port;
+  const auth = () => ({ authorization: 'Bearer ' + JSON.parse(fs.readFileSync(controlFile(root), 'utf8')).token });
+  const get = async () => (await fetch(base + '/_runtime/native-models', { headers: auth() })).json();
+  // Responses are always fully consumed so later requests never race a
+  // half-read body; callers get the status code and nothing dangles.
+  const post = async payload => { const r = await fetch(base + '/_runtime/native-models', { method: 'POST',
+    headers: { ...auth(), 'content-type': 'application/json' }, body: JSON.stringify(payload) }); await r.arrayBuffer(); return r.status; };
+  const cli = async () => { const r = await fetch(base + '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings',
+    { method: 'POST', body: '{}' }); await r.arrayBuffer(); return r.status; };
+  const other = async () => { const r = await fetch(base + '/exa.language_server_pb.LanguageServerService/GetUserStatus',
+    { method: 'POST', body: '{}' }); await r.arrayBuffer(); return r.status; };
+  return { get, post, cli, other };
+}
+
+test('the raw CLI channel needs three consecutive empty verdicts to lift a restriction', async t => {
+  let statusCode = 200, payload = { allowedModelUids: [] };
+  const f = await rawForwardFixture(t, (req, res) => {
+    res.writeHead(statusCode, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(payload));
+  });
+  const entry = { uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['h'] };
+  assert.equal(await f.post({ models: [entry], allowedUids: ['A1'] }), 200);
+  assert.equal((await f.get()).allowedMode, 'restricted');
+  await f.cli();
+  assert.equal((await f.get()).allowedMode, 'restricted', 'one empty verdict is a weak signal');
+  await f.cli();
+  await f.other();
+  assert.equal((await f.get()).allowedMode, 'restricted', 'an unrelated RPC must not interrupt the streak');
+  await f.cli();
+  let body = await f.get();
+  assert.equal(body.allowedMode, 'unrestricted', 'two empties plus an unrelated RPC then a third still flip');
+  assert.deepEqual(body.allowedUids, []);
+  payload = { allowedModelUids: ['B1'] };
+  await f.cli();
+  body = await f.get();
+  assert.equal(body.allowedMode, 'restricted', 'a raw restricted verdict applies immediately');
+  assert.deepEqual(body.allowedUids, ['B1']);
+  payload = { allowedModelUids: [] };
+  await f.cli();
+  await f.cli();
+  statusCode = 500; await f.cli(); statusCode = 200;
+  await f.cli();
+  assert.equal((await f.get()).allowedMode, 'restricted', 'empty, empty, failed, empty is not three consecutive');
+  await f.cli();
+  await f.cli();
+  assert.equal((await f.get()).allowedMode, 'unrestricted', 'three clean empties after the failure flip again');
+  payload = { allowedModelUids: ['C1'] };
+  await f.cli();
+  payload = { allowedModelUids: [] };
+  await f.cli();
+  await f.cli();
+  assert.equal(await f.post({ models: [entry], allowedUids: ['C1'] }), 200);
+  await f.cli();
+  assert.equal((await f.get()).allowedMode, 'restricted',
+    'a confirmed host submission resets the raw streak even when nothing changed');
+  assert.equal(await f.post({ models: [entry], allowedMode: 'unrestricted' }), 200);
+  assert.equal((await f.get()).allowedMode, 'unrestricted', 'a confirmed unrestricted applies without the streak');
+});

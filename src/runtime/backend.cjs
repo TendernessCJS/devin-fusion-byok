@@ -170,16 +170,35 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
   // Team settings publish the account's selectable uid set. It is a complete
   // list, so each observation replaces the previous one outright — a retired
   // model (o3 next to GPT-4.1) must drop out rather than linger in a union.
+  let allowedEmptyStreak = 0;
   const onAllowedUids = observation => {
     const mode = observation?.kind === 'unrestricted' ? 'unrestricted' : 'restricted';
     const next = normalizeAllowedUids(observation?.uids || []);
     if (mode === 'restricted' && !next.length) return;
+    // A confirmed submission (control POST, or a debounced raw verdict below)
+    // always resets the raw streak, even when it changes nothing.
+    allowedEmptyStreak = 0;
     if (mode === allowedMode && next.length === allowedUids.size && next.every(uid => allowedUids.has(uid))) return;
     allowedMode = mode;
     allowedUids.clear();
     for (const uid of next) allowedUids.add(uid);
     log('native-allowed', { count: allowedUids.size, mode: allowedMode });
     scheduleNativeCacheSave();
+  };
+  // The raw CLI channel is weaker than a confirmed host submission: an empty
+  // verdict needs three consecutive sightings before it may lift a
+  // restriction, while a restricted verdict applies at once and a malformed
+  // observation (null) only resets the streak.
+  const onObservedAllowedUids = observation => {
+    if (observation?.kind === 'unrestricted') {
+      allowedEmptyStreak += 1;
+      if (allowedEmptyStreak < 3) return;
+      allowedEmptyStreak = 0;
+      onAllowedUids(observation);
+      return;
+    }
+    allowedEmptyStreak = 0;
+    if (observation?.kind === 'restricted') onAllowedUids(observation);
   };
   const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedMode === 'unrestricted' ? null : allowedUids); };
   // Official Fusion uids observed as disabled in catalog responses. Entries
@@ -249,7 +268,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     // be traced back to the connecting process afterwards (lsof -i TCP:<port>).
     const forwardLog = (event, fields) => log(event, { ...fields, peerPort: request.socket?.remotePort });
     if (request.method !== 'POST' || ![API_PREFIX + 'AssignModel', API_PREFIX + 'GetChatMessage'].includes(rpc)) {
-      forward(request, response, target, { getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids }); return;
+      forward(request, response, target, { getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids }); return;
     }
     let body;
     try {
@@ -285,7 +304,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
       if (response.headersSent) { response.end(); return; }
       // Malformed data must never select a default provider.
     }
-    if (body) forward(request, response, target, { body, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids });
+    if (body) forward(request, response, target, { body, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids });
     else { response.writeHead(502); response.end(); }
   };
   const server = http.createServer((request, response) => {

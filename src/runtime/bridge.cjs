@@ -17,6 +17,7 @@ const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server
 // Server-push RPCs (all long-lived pushes are Stream*/HandleStreaming*) sit
 // idle between events by design, so the 120s body idle budget would kill them
 // mid-stream. They get a 30-minute floor instead; connect/headers stay fast.
+const TEAM_SETTINGS_RPC = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
 const STREAMING_RPC = /\/exa\.[a-z_]+\.[A-Za-z]+Service\/(?:Stream[A-Za-z]*|HandleStreaming[A-Za-z]*)$/;
 const STREAMING_IDLE_LIMIT = 30 * 60 * 1000;
 function cors(request) {
@@ -40,6 +41,17 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         : Math.max(limits.body, STREAMING_IDLE_LIMIT))
     : limits.body;
   const secure = target.protocol === 'https:';
+  // The team-settings allowlist is a debounced streak on the receiving side,
+  // so a failed request must be distinguishable from a quiet one: exactly one
+  // notification per request — the parsed observation on success, null on any
+  // failure — and only for this one RPC.
+  const allowedTarget = target.pathname === TEAM_SETTINGS_RPC;
+  let allowedNotified = false;
+  const notifyAllowed = observation => {
+    if (!allowedTarget || allowedNotified) return;
+    allowedNotified = true;
+    try { onAllowedUids?.(observation); } catch {}
+  };
   let connectTimer, headersTimer, bodyTimer, connectSocket, connectListener, stopped = false;
   const stop = () => {
     if (stopped) return;
@@ -58,6 +70,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
   const timedOut = phase => { try { log('forward-timeout', { phase, rpc: target.pathname.split('/').pop() }); } catch {} fail(); };
   let incoming;
   const fail = () => {
+    notifyAllowed(null);
     stop();
     incoming?.destroy();
     outbound.destroy();
@@ -84,6 +97,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
     upstream.on('aborted', fail);
     upstream.on('close', () => { stop(); if (!upstream.complete) fail(); });
     if (!CATALOG.test(target.pathname) || upstream.statusCode !== 200 || !getCatalog) {
+      if (allowedTarget) notifyAllowed(null);
       response.writeHead(upstream.statusCode, { ...upstream.headers, ...cors(request) }); upstream.pipe(response); return;
     }
     try {
@@ -94,7 +108,8 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         const observed = collectNativeModels(format.data, { rpc: target.pathname, format });
         if (observed.length) try { onNativeModels?.(observed); } catch {}
         const observation = collectAllowedUids(format.data, { rpc: target.pathname, format });
-        if (observation) try { onAllowedUids?.(observation); } catch {}
+        if (allowedTarget) notifyAllowed(observation);
+        else if (observation) try { onAllowedUids?.(observation); } catch {}
         const catalog = getCatalog();
         // A skip means the payload went back untouched, which otherwise reads
         // exactly like "nothing to do". It rides on the `catalog` line, which is
@@ -111,7 +126,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         delete outgoingHeaders['connect-content-encoding'];
         delete outgoingHeaders['transfer-encoding']; outgoingHeaders['content-length'] = String(outgoing.length);
         log('catalog', { rpc: target.pathname.split('/').pop(), models: catalog.models.length, matrix: catalog.matrixUids?.size ?? 0, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented), ...(skipped ? { skipped } : {}) });
-      } catch { log('catalog-error', { code: 'catalog_transform_failed' }); }
+      } catch { log('catalog-error', { code: 'catalog_transform_failed' }); notifyAllowed(null); }
       response.writeHead(upstream.statusCode, outgoingHeaders); response.end(outgoing);
     } catch { fail(); }
   });
@@ -127,7 +142,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
   request.on('error', fail);
   request.on('aborted', fail);
   response.on('error', fail);
-  response.on('close', () => { stop(); if (!response.writableFinished) { incoming?.destroy(); outbound.destroy(); } });
+  response.on('close', () => { stop(); if (!response.writableFinished) { notifyAllowed(null); incoming?.destroy(); outbound.destroy(); } });
   connectTimer = setTimeout(() => timedOut('connect'), limits.connect);
   headersTimer = setTimeout(() => timedOut('headers'), limits.headers);
   if (body !== undefined) outbound.end(body); else request.pipe(outbound);

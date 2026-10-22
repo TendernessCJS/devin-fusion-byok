@@ -605,3 +605,71 @@ test('the same idle gap still times out on a non-streaming path', async t => {
   assert.ok(outcome.error, 'the downstream connection is destroyed after the idle budget');
   assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['body']);
 });
+
+test('team-settings observations notify once per request and null exactly once per failure', async t => {
+  const seat = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
+  const other = LS + 'GetProcessInfo';
+  let respond = (req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"allowedModelUids":[]}'); };
+  const native = await listen((req, res) => respond(req, res));
+  t.after(() => native.close());
+  const observations = [];
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog,
+    onAllowedUids: observation => observations.push(observation),
+    timeouts: { connectMs: 2000, firstResponseMs: 60, idleMs: 2000 } });
+  t.after(() => bridge.close());
+  const json = (status, body) => (req, res) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(body); };
+  const nulls = () => observations.filter(o => o === null).length;
+  const settledNulls = async (expected, message) => {
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && nulls() !== expected) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(nulls(), expected, message);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(nulls(), expected, message + ' — exactly once, no error/close re-entry');
+  };
+  respond = json(200, '{"allowedModelUids":[]}');
+  await request(bridge.port, seat);
+  await request(bridge.port, seat);
+  assert.deepEqual(observations, [{ kind: 'unrestricted' }, { kind: 'unrestricted' }]);
+  respond = json(200, '{"anything":1}');
+  await request(bridge.port, other);
+  assert.equal(observations.length, 2, 'an unrelated RPC reports nothing');
+  respond = json(200, '{"allowedModelUids":"oops"}');
+  await request(bridge.port, seat);
+  await settledNulls(1, 'a legal non-array allowlist notifies null once');
+  respond = json(200, '{not-json');
+  await request(bridge.port, seat);
+  await settledNulls(2, 'undecodable JSON notifies null once');
+  respond = json(500, '{}');
+  await request(bridge.port, seat);
+  await settledNulls(3, 'a non-200 upstream notifies null once');
+  respond = (req, res) => { req.socket.destroy(); };
+  await request(bridge.port, seat).catch(() => {});
+  await settledNulls(4, 'a dropped upstream connection notifies null once');
+  respond = (req, res) => {};
+  await request(bridge.port, seat).catch(() => {});
+  await settledNulls(5, 'a header timeout notifies null once');
+  let upstreamSawClose;
+  const entered = new Promise(resolve => {
+    respond = (req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"allowedModelUids":[');
+      upstreamSawClose = new Promise(done => res.on('close', done));
+      resolve();
+    };
+  });
+  const client = http.request({ hostname: '127.0.0.1', port: bridge.port, method: 'POST', path: seat });
+  client.on('error', () => {});
+  client.end('{}');
+  await entered;
+  client.destroy();
+  const cancelDeadline = Date.now() + 3000;
+  while (Date.now() < cancelDeadline && nulls() !== 6) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(nulls(), 6, 'a client cancelling mid-body notifies null exactly once');
+  assert.ok(await Promise.race([upstreamSawClose.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 3000))]),
+    'the abandoned upstream request is torn down');
+  respond = json(200, '{"allowedModelUids":["swe-2-medium"]}');
+  await request(bridge.port, seat);
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(observations.at(-1)?.kind, 'restricted');
+  assert.equal(observations.length, 9, 'a finished response never reports a trailing null');
+});

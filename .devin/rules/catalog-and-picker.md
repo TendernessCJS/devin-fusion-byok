@@ -89,8 +89,10 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
 ## allowlist 三态与 restricted→unrestricted 链路
 
 `collectAllowedUids` 返回三态：`{kind:'restricted',uids}` / `{kind:'unrestricted'}` / `null`（非该 RPC 或形状坏）。
-proto3 repeated 无法区分「存在但空」与「不存在」，**空是弱信号**：宿主侧 `observeAllowedUids` 要连续
-**3 次** unrestricted 才翻转（`native-allowed-cleared`），反向一次 restricted 观测**立即恢复**；从未观测过
-受限集合的宿主不翻转（只能由 backend 冷启动回显 `allowedMode:'unrestricted'` 解除）。unrestricted 时
-`allowedUids` 为空**仍要推**（push 带 `allowedMode`），POST 校验在 ingest 前（unrestricted+非空 uids=400）。
-旧缓存缺 `allowedMode` 键一律读作 restricted；`saveNativeCache` 只写 unrestricted 值。
+proto3 repeated 无法区分「存在但空」与「不存在」，**空是弱信号**，**两条通道各自 N=3 去抖**：
+宿主 `observeAllowedUids` 与 backend 原始观测 `onObservedAllowedUids`（`allowedEmptyStreak`）都要连续 3 次
+unrestricted 才翻转，反向 restricted 单次立即恢复；**从未建立受限权威的宿主不因空 streak 翻转，只能经
+backend 冷启动回显采纳**。bridge 对 GetCliTeamSettings **每请求恰好通知一次**，任何失败（非 200/坏 JSON/
+断连/超时/客户端取消）通知 `null` 并打断连续计数。**确认提交（control POST / 已去抖判定）直调
+`onAllowedUids` 立即生效并重置原始空计数，不再等 3**；unrestricted 时 `allowedUids` 为空仍要推，但
+models 必须非空（空 payload 不推），POST 的模式校验在 ingest 之前。旧缓存缺 `allowedMode` 键=restricted。

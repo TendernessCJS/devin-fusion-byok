@@ -190,8 +190,12 @@ function installCatalogSync({ deps, shared }) {
       if (!next) continue;
       const previous = shared.nativeModels.get(next.uid);
       const merged = mergeNativeEntry(previous, next);
+      // Source authority registers on every valid observation — even one equal
+      // to the current entry — so a later stale backend copy cannot win. Only
+      // a real content change republishes or bumps the revision.
+      observed.set(next.uid, merged);
       if (!previous || JSON.stringify(previous) !== JSON.stringify(merged)) {
-        observed.set(next.uid, merged); shared.nativeModels.set(next.uid, merged); changed = true;
+        shared.nativeModels.set(next.uid, merged); changed = true;
       }
     }
     if (changed && !lifecycle.activationDisposed) try { void commit({ bumpRevision: true }); } catch {}
