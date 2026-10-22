@@ -1,6 +1,6 @@
 'use strict';
 const { readNativeModels, pushNativeModels, isUpstreamUid } = require('../runtime/native-models.cjs');
-const { mergeNativeEntry, normalizeNativeEntry } = require('../native-entry.cjs');
+const { mergeNativeEntry, normalizeNativeEntry, normalizeAllowedUids } = require('../native-entry.cjs');
 
 function installCatalogSync({ deps, shared }) {
   const { lifecycle, config, log } = deps;
@@ -114,6 +114,14 @@ function installCatalogSync({ deps, shared }) {
       if (shared.pushTimer !== undefined) { clearTimeout(shared.pushTimer); shared.pushTimer = undefined; } };
     shared.syncTimer = setInterval(() => { void shared.refreshNativeModels(); }, 3000); shared.syncTimer.unref?.();
     void shared.refreshNativeModels();
+  };
+  shared.observeAllowedUids = uids => {
+    if (lifecycle.activationDisposed || config().enabled === false) return;
+    const normalized = normalizeAllowedUids(uids);
+    if (!normalized.length) return;
+    if (normalized.length === shared.nativeAllowedUids.size && normalized.every(uid => shared.nativeAllowedUids.has(uid))) return;
+    shared.nativeAllowedUids = new Set(normalized);
+    void commit({ bumpRevision: true });
   };
   shared.observeNativeModels = entries => {
     if (!Array.isArray(entries)) return;

@@ -48,3 +48,5 @@ description: "Apply when changing self-update behaviour or the release contract 
   再退。日志写 `<globalStorage>/restart.log`（每次重启把上一轮轮转为 `restart.log.previous`），行前缀为 UTC 时间戳；`open` 与应用自身的
   stdout/stderr 也追加进该日志，且 `attempt <n> channel=<c>` / `confirmed round=<n>` 记录成功轮次与通道，真实阈值可观测。非 darwin 抛
   `restart_unsupported`；存活探测用 `ps -Ao comm=`（`pgrep` 会跳过祖先进程，而 helper 必在 App 进程树内时不可用）。
+
+- 重启 helper 的 child 必须处理异步 `error`，不能只 catch `spawn()` 的同步异常。launchctl 提交失败才回退一次 shell；**提交超时不回退、不 quit**（结果不确定，迟到成功可能造成双 helper）。shell 必须确认 `spawn` 后才 unref/quit；派生失败、提前退出或超时均报错且不退出应用。error/exit/timeout 只结算一次，迟到事件不得再次回退、quit 或形成未处理 error。真实重启仍由用户确认，测试只能使用隔离假进程。

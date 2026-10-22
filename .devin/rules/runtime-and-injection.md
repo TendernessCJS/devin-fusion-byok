@@ -53,7 +53,7 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
 - **catalog 有两跳独立重写，日志落在不同的文件里，别拿一条事件当另一条的证据**（2026-10-18 真机 0.3.49 实测）：
   ① **渲染端 picker 路径 = 桥**：`ls-injection.cjs` 观测 LS 端口后建桥，宿主 output channel 里是 `ls bridge ready <LS> -> <bridge>`
   （实测 `57159 -> 57194`）；渲染端（Chromium 的 `--utility-sub-type=network.mojom.NetworkService` 进程）连桥、宿主连 LS，catalog 响应在
-  `src/runtime/bridge.cjs` 的 `forward` 里改写成明文回写。它的 `catalog` 事件只出现在宿主的 `output_logging_*/1-Devin Fusion BYOK.log`。
+  `src/runtime/bridge.cjs` 的 `forward` 里改写并保留传输层 gzip。它的 `catalog` 事件只出现在宿主的 `output_logging_*/1-Devin Fusion BYOK.log`。
   ② **CLI/ACP 路径 = backend**：CLI 的 api server 就是 backend（env 注入），控制面 RPC 由 backend 经 `bridge.cjs` 的 `forward` 转发到
   `server.codeium.com` 后改写，`catalog` 事件写 `runtime.log`（**`runtime.log` 的唯一写入点是 `backend.cjs`**）。
   两处事件同名字段但 payload 完全不同（实测桥 `before 47216 → after 1358625`、backend `before 154666 → after 716794`），因此
@@ -68,8 +68,7 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
 - **渲染端仍有到真实 LS 端口的短连接，但它们是连接池残渣、不是固定第二入口**：实测空闲 2 分钟内网络服务侧到 LS 的连接 10 → 1 自行衰减，而桥侧
   「渲染端→桥」与「宿主→LS」稳定为 6/6 一一对应。所以**不要把某一时刻的 `lsof` 计数当作架构常量**；连接归属必须按 **pid** 判（`lsof` 的进程名被
   截断成 `Devin\x20`，按名字匹配会全部落空或全命中），`WebKit/Chromium` 侧真正持有 socket 的是 network service 进程而非渲染进程本体。
-- **桥的载荷放大是已知代价**：LS 侧 catalog 响应是 gzip，桥 `wire.decode` 解压后按 `gzip:false` 明文回写，实测 `GetUserStatus`
-  `47,216 B → 1,358,625 B`（≈28.8×，每几分钟一次）；backend 侧上游未压缩故只有 4.6×。若要降开销，方向是「上游压缩过就重新压缩」，**不是放宽改写**。
+- **桥已保留传输层 gzip（2026-10-19）**：旧版解压后明文回写曾放大约 28.8×；修复后实测 `47,222 B → 73,935 B`（1.566×，新增目录条目的真实开销）。不得把旧测量当现状，也不得通过放宽改写降低体积；逐消息压缩仍按原逻辑展平。
 - **`src/protocol/` 是多关注点的混合体，不要按目录名或文件名推断职责**（8 个文件，2026-10-18 拆分后核对）：① 协议转换 —— `acp.cjs`（**Devin 侧**：解析
   `exa.chat_pb` 原生请求 + 造出站 ACP chunk）、`inference.cjs`（**三协议统一入口**：`serveChat` + `processor` 的流编排/有界降级/推理状态通道衔接；
   **不是 Responses 专用**）；它的内部职责已按协议语义拆开：`provider-request.cjs`（格式判定/端点/请求体构造，**OpenAI Chat 的请求体在这里**）、

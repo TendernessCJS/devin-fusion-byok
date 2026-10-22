@@ -78,7 +78,8 @@ test('restart prefers launchd and falls back to a detached shell on submit failu
     calls.push([file, args, options]);
     const child = new EventEmitter();
     child.unref = () => unrefs.push(file);
-    setTimeout(() => child.emit('exit', code), 5);
+    if (file === '/bin/sh') setTimeout(() => child.emit('spawn'), 1);
+    else setTimeout(() => child.emit('exit', code), 5);
     return child;
   };
   assert.equal(await restartApp({ vscode, spawn: submitter(0), platform: 'darwin' }), '/Applications/Devin.app');
@@ -105,10 +106,16 @@ test('restart falls back when submit throws or returns a non-awaitable child', a
   const vscode = { env: { appRoot: '/Applications/Devin.app/Contents/Resources/app' },
     commands: { executeCommand: async () => {} } };
   const calls = [];
+  const fallbackChild = () => {
+    const child = new EventEmitter();
+    child.unref = () => calls.push('unref');
+    setTimeout(() => child.emit('spawn'), 1);
+    return child;
+  };
   const throwing = (file, args, options) => {
     calls.push(file);
     if (file === '/bin/launchctl') throw new Error('spawn ENOENT');
-    return { unref() { calls.push('unref'); } };
+    return fallbackChild();
   };
   await restartApp({ vscode, spawn: throwing, platform: 'darwin' });
   assert.deepEqual(calls, ['/bin/launchctl', '/bin/sh', 'unref']);
@@ -116,7 +123,7 @@ test('restart falls back when submit throws or returns a non-awaitable child', a
   const silent = (file, args, options) => {
     calls.push(file);
     if (file === '/bin/launchctl') return {};
-    return { unref() { calls.push('unref'); } };
+    return fallbackChild();
   };
   await restartApp({ vscode, spawn: silent, platform: 'darwin' });
   assert.deepEqual(calls, ['/bin/launchctl', '/bin/sh', 'unref']);
@@ -134,7 +141,7 @@ test('restart rotates the previous helper log and hands the new path to the scri
     const spawn = (file, args) => {
       const child = new EventEmitter();
       if (file === '/bin/launchctl') { scripts.push(args.at(-1)); setTimeout(() => child.emit('exit', 0), 5); }
-      else child.unref = () => {};
+      else { child.unref = () => {}; setTimeout(() => child.emit('spawn'), 1); }
       return child;
     };
     await restartApp({ vscode, spawn, platform: 'darwin', logFile });
@@ -143,6 +150,129 @@ test('restart rotates the previous helper log and hands the new path to the scri
     assert.ok(scripts[0].includes(`'${logFile}'`), 'the submitted helper writes to the new log path');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an async submit spawn error falls back exactly once', async () => {
+  const spawns = [], unrefs = [], commands = [];
+  let fallback;
+  const vscode = { env: { appRoot: '/Applications/Devin.app/Contents/Resources/app' },
+    commands: { executeCommand: async command => commands.push(command) } };
+  const spawn = file => {
+    spawns.push(file);
+    const child = new EventEmitter();
+    child.unref = () => unrefs.push(file);
+    if (file === '/bin/launchctl') process.nextTick(() => child.emit('error', Object.assign(new Error('synthetic'), { code: 'EAGAIN' })));
+    else fallback = child;
+    return child;
+  };
+  const pending = restartApp({ vscode, spawn, platform: 'darwin' });
+  const deadline = Date.now() + 3000;
+  while (!fallback && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(fallback, 'the fallback child was spawned');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(commands, [], 'no quit before the fallback confirms spawn');
+  assert.deepEqual(unrefs, []);
+  fallback.emit('spawn');
+  assert.equal(await pending, '/Applications/Devin.app');
+  assert.deepEqual(spawns, ['/bin/launchctl', '/bin/sh'], 'one fallback, not a crash');
+  assert.deepEqual(unrefs, ['/bin/sh']);
+  assert.deepEqual(commands, ['workbench.action.quit'], 'the quit still happens once');
+  fallback.emit('error', new Error('late'));
+  fallback.emit('exit', 1);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(spawns, ['/bin/launchctl', '/bin/sh'], 'late events trigger no second fallback');
+  assert.deepEqual(commands, ['workbench.action.quit'], 'and no second quit');
+});
+
+test('a submit error followed by an exit never triggers a second fallback', async () => {
+  const spawns = [], commands = [];
+  const vscode = { env: { appRoot: '/Applications/Devin.app/Contents/Resources/app' },
+    commands: { executeCommand: async command => commands.push(command) } };
+  const spawn = file => {
+    spawns.push(file);
+    const child = new EventEmitter();
+    child.unref = () => {};
+    if (file === '/bin/launchctl') {
+      process.nextTick(() => { child.emit('error', new Error('EAGAIN')); child.emit('exit', 1); });
+    } else process.nextTick(() => child.emit('spawn'));
+    return child;
+  };
+  await restartApp({ vscode, spawn, platform: 'darwin' });
+  assert.deepEqual(spawns, ['/bin/launchctl', '/bin/sh'], 'settled once: no duplicate fallback');
+  assert.deepEqual(commands, ['workbench.action.quit']);
+});
+
+test('a failing fallback rejects without quitting or spawning again', async () => {
+  const spawns = [], commands = [];
+  const vscode = { env: { appRoot: '/Applications/Devin.app/Contents/Resources/app' },
+    commands: { executeCommand: async command => commands.push(command) } };
+  const spawn = file => {
+    spawns.push(file);
+    const child = new EventEmitter();
+    child.unref = () => {};
+    if (file === '/bin/launchctl') process.nextTick(() => child.emit('error', new Error('EAGAIN')));
+    else process.nextTick(() => child.emit('error', new Error('ENOENT')));
+    return child;
+  };
+  await assert.rejects(restartApp({ vscode, spawn, platform: 'darwin' }), /restart_helper_failed/);
+  assert.deepEqual(spawns, ['/bin/launchctl', '/bin/sh']);
+  assert.deepEqual(commands, [], 'a dead helper must not quit the app');
+});
+
+test('a synchronous fallback spawn throw rejects without quitting', async () => {
+  const spawns = [], commands = [];
+  const vscode = { env: { appRoot: '/Applications/Devin.app/Contents/Resources/app' },
+    commands: { executeCommand: async command => commands.push(command) } };
+  const spawn = file => {
+    spawns.push(file);
+    if (file === '/bin/sh') throw new Error('spawn EAGAIN');
+    const child = new EventEmitter();
+    child.unref = () => {};
+    process.nextTick(() => child.emit('error', new Error('EAGAIN')));
+    return child;
+  };
+  await assert.rejects(restartApp({ vscode, spawn, platform: 'darwin' }), /restart_helper_failed/);
+  assert.deepEqual(spawns, ['/bin/launchctl', '/bin/sh']);
+  assert.deepEqual(commands, []);
+});
+
+test('a submit that answers late is treated as uncertain and neither falls back nor quits', async () => {
+  const spawns = [], commands = [];
+  const vscode = { env: { appRoot: '/Applications/Devin.app/Contents/Resources/app' },
+    commands: { executeCommand: async command => commands.push(command) } };
+  const spawn = file => {
+    spawns.push(file);
+    const child = new EventEmitter();
+    child.unref = () => {};
+    setTimeout(() => { child.emit('exit', 0); child.emit('error', new Error('late')); }, 1600);
+    return child;
+  };
+  await assert.rejects(restartApp({ vscode, spawn, platform: 'darwin' }), /restart_helper_timeout/);
+  assert.deepEqual(spawns, ['/bin/launchctl'], 'no fallback on an uncertain submission');
+  assert.deepEqual(commands, [], 'and no quit that could orphan the helper');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.deepEqual(spawns, ['/bin/launchctl']);
+  assert.deepEqual(commands, []);
+});
+
+test('a fallback that never confirms spawn or exits early rejects without quitting', async () => {
+  for (const arm of ['silent', 'early-exit']) {
+    const spawns = [], commands = [];
+    const vscode = { env: { appRoot: '/Applications/Devin.app/Contents/Resources/app' },
+      commands: { executeCommand: async command => commands.push(command) } };
+    const spawn = file => {
+      spawns.push(file);
+      const child = new EventEmitter();
+      child.unref = () => {};
+      if (file === '/bin/launchctl') process.nextTick(() => child.emit('error', new Error('EAGAIN')));
+      else if (arm === 'early-exit') process.nextTick(() => { child.emit('exit', 1); child.emit('spawn'); });
+      return child;
+    };
+    await assert.rejects(restartApp({ vscode, spawn, platform: 'darwin' }),
+      arm === 'early-exit' ? /restart_helper_failed/ : /restart_helper_timeout/, arm);
+    assert.deepEqual(spawns, ['/bin/launchctl', '/bin/sh'], arm);
+    assert.deepEqual(commands, [], arm);
   }
 });
 

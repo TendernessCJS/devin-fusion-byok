@@ -112,7 +112,7 @@ async function activate(context) {
     nativeSyncSize: -1, cliCacheReport: null, contextObserver: undefined,
     lastAutoError: undefined, lastAutoPlan: undefined,
     pushToBackend: undefined, refreshNativeModels: undefined,
-    startNativeSync: undefined, observeNativeModels: undefined,
+    startNativeSync: undefined, observeNativeModels: undefined, observeAllowedUids: undefined,
     ensureEnabled: undefined,
     saveFusionChoice: undefined, reconcilePreference: undefined,
     disable: undefined, reconcileSelection: undefined,

@@ -35,8 +35,7 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   三方一致；monitor 有 HTTP 200 且日志无 `error`/`unhandled`。
   **两个验收时别误判的现象**：① 重载后出现一次 `backend-adopted`（0.3.50 之前叫 `startup-error code:port_in_use`，名字误导且已改）是**良性接管**——`backend.cjs` 对 `EADDRINUSE` 记日志后 **exit 0**，宿主握手探到同
   `service` 即采用已在跑的那个（backend 因此 `ppid=1`，跨重载存活是本意）；② 流式超时修复的判据在**宿主输出日志**
-  （`~/Library/Application Support/Devin/logs/*/window*/exthost/output_logging_*/1-Devin Fusion BYOK.log`），`runtime.log` 的 `forward-timeout` 不带 `rpc`
-  字段——改前同期 10 分钟 30 条 `phase:body`，改后 0 条。
+  （`~/Library/Application Support/Devin/logs/*/window*/exthost/output_logging_*/1-Devin Fusion BYOK.log`）；早期 `runtime.log` 的超时条目不带 `rpc`，当前已带 `rpc` 与 backend 注入的 `peerPort`。历史改前同期 10 分钟 30 条 `phase:body`，改后 0 条。
   **预期副作用**：protocol 三个新文件进了 `SOURCE_FILES`，`sourceId` 必变，首次重载会让 backend **重启一次**——这是新代码生效的
   正确行为，不要误判为重载循环（判据仍是 `ready` 只出现 1 次）。
 - **Goal 与 Fast Context 不在本 fork 的验收范围内**（2026-10-16 决定）：两者是上游自带、由上游验证过的**额外功能**，本机不使用，因此**不要**为它们安排真实 Devin 窗口的端到端验收，也不要因为「只有模拟/合成测试」而把它们列为待补缺口。核心逻辑与上游同源或纯搬迁；fork 只改过它们的视图层（`panel/goal-view.cjs`、`panel/fast-context-view.cjs` 的共享 DOM 助手改造），那部分由本仓自身的视图测试覆盖。**精力投在 BYOK + Fusion 基础功能上。**

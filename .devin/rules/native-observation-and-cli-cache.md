@@ -70,3 +70,5 @@ description: "Apply when changing native catalog observation or its cache, CLI c
 
 - backend 的原生缓存落盘条件包含「任一入口的维度变富」，不再只看条目数：seed 已是满员（875）时条目数永不变化，只看数量就永远不会把更完整的观测写回磁盘，每次重启都重新 seed
   回贫化形态（`runtime.log` 的 `native-observed` 全天只出现 2 次就是这个征兆）。
+
+- LS 观测到的允许集变更必须经 `catalog-sync` 的 `observeAllowedUids` 进入统一 commit：推进 `nativeRevision`，并触发面板、picker、缓存与 backend 推送；不得只替换集合后调用 `pushToBackend`（revision 已追平时会被门控挡住，随后被旧 backend 快照覆盖）。同集合的重排/重复值不算变更；停用/销毁后不接收回调。本补丁保留空集忽略策略，**未解决** restricted → unrestricted 的三态表达或两路观测乱序问题。

@@ -65,10 +65,4 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   换一个低频计数不值得。仍以直接查 `runtime.log` 为准。
 - **`response.reasoning.delta` 保留**：非死分支，上游同样处理（`.refs/devin-fusion-byok/src/protocol/responses.cjs:416`；`.refs/` 在 `.gitignore` 里**未入库**，该行号仅本机可核），属防御性透传；
   只有 `retried` 是真死代码（已删）。
-- **受管 env 不加 `NO_PROXY`（2026-10-19 真机实测，触发条件不成立）**：目标曾是"`http.proxy` 配置时给 `devin-cli` 子进程加回环豁免"
-  （`test/proxy-env.test.cjs:97` 那条 `todo`）。取证：Devin 主进程 env 无 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`、`settings.json` 的
-  `http.proxy` 未设置、运行中的 `devin acp` 子进程（`ps eww`）env **只有** `WINDSURF_API_SERVER_URL`，且原生 LS 启动参数带
-  `--detect_proxy=false`。即 `http.proxy` 是 VS Code 自身网络栈的设置，**没有证据表明它会被下传给 ACP 子进程**——那条 `todo` 把"用户配了代理"
-  当成了"CLI 拿到了代理"，中间缺一环。本机的代理是 **git URL 限定** + **SSH `ProxyCommand`**，都不产生环境变量。
-  条件只在"从带代理变量的终端启动 Devin"或 `launchctl setenv HTTP_PROXY` 后才成立；真出现时再加，且必须**合并**用户已有的 `noProxy`
-  条目而非覆盖。
+- **历史 NO_PROXY 不做结论已被替代（2026-10-22，`293fefe`）**：2026-10-19 未配置 `http.proxy` 的取证仍有效，但不能作为现行“不注入”禁令。当前 `enable()` 检测到代理配置时，经 receipt 管理 `NO_PROXY=127.0.0.1,localhost,::1`；无代理的后续 enable 会还原仍匹配受管值的旧值。它不证明代理变量被下传，也不是 `http.proxy` 变更后即时协调：已有连接时 enable 会跳过。当前固定值不合并用户已有豁免，合并与动态协调属于后续改进，勿将尚未实现的建议写成现有保证。

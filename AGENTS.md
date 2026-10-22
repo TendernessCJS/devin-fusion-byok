@@ -32,7 +32,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
   **`agent-decidable`**（按模型判断注入，**不保证加载**）。所以「漏读会安静地做错」的知识不能靠「放在哪个文件」保证送达，
   索引必须给出**何时必读**——这也是上面「为什么不把约束留在本文件里」的同一组实测约束逼出来的结论。
 
-**体积纪律**：每卷必须 < 16,384 字节，超限部分静默丢弃。最近一次实测（2026-10-22）：`runtime-and-injection.md` 16,230、`acp-protocol-fields.md` 16,051（**仅剩 333 字节，实质已满**）、`catalog-and-picker.md` 15,255、`fusion-matrix.md` 14,790——这几卷增补前必须先 `wc -c`，装不下就压缩或移出成新卷；`provider-measurements.md` 13,710 及更小的卷余量尚宽。
+**体积纪律**：每卷必须 < 16,384 字节，超限部分静默丢弃。最近一次实测（2026-10-22）：`runtime-and-injection.md` 16,182、`acp-protocol-fields.md` 16,051（**仅剩 333 字节，实质已满**）、`catalog-and-picker.md` 15,255、`fusion-matrix.md` 14,790——这几卷增补前必须先 `wc -c`，装不下就压缩或移出成新卷；`provider-measurements.md` 13,710 及更小的卷余量尚宽。
 
 **行为锚定卷**（改代码前按需读）
 

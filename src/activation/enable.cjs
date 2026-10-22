@@ -86,13 +86,7 @@ function installEnable({ deps, shared }) {
     if (!native) throw new Error('未找到 Devin 原生扩展');
     const injected = await installLsInjection({ nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main),
       createBridge: (port, extra) => createLsBridge(port, { ...extra, getCatalog: catalog, log, onNativeModels: shared.observeNativeModels,
-        onAllowedUids: uids => {
-          const next = new Set(Array.isArray(uids) ? uids.filter(uid => typeof uid === 'string' && uid) : []);
-          if (!next.size || (next.size === shared.nativeAllowedUids.size && [...next].every(uid => shared.nativeAllowedUids.has(uid)))) return;
-          shared.nativeAllowedUids = next;
-          void shared.management?.publish()?.catch(() => {});
-          shared.pushToBackend();
-        } }), log });
+        onAllowedUids: shared.observeAllowedUids }), log });
     if (generation !== lifecycle.activationGeneration || config().enabled === false || lifecycle.activationDisposed) {
       try { await injected.dispose(); } catch {}
       return;

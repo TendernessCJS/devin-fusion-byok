@@ -128,14 +128,29 @@ async function restartApp({ vscode, spawn, platform = process.platform, appRoot 
   const submitted = await new Promise(resolve => {
     let child;
     try { child = spawn(LAUNCHCTL, ['submit', '-l', label, '--', '/bin/sh', '-c', script], { stdio: 'ignore' }); }
-    catch { return resolve(false); }
-    if (!child || typeof child.once !== 'function') return resolve(false);
-    const timer = setTimeout(() => resolve(false), 1500);
-    child.once('exit', code => { clearTimeout(timer); resolve(code === 0); });
+    catch { return resolve('failed'); }
+    if (!child || typeof child.once !== 'function') return resolve('failed');
+    let settled = false;
+    const settle = value => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } };
+    const timer = setTimeout(() => settle('timeout'), 1500);
+    child.once('exit', code => settle(code === 0 ? 'ok' : 'failed'));
+    child.on('error', () => settle('failed'));
   });
-  if (!submitted) {
-    const child = spawn('/bin/sh', ['-c', script], { detached: true, stdio: 'ignore' });
-    child.unref?.();
+  if (submitted === 'timeout') throw new Error('restart_helper_timeout');
+  if (submitted !== 'ok') {
+    const fallback = await new Promise((resolve, reject) => {
+      let child;
+      try { child = spawn('/bin/sh', ['-c', script], { detached: true, stdio: 'ignore' }); }
+      catch { return reject(new Error('restart_helper_failed')); }
+      if (!child || typeof child.once !== 'function') return reject(new Error('restart_helper_failed'));
+      let settled = false;
+      const settle = error => { if (!settled) { settled = true; clearTimeout(timer); error ? reject(error) : resolve(child); } };
+      const timer = setTimeout(() => settle(new Error('restart_helper_timeout')), 1500);
+      child.once('spawn', () => settle());
+      child.once('exit', () => settle(new Error('restart_helper_failed')));
+      child.on('error', () => settle(new Error('restart_helper_failed')));
+    });
+    fallback.unref?.();
   }
   await vscode.commands.executeCommand('workbench.action.quit');
   return bundle;
