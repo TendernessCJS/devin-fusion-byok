@@ -53,4 +53,15 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
 - **`thinking_tokens` 必须映射，否则统计留空而非虚高**：SDK 的 `usage.output_tokens_details.thinking_tokens` 要被读成适配器内部的 `completion_tokens_details.reasoning_tokens`（`output_tokens` 本身是含思考的权威总数，不要改）。Moonshot 实测**返回**该字段、DeepSeek 不返回。此前推断「未映射会让可见 token/tps 虚高」**是错的**：`tracker` 有门控——只要有 thinking 块却拿不到 reasoningTokens，`visibleTokens`/`tps` 直接为 `null`。可见症状是**指标缺列**，不是数字偏大。
 - **思考不可控是能力缺口**：两家都不发 `thinking` 也返回 thinking 块（思考默认开），`budget_tokens` 能改思考量、`disabled` 能关，而本仓没有开关/预算入口。要加就得同时暴露「关」与「预算」，否则用户仍然无法约束成本。
 - **base path 是厂商相关**：Moonshot 上 `/anthropic/messages` 为 **404**、`/anthropic/v1/messages` 才 200；DeepSeek 两个路径都 200（宽容，不是规范）。面板填厂商文档给的 `…/anthropic` 在 Moonshot 上**必然 404**，排障先看这一条。
-- **签名闭环只在有签名的厂商成立**：DeepSeek 返回 36 字符签名且原样回放 200；Moonshot 不返回签名，所以续轮只能省略 signed thinking 块（`FOREIGN_STATE_PREFIX` 之外，脱敏数据另有 `dfbyok-redacted-v1:` 通道，见 `acp-protocol-fields.md`）。缺签名不等于工具多轮不可用，需厂商专项测试再下结论。
+- **签名闭环只在有签名的厂商成立**：DeepSeek 返回 36 字符签名且原样回放 200；Moonshot 不返回签名，所以续轮只能省略 signed thinking 块（`FOREIGN_STATE_PREFIX` 之外，脱敏数据另有 `dfbyok-redacted-v1:` 通道，见 `acp-protocol-fields.md`）。缺签名不等于工具多轮不可用，需厂商专项测试再下结论。**补测（2026-10-22）：把 `signature` 删掉再回放，DeepSeek 仍返回 200**——它不校验签名，所以
+  「签名回放 200」不能证明我们保真，只有真 Anthropic 端点能戳穿；同理，本地全绿也不代表签名通道正确。
+
+## 附件走 `resource_link`，不是 document（2026-10-22 桌面客户端实测）
+
+- **桌面客户端不内联文档字节**：一份 61,341 B 的 PDF 以 `chisel/acp-content-blocks` 里的 `resource_link` 进入消息
+  （`uri: file:///…`、`_meta: {"cognition.ai/scope-item-type":"file"}`），`content` 只剩一行 markdown 链接，**节点总长 724 B**。
+  对照同一会话的截图消息：**137,580 B**，带 `images[].base64_data`。全会话 5,829 节点统计：`documents` **0** 次、`resource_link` 6 次、含 `images` 5 次。
+- 结论：**`documents`（protobuf 21）在该客户端恒为空**，所以 `contentOf` 的 `input_file`（Responses）/ `file`（Chat）/`document`（Anthropic）
+  三条映射**真机不可达**，只有测试背书；`attachment_unsupported` 同样**不可触发**——没有东西可拒，别把「日志里没这条」读成「守卫生效」。
+- 后果：模型只拿到链接，PDF 正文必须由自己读文件获得（本机 `pypdf`/`pdfplumber` 缺失，`pymupdf` 可用）。
+- **不要给 `resource`/`resource_link` 猜一个 wire 映射**：当前没坏是因为 CLI 同时把链接写进了正文；在拿到真实 wire 证据前加映射等于凭想象改协议层。
