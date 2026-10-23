@@ -278,6 +278,95 @@ test('auto continue retries the upstream timeout text the same way as the generi
   assert.equal(scheduler.pendingCount(), 0);
 });
 
+test('a provider-like tail that fails matching logs a miss with lengths only, no content', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(request) {
+      if (request.method === 'session/prompt') return Promise.resolve({ stopReason: 'end_turn' });
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const prompt = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-miss', prompt: [{ type: 'text', text: 'hi' }] } });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-miss', update: { sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'Provider response could not be completed. Try again later.' } } }
+  });
+  await prompt;
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 0);
+  const miss = f.logs.find(l => l.event === 'auto-continue-miss');
+  assert.ok(miss, 'a provider-like but non-matching tail must produce a miss record');
+  assert.equal(miss.data.reason, 'tail-mismatch');
+  assert.equal(miss.data.endsWithGeneric, false);
+  assert.equal(miss.data.tailLength > 0, true);
+  assert.equal(JSON.stringify(f.logs).includes('Try again later'), false, 'the miss record must never carry tail content');
+});
+
+test('an ordinary turn produces no miss log', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(request) {
+      if (request.method === 'session/prompt') return Promise.resolve({ stopReason: 'end_turn' });
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const prompt = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-ok', prompt: [{ type: 'text', text: 'hi' }] } });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-ok', update: { sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'All done successfully!' } } }
+  });
+  await prompt;
+  await new Promise(r => setImmediate(r));
+  assert.equal(f.logs.some(l => l.event === 'auto-continue-miss'), false);
+});
+
+test('a session suppressed mid-turn reports session-suppressed instead of retrying', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  let suppressed = false;
+  const handle = f.install({ isEnabled: () => true, scheduler, isSessionSuppressed: () => suppressed });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(request) {
+      if (request.method === 'session/prompt') return Promise.resolve({ stopReason: 'end_turn' });
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const prompt = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-sup', prompt: [{ type: 'text', text: 'hi' }] } });
+  suppressed = true;
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-sup', update: { sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'Provider response could not be completed.' } } }
+  });
+  await prompt;
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 0);
+  const miss = f.logs.find(l => l.event === 'auto-continue-miss');
+  assert.ok(miss, 'a suppressed session must still produce a miss record');
+  assert.equal(miss.data.reason, 'session-suppressed');
+});
+
 test('auto continue handles v2 idle completion, duplicate idle suppression, and backoff', async t => {
   const f = fixture();
   const scheduler = fakeScheduler();

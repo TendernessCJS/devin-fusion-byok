@@ -62,5 +62,5 @@ DeepSeek Anthropic provider 的 4816 条记录中有 8 条非 success；当时�
 
 重试面（该次未开启，随后由用户开启 `autoContinueOnProviderError`）：
 
-- 超时现在有专属文案 `Provider response timed out after <预算>s/ms`（`src/protocol/inference.cjs` 按 `status` 选 `firstResponseLimit` 或 `idleLimit`）；`upstream_stream_error` / `upstream_stream_incomplete` / `upstream_network` 仍走通用文案 `Provider response could not be completed.`。两类文案都被 `src/runtime/host/auto-continue.cjs` 匹配为可重试目标（`TARGET_ERROR` + `TIMEOUT_RE`）；终止判定 `TERMINAL_BLOCKER_RE` 只匹配 `Provider returned HTTP 4xx/5xx.` 与格式类错误，所以这两类文案**都会**被自动重试。
+- 超时现在有专属文案 `Provider response timed out after <预算>s/ms`（`src/protocol/inference.cjs` 按 `status` 选 `firstResponseLimit` 或 `idleLimit`）；`upstream_stream_error` / `upstream_stream_incomplete` / `upstream_network` 仍走通用文案 `Provider response could not be completed.`。两类文案都被 `src/runtime/host/auto-continue.cjs` 匹配为可重试目标（`TARGET_ERROR` + `TIMEOUT_RE`）；终止判定 `TERMINAL_BLOCKER_RE` 只匹配 `Provider returned HTTP 4xx/5xx.` 与格式类错误，所以这两类文案**都会**被自动重试。匹配失败只在 tail 末尾 400 字符含「provider response」时记 `auto-continue-miss`（只记 `reason`/`tailLength`/布尔量/`stopReason`，绝不记正文），据此区分 `tail-mismatch`/`session-suppressed`/`retry-disallowed`/`reject-mismatch`。
 - 预算：`ERROR_ATTEMPT_LIMIT = 5`、`ERROR_WINDOW_MS = 10 min`，超出即停止，不会无限重试。

@@ -9,6 +9,7 @@ const ATTACHED = Symbol.for('devin-fusion-byok.auto-continue.attached');
 const TARGET_ERROR = 'Provider response could not be completed';
 const TRANSIENT_HTTP_RE = /Provider returned HTTP (?:408|429|500|502|503|504)\.$/;
 const TIMEOUT_RE = /Provider response timed out after \d+(?:ms|s)\.$/;
+const PROVIDER_LIKE_RE = /provider response/i;
 const TERMINAL_BLOCKER_RE = /(?:Provider returned HTTP (?:4\d\d|5\d\d)\.|Provider response format is invalid\.)$/;
 
 function matchesTimeoutError(text) {
@@ -317,6 +318,21 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             turn.lastResult = { value: res, isReject: false };
             scheduleAuto(sessionId, turn, 'plan');
           } else {
+            if (isEnabled() && options.onProviderError !== false) {
+              const tail = typeof turn.tail === 'string' ? turn.tail : '';
+              if (PROVIDER_LIKE_RE.test(tail.slice(-400))) {
+                const trimmed = tail.trimEnd();
+                report('auto-continue-miss', {
+                  reason: turn.retryDisallowed ? 'retry-disallowed'
+                    : sessionSuppressed(sessionId) ? 'session-suppressed' : 'tail-mismatch',
+                  tailLength: tail.length,
+                  endsWithGeneric: trimmed.endsWith(TARGET_ERROR) || trimmed.endsWith(TARGET_ERROR + '.'),
+                  endsWithTimeout: matchesTimeoutError(tail),
+                  terminalBlocker: isBlocked,
+                  stopReason: typeof res?.stopReason === 'string' ? res.stopReason : ''
+                });
+              }
+            }
             if (turn.deferred && !turn.deferred.settled) {
               turn.deferred.settled = true;
               turn.deferred.resolve(res);
@@ -352,6 +368,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             turn.lastResult = { value: err, isReject: true };
             scheduleAuto(sessionId, turn, 'error');
           } else {
+            if (isEnabled() && options.onProviderError !== false && PROVIDER_LIKE_RE.test(msg.slice(-400)))
+              report('auto-continue-miss', { reason: 'reject-mismatch', messageLength: msg.length, enabled: true });
             turn.retryDisallowed = true;
             if (turn.deferred && !turn.deferred.settled) {
               turn.deferred.settled = true;
