@@ -7,7 +7,7 @@ const { buildCatalog: buildSavedCatalog, buildRoleLists, refKey, augmentCatalog,
 const buildCatalog = buildSavedCatalog;
 const { createManager } = require('../src/panel/manager.cjs');
 
-const fixture = JSON.parse(fs.readFileSync('test/fixtures/real-picker-0.3.11.json', 'utf8'));
+const fixture = JSON.parse(fs.readFileSync(__dirname + '/fixtures/real-picker.json', 'utf8'));
 
 function buildObservedFromFixture() {
   const models = [];

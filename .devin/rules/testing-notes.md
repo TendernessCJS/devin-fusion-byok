@@ -5,7 +5,7 @@ description: "Apply when writing or debugging tests — the installed-renderer s
 
 ## 测试注意
 
-- `test/support/installed-renderer.cjs` 与 5 处条件 `skip` 依赖本机已安装的 Devin 原生渲染文件；缺失时会跳过而非失败。
+- `test/helpers/installed-renderer.cjs` 与 4 处条件 `skip`（`catalog-emit` 3 处、`fusion-options` 1 处）依赖本机已安装的 Devin 原生渲染文件；缺失时会跳过而非失败。
 - **用 `ps | grep <名字>` 排查进程时，注意命中的可能是执行该命令的 bash 自身**：命令文本里一旦出现那个字面量（例如脚本里的 `'backend.cjs'`），`bash -c ...`
   就会一并被匹配，且它的 ppid 正好是 CLI 的 `exec` 父进程——看起来就像「CLI 派生了一个 backend」。曾据此误判出根本不存在的孤儿 backend（2026-10-14）。要确认，
   务必打印**完整命令行**（`ps -o command= -p <pid>`）或直接核对 `/health` 与端口归属；`[b]ackend` 这类写法只能防住 grep 自己，防不住携带同样字面量的父
@@ -54,3 +54,5 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   **唯一**凭据来源，CLI 不读本地 REPL 凭据与 env 里的 key。
 - **架构反例必须调用真实违规谓词并精确断言 `source -> target`**：endsWith/子串匹配或自造判定函数会让「删掉守卫」照样绿，等于没有反例。
 - **传输取消用例的判据是「请求到达目标阶段 + 服务端 socket 实际 close」**：不用固定 sleep 触发 abort，也不只断言 reject——要条件等待到 `slowHits`/`closes` 递增。
+- `test/fixtures/real-picker.json` 是 **0.3.11 时期**真实 picker 响应的快照（文件名不再带版本，来源记在这里）；更新它必须说明取自哪个版本。
+- 读 `test/fixtures/**` 一律用 `__dirname` 拼绝对路径，禁止 CWD 相对路径（曾导致从其他目录单跑 ENOENT）。

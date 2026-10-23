@@ -16,7 +16,7 @@ const { loadNativeCache } = require('../src/runtime/native-cache.cjs');
 const { s, v } = require('../src/protocol/wire.cjs');
 const API = '/exa.api_server_pb.ApiServerService/';
 
-const fixtureJson = JSON.parse(fs.readFileSync(__dirname + '/fixtures/real-picker-0.3.11.json', 'utf8'));
+const fixtureJson = JSON.parse(fs.readFileSync(__dirname + '/fixtures/real-picker.json', 'utf8'));
 const upstream = { clientModelConfigs: [
   ...fixtureJson.natives.map(record => ({ modelUid: record.uid, label: record.label, disabled: !!record.disabled,
     modelInfo: { harnessUids: record.harnesses || [], isModelRouter: !!record.router },
