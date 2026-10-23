@@ -200,7 +200,7 @@ test('requestBytes defaults to directFetch without touching the ambient fetch', 
   const path = require('node:path');
   const { createSandboxLoader } = require('./helpers/sandbox.cjs');
   const calls = [];
-  const loader = createSandboxLoader({ filename: path.resolve(__dirname, '../src/update.cjs'),
+  const loader = createSandboxLoader({ filename: path.resolve(__dirname, '../src/update/updater.cjs'),
     overrides: { [path.resolve(__dirname, '../src/network/direct-fetch.cjs')]: {
       directFetch: async (url, options) => { calls.push({ url, redirect: options?.redirect }); return new Response('ok'); } } } });
   t.after(() => loader.assertStubsUsed('update default transport'));
@@ -232,4 +232,14 @@ test('snapshot proxy falls back to empty on non-strings and getter failures', ()
   const { updater: numeric } = setup({ proxy: () => 42 });
   assert.equal(numeric.snapshot().proxy, '');
   numeric.dispose();
+});
+
+test('src/update.cjs stays a pure compatibility facade over update/updater.cjs', () => {
+  const facade = require('../src/update.cjs');
+  const impl = require('../src/update/updater.cjs');
+  assert.deepEqual(Object.keys(facade), Object.keys(impl));
+  assert.equal(facade.REPOSITORY, impl.REPOSITORY);
+  assert.equal(facade.PAGE, impl.PAGE);
+  for (const key of ['compareVersions', 'parseVersion', 'releaseInfo', 'allowedUrl', 'requestBytes', 'verifyPackage', 'createUpdater', 'createUpdateHost'])
+    assert.equal(facade[key], impl[key]);
 });

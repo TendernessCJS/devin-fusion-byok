@@ -7,7 +7,7 @@ description: "Apply when changing self-update behaviour or the release contract 
 
 自更新运行时契约、Release 资产名/tag/digest 规则、更新代理、重启 helper。流程与验收方法见 `.devin/skills/release/SKILL.md`。
 
-- 自更新运行时只读 `src/update.cjs` 的 `REPOSITORY` 常量，`PAGE` 与 `API` 由它派生。测试通过导出的 `PAGE` 复用，不要重写回硬编码字符串。换仓库需同时改这里与
+- 自更新运行时只读 `src/update/updater.cjs` 的 `REPOSITORY` 常量，`PAGE` 与 `API` 由它派生（`src/update.cjs` 只是转发门面）。测试通过导出的 `PAGE` 复用，不要重写回硬编码字符串。换仓库需同时改这里与
   `package.json` 的 `repository.url`（后者是纯元数据，运行时不读）。
 - **不要修改 `package.json` 的 `name`（必须 `devin-fusion-byok`）和 `publisher`（必须 `local`）**：`verifyPackage()` 会校验包内
   `package.json` 与 `extension.vsixmanifest` 的 Id/Publisher/Version 一致，不一致则拒绝安装。

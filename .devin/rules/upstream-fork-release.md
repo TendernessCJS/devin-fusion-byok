@@ -109,5 +109,5 @@ git diff "$(git merge-base upstream/main HEAD)" HEAD -- <file>                # 
 
 最容易**静默**坏掉的两处（行为看似正常但功能失效，测试不一定抓得住）：
 
-- `src/update.cjs` 的 `REPOSITORY` —— 取了 upstream 会指向原仓库，本 fork 的自更新随之失效；
+- `src/update/updater.cjs` 的 `REPOSITORY` —— 取了 upstream 会指向原仓库，本 fork 的自更新随之失效；
 - `package.json` 的 `version` —— 一律取 ours（见「同步 upstream」一节）。

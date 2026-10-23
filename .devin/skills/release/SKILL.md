@@ -25,14 +25,14 @@ permissions:
 
 # 发布与自更新验收
 
-覆盖「发一个新版本 → 让插件自更新真正可用 → 验收」全流程。发布契约的权威定义在 `src/update.cjs`（`releaseInfo()` / `verifyPackage()`）与 `.devin/rules/release-contract.md`；本 skill 只固化流程与验收方法，规则冲突时以那两处为准。
+覆盖「发一个新版本 → 让插件自更新真正可用 → 验收」全流程。发布契约的权威定义在 `src/update/updater.cjs`（`releaseInfo()` / `verifyPackage()`，`src/update.cjs` 为门面）与 `.devin/rules/release-contract.md`；本 skill 只固化流程与验收方法，规则冲突时以那两处为准。
 
 ## 0. 先确认你在改什么
 
 | 想做的事 | 去哪 |
 | --- | --- |
 | 发布一个已就绪的版本 | 走下面 1→7 |
-| 改动发布契约（资产名 / tag / digest 规则） | 先改 `src/update.cjs` + `test/update.test.cjs` 并补测试，再发布 |
+| 改动发布契约（资产名 / tag / digest 规则） | 先改 `src/update/updater.cjs` + `test/update.test.cjs` 并补测试，再发布 |
 | 同步 upstream | 见 `.devin/rules/upstream-fork-release.md`，不是本 skill |
 
 **不要改** `package.json` 的 `name`（`devin-fusion-byok`）与 `publisher`（`local`）：`verifyPackage()` 会校验包内身份，改了就拒绝安装自己的包。
@@ -173,5 +173,5 @@ const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
 
 ## 验收时的两个坑
 
-- 已安装副本的 `package.json` 与工作区**哈希必然不同**（VS Code 会注入 `__metadata` 字段），这不代表装错版本或装旧码。要确认装的是本 fork，应比对 `src/update.cjs` 里的 `REPOSITORY`。
+- 已安装副本的 `package.json` 与工作区**哈希必然不同**（VS Code 会注入 `__metadata` 字段），这不代表装错版本或装旧码。要确认装的是本 fork，应比对 `src/update.cjs` 里的 `REPOSITORY`。**验收一律走这个路径**：`src/update/updater.cjs` 是 0.3.58 起才有的实现文件，装的是更早版本时它不存在。
 - `verifyPackage(file, version)` 第一参数是**文件路径**，不是 Buffer。传 Buffer 会让 `unzip` 崩溃并打印 `Assertion failed: (advance > 0)`，看起来像包损坏，其实是调用方传错类型。

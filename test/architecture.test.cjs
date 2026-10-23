@@ -203,8 +203,10 @@ const updateViolations = (graph, entries = filesUnder('update')) => {
   const violations = [];
   for (const entry of entries) {
     const closure = closureOf(graph, entry);
+    // `..` 前缀=解析到 src/ 之外的数据依赖（如 update/updater.cjs -> ../../package.json），
+    // 不是模块分层边；`vscode` 仍由下面的 vscodeEdges 单独判定。
     for (const file of closure)
-      if (file !== entry && !file.startsWith('update' + path.sep) && !file.startsWith('network' + path.sep))
+      if (file !== entry && !file.startsWith('..') && !file.startsWith('update' + path.sep) && !file.startsWith('network' + path.sep))
         violations.push(entry + ' -> ' + file);
     violations.push(...vscodeEdges(graph, entry, closure));
   }

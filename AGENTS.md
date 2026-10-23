@@ -111,10 +111,10 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 **只以 macOS 为目标平台**（个人自用，本机即 macOS）：验证、真机验收、发布检查都只针对 macOS。其他平台按「逻辑可行」的最低标准处理，**短期不做实机验证**。
 - **不要声称非 macOS 已验证可用**。涉及平台差异的行为，在代码与文档里注明「仅 macOS 验证」。
 - **非 macOS 必须明确失败，不得静默出错**。既有先例（沿用这个模式）：`src/runtime/host/app-restart.cjs` 在非 darwin 抛 `restart_unsupported`，
-  面板提示「当前环境不支持重启 Devin」；`src/update.cjs` 的 `supported` 判断使非 macOS 只能手动装 vsix。注意 `package.json` **未设 `os` 字段**，
+  面板提示「当前环境不支持重启 Devin」；`src/update/updater.cjs` 的 `supported` 判断使非 macOS 只能手动装 vsix。注意 `package.json` **未设 `os` 字段**，
   其他平台能装上、只是相应功能不可用。
 - **已知 macOS 硬编码**（非 macOS 上会失败或降级，暂无适配计划）：`/usr/bin/sqlite3`（用量归属，`src/monitor/store.cjs`；失败降级为 `unavailable`）、
-  `/usr/bin/unzip`（一键安装，`update.cjs`）、`/usr/bin/open` 与 `/usr/bin/grep`（重启 Devin，`app-restart.cjs`）、
+  `/usr/bin/unzip`（一键安装，`update/updater.cjs`）、`/usr/bin/open` 与 `/usr/bin/grep`（重启 Devin，`app-restart.cjs`）、
   `/usr/bin/zip`（打包，`scripts/package.cjs`）。Fast Context 的 ripgrep 查找是唯一带回退的：`FUSION_FAST_CONTEXT_RG` → `PATH`
   → `/Applications/Devin.app/...`，都找不到才抛 `ripgrep_unavailable`。
 - **测试只覆盖逻辑分支**：平台差异靠注入参数验证（如 `platform` 形参、`resolveNode(env, platform)`），不依赖真机。
