@@ -1,5 +1,5 @@
 'use strict';
-const { directFetch } = require('../proxy.cjs');
+const { directFetch } = require('../network/direct-fetch.cjs');
 const { ModelDiscoveryError } = require('./discovery-error.cjs');
 
 // Model lists arrive in one of two shapes: the OpenAI body itself, or that body

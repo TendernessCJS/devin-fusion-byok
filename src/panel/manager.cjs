@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { analyzeRoles, buildCatalog, buildRoleLists, refKey } = require('../catalog.cjs');
 const { discover: discoverModels } = require('../models/discovery.cjs');
 const { normalizeBaseUrlPath } = require('./base-url.cjs');
-const { parseProxy, maskProxy } = require('../proxy.cjs');
+const { parseProxy, maskProxy } = require('../update/proxy-config.cjs');
 const { publicState } = require('./panel-state.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 class PanelInputError extends Error {}

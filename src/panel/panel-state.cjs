@@ -1,7 +1,7 @@
 'use strict';
 const { analyzeRoles, buildCatalog, buildRoleLists } = require('../catalog.cjs');
 const { modelSupportsImages } = require('../models/capabilities.cjs');
-const { maskProxy } = require('../proxy.cjs');
+const { maskProxy } = require('../update/proxy-config.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 // The settings list mirrors the official picker's provider sections. The wire
 // carries no vendor field, so the family id's prefix decides; codenamed uids

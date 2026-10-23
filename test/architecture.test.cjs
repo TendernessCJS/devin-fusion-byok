@@ -20,9 +20,9 @@ const srcFiles = () => {
   return files;
 };
 
-const BACKEND_FORBIDDEN_DIRS = ['activation', 'panel', 'goal', 'fast-context', 'lifecycle'];
+const BACKEND_FORBIDDEN_DIRS = ['activation', 'panel', 'goal', 'fast-context', 'lifecycle', 'network', 'update'];
 const BACKEND_FORBIDDEN_FILES = [
-  'models/discovery.cjs', 'models/discovery-error.cjs', 'update.cjs', 'update-url.cjs', 'proxy.cjs',
+  'models/discovery.cjs', 'models/discovery-error.cjs', 'update.cjs', 'proxy.cjs',
   'extension.cjs',
 ];
 const BACKEND_RUNTIME_ROOT = [
@@ -170,5 +170,90 @@ for (const discovery of ['models/discovery.cjs', 'models/discovery-error.cjs']) 
     });
     assert.ok(backendViolations(overlay).includes(discovery),
       'an injected ' + discovery + ' edge must trip the backend closure guard');
+  });
+}
+
+const closureRel = (graph, entry) =>
+  new Set([...graph.closure(path.join(srcRoot, entry))].map(file => path.relative(srcRoot, file)));
+const relPath = (...parts) => path.join(...parts);
+const UPDATE_TRANSPORT = [relPath('update', 'proxy-transport.cjs'), relPath('update', 'download.cjs')];
+
+// Layering policy for everything outside the backend: the shared direct
+// transport must never reach the GitHub-only update internals, model discovery
+// must not pull the update stack or the compatibility facade, and the panel's
+// proxy-config dependency must stay a leaf.
+const LAYERING = [
+  { entry: relPath('network', 'direct-fetch.cjs'),
+    banned: file => file === 'proxy.cjs' || file.startsWith('update' + path.sep) },
+  { entry: relPath('network', 'client-request.cjs'),
+    banned: file => file === 'proxy.cjs' || file.startsWith('update' + path.sep) },
+  { entry: relPath('models', 'discovery.cjs'),
+    banned: file => file === 'proxy.cjs' || file.startsWith('update' + path.sep) },
+  { entry: relPath('panel', 'manager.cjs'),
+    banned: file => file === 'proxy.cjs' || UPDATE_TRANSPORT.includes(file) },
+  { entry: relPath('panel', 'panel-state.cjs'),
+    banned: file => file === 'proxy.cjs' || UPDATE_TRANSPORT.includes(file) ||
+      file === relPath('network', 'direct-fetch.cjs') },
+  { entry: relPath('update', 'proxy-config.cjs'),
+    banned: file => file !== relPath('update', 'proxy-config.cjs') },
+];
+function layeringViolations(graph) {
+  const violations = [];
+  for (const { entry, banned } of LAYERING)
+    for (const file of closureRel(graph, entry)) if (banned(file)) violations.push(entry + ' -> ' + file);
+  return violations;
+}
+
+test('the network/update layering keeps transports and the panel config isolated', () => {
+  const graph = createSourceGraph();
+  assert.deepEqual(layeringViolations(graph), []);
+  assert.ok(closureRel(graph, 'models/discovery.cjs').has(relPath('network', 'direct-fetch.cjs')),
+    'discovery uses the direct transport at its new path');
+  for (const entry of ['panel/manager.cjs', 'panel/panel-state.cjs'])
+    assert.ok(closureRel(graph, entry).has(relPath('update', 'proxy-config.cjs')),
+      entry + ' reads proxy configuration only');
+});
+
+test('no production module requires the proxy.cjs facade', () => {
+  const graph = createSourceGraph();
+  const facade = path.join(srcRoot, 'proxy.cjs');
+  for (const file of srcFiles()) {
+    if (file === facade) continue;
+    assert.ok(!graph.depsOf(file, { tolerateDynamic: true }).deps.includes(facade),
+      rel(file) + ' must import the new module paths, not the compatibility facade');
+  }
+});
+
+const injectedLayeringGraph = (patched, specifier) => {
+  const file = path.join(srcRoot, patched);
+  return createSourceGraph({
+    readFile: target => path.resolve(target) === file
+      ? fs.readFileSync(target, 'utf8') + `\nrequire('${specifier}');\n`
+      : fs.readFileSync(target, 'utf8'),
+  });
+};
+
+test('backend boundary guards fail on an injected update/download edge', () => {
+  const backendFile = path.join(srcRoot, 'runtime/backend.cjs');
+  const overlay = createSourceGraph({
+    readFile: file => path.resolve(file) === backendFile
+      ? fs.readFileSync(file, 'utf8') + "\nrequire('../update/download.cjs');\n"
+      : fs.readFileSync(file, 'utf8'),
+  });
+  assert.ok(backendViolations(overlay).includes(path.join('update', 'download.cjs')),
+    'an injected update/ edge must trip the backend closure guard');
+});
+
+for (const { patched, specifier, expect } of [
+  { patched: relPath('network', 'direct-fetch.cjs'), specifier: '../update/download.cjs', expect: relPath('update', 'download.cjs') },
+  { patched: relPath('network', 'client-request.cjs'), specifier: '../update/url-policy.cjs', expect: relPath('update', 'url-policy.cjs') },
+  { patched: relPath('models', 'discovery.cjs'), specifier: '../proxy.cjs', expect: 'proxy.cjs' },
+  { patched: relPath('panel', 'panel-state.cjs'), specifier: '../update/download.cjs', expect: relPath('update', 'download.cjs') },
+  { patched: relPath('update', 'proxy-config.cjs'), specifier: '../network/direct-fetch.cjs', expect: relPath('network', 'direct-fetch.cjs') },
+]) {
+  test(`the layering guard rejects an injected ${patched} -> ${expect} edge`, () => {
+    const violations = layeringViolations(injectedLayeringGraph(patched, specifier));
+    assert.ok(violations.includes(patched + ' -> ' + expect),
+      'the injected edge must be reported from its own entry, not via another module that reaches it');
   });
 }

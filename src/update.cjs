@@ -4,7 +4,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const execFile = promisify(require('node:child_process').execFile);
-const { allowedUrl } = require('./update-url.cjs');
+const { allowedUrl } = require('./update/url-policy.cjs');
+const { requestBytes } = require('./update/download.cjs');
+const { maskProxy, parseProxy } = require('./update/proxy-config.cjs');
 const REPOSITORY = 'TendernessCJS/devin-fusion-byok';
 const PAGE = `https://github.com/${REPOSITORY}/releases`;
 const API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
@@ -32,37 +34,6 @@ function releaseInfo(value) {
   const installable = !!asset && asset.browser_download_url === url && /^sha256:[a-f0-9]{64}$/.test(asset.digest) && Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= MAX;
   return { version, name, url, page: `${PAGE}/tag/${value.tag_name}`, digest: installable ? asset.digest.slice(7) : null, size: installable ? asset.size : null, installable, notes: typeof value.body === 'string' ? value.body.slice(0, 6000) : '' };
 }
-async function requestBytes(url, { limit, signal, fetchImpl, timeout = 30000, proxy = null }) {
-  if (proxy) return require('./proxy.cjs').proxyRequestBytes(url, { proxy, limit, signal, timeout });
-  fetchImpl ??= require('./proxy.cjs').directFetch;
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  signal?.addEventListener('abort', abort, { once: true });
-  if (signal?.aborted) abort();
-  const timer = setTimeout(abort, timeout);
-  try {
-    for (let hops = 0; hops <= 5; hops++) {
-      const target = allowedUrl(url);
-      const response = await fetchImpl(target.href, { signal: controller.signal, redirect: 'manual', headers: { 'User-Agent': 'devin-fusion-byok', Accept: 'application/vnd.github+json' } });
-      if ([301, 302, 303, 307, 308].includes(response.status)) {
-        await response.body?.cancel();
-        const location = response.headers.get('location'); if (!location) throw Error('redirect');
-        url = new URL(location, target).href; continue;
-      }
-      if (response.status !== 200 || Number(response.headers.get('content-length')) > limit) { await response.body?.cancel(); throw Error('http'); }
-      const reader = response.body.getReader(); const chunks = []; let size = 0;
-      for (;;) {
-        const { done, value } = await reader.read(); if (done) break;
-        size += value.length;
-        if (size > limit || controller.signal.aborted) { await reader.cancel(); throw Error('size'); }
-        chunks.push(Buffer.from(value));
-      }
-      if (controller.signal.aborted) throw Error('aborted');
-      return Buffer.concat(chunks);
-    }
-    throw Error('redirect');
-  } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
-}
 async function verifyPackage(file, version, run = execFile) {
   const options = { maxBuffer: 1024 * 1024, timeout: 15000 };
   const { stdout } = await run('/usr/bin/unzip', ['-p', file, 'extension/package.json'], options);
@@ -82,11 +53,11 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
   let phase = 'idle', error = '', latest = null, disposed = false, timer, pending, installing, abort, lastCheck = 0, announced;
   let writes = Promise.resolve();
   const snapshot = () => { let proxyValue = '';
-    try { proxyValue = require('./proxy.cjs').maskProxy(proxy()); } catch {}
+    try { proxyValue = maskProxy(proxy()); } catch {}
     return { currentVersion, latestVersion: latest?.version || null, phase, error, autoCheck, ignored: latest?.version === ignoredVersion, notes: latest?.notes || '', releaseUrl: latest?.page || PAGE, canInstall: phase === 'available' && latest?.installable === true && typeof install === 'function', installable: latest?.installable === true, proxy: proxyValue };
   };
   const emit = () => { if (!disposed) Promise.resolve().then(() => onChange(snapshot())).catch(() => {}); };
-  const proxyConfig = () => require('./proxy.cjs').parseProxy(proxy());
+  const proxyConfig = () => parseProxy(proxy());
   const persist = () => {
     const value = { autoCheck, ignoredVersion };
     writes = writes.then(() => globalState?.update('fusionByokUpdate', value)).catch(() => { error = '更新偏好保存失败，请稍后重试。'; emit(); });

@@ -109,6 +109,45 @@ test('controller routes updates separately from model settings and only opens tr
     'update.proxy routes to the dedicated action, never to a same-named model setting');
   assert.equal(posts.filter(p => p.type === 'update-state').length, 7); panel.dispose();
 });
+test('requestBytes accepts content-length exactly at the limit and enforces streamed size', async () => {
+  const url = 'https://api.github.com/a';
+  assert.equal((await requestBytes(url, { limit: 5, fetchImpl: async () => new Response('12345') })).toString(), '12345');
+  const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([120, 120])); controller.enqueue(new Uint8Array([120, 120])); controller.close(); } });
+  await assert.rejects(requestBytes(url, { limit: 3, fetchImpl: async () => new Response(stream) }), error => error.message === 'size');
+});
+
+test('requestBytes follows five redirects and rejects the sixth without a seventh request', async () => {
+  const calls = [];
+  const fetchImpl = async url => {
+    calls.push(url);
+    if (calls.length <= 5) return new Response(null, { status: 302, headers: { location: 'https://api.github.com/r' + calls.length } });
+    return new Response('done');
+  };
+  assert.equal((await requestBytes('https://api.github.com/r0', { limit: 10, fetchImpl })).toString(), 'done');
+  assert.equal(calls.length, 6, 'five hops plus the final request');
+  calls.length = 0;
+  const looping = async url => { calls.push(url); return new Response(null, { status: 302, headers: { location: 'https://api.github.com/x' } }); };
+  await assert.rejects(requestBytes('https://api.github.com/x', { limit: 10, fetchImpl: looping }), error => error.message === 'redirect');
+  assert.equal(calls.length, 6, 'the seventh request is never issued');
+});
+
+test('requestBytes rejects a redirect without Location and honours pre-call and mid-read aborts', async () => {
+  await assert.rejects(requestBytes('https://api.github.com/x', { limit: 10, fetchImpl: async () => new Response(null, { status: 302 }) }),
+    error => error.message === 'redirect');
+  const pre = new AbortController(); pre.abort();
+  await assert.rejects(requestBytes('https://api.github.com/x', { limit: 10, signal: pre.signal,
+    fetchImpl: () => { throw Error('must not be called'); } }));
+  const mid = new AbortController();
+  let cancelled = false;
+  const stream = new ReadableStream({
+    async pull(controller) { mid.abort(); controller.enqueue(new Uint8Array(1)); },
+    cancel() { cancelled = true; },
+  });
+  await assert.rejects(requestBytes('https://api.github.com/x', { limit: 10, signal: mid.signal,
+    fetchImpl: async () => new Response(stream) }));
+  assert.ok(cancelled, 'aborting mid-read cancels the body reader');
+});
+
 test('requests without a proxy keep using the injected fetch implementation', async () => {
   let calls = 0;
   const body = await requestBytes('https://api.github.com/x', { limit: 10, fetchImpl: async () => { calls++; return new Response('ok'); } });
@@ -157,24 +196,16 @@ test('pressing Enter in the proxy field saves it like the button', () => {
   assert.deepEqual(posts.find(message => message.type === 'update.proxy').payload, { value: 'http://127.0.0.1:7897' });
 });
 
-test('requestBytes defaults to directFetch without touching the ambient fetch', async () => {
-  const fs = require('node:fs');
+test('requestBytes defaults to directFetch without touching the ambient fetch', async t => {
   const path = require('node:path');
-  const vm = require('node:vm');
-  const { createRequire } = require('node:module');
-  const filename = path.resolve(__dirname, '../src/update.cjs');
-  const realRequire = createRequire(filename);
+  const { createSandboxLoader } = require('./helpers/sandbox.cjs');
   const calls = [];
-  const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
-    module, exports: module.exports, __dirname: path.dirname(filename),
-    process, Buffer, URL, AbortController, AbortSignal, setTimeout, clearTimeout, Response, Headers,
-    require(name) {
-      if (name === './proxy.cjs') return { directFetch: async (url, options) => { calls.push({ url, redirect: options?.redirect }); return new Response('ok'); } };
-      return realRequire(name);
-    },
-  }, { filename });
-  const body = await module.exports.requestBytes('https://api.github.com/x', { limit: 10 });
+  const loader = createSandboxLoader({ filename: path.resolve(__dirname, '../src/update.cjs'),
+    overrides: { [path.resolve(__dirname, '../src/network/direct-fetch.cjs')]: {
+      directFetch: async (url, options) => { calls.push({ url, redirect: options?.redirect }); return new Response('ok'); } } } });
+  t.after(() => loader.assertStubsUsed('update default transport'));
+  t.mock.method(globalThis, 'fetch', () => { throw Error('ambient fetch must not be used'); });
+  const body = await loader.module.exports.requestBytes('https://api.github.com/x', { limit: 10 });
   assert.equal(body.toString(), 'ok');
   assert.deepEqual(calls, [{ url: 'https://api.github.com/x', redirect: 'manual' }],
     'the direct transport is the default; the sandbox has no ambient fetch at all');

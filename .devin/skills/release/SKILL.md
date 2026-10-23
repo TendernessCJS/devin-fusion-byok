@@ -110,7 +110,7 @@ HTTPS_PROXY=http://127.0.0.1:7897 gh release create v<version> \
 
 网页显示正常 ≠ 插件能用。**用已安装副本的代码**跑一遍真实回路。
 
-**走插件自带的代理路径**：`requestBytes` 支持 `proxy` 参数（`src/proxy.cjs` 的 `parseProxy` 结果）。下面片段显式传 `http://127.0.0.1:7897`（与 `config.json` 的 `updateProxy` 等效），和面板「检查更新」走的是同一条代码路径，不依赖 TUN 与环境变量，结果可复现。
+**走插件自带的代理路径**：`requestBytes` 支持 `proxy` 参数（`src/update/proxy-config.cjs` 的 `parseProxy` 结果，`src/proxy.cjs` 仍兼容导出）。下面片段显式传 `http://127.0.0.1:7897`（与 `config.json` 的 `updateProxy` 等效），和面板「检查更新」走的是同一条代码路径，不依赖 TUN 与环境变量，结果可复现。
 
 ```bash
 EXT="$HOME/.devin/extensions/local.devin-fusion-byok-<version>" \
@@ -164,8 +164,8 @@ const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
 
 - GitHub 访问必须经代理 `http://127.0.0.1:7897`：直连 `api.github.com`、`github.com`、`objects.githubusercontent.com` 均被连接重置。
 - **第 4 步的 `git push` 不要加前缀**（`origin` 是 SSH，`~/.ssh/config` 自动代理）；**第 5 步的 `gh` 必须加**前缀 `HTTPS_PROXY=http://127.0.0.1:7897`（HTTPS，且 `gh` 没有 proxy 配置项）。两者不对称，不要照抄。完整说明以 `AGENTS.md`「本机网络路径」为准。
-- **首选：插件自带代理**（`src/proxy.cjs`，随 0.3.43 之后版本一起分发）。`config.json` 设 `updateProxy` 后，面板「检查更新」与一键安装经 CONNECT 隧道走代理，不受 TUN 与环境变量影响；第 6 步验收片段显式传同一个代理地址，跑的是同一条路径。
-- **备选：环境变量 / TUN**。验收已安装的旧版本（没有 `src/proxy.cjs`）或排查直连路径时才需要：
+- **首选：插件自带代理**（实现在 `src/update/proxy-transport.cjs`，`src/proxy.cjs` 保留同名兼容导出；随 0.3.43 之后版本一起分发）。`config.json` 设 `updateProxy` 后，面板「检查更新」与一键安装经 CONNECT 隧道走代理，不受 TUN 与环境变量影响；第 6 步验收片段显式传同一个代理地址，跑的是同一条路径。
+- **备选：环境变量 / TUN**。验收已安装的旧版本（没有 `src/proxy.cjs` 兼容导出）或排查直连路径时才需要：
   - 验收片段改用 `HTTPS_PROXY=http://127.0.0.1:7897 NODE_USE_ENV_PROXY=1 NO_PROXY=localhost,127.0.0.1` 让全局 `fetch` 读环境变量（扩展宿主的 `fetch` 默认不读，缺了它就 ECONNRESET，看起来像「发布失败」）。
   - Devin 本体不读 shell 环境：TUN 模式，或以 `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897 NO_PROXY=localhost,127.0.0.1` 启动 Devin。
   - 判定 TUN 是否生效不能看开关，要看实际出口：`route get <api.github.com 的 IP>` 应为 `utun*`（开）或 `en0`（关）；开 TUN 时 DNS 会解析到 fake-IP 段 `198.18.x.x`。TUN 会被用户关掉或断开，验收前先确认。

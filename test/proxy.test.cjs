@@ -6,7 +6,7 @@ const net = require('node:net');
 const { Duplex } = require('node:stream');
 const { parseProxy, tunnel, proxyRequestBytes } = require('../src/proxy.cjs');
 const update = require('../src/update.cjs');
-const updateUrl = require('../src/update-url.cjs');
+const updateUrl = require('../src/update/url-policy.cjs');
 
 function listen(server) { return new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); }
 function fakeSocket(written) {
@@ -446,4 +446,64 @@ test('requests fall back to http.request when the ClientRequest constructor fail
   const response = await directFetch('http://fixture.invalid/x');
   assert.equal(response.status, 204);
   assert.deepEqual(calls, ['fixture.invalid'], 'the request went through the http.request fallback');
+});
+
+test('src/proxy.cjs stays a pure compatibility facade over the new modules', () => {
+  const facade = require('../src/proxy.cjs');
+  const config = require('../src/update/proxy-config.cjs');
+  const transport = require('../src/update/proxy-transport.cjs');
+  const direct = require('../src/network/direct-fetch.cjs');
+  assert.equal(facade.parseProxy, config.parseProxy);
+  assert.equal(facade.maskProxy, config.maskProxy);
+  assert.equal(facade.tunnel, transport.tunnel);
+  assert.equal(facade.proxyRequestBytes, transport.proxyRequestBytes);
+  assert.equal(facade.directFetch, direct.directFetch);
+});
+
+test('proxyRequestBytes enforces length, redirect and abort contracts end to end', async () => {
+  const target = http.createServer((req, res) => {
+    if (req.url === '/exact') { res.writeHead(200, { 'content-length': '10' }); return res.end('x'.repeat(10)); }
+    if (req.url === '/noloc') { res.writeHead(302); return res.end(); }
+    if (req.url === '/r6') { res.writeHead(302, { location: '/r6' }); return res.end(); }
+    if (req.url === '/slow') { res.writeHead(200, { 'content-length': '4' }); res.write('ab'); return; }
+    res.end('ok');
+  });
+  const proxyServer = http.createServer((req, res) => res.writeHead(501).end());
+  const connected = [];
+  proxyServer.on('connect', (req, socket) => {
+    connected.push(req.url);
+    const [host, port] = req.url.split(':');
+    const upstream = net.connect(Number(port), host, () => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      upstream.pipe(socket); socket.pipe(upstream);
+    });
+    upstream.once('error', () => socket.destroy());
+    upstream.once('close', () => socket.destroy());
+    socket.once('close', () => upstream.destroy());
+  });
+  await listen(target); await listen(proxyServer);
+  const targetPort = target.address().port;
+  const px = parseProxy('http://127.0.0.1:' + proxyServer.address().port);
+  const original = updateUrl.allowedUrl;
+  updateUrl.allowedUrl = url => new URL(url);
+  try {
+    const base = 'http://127.0.0.1:' + targetPort;
+    assert.equal((await proxyRequestBytes(base + '/exact', { proxy: px, limit: 10 })).toString(), 'x'.repeat(10),
+      'content-length equal to the limit is accepted');
+    await assert.rejects(proxyRequestBytes(base + '/noloc', { proxy: px, limit: 10 }), error => error.message === 'redirect');
+    connected.length = 0;
+    await assert.rejects(proxyRequestBytes(base + '/r6', { proxy: px, limit: 10 }), error => error.message === 'redirect');
+    assert.equal(connected.length, 6, 'the seventh CONNECT is never issued');
+    const pre = new AbortController(); pre.abort();
+    const before = connected.length;
+    await assert.rejects(proxyRequestBytes(base + '/exact', { proxy: px, limit: 10, signal: pre.signal }));
+    assert.equal(connected.length, before, 'a pre-aborted signal opens no connection');
+    const mid = new AbortController();
+    const pending = proxyRequestBytes(base + '/slow', { proxy: px, limit: 10, signal: mid.signal, timeout: 5000 });
+    setTimeout(() => mid.abort(), 150);
+    await assert.rejects(pending);
+  } finally {
+    updateUrl.allowedUrl = original;
+    target.close(); proxyServer.close();
+  }
 });
