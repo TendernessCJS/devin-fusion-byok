@@ -173,44 +173,78 @@ for (const discovery of ['models/discovery.cjs', 'models/discovery-error.cjs']) 
   });
 }
 
-const closureRel = (graph, entry) =>
-  new Set([...graph.closure(path.join(srcRoot, entry))].map(file => path.relative(srcRoot, file)));
-const relPath = (...parts) => path.join(...parts);
-const UPDATE_TRANSPORT = [relPath('update', 'proxy-transport.cjs'), relPath('update', 'download.cjs')];
+const filesUnder = prefix => srcFiles()
+  .map(file => path.relative(srcRoot, file))
+  .filter(relative => relative.startsWith(prefix + path.sep))
+  .sort();
 
-// Layering policy for everything outside the backend: the shared direct
-// transport must never reach the GitHub-only update internals, model discovery
-// must not pull the update stack or the compatibility facade, and the panel's
-// proxy-config dependency must stay a leaf.
-const LAYERING = [
-  { entry: relPath('network', 'direct-fetch.cjs'),
-    banned: file => file === 'proxy.cjs' || file.startsWith('update' + path.sep) },
-  { entry: relPath('network', 'client-request.cjs'),
-    banned: file => file === 'proxy.cjs' || file.startsWith('update' + path.sep) },
-  { entry: relPath('models', 'discovery.cjs'),
-    banned: file => file === 'proxy.cjs' || file.startsWith('update' + path.sep) },
-  { entry: relPath('panel', 'manager.cjs'),
-    banned: file => file === 'proxy.cjs' || UPDATE_TRANSPORT.includes(file) },
-  { entry: relPath('panel', 'panel-state.cjs'),
-    banned: file => file === 'proxy.cjs' || UPDATE_TRANSPORT.includes(file) ||
-      file === relPath('network', 'direct-fetch.cjs') },
-  { entry: relPath('update', 'proxy-config.cjs'),
-    banned: file => file !== relPath('update', 'proxy-config.cjs') },
-];
-function layeringViolations(graph) {
+const closureOf = (graph, entry) => [...graph.closure(path.join(srcRoot, entry))]
+  .map(file => file === 'vscode' ? 'vscode' : path.relative(srcRoot, file));
+// `closure()` only returns the files the walker enqueued, so a `vscode` edge is
+// never a key — the dependency has to be read off each visited file's deps or the
+// guard silently misses it.
+const vscodeEdges = (graph, entry, closure) => closure
+  .filter(file => file !== 'vscode')
+  .filter(file => graph.depsOf(path.join(srcRoot, file), { tolerateDynamic: true }).deps.includes('vscode'))
+  .map(() => entry + ' -> vscode');
+
+const networkViolations = (graph, entries = filesUnder('network')) => {
   const violations = [];
-  for (const { entry, banned } of LAYERING)
-    for (const file of closureRel(graph, entry)) if (banned(file)) violations.push(entry + ' -> ' + file);
+  for (const entry of entries) {
+    const closure = closureOf(graph, entry);
+    for (const file of closure)
+      if (file !== entry && !file.startsWith('network' + path.sep)) violations.push(entry + ' -> ' + file);
+    violations.push(...vscodeEdges(graph, entry, closure));
+  }
   return violations;
-}
+};
 
-test('the network/update layering keeps transports and the panel config isolated', () => {
+const updateViolations = (graph, entries = filesUnder('update')) => {
+  const violations = [];
+  for (const entry of entries) {
+    const closure = closureOf(graph, entry);
+    for (const file of closure)
+      if (file !== entry && !file.startsWith('update' + path.sep) && !file.startsWith('network' + path.sep))
+        violations.push(entry + ' -> ' + file);
+    violations.push(...vscodeEdges(graph, entry, closure));
+  }
+  return violations;
+};
+
+// proxy-config carries panel-facing proxy text handling only; any repository
+// dependency makes it a transport module wearing a config name.
+const LEAF = path.join('update', 'proxy-config.cjs');
+const leafViolations = graph => closureOf(graph, LEAF).length === 1 ? [] : [LEAF];
+
+// Model discovery reached the GitHub stack only through the facade before; it
+// must keep resolving to the shared direct transport and nothing update-shaped.
+const DISCOVERY = path.join('models', 'discovery.cjs');
+const discoveryViolations = graph => {
+  const closure = closureOf(graph, DISCOVERY);
+  return closure
+    .filter(file => file !== DISCOVERY && (file === 'proxy.cjs' || file.startsWith('update' + path.sep)))
+    .map(file => DISCOVERY + ' -> ' + file)
+    .concat(vscodeEdges(graph, DISCOVERY, closure));
+};
+
+test('filesUnder enumerates the network directory from disk, so new files join the guard', () => {
+  const listed = filesUnder('network');
+  const onDisk = fs.readdirSync(path.join(srcRoot, 'network')).filter(name => name.endsWith('.cjs'));
+  assert.equal(listed.length, onDisk.length);
+  for (const file of listed) assert.ok(file.startsWith('network' + path.sep));
+});
+
+test('network/ and update/ keep their dependency ceilings, and proxy-config stays a leaf', () => {
   const graph = createSourceGraph();
-  assert.deepEqual(layeringViolations(graph), []);
-  assert.ok(closureRel(graph, 'models/discovery.cjs').has(relPath('network', 'direct-fetch.cjs')),
+  assert.deepEqual(networkViolations(graph), []);
+  assert.deepEqual(updateViolations(graph), []);
+  assert.deepEqual(leafViolations(graph), [], 'proxy-config must stay a leaf with only builtin dependencies');
+  assert.deepEqual(discoveryViolations(graph), []);
+  const discovery = closureOf(graph, DISCOVERY);
+  assert.ok(discovery.includes(path.join('network', 'direct-fetch.cjs')),
     'discovery uses the direct transport at its new path');
-  for (const entry of ['panel/manager.cjs', 'panel/panel-state.cjs'])
-    assert.ok(closureRel(graph, entry).has(relPath('update', 'proxy-config.cjs')),
+  for (const entry of [path.join('panel', 'manager.cjs'), path.join('panel', 'panel-state.cjs')])
+    assert.ok(closureOf(graph, entry).includes(path.join('update', 'proxy-config.cjs')),
       entry + ' reads proxy configuration only');
 });
 
@@ -224,7 +258,7 @@ test('no production module requires the proxy.cjs facade', () => {
   }
 });
 
-const injectedLayeringGraph = (patched, specifier) => {
+const injectedGraph = (patched, specifier) => {
   const file = path.join(srcRoot, patched);
   return createSourceGraph({
     readFile: target => path.resolve(target) === file
@@ -245,15 +279,60 @@ test('backend boundary guards fail on an injected update/download edge', () => {
 });
 
 for (const { patched, specifier, expect } of [
-  { patched: relPath('network', 'direct-fetch.cjs'), specifier: '../update/download.cjs', expect: relPath('update', 'download.cjs') },
-  { patched: relPath('network', 'client-request.cjs'), specifier: '../update/url-policy.cjs', expect: relPath('update', 'url-policy.cjs') },
-  { patched: relPath('models', 'discovery.cjs'), specifier: '../proxy.cjs', expect: 'proxy.cjs' },
-  { patched: relPath('panel', 'panel-state.cjs'), specifier: '../update/download.cjs', expect: relPath('update', 'download.cjs') },
-  { patched: relPath('update', 'proxy-config.cjs'), specifier: '../network/direct-fetch.cjs', expect: relPath('network', 'direct-fetch.cjs') },
+  { patched: path.join('network', 'client-request.cjs'), specifier: '../panel/manager.cjs', expect: path.join('panel', 'manager.cjs') },
+  { patched: path.join('network', 'direct-fetch.cjs'), specifier: 'vscode', expect: 'vscode' },
+  { patched: path.join('update', 'proxy-transport.cjs'), specifier: '../panel/manager.cjs', expect: path.join('panel', 'manager.cjs') },
+  { patched: path.join('update', 'download.cjs'), specifier: '../proxy.cjs', expect: 'proxy.cjs' },
 ]) {
   test(`the layering guard rejects an injected ${patched} -> ${expect} edge`, () => {
-    const violations = layeringViolations(injectedLayeringGraph(patched, specifier));
+    const violations = [...networkViolations(injectedGraph(patched, specifier)),
+      ...updateViolations(injectedGraph(patched, specifier))];
     assert.ok(violations.includes(patched + ' -> ' + expect),
       'the injected edge must be reported from its own entry, not via another module that reaches it');
   });
 }
+
+test('the leaf guard rejects an injected proxy-config -> direct-fetch edge', () => {
+  const overlay = injectedGraph(LEAF, '../network/direct-fetch.cjs');
+  assert.deepEqual(leafViolations(overlay), [LEAF],
+    'proxy-config must stop being a leaf once it depends on a transport');
+});
+
+test('the discovery guard rejects an injected discovery -> proxy.cjs edge', () => {
+  const overlay = injectedGraph(DISCOVERY, '../proxy.cjs');
+  // The facade re-exports the update modules, so this edge also drags them in;
+  // the point is that the violation is reported from discovery's own entry.
+  assert.ok(discoveryViolations(overlay).includes(DISCOVERY + ' -> proxy.cjs'),
+    'discovery reaching the facade must be reported from its own entry');
+});
+
+test('the network ceiling covers every file the directory listing returns', () => {
+  const download = path.join('update', 'download.cjs');
+  for (const entry of filesUnder('network')) {
+    const overlay = injectedGraph(entry, '../update/download.cjs');
+    assert.ok(networkViolations(overlay).includes(entry + ' -> ' + download),
+      entry + ' must be its own guard root, not a name in a hand-kept list');
+  }
+});
+
+test('the update ceiling covers every file the directory listing returns', () => {
+  const panel = path.join('panel', 'controller.cjs');
+  for (const entry of filesUnder('update')) {
+    const overlay = injectedGraph(entry, '../panel/controller.cjs');
+    assert.ok(updateViolations(overlay).includes(entry + ' -> ' + panel),
+      entry + ' must be its own guard root, not a name in a hand-kept list');
+  }
+});
+
+test('a new file dropped into network/ is guarded by the same ceiling', () => {
+  const ghost = path.join(srcRoot, 'network', 'extra.cjs');
+  const overlay = createSourceGraph({
+    readFile: file => path.resolve(file) === ghost
+      ? "'use strict';\nrequire('../update/download.cjs');\n"
+      : fs.readFileSync(file, 'utf8'),
+    exists: file => path.resolve(file) === ghost || fs.existsSync(file),
+  });
+  const violations = networkViolations(overlay, [path.join('network', 'extra.cjs')]);
+  assert.ok(violations.includes(path.join('network', 'extra.cjs') + ' -> ' + path.join('update', 'download.cjs')),
+    'a new network/ file reaching update/ must be reported');
+});

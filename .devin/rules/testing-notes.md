@@ -52,3 +52,5 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   `assignment` / `inference` 事件。反向也要注意：`AssignModel` **不是必经 RPC**，实测 `GetChatMessage` 可直接落到 api server，
   所以「没有 assignment 就等于没接通」是假阴性。同理，`devin models list` 在 acp 模式下报 "Not logged in" 属正常——ACP 宿主是
   **唯一**凭据来源，CLI 不读本地 REPL 凭据与 env 里的 key。
+- **架构反例必须调用真实违规谓词并精确断言 `source -> target`**：endsWith/子串匹配或自造判定函数会让「删掉守卫」照样绿，等于没有反例。
+- **传输取消用例的判据是「请求到达目标阶段 + 服务端 socket 实际 close」**：不用固定 sleep 触发 abort，也不只断言 reject——要条件等待到 `slowHits`/`closes` 递增。
