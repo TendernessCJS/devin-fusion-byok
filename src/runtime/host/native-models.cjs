@@ -1,8 +1,9 @@
 'use strict';
 const fs = require('node:fs');
-const { runtimeIdentity, controlFile, PORT } = require('./backend.cjs');
+const { rootIdentity, controlFile } = require('../contract.cjs');
+const { PORT } = require('../port.cjs');
 const { withConnectionRetry } = require('./retry.cjs');
-const { normalizeNativeEntry, normalizeAllowedUids } = require('../native-entry.cjs');
+const { normalizeNativeEntry, normalizeAllowedUids } = require('../../models/native-entry.cjs');
 // Upstream observations only: our own uids are never part of the native
 // catalog, and the reader rejects a payload containing them outright. Both the
 // reader's validation and the push payload derive from this one predicate so the
@@ -23,7 +24,7 @@ async function readOnce({ root, port, signal, request }) {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   };
   const health = await read(base + '/health');
-  const expected = runtimeIdentity(root);
+  const expected = rootIdentity(root);
   if (health.service !== expected.service || health.rootId !== expected.rootId || !health.instanceId) throw new Error('native_catalog_identity');
   if (health.nativeModelsProtocol !== 1) return { status: 'unsupported', models: [] };
   const control = JSON.parse(fs.readFileSync(controlFile(root), 'utf8'));
@@ -99,7 +100,7 @@ async function pushNativeModels({ root, models, allowedUids, allowedMode, revisi
     if (!response.ok) return { pushed: 0, reason: 'unavailable' };
     health = await response.json();
   } catch { return { pushed: 0, reason: 'unavailable' }; }
-  const expected = runtimeIdentity(root);
+  const expected = rootIdentity(root);
   if (health.service !== expected.service || health.rootId !== expected.rootId || !health.instanceId) return { pushed: 0, reason: 'identity' };
   // An older backend has no ingest endpoint; skipping is the correct outcome.
   if (health.nativeModelsIngest !== 1) return { pushed: 0, reason: 'unsupported' };

@@ -5,9 +5,9 @@ const vm = require('node:vm');
 const { createRequire, builtinModules } = require('node:module');
 
 // Loads a CommonJS entry inside a single VM realm shared by the whole fixture.
-// Stubs are matched by RESOLVED absolute path: a key like './config.cjs' is
-// resolved against the entry's directory, so '../config.cjs' required from a
-// sibling directory (src/activation/*.cjs) hits the same stub. Relative
+// Stubs are matched by RESOLVED absolute path: a key like './config/config.cjs' is
+// resolved against the entry's directory, so '../config/config.cjs' required from a
+// sibling directory (src/runtime/*.cjs) hits the same stub. Relative
 // requires without a stub are loaded inside this same context — never through
 // the host realm's require — sharing one module cache (one instance per file,
 // or realm mismatches break instanceof and singleton guards).

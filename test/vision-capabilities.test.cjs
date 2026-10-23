@@ -1,11 +1,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { modelSupportsImages } = require('../src/model-capabilities.cjs');
+const { modelSupportsImages } = require('../src/models/capabilities.cjs');
 const { buildCatalog: buildSavedCatalog, resolveAssignment } = require('../src/catalog.cjs');
 const buildCatalog = buildSavedCatalog;
 const { publicState } = require('../src/panel/manager.cjs');
-const { parseChat } = require('../src/protocol/acp.cjs');
+const { parseChat } = require('../src/protocol/native-chat-codec.cjs');
 const { buildRequestBody } = require('../src/protocol/inference.cjs');
 const { fields, num } = require('../src/protocol/wire.cjs');
 

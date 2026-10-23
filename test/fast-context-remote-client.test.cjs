@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { gzipSync } = require('node:zlib');
 const { s, v, frame, str, fields } = require('../src/protocol/wire.cjs');
-const { createRemote, parseStream, parseCall, requestBody, ORIGIN, MAX_RESPONSE } = require('../src/fast-context/protocol.cjs');
+const { createRemote, parseStream, parseCall, requestBody, ORIGIN, MAX_RESPONSE } = require('../src/fast-context/remote-client.cjs');
 const finish = (text, trailer = {}) => Buffer.concat([frame(s(1, text)), frame(Buffer.from(JSON.stringify(trailer)), 2)]);
 test('stream parses arbitrarily small fragments and gzip, requiring terminal success', () => {
   const bytes = Buffer.concat([frame(s(1, 'a')), frame(gzipSync(s(1, 'b')), 1), frame(Buffer.from('{}'), 2)]);

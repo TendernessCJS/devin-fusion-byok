@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('node:fs');
-const { runtimeIdentity, controlFile, PORT } = require('./backend.cjs');
+const { rootIdentity, controlFile } = require('../contract.cjs');
+const { PORT } = require('../port.cjs');
 const MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 const MAX_HEALTH_BYTES = 4 * 1024 * 1024;
 const COUNT_FIELDS = ['requests', 'success', 'error', 'cancelled', 'excludedUsageRecords'];
@@ -30,7 +31,7 @@ async function readOnce({ root, port, signal, request }) {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   };
   const health = await read(base + '/health', undefined, MAX_HEALTH_BYTES);
-  const expected = runtimeIdentity(root);
+  const expected = rootIdentity(root);
   if (health.service !== expected.service || health.rootId !== expected.rootId || !health.instanceId) throw new Error('monitor_identity');
   if (health.monitorProtocol !== 1) return { status: 'unsupported', snapshot: null };
   const control = JSON.parse(fs.readFileSync(controlFile(root), 'utf8'));

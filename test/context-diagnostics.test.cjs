@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { createContextDiagnostics, STALE_AFTER_MS } = require('../src/runtime/context-diagnostics.cjs');
+const { createContextDiagnostics, STALE_AFTER_MS } = require('../src/runtime/host/context-diagnostics.cjs');
 test('diagnostics are private, isolated, bounded snapshots carrying ids, numbers and counters only', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-diagnostics-'));
   const options = { root, version: '0.3.26', readStatus: () => ({ state: 'observing', connections: 1, usageUpdates: 2, usageRejections: { 'invalid-used': 1, 'missing-size': 2, 'zero-size': -1, 'never-persist': 123 }, secret: 'never-persist' }), snapshot: () => [{ sessionId: 'sess-diag', lead: { used: 123 }, subagents: [{}] }], intervalMs: 60000 };
@@ -119,7 +119,7 @@ test('subagent details stay untruncated within the bounds', () => {
 
 test('diagnostics counts only real subagents, never the root-scoped duplicate', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-diagnostics-'));
-  const { createContextState } = require('../src/runtime/context-state.cjs');
+  const { createContextState } = require('../src/runtime/host/context-state.cjs');
   const state = createContextState();
   state.observe('s', { sessionUpdate: 'usage_update', used: 100, size: 1000, _meta: { 'cognition.ai/subagent_context': { parentAgentId: 'root' } } });
   state.observe('s', { sessionUpdate: 'usage_update', used: 80, size: 262, _meta: { 'cognition.ai/subagent_context': { parentAgentId: 'sidekick' } } });

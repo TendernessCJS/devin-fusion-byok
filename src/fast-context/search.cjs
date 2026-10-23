@@ -2,7 +2,7 @@
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { createSnapshot, modelPath, bounded } = require('./files.cjs');
-const { createRemote } = require('./protocol.cjs');
+const { createRemote } = require('./remote-client.cjs');
 const { readKey } = require('./auth.cjs');
 
 function options(input) {

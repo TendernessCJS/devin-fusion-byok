@@ -4,10 +4,11 @@
 多个扩展宿主（多窗口）共享同一文件：原子 rename 只保证文件完整，不保证跨进程事务——
 两个进程各「读→改→写」时后写者会静默覆盖前者（已实测复现）。
 
-## 写入契约（`src/config-store.cjs`）
+## 写入契约（`src/config/store.cjs`）
 
 - **所有 config.json 写入必须走 `updateConfig(file, mutator)`**。禁止直接
-  `fs.writeFileSync`（`config.cjs` 已不再有写函数）。
+  `fs.writeFileSync`（`config/config.cjs` 已不再有写函数；远程模型发现在
+  `src/models/discovery.cjs`，错误契约在 `src/models/discovery-error.cjs`）。
 - `updateConfig` 内部顺序：`<file>.lock` 排他锁（`wx`+fsync，含 `{pid,time}`）→ 读最新文档 →
   mutator → `doc.configRevision = revision + 1` → tmp+fsync 写新文档 → 旧字节完整写
   `<file>.bak`（tmp+fsync+rename）→ rename → 目录 fsync（失败忽略）→ 释放锁。

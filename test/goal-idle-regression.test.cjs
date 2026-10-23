@@ -23,9 +23,9 @@ function fixture(t, protocolVersion) {
     require(name) {
       if (name === 'node:crypto') return require(name);
       if (name === 'node:module') return { createRequire };
-      if (name === '../runtime/acp-hook.cjs') {
+      if (name === '../runtime/host/acp-hook.cjs') {
         const hook = { exports: {} };
-        vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+        vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../src/runtime/host/acp-hook.cjs'), 'utf8'),
           { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
         return hook.exports;
       }

@@ -55,8 +55,9 @@ function expectedSourceId() {
   return hash.digest('hex');
 }
 
-test('the hashed set covers exactly the modules backend.cjs loads', () => {
-  const hashed = new Set(hashedFiles().map(name => path.resolve(path.dirname(backendFile), name)));
+test('the production derived set covers exactly the modules backend.cjs loads', () => {
+  const { deriveSourceFiles } = require('../src/runtime/source-identity.cjs');
+  const hashed = new Set(deriveSourceFiles().map(name => path.resolve(path.dirname(backendFile), name)));
   const { files } = reachableModules();
   const missing = [...files].filter(file => !hashed.has(file));
   const stale = [...hashed].filter(file => !files.has(file));
@@ -67,7 +68,7 @@ test('the hashed set covers exactly the modules backend.cjs loads', () => {
 });
 
 test('the derived digest matches the module and stays stable across calls', () => {
-  const { runtimeIdentity } = require('../src/runtime/backend.cjs');
+  const { runtimeIdentity } = require('../src/runtime/source-identity.cjs');
   const first = runtimeIdentity(repoRoot).sourceId;
   assert.equal(first, expectedSourceId(),
     'runtimeIdentity must hash exactly the derived closure, nothing more or less');

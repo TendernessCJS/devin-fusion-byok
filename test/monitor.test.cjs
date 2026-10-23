@@ -185,12 +185,12 @@ test('long session titles pass through snapshot and publicSnapshot untruncated',
   monitor.record({ id: 'r-long', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-long'] });
   const snapshot = await monitor.snapshot();
   assert.equal(snapshot.sessions[0].title, longTitle);
-  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  const { publicSnapshot } = require('../src/runtime/host/monitor-client.cjs');
   assert.equal(publicSnapshot(snapshot).sessions[0].title, longTitle);
 });
 
 test('publicSnapshot carries session titles through the whitelist and still strips unknown fields', () => {
-  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  const { publicSnapshot } = require('../src/runtime/host/monitor-client.cjs');
   const snapshot = publicSnapshot({ version: 1, status: 'ready', summary: { requests: 1 }, records: [],
     sessions: [{ sessionId: 's', title: '标题', lastActivityAt: 42, secret: 'x', attribution: 'tool-id', summary: { requests: 1 }, records: [] }] });
   assert.equal(snapshot.sessions[0].title, '标题');
@@ -573,7 +573,7 @@ test('storageDiagnostics reports safe fixed codes and counters for every failure
 });
 
 test('publicSnapshot exposes diagnostics through the whitelist and strips secrets', () => {
-  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  const { publicSnapshot } = require('../src/runtime/host/monitor-client.cjs');
   const record = { schemaVersion: 3, id: 'r1', startedAt: '2026-01-01T00:00:00Z', model: 'm', providerId: 'p', status: 'error',
     attributionReason: 'lookup-unavailable', leak: 'SECRET', toolIds: ['internal'], messageIds: ['internal'] };
   const snapshot = {
@@ -599,7 +599,7 @@ test('publicSnapshot exposes diagnostics through the whitelist and strips secret
 });
 
 test('publicSnapshot accepts legacy snapshots without diagnostics', () => {
-  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  const { publicSnapshot } = require('../src/runtime/host/monitor-client.cjs');
   const legacy = { version: 1, status: 'ready', storageError: false, sessionStatus: 'ready',
     summary: { requests: 0, success: 0, error: 0, cancelled: 0 }, records: [], sessions: [] };
   const pub = publicSnapshot(legacy);
@@ -609,7 +609,7 @@ test('publicSnapshot accepts legacy snapshots without diagnostics', () => {
 });
 
 test('an invalid attributionReason is normalized to null through the client whitelist', () => {
-  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  const { publicSnapshot } = require('../src/runtime/host/monitor-client.cjs');
   const record = { schemaVersion: 3, id: 'r1', startedAt: '2026-01-01T00:00:00Z', model: 'm', providerId: 'p', status: 'success', attributionReason: 'injected-SECRET' };
   const pub = publicSnapshot({ version: 1, status: 'ready', storageError: false, sessionStatus: 'ready',
     summary: { requests: 1 }, records: [record], sessions: [] });
@@ -706,7 +706,7 @@ test('latest text TPS wins over averages and cancelled usage still counts into t
 });
 
 test('invalid diagnostics collapse to null instead of echoing fake zeros', () => {
-  const { publicSnapshot } = require('../src/runtime/monitor-client.cjs');
+  const { publicSnapshot } = require('../src/runtime/host/monitor-client.cjs');
   const pub = publicSnapshot({
     version: 1, status: 'ready', storageError: false, sessionStatus: 'ready',
     lookupStatus: { tools: 'bogus', labels: 'ready' },

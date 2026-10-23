@@ -1,12 +1,13 @@
 'use strict';
 const path = require('node:path');
 const { readReceipt, remember, saveReceipt, valueAt } = require('../lifecycle/owned-settings.cjs');
-const { installLsInjection } = require('../runtime/ls-injection.cjs');
+const { installLsInjection } = require('../runtime/host/ls-injection.cjs');
 const { createLsBridge } = require('../runtime/bridge.cjs');
-const { installAcpObserver } = require('../runtime/acp-observer.cjs');
+const { installAcpObserver } = require('../runtime/host/acp-observer.cjs');
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
-const { globalSetting, safeError } = require('./errors.cjs');
+const { globalSetting } = require('./settings.cjs');
+const { safeError } = require('./errors.cjs');
 
 // A configured http.proxy routes this window, so the managed CLI env must exempt
 // loopback or devin-cli cannot reach the local backend or the LS bridge. Read

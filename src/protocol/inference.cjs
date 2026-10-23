@@ -8,7 +8,7 @@
 
 const { randomUUID } = require('node:crypto');
 const { frame } = require('./wire.cjs');
-const { textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk } = require('./acp.cjs');
+const { textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk } = require('./native-chat-codec.cjs');
 const { createTracker } = require('./tracker.cjs');
 const { anthropicHeaders, createAnthropicAdapter } = require('./anthropic.cjs');
 const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem, sizeBucket } = require('./state-envelope.cjs');

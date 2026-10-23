@@ -12,7 +12,7 @@ const store = require('../src/goal/store.cjs');
 const reportCli = require('../src/goal/report.cjs');
 
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
-const autoSource = fs.readFileSync(path.join(__dirname, '../src/runtime/auto-continue.cjs'), 'utf8');
+const autoSource = fs.readFileSync(path.join(__dirname, '../src/runtime/host/auto-continue.cjs'), 'utf8');
 const goalSource = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cjs'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
@@ -24,9 +24,9 @@ function loadModule(source, filename, api) {
     require(name) {
       if (name === 'node:crypto') return require('node:crypto');
       if (name === 'node:module') return { createRequire };
-      if (name === './acp-hook.cjs' || name === '../runtime/acp-hook.cjs') {
+      if (name === './acp-hook.cjs' || name === '../runtime/host/acp-hook.cjs') {
         const hook = { exports: {} };
-        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/host/acp-hook.cjs'), 'utf8'),
           { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
         return hook.exports;
       }

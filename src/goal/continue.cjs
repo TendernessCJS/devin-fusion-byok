@@ -1,7 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { createRequire } = require('node:module');
-const { loadAcpApi, restoreMember, createAcpRegistry } = require('../runtime/acp-hook.cjs');
+const { loadAcpApi, restoreMember, createAcpRegistry } = require('../runtime/host/acp-hook.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.goal-continue.v1');
 const ATTACHED = Symbol.for('devin-fusion-byok.goal-continue.attached');

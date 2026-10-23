@@ -13,7 +13,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const url = require('node:url');
 
-const source = fs.readFileSync(path.join(__dirname, '../src/runtime/ls-injection.cjs'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../src/runtime/host/ls-injection.cjs'), 'utf8');
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
 const HEARTBEAT = '/exa.language_server_pb.LanguageServerService/Heartbeat';
 const tick = () => new Promise(resolve => setImmediate(resolve));

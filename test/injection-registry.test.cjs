@@ -6,7 +6,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createAcpRegistry } = require('../src/runtime/acp-hook.cjs');
+const { createAcpRegistry } = require('../src/runtime/host/acp-hook.cjs');
 
 function fixture() {
   const events = [];

@@ -1,7 +1,7 @@
 'use strict';
 const { parseFields, str, num, m } = require('../protocol/wire.cjs');
 const { concat, ownUid, has, nativeUid } = require('./identity.cjs');
-const { normalizeNativeEntry } = require('../native-entry.cjs');
+const { normalizeNativeEntry } = require('../models/native-entry.cjs');
 
 const OBSERVE_SOURCE = { GetCliModelConfigs: 'cli', GetCascadeModelConfigs: 'cascade', GetCommandModelConfigs: 'command', GetUserStatus: 'entitlement' };
 function rpcShape(rpc) {

@@ -32,15 +32,17 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
   **`agent-decidable`**（按模型判断注入，**不保证加载**）。所以「漏读会安静地做错」的知识不能靠「放在哪个文件」保证送达，
   索引必须给出**何时必读**——这也是上面「为什么不把约束留在本文件里」的同一组实测约束逼出来的结论。
 
-**体积纪律**：每卷必须 < 16,384 字节，超限部分静默丢弃。最近一次实测（2026-10-22）：`provider-measurements.md` 16,191、`runtime-and-injection.md` 16,182、`catalog-and-picker.md` 16,338、`acp-protocol-fields.md` 16,051——**这四卷余量均不足 350 字节，实质已满**，增补前必须先 `wc -c`，装不下就压缩或移出成新卷；`fusion-matrix.md` 14,790 及更小的卷余量较宽。
+**体积纪律**：每卷必须 < 16,384 字节，超限部分静默丢弃。`test/rule-budget.test.cjs`（`npm test` 的一部分）会硬拦超限卷与「新卷没进本索引」，所以别在这里维护体积快照——它必然过期，判据以测试为准。接近上限时**先拆卷再加内容**：把「实测依据/排障判据」移成 `<主题>-forensics.md`，契约卷留一条指向与禁令（`runtime-and-injection.md` ↔ `runtime-forensics.md` 是范例）。拆卷是**逐字搬运 + 不加新论断**，只补指针句。
 
 **行为锚定卷**（改代码前按需读）
 
 | 卷 | 何时必须读 |
 | --- | --- |
 | `.devin/rules/runtime-and-injection.md` | 改 ACP/LS 注入、backend 生命周期与关闭、日志、用户设置写入、重试预算、安全校验、`SOURCE_FILES`、`protocol/` 职责划分或 `src/activation/` 编排层 |
+| `.devin/rules/runtime-forensics.md` | **排查「注入/目录改写改了没生效」时必读**——api server 凭据优先级、`agentEnv` 只覆盖主 agent、日志归属（宿主 channel vs `runtime.log`）、连接按 pid 判、桥的 gzip 体积 |
 | `.devin/rules/fusion-matrix.md` | 改 Fusion 矩阵 emit 规则、Lead/Sidekick 资格与命名、harness、Fast Mode |
-| `.devin/rules/catalog-and-picker.md` | 改 picker 可见性契约、角色白名单、陈旧条目判定与清理、推送门控、`nativeFamilies`、声明窗口、维度 order |
+| `.devin/rules/catalog-and-picker.md` | 改 picker 可见性契约、角色白名单、陈旧条目判定与清理、推送门控、`nativeFamilies`、维度 order |
+| `.devin/rules/context-and-compaction.md` | 改声明的上下文窗口（ModelInfo `f4`/`maxTokens`）、或怀疑「是不是扩展触发了压缩」 |
 | `.devin/rules/native-observation-and-cli-cache.md` | 改原生目录观测与缓存、CLI 缓存原地重写、配置键分类清理 |
 | `.devin/rules/config-and-storage.md` | 改 config.json 读写、面板提交、损坏恢复 |
 | `.devin/rules/monitor-and-panel.md` | 改用量记录/归属/时间筛选、面板 webview 样式、busy 锁定、state 去重与焦点保留 |
@@ -52,6 +54,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | --- | --- |
 | `.devin/rules/upstream-fork-release.md` | 同步 `upstream`、定/升版本号、发布、解 merge 冲突 |
 | `.devin/rules/provider-measurements.md` | **改 Responses/Anthropic/Chat 语义前必读**——供应商面实测事实，已推翻多处早期结论 |
+| `.devin/rules/provider-endpoint-latency.md` | **排查首响慢、`upstream_timeout`/`upstream_stream_error`，或要动超时预算时必读**——响应头探针、历史统计口径与超时路径的证据边界 |
 | `.devin/rules/testing-notes.md` | 写或调测试 |
 | `.devin/rules/retired-and-deadends.md` | 清理配置键、审「这段代码还活着吗」、疑惑旧字段为何还在 |
 | `.devin/rules/acp-protocol-fields.md` | 改 `src/protocol/*` 的 protobuf 字段号、核对原生请求/响应/用量字段 |
@@ -97,7 +100,7 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 全量测试应全绿（0 失败）。
 
 历史说明：`test/native-models-sync.test.cjs` 曾稳定失败——同一端口重启 backend 后，对该 origin 的首次请求复用了 undici 连接池中已被旧服务关闭的
-  keep-alive socket（`ECONNRESET`），第二次请求自愈。这是**客户端连接复用缺口**，已由 `src/runtime/retry.cjs` 的 `withConnectionRetry`
+  keep-alive socket（`ECONNRESET`），第二次请求自愈。这是**客户端连接复用缺口**，已由 `src/runtime/host/retry.cjs` 的 `withConnectionRetry`
   修复：`readNativeModels` 与 `readMonitor` 对连接层失败做一次重试。
 
 纪律保留：**不要为了通过测试而修改断言**；`withConnectionRetry` 只重试连接层失败（按 `error.cause.code` / `error.code` 判定），
@@ -107,7 +110,7 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 
 **只以 macOS 为目标平台**（个人自用，本机即 macOS）：验证、真机验收、发布检查都只针对 macOS。其他平台按「逻辑可行」的最低标准处理，**短期不做实机验证**。
 - **不要声称非 macOS 已验证可用**。涉及平台差异的行为，在代码与文档里注明「仅 macOS 验证」。
-- **非 macOS 必须明确失败，不得静默出错**。既有先例（沿用这个模式）：`src/runtime/app-restart.cjs` 在非 darwin 抛 `restart_unsupported`，
+- **非 macOS 必须明确失败，不得静默出错**。既有先例（沿用这个模式）：`src/runtime/host/app-restart.cjs` 在非 darwin 抛 `restart_unsupported`，
   面板提示「当前环境不支持重启 Devin」；`src/update.cjs` 的 `supported` 判断使非 macOS 只能手动装 vsix。注意 `package.json` **未设 `os` 字段**，
   其他平台能装上、只是相应功能不可用。
 - **已知 macOS 硬编码**（非 macOS 上会失败或降级，暂无适配计划）：`/usr/bin/sqlite3`（用量归属，`src/monitor/store.cjs`；失败降级为 `unavailable`）、

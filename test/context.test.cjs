@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const { createContextState, usageRejectionReason, USAGE_REJECTIONS } = require('../src/runtime/context-state.cjs');
+const { createContextState, usageRejectionReason, USAGE_REJECTIONS } = require('../src/runtime/host/context-state.cjs');
 const { contextDetails, contextScript, contextHtml, createContextUi } = require('../src/panel/context-view.cjs');
 const update = (used = 20, size = 100, meta) => ({ sessionUpdate: 'usage_update', used, size, ...(meta ? { _meta: { 'cognition.ai/subagent_context': meta } } : {}) });
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -52,11 +52,11 @@ function fixture(protocolVersion = 1) {
   const api = { registerConnection(...args) { registrations.push({ thisArg: this, args }); return registration; } }, original = api.registerConnection;
   const module = { exports: {} };
   const createRequire = () => () => ({ windsurfAcp: api });
-  vm.runInNewContext(fs.readFileSync(require.resolve('../src/runtime/context-observer.cjs'), 'utf8'), { module, exports: module.exports, require(name) {
+  vm.runInNewContext(fs.readFileSync(require.resolve('../src/runtime/host/context-observer.cjs'), 'utf8'), { module, exports: module.exports, require(name) {
     if (name === 'node:module') return { createRequire };
     if (name === './acp-hook.cjs') {
       const hook = { exports: {} };
-      vm.runInNewContext(fs.readFileSync(require.resolve('../src/runtime/acp-hook.cjs'), 'utf8'),
+      vm.runInNewContext(fs.readFileSync(require.resolve('../src/runtime/host/acp-hook.cjs'), 'utf8'),
         { module: hook, exports: hook.exports, require: () => ({ createRequire }) });
       return hook.exports;
     }

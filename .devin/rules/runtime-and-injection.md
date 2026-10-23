@@ -17,59 +17,20 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   已配置 `http.proxy` 时 `enable()` 还会经同一 receipt 写入 `NO_PROXY=127.0.0.1,localhost,::1` 回环豁免，代理清空后由迁移分支自动还原。
 - 服务商错误自动继续的连续预算是 **5 次自动重试 / 10 分钟窗口**；触顶必须停止、结算等待中的请求并提示用户。待办无进展停止规则与 Goal 的预算独立，不能互相绕过。
 
-- `SOURCE_FILES` 已**不再是手工清单**（R2b-1）：`backend.cjs` 加载期从字面量 require 图自动推导 `sourceId()` 的哈希输入。
-  对应的新约束是 **backend 侧禁止动态 require**——非字面量 specifier 会让推导直接抛错、backend 起不来；
-  新增模块只要被正常 `require` 就自动进哈希，无需再改清单。
+- `SOURCE_FILES` 已**不再是手工清单**（R2b-1）：`runtime/source-identity.cjs` 加载期从 `backend.cjs` 字面量 require 图推导哈希输入；`backend.cjs`
+  转导出旧导出面，客户端（`native-models`/`monitor-client`）改依赖 `contract.cjs`+`port.cjs`+`retry.cjs`，`backend-handshake` 用 `source-identity` 做
+  fresh 检查。**backend 闭包禁止动态 require**（非字面量 specifier 让推导抛错、起不来）；新模块被正常 `require` 即自动进哈希。
+  `test/architecture.test.cjs` 禁绝 backend 闭包进宿主/UI/发现/更新模块并查文件级循环。
 
 - 本扩展不修改 Devin 应用本体、不重新签名、不安装证书、不改系统代理。保持这个前提。
-- 强依赖 Devin 私有接口：LS `Heartbeat` 抓端口（`src/runtime/ls-injection.cjs`）、catalog 的 protobuf 字段号与 Connect
+- 强依赖 Devin 私有接口：LS `Heartbeat` 抓端口（`src/runtime/host/ls-injection.cjs`）、catalog 的 protobuf 字段号与 Connect
   帧（`src/protocol/wire.cjs`、`src/catalog.cjs`）、ACP 连接器面（`windsurfAcp.registerConnection` /
   `connector.sendRequest` / `connector.forwardClientRequest`，被 `acp-observer.cjs`、`auto-continue.cjs`、
   `goal/continue.cjs` 观察与包装）、CLI 的 `WINDSURF_API_SERVER_URL` env 覆盖（经 `devin.acp.agentEnv` 受管设置注入，ACP
-  通道的实际入口）、Fast Context 的 `GetDevstralStream`（`src/fast-context/protocol.cjs`）。这些接口不稳定，改动附近代码时按「可能失败」处理，
+  通道的实际入口）、Fast Context 的 `GetDevstralStream`（`src/fast-context/remote-client.cjs`）。这些接口不稳定，改动附近代码时按「可能失败」处理，
   不要在失败路径上伪装成功。
-- **api server 入口的优先级与凭据策略（2026-10-18 实测，`devin acp` 3000.10.67，六臂对照）**：`authenticate._meta.api_server_url`
-  **也能**重定向 CLI 的 api server 面——控制面（`GetUserStatus`/`GetCliTeamSettings`/`GetCliModelConfigs`）**和推理面 `GetChatMessage` 都在内**；
-  但它**优先级低于** `WINDSURF_API_SERVER_URL` env，两处同时存在时一律走 env 且失败不回退。桌面端每次 `authenticate` 都带官方的
-  `api_server_url`（`getConfig(Config.API_SERVER_URL)`），BYOK 没被它拨回官方正是靠 env 优先。另一条硬约束（CLI 日志原文）：
-  `ACP server credential policy: ACP host is the sole source of credentials. Local CLI credentials (env vars, on-disk REPL store) will NOT be used.`
-  —— acp 子进程不读本地凭据，`meta.api_key` 必须由宿主提供，而扩展拿不到 key，因此**不要试图用 meta 替代 env 注入**。对照事实：
-  env=<X> + meta=死端口 → 命中 X；env=死端口 + meta=<X> → 认证直接对死端口失败、X 零命中；只给 URL 不给 key → `authenticate` 返回 `{}`
-  但**零网络**（走 PKCE 分支），URL 从未被采用。方法：本机起一个只记路径的 HTTP 收集器/透传中继，用临时 `HOME` 与假 key 臂隔离，
-  需要「假 key 也能认证成功」时让中继回放 `~/.cache/devin/cli/*.bin` 里的真实 protobuf。
-- **`agentEnv` 按 connector id 取，只覆盖主 agent——summarizer 实例拿不到**（2026-10-18 真机，0.3.49）。`RegistryAcpConnector.get env()` 是
-  `getWindsurfOrDevinConfiguration('acp.agentEnv').get(this.id)`，桌面端同时跑两个 `devin acp`：主 agent（connector `devin-cli`）与
-  `devin acp --agent-type summarizer`（CLI 原生 agent 类型，`man devin-acp`：无工具、把摘要写到 `~/.local/share/devin/summaries/`）。实测后者 env 只有
-  内置的 `WINDSURF_IDE_TYPE`/`WINDSURF_EXT_HOST_PID`、**没有任何 TCP 套接字**，因此它的推理走官方、**不进 monitor 账本**。
-  **这不是注入失败**：`devin.acp.enabledAgents` 里只有 `devin-cli` 与 `__cascade__`，没有 summarizer 的键。要覆盖它得先弄清它挂在哪个 connector id
-  （`__cascade__` 是**未验证的假设**），且把 Devin 自己的 cascade 面拨到本地 backend 风险明显更高——不做之前别写成「覆盖不全的 bug」。
-- **验证注入是否真的生效，判据是进程 env + socket，不是 settings.json**（2026-10-18）：`ps eww -p <pid> | tr ' ' '\n' | grep -a '^WINDSURF_API_SERVER_URL='`
-  只输出该变量（**别直接打印 `ps eww` 全量输出，里面有权钥**），再用 `lsof -a -nP -p <pid> -iTCP` 确认它确实连到 backend 端口。`lsof` 的 `-p` 与 `-i`
-  默认是**或**关系，缺 `-a` 会把全机 TCP socket 都列出来（会误读成「这个进程连了一堆端口」）。
-- **`remote_config` 每 60–70 秒超时一次，两侧都有 ⇒ 不要归因 backend**（2026-10-18）：主 agent（已注入）与 summarizer（未注入）的 CLI 日志各出现
-  `remote config revalidation failed, keeping last-good value: fetch timed out after 5000ms`，且在 `authenticate`/`session/new`/`user_status_refresh`
-  的关键路径上各算 2–5 秒。**未注入的那一侧同样报**，说明是本机到官方 remote-config 端点的网络问题，有 last-good 兜底、非致命。做归因前先比对
-  一个未注入实例，否则很容易把它误判成「BYOK 后台拖慢了会话创建」。
-- **catalog 有两跳独立重写，日志落在不同的文件里，别拿一条事件当另一条的证据**（2026-10-18 真机 0.3.49 实测）：
-  ① **渲染端 picker 路径 = 桥**：`ls-injection.cjs` 观测 LS 端口后建桥，宿主 output channel 里是 `ls bridge ready <LS> -> <bridge>`
-  （实测 `57159 -> 57194`）；渲染端（Chromium 的 `--utility-sub-type=network.mojom.NetworkService` 进程）连桥、宿主连 LS，catalog 响应在
-  `src/runtime/bridge.cjs` 的 `forward` 里改写并保留传输层 gzip。它的 `catalog` 事件只出现在宿主的 `output_logging_*/1-Devin Fusion BYOK.log`。
-  ② **CLI/ACP 路径 = backend**：CLI 的 api server 就是 backend（env 注入），控制面 RPC 由 backend 经 `bridge.cjs` 的 `forward` 转发到
-  `server.codeium.com` 后改写，`catalog` 事件写 `runtime.log`（**`runtime.log` 的唯一写入点是 `backend.cjs`**）。
-  两处事件同名字段但 payload 完全不同（实测桥 `before 47216 → after 1358625`、backend `before 154666 → after 716794`），因此
-  **排查「picker 没生效」要看宿主 output channel，排查「CLI 模型列表没生效」要看 `runtime.log`**，反之会得出错误结论。
-  backend 的 forward 类事件（`catalog` / `catalog-error` / `forward-timeout`）**带 `peerPort`**（该请求客户端 socket 的 `remotePort`，由
-  `backend.cjs` 的 `forwardLog` 逐请求包装注入；`bridge.cjs` 不参与，桥侧日志没有这个字段）——事后 `lsof -nP -i TCP:<peerPort>` 即可反查 pid 定性。
-  **归属已实测坐实（0.3.50 首验）**：`catalog peerPort 55805` 的对端是 `devin acp`（主 agent，`ps eww` 里含 `WINDSURF_API_SERVER_URL`），
-  所以「backend 的 CLI 侧 catalog 转发由 ACP CLI 发起」不再是排除法结论。
-  `forward-timeout` 早期条目缺 `rpc` 属**历史**（32 条全在 2026-10-16，之后的代码已带 `rpc` 与 `peerPort`），不要据此判断当前实现丢字段。
-- **LS 进程不是 backend 的客户端**（同上实测）：LS 的 env 没有 `WINDSURF_API_SERVER_URL`、也没有到 39842 的 socket；backend 的客户端只有扩展宿主
-  （且只打自有端点：native push / health / monitor）与 `devin` CLI。所以「backend 改写了渲染端的 catalog」是**错的**说法——渲染端那一跳在桥上。
-- **渲染端仍有到真实 LS 端口的短连接，但它们是连接池残渣、不是固定第二入口**：实测空闲 2 分钟内网络服务侧到 LS 的连接 10 → 1 自行衰减，而桥侧
-  「渲染端→桥」与「宿主→LS」稳定为 6/6 一一对应。所以**不要把某一时刻的 `lsof` 计数当作架构常量**；连接归属必须按 **pid** 判（`lsof` 的进程名被
-  截断成 `Devin\x20`，按名字匹配会全部落空或全命中），`WebKit/Chromium` 侧真正持有 socket 的是 network service 进程而非渲染进程本体。
-- **桥已保留传输层 gzip（2026-10-19）**：旧版解压后明文回写曾放大约 28.8×；修复后实测 `47,222 B → 73,935 B`（1.566×，新增目录条目的真实开销）。不得把旧测量当现状，也不得通过放宽改写降低体积；逐消息压缩仍按原逻辑展平。
-- **`src/protocol/` 是多关注点的混合体，不要按目录名或文件名推断职责**（8 个文件，2026-10-18 拆分后核对）：① 协议转换 —— `acp.cjs`（**Devin 侧**：解析
+- **实测依据与排障判据已分卷到 `runtime-forensics.md`**：`authenticate._meta` 与 env 的凭据优先级、`agentEnv` 只覆盖主 agent、注入是否生效的判据、catalog 两跳与日志归属、连接池残渣、桥的 gzip 体积都在那一卷。**改注入或排查「改了没生效」前必读**；两条禁令仍留在本卷：**不要用 `meta.api_key` 替代 env 注入**，**不要把某一时刻的 `lsof` 计数当作架构常量**。
+- **`src/protocol/` 是多关注点的混合体，不要按目录名或文件名推断职责**（8 个文件，2026-10-18 拆分后核对）：① 协议转换 —— `native-chat-codec.cjs`（**Devin 侧**：解析
   `exa.chat_pb` 原生请求 + 造出站 ACP chunk）、`inference.cjs`（**三协议统一入口**：`serveChat` + `processor` 的流编排/有界降级/推理状态通道衔接；
   **不是 Responses 专用**）；它的内部职责已按协议语义拆开：`provider-request.cjs`（格式判定/端点/请求体构造，**OpenAI Chat 的请求体在这里**）、
   `provider-events.cjs`（SSE 解析/用量快照/错误详情）、`state-envelope.cjs`（状态信封前缀、`{scope, items}` 构造与其校验），`anthropic.cjs` 仍是
@@ -77,23 +38,22 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   再拆时**保持这四个导出不变**；② 字节层 —— `wire.cjs` 是**全仓共享**的 proto 读写/framing/gzip 工具，`catalog/*`、`fast-context/`、
   `runtime/` 都直接依赖它，**不是协议专用**；③ 埋点 —— `tracker.cjs` 是计量（→ monitor），它落在 `protocol/` 是**依赖图决定而非语义决定**：为消除
   `protocol → runtime` 反向依赖才从 `runtime/monitor.cjs` 移出，**不能搬回 `runtime/`**（`runtime/backend.cjs` 本就 import `protocol/inference.cjs`，
-  搬回即成环）。旧名对照：`chat.cjs → acp.cjs`、`responses.cjs → inference.cjs`——旧名正是误读源头（前者与 Chat Completions 无关，OpenAI Chat 的请求体在
-  `provider-request.cjs`）。**撞名警告**：`src/fast-context/protocol.cjs` 是**另一个** protocol（Fast Context 的 MCP 实现），且它反向 import
-  `src/protocol/wire.cjs`——两条路径别混。在 `protocol/` 内增删/改名文件时，除 `SOURCE_FILES` 外还要留意**不靠 `require` 的隐式引用**（按模块名打桩的
+  搬回即成环）。旧名对照：`chat.cjs → acp.cjs → native-chat-codec.cjs`、`responses.cjs → inference.cjs`——旧名正是误读源头（前者与 Chat Completions 无关，OpenAI Chat 的请求体在
+  `provider-request.cjs`）。Fast Context 的 `remote-client.cjs` 反向 import `src/protocol/wire.cjs`，两条路径别混。在 `protocol/` 内增删/改名文件时，除 `SOURCE_FILES` 外还要留意**不靠 `require` 的隐式引用**（按模块名打桩的
   字符串键、`readFileSync` 的路径、`AGENTS.md` 里按路径写的说明），这类漏改不报错、只静默失效——`test/source-identity.test.cjs` 现在会兜住
   `SOURCE_FILES` 那一半（现在校验推导出的哈希集合与 `backend.cjs` 的 require 闭包双向精确相等），但路径字符串与打桩键它管不到。
-- **扩展宿主编排层在 `src/activation/`**（2026-10-18 从 725 行的 `extension.cjs` 拆出，现 154 行）：`errors`（RuntimeError/`safeError`/`pause`/
-  `compareVersion`/`globalSetting`，零依赖）、`backend-handshake`（`ensureBackend`）、`catalog-sync`（原生目录观测/推送/CLI 缓存触发）、`enable`
-  （受管设置写入 + LS 注入 + startNativeSync）、`commands`（命令注册、Fusion 选择与 `disable` 恢复）、`panel-install`（状态栏/pickerRefresh/
-  `checkCliCaches`/面板控制器/配置监听）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`
-  被测试与 `package.json` 依赖**。这些文件运行在扩展宿主、**不在 backend 里，因此不能进入 backend 的 require 闭包**（否则会把宿主代码算进重启哈希）。
-  拆分时的硬约束：共享可变槽必须放进显式传递的 `shared` 对象，**不得**改成模块级单例（会在多次 activate 之间串状态）；
+- **扩展宿主编排层在 `src/activation/`**（自 725 行 `extension.cjs` 拆出）：`errors`（RuntimeError/`safeError` + 叶子 `models/discovery-error.cjs`）、`settings`（`globalSetting`）、`backend-handshake`
+  （`ensureBackend` + 局部 `pause`/`compareVersion`）、`catalog-sync`（原生目录观测/推送）、`enable`
+  （受管设置写入 + LS 注入 + startNativeSync）、`commands`（命令注册、Fusion 选择与 `disable` 恢复）、`panel-install`（状态栏/面板控制器）、`cache-sync`/`config-sync`（pickerRefresh、CLI 缓存检查、配置监听/afterChange）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`
+  被测试与 `package.json` 依赖**。这些文件在扩展宿主运行、**不能进 backend 的 require 闭包**（否则宿主代码被算进重启哈希）。
+  拆分时的硬约束：共享可变槽必须放进显式传递的 `shared` 对象，**不得**改成模块级单例（跨 activate 串状态）；
   `enableQueue`/`reconcileQueue` 这类序列化队列留在各自工厂闭包内；`generation`/abort 判据一处都不能少（`enable()` 里有 4 处）。
-  改激活流程前先确认动的是哪个入口：全仓共 **5 个入口**，其中 3 个（`fast-context/server.cjs`、`goal/report.cjs`、`lifecycle/uninstall.cjs`）
-  **从 `extension.cjs` 的 require 图走不到**，清单见 `.devin/rules/retired-and-deadends.md` 的「路径型入口」表。
-- **`src/runtime/health.cjs` 虽在 `runtime/`，却是宿主侧模块、不得被 backend require**：只有 `activation/panel-install.cjs` require 它，结果经共享槽以
-  `readHealth()` 回调传给 `runtime/context-diagnostics.cjs` 与 `panel/manager.cjs`（backend 里没有任何 require）。让 backend require 它会让
-  `source-identity` 测试红，且会让「只在宿主生效」的代码被误当成 backend 代码改动。输出确定性约束见 `monitor-and-panel.md`。
+  改激活流程前先确认入口：全仓 **5 个入口**中 3 个（`fast-context/server.cjs`、`goal/report.cjs`、`lifecycle/uninstall.cjs`）
+  从 `extension.cjs` 的 require 图走不到（清单见 `retired-and-deadends.md`）。
+- **`src/runtime/` 按「谁运行」分区，判据是路径不是文件名**：根目录只留 backend 进程与两侧共享的 7 个模块（`backend.cjs`、`backend-control.cjs`、`bridge.cjs`、`contract.cjs`、`native-cache.cjs`、`port.cjs`、`source-identity.cjs`），**只在扩展宿主运行的模块一律放 `src/runtime/host/`**。`test/architecture.test.cjs` 按目录强制这条：backend 闭包出现任何 `runtime/host/**`、或出现白名单外的 `runtime/` 根模块，都判违规——**不再维护文件名黑名单**，新加宿主模块就地放进 `host/` 即自动受约束。放错方向的代价是把「只在宿主生效」的代码算进重启哈希（并让宿主模块被当 backend 代码改动）。
+- **`src/runtime/host/injection-health.cjs` 是宿主侧模块、不得被 backend require**：只有 `activation/panel-install.cjs` require 它，结果经共享槽以
+  `readHealth()` 回调传给 `runtime/host/context-diagnostics.cjs` 与 `panel/manager.cjs`（backend 里没有任何 require）。让 backend require 它会让
+  `architecture` 测试红（source-identity 派生只跟随 require 图），且会把「只在宿主生效」的代码误当 backend 代码改动。输出确定性约束见 `monitor-and-panel.md`。
 - `AssignModel` 本地应答不含 `assignment_jwt`（官方 `ModelAssignment` 响应带该字段）。当前 CLI（3000.10.48 实测）不校验；若未来版本强制校验，
   本地指派整体失效——届时改为转发上游或显式降级，不得伪造成功。
 - 修改行为时不要放宽现有安全校验（Origin 一律 403、控制令牌 `timingSafeEqual`、webview 只用 `createElement`/`textContent` 不用

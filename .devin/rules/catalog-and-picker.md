@@ -36,7 +36,7 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
   `getCatalog`/AssignModel；历史上的迁移路径 `migrateFusionConfig` 同样不传——该函数已随预设管线删除（见 `retired-and-deadends.md`），保留这条只为锁住判据：**不该因资格丢用户既有选择**。
 - **Lead/Sidekick 门槛的机制依据（App bundle proto/schema 坐实）**：官方客户端**不做资格计算**——可选组合就是服务端枚举的 fusion 条目集，picker
   只做「维度元组→uid」查表（`nr6`，无匹配静默不切换）。AssignModel 双 router 字段：`model_router_uid`（f2）分配 sidekick、
-  `fusion_lead_router_uid`（f6）分配 lead；**组合条目的 `harnessUids` 携带 `['fusion', lead真harness]`——lead 的执行通道由组合条目替它声明**，所以成员 lead 无自带 harness 也可当 lead（实测 29 个），而 sidekick 经独立 router 解析、组合条目不携带其 harness，故必须自带（实测 11/11）。**发射侧与 `resolveAssignment`（AssignModel 路径）必须同规则**：`leadNative ? leadHarnessUids : ['fusion']`（`leadHarnessUids` 在 catalog.cjs 里已含 `'fusion'`）。发射侧此前一律只写 `['fusion']`，与契约不一致，2026-10-16 修正（实测 336 条 native-Lead 组合各补上其 Lead harness、112 条 BYOK-Lead 保持 `['fusion']`；改前实测官方 586 个可解析样本中该规则 **390/390 零例外**）。**改这两处中任意一处，必须同时改另一处**，并跑那条逐条比对的回归断言。ModelInfo 官方 schema：`inferenceServerUrl/harnessUids/displayOption/modelFamilyUid/isModelRouter`——与我方 emit 字段名逐一对齐。**字段级实测（2026-10-16 解 CLI 缓存 `model_configs_v5.*.bin`）**：`f4 = 声明窗口`（官方原生值 262000/1000000/200000 与其真实窗口精确相等；我方 BYOK 发 1024000），它同时就是喂给「context-window-based」压缩默认值的那个数——见「上下文与压缩」一节；`f20 = harnessUids`（repeated，是**候选列表**），assignment 落的是**单个** `harness_uid`（`ModelAssignmentInfo`）；`f25 = isModelRouter`（官方原生不写＝默认 false，我方 fusion 条目写 1）；`f22 = displayOption`；`f23 = familyUid`。**`f5` 是一条「我方永不发、官方部分条目发」的字段**：实测 CLI 缓存 1205 条原生条目中 **234 条**带 f5，值**恒为 `LLAMA_WITH_SPECIAL`**（971 条不带；形态看是提示词模板/分词器类型，字段名未在 bundle 里确证）；我方 `encodeConfig`（catalog.cjs:88-99）**72 条**全部不发。**影响未验证**（可能 harness 已在服务端提供模板故留空无害，也可能客户端回落默认模板），**拿到影响证据前不要改**，也不要写成「官方一律发」。
+  `fusion_lead_router_uid`（f6）分配 lead；**组合条目的 `harnessUids` 携带 `['fusion', lead真harness]`——lead 的执行通道由组合条目替它声明**，所以成员 lead 无自带 harness 也可当 lead（实测 29 个），而 sidekick 经独立 router 解析、组合条目不携带其 harness，故必须自带（实测 11/11）。**发射侧与 `resolveAssignment`（AssignModel 路径）必须同规则**：`leadNative ? leadHarnessUids : ['fusion']`（`leadHarnessUids` 在 catalog.cjs 里已含 `'fusion'`）。发射侧此前一律只写 `['fusion']`，与契约不一致，2026-10-16 修正（实测 336 条 native-Lead 组合各补上其 Lead harness、112 条 BYOK-Lead 保持 `['fusion']`；改前实测官方 586 个可解析样本中该规则 **390/390 零例外**）。**改这两处中任意一处，必须同时改另一处**，并跑那条逐条比对的回归断言。ModelInfo 官方 schema：`inferenceServerUrl/harnessUids/displayOption/modelFamilyUid/isModelRouter`——与我方 emit 字段名逐一对齐。**字段级实测（2026-10-16 解 CLI 缓存 `model_configs_v5.*.bin`）**：`f4 = 声明窗口`（官方原生值 262000/1000000/200000 与其真实窗口精确相等；我方 BYOK 发 1024000），它同时就是喂给「context-window-based」压缩默认值的那个数——见 `context-and-compaction.md`；`f20 = harnessUids`（repeated，是**候选列表**），assignment 落的是**单个** `harness_uid`（`ModelAssignmentInfo`）；`f25 = isModelRouter`（官方原生不写＝默认 false，我方 fusion 条目写 1）；`f22 = displayOption`；`f23 = familyUid`。**`f5` 是一条「我方永不发、官方部分条目发」的字段**：实测 CLI 缓存 1205 条原生条目中 **234 条**带 f5，值**恒为 `LLAMA_WITH_SPECIAL`**（971 条不带；形态看是提示词模板/分词器类型，字段名未在 bundle 里确证）；我方 `encodeConfig`（catalog.cjs:88-99）**72 条**全部不发。**影响未验证**（可能 harness 已在服务端提供模板故留空无害，也可能客户端回落默认模板），**拿到影响证据前不要改**，也不要写成「官方一律发」。
 
 - **隐藏语义是家族级**：`hiddenNativeModelUids` 仍存 uid，但 `expandHiddenByFamily`（catalog.cjs）在
   `augmentProtoList`/`augmentJsonList`/`buildRoleLists` 三处把隐藏 uid 连坐到同 `familyUid` 的全部兄弟——官方上新变体不会漏过黑名单；面板
@@ -62,29 +62,7 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
   0 条）。抛错在此是安全方向：`inspectCliCaches` 用 try/catch 包住探针，抛错被吞即空陈旧集合＝一条都不删。
 - **推送门控必须描述「真正发送的内容」，且只描述它**：旧实现是 `pushKey()`——把「本地桥计数 : 上游载荷条数 : 上游载荷带维度条数」拼成字符串的启发式，它在激活初期不等价（首次 refresh 时 backend 可能未就绪、返回空），于是**空载荷占用了 key**，紧接着那次有意义的 refresh 被判「未变化」，推送静默地从未发生（只在上一轮侥幸的时序下成功过）。2026-10-19 起改为 **revision 门控**：`shared.nativeRevision` 只在目录/白名单**实际变化**时自增（`commit({ bumpRevision })` 是唯一写入口，refresh 与观测两条通道共用），发送条件为 `shared.nativeRevision > shared.lastPushedRevision`，且 `lastPushedRevision` 仅在后端**接受**该 revision 后才推进——失败或跳过的尝试会在下一次 refresh 重试，不会把声称过的 revision 固化住。**空载荷不推进 `lastPushedRevision`，因此不消耗门控**。`pushKey` 与 `localNativeModels` 都已删除（后者改名为 `catalog-sync` 闭包内的 `observed`），别按它们的旧语义去「修复」。
 
-- **上下文压缩：扩展不是施加者，且声明窗口是唯一杠杆（2026-10-16 定论，含三次自我推翻，别再重走）**。①**扩展从不碰会话历史、也不设任何压缩参数**；我们唯一的杠杆是 ModelInfo 的
-  `f4 = maxTokens`（＝声明窗口）。**实测该声明被采纳且生效**：BYOK `deepseek-flash` 声明 `contextWindow: 1024000`，真实会话跑到
-  **280,819** 而**零压缩**（`monitor.jsonl` 峰值，其中 >262000 共 9 条全 success），证明压缩**不是**按副模型 swe-2 的 262,000 走。
-  ②**压缩由 CLI 的「压缩调度 + 阈值」决定，且调度是云端部署的**：远程 flag `enable-devin-cli-cloud-compaction-schedule=true`（描述原文「gate
-  the deployment of CompactionSchedules and self-compaction for SWE-1.7/2」）、`devin-cli-compaction-threshold`
-  与 `enable-devin-cli-swe2-self-compaction` 均为 `false`；CLI 配置项 `agent.compaction_threshold_tokens`（官方
-  changelog：「trigger automatic compaction **earlier** than the context-window-based default」）只能让它更早，
-  **没有**可靠办法推迟。③**CLI 有专门的 Fusion sidekick 阈值开关**（隐藏、`--help`
-  不列）：`--compaction-thresholds <SPAWN,[APPLY,]HARD>`（示例 `183500,183500,262144`）与
-  `--sidekick-compaction-thresholds`，后者原文「Override the **Local Fusion sidekick chain's** compaction
-  thresholds **independently of the lead's**，未设置时回退到前者」，env 为 `DEVIN_COMPACTION_THRESHOLDS` /
-  `DEVIN_SIDEKICK_COMPACTION_THRESHOLDS`。**但没有任何证据显示这两个开关在默认下把上限压到 sidekick 窗口**——实测已到 280,819 未压缩即反证，勿据此改配置。
-  ④**触发是事件驱动的，不要用「压缩时的 token 数」反推阈值**：把全部真实压缩回溯前序事件，**每一条都紧跟在 `session/load` 之后**（15:21:51←15:19:15、
-  15:33:11←15:32:59、16:00:01←15:59:44、17:00:20←16:59:13、00:26:01←00:23:47、01:43:00←01:39:46、
-  02:08:11←02:07:45），token 数只是当时的规模，因此历史上把 141k/211k 当阈值证据、以及按 `0.7×262k`/`0.8×262k` 推阈值**都是错的**（已被
-  249.9k/280.8k 无压缩直接证伪）。⑤**唯一干净的实验样本**：pid 33561 自 02:07:52 起 `initialize`/`session/load` 计数为 **0**（无重载、
-  无切模型），`Summarize` 仅 02:08:11 一次，`message_nodes.num_tokens_preceding` 单调递增无断层。⑥**排障四个源**（缺一不可，
-  因为压缩**不在对话里显示**——官方 changelog：「Automatic context compaction is no longer surfaced in the scrollback or the
-  ACP conversation view」）：CLI 日志 `Summarize: truncated conversation history from N to M messages`、
-  `message_nodes.num_tokens_preceding` 的断层、`~/.local/share/devin/cli/summaries/` 的新摘要产物、`summaries/sidekick/`
-  与 summary-agent 日志。⑦**不要把面板的 `used` 与 `monitor.jsonl` 的 `inputTokens` 混用**：前者是 Devin 上报值（略高），后者是实际请求量，
-  二者差值可达 5–7k，用它们互相验证会得出假结论。⑧`usageState: 'inconsistent'`（如 `cachedTokens > inputTokens`）与
-  `num_tokens_preceding` 的**常态回落**（实测 484 条请求中 37 次回落、21 次 ≥5,000，最大 −31k 且 24 秒内自愈）都**不是**压缩，别当信号。
+- **上下文压缩（声明窗口 `f4`/`maxTokens` 是唯一杠杆、压缩由 CLI 云端调度、四项排障信号）已分卷到 `context-and-compaction.md`**：那一卷含三次自我推翻的定论与实验样本，**改声明窗口或怀疑「扩展触发了压缩」前必读**，不要在这里凭印象重推阈值。
 
 ## allowlist 三态与 restricted→unrestricted 链路
 

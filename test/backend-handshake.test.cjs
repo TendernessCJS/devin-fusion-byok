@@ -16,14 +16,14 @@ const cliCacheStub = { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-
   inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
   refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } };
 const loader = createSandboxLoader({ filename,
-  overrides: { 'vscode': {}, './runtime/cli-cache.cjs': cliCacheStub },
+  overrides: { 'vscode': {}, './runtime/host/cli-cache.cjs': cliCacheStub },
   globals: { AbortController, AbortSignal, setTimeout, clearTimeout },
   shareGlobals: file => file.includes(path.sep + 'src' + path.sep + 'activation' + path.sep) });
 const moduleUnderTest = loader.module;
 const { ensureBackend, safeError } = moduleUnderTest.exports;
 
 test('every registered stub is actually hit', () => {
-  loader.assertStubsUsed('runtime-manager');
+  loader.assertStubsUsed('backend-handshake');
 });
 
 function fixture(t) {

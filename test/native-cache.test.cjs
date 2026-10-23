@@ -9,8 +9,8 @@ const { CACHE_VERSION, DEFAULT_TTL_MS, MAX_ENTRIES,
 
 const entry = (over = {}) => ({ uid: 'swe-2-medium', label: 'SWE-2 Medium', ...over });
 
-test('the canonical contract lives in src/native-entry.cjs and native-cache re-exports it', () => {
-  const leaf = require('../src/native-entry.cjs');
+test('the canonical contract lives in src/models/native-entry.cjs and native-cache re-exports it', () => {
+  const leaf = require('../src/models/native-entry.cjs');
   assert.equal(normalizeNativeEntry, leaf.normalizeNativeEntry, 'same function object, not a copy');
   assert.equal(normalizeAllowedUids, leaf.normalizeAllowedUids);
 });

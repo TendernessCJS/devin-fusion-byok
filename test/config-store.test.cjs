@@ -5,9 +5,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { readDoc, updateConfig, applyKeyDelta, archiveCorrupt, recoverFromBackup } = require('../src/config-store.cjs');
+const { readDoc, updateConfig, applyKeyDelta, archiveCorrupt, recoverFromBackup } = require('../src/config/store.cjs');
 const { createManager } = require('../src/panel/manager.cjs');
-const { readConfig } = require('../src/config.cjs');
+const { readConfig } = require('../src/config/config.cjs');
 
 function dir(t) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-config-store-'));
@@ -19,7 +19,7 @@ test('two processes holding the lock in turn never lose an update', async t => {
   const file = path.join(dir(t), 'config.json');
   fs.writeFileSync(file, JSON.stringify({ enabled: true, providers: [] }));
   const worker = (key, value) => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['-e', `const { updateConfig } = require(${JSON.stringify(path.resolve(__dirname, '../src/config-store.cjs'))});
+    const child = spawn(process.execPath, ['-e', `const { updateConfig } = require(${JSON.stringify(path.resolve(__dirname, '../src/config/store.cjs'))});
       const sab = new Int32Array(new SharedArrayBuffer(4));
       updateConfig(${JSON.stringify(file)}, doc => {
         Atomics.wait(sab, 0, 0, 200);

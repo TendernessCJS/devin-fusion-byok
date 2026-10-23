@@ -22,7 +22,7 @@ const ROOT = path.join(__dirname, '../src');
 // fixture installed (loadModule always points currentApi at that fixture).
 let currentApi = null;
 const acpHook = { exports: {} };
-vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'runtime/acp-hook.cjs'), 'utf8'),
+vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'runtime/host/acp-hook.cjs'), 'utf8'),
   { module: acpHook, exports: acpHook.exports,
     require: () => ({ createRequire: () => name => {
       assert.equal(name, 'vscode');
@@ -72,8 +72,8 @@ function fixture() {
   const originalForward = connector.forwardClientRequest;
   const descriptor = Object.getOwnPropertyDescriptor(api, 'registerConnection');
   const goal = loadModule('goal/continue.cjs', api);
-  const auto = loadModule('runtime/auto-continue.cjs', api);
-  const observer = loadModule('runtime/acp-observer.cjs', api);
+  const auto = loadModule('runtime/host/auto-continue.cjs', api);
+  const observer = loadModule('runtime/host/acp-observer.cjs', api);
   function installAll() {
     const goalHandle = goal.installGoalContinue({ nativeMainPath: NATIVE_MAIN });
     const autoHandle = auto.installAutoContinue({ nativeMainPath: NATIVE_MAIN });

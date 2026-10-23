@@ -5,10 +5,10 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const { once } = require('node:events');
 const { s, v, m, str, num, fields } = require('../src/protocol/wire.cjs');
-const { parseChat } = require('../src/protocol/acp.cjs');
+const { parseChat } = require('../src/protocol/native-chat-codec.cjs');
 const { serveChat, buildRequestBody } = require('../src/protocol/inference.cjs');
 const { createAnthropicAdapter } = require('../src/protocol/anthropic.cjs');
-const { modelEfforts } = require('../src/model-capabilities.cjs');
+const { modelEfforts } = require('../src/models/capabilities.cjs');
 
 const nativeMessage = (source, text, extra = []) => m(3, Buffer.concat([v(2, source), s(3, text), ...extra]));
 function nativeRequest() {
@@ -365,7 +365,7 @@ test('Anthropic model discovery pages with x-api-key and keeps reported limits',
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(page));
   }, t);
-  const { discover } = require('../src/config.cjs');
+  const { discover } = require('../src/models/discovery.cjs');
   const provider = { name: 'Claude', baseUrl: `${upstream}/v1`, apiKey: 'fake-anthropic-key', apiFormat: 'anthropic', models: [] };
   assert.equal(await discover(provider), 2);
   assert.deepEqual(seen.map(item => [item.path, item.after, item.key, item.auth]),

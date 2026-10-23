@@ -7,7 +7,7 @@ const { once } = require('node:events');
 const zlib = require('node:zlib');
 const { createHash } = require('node:crypto');
 const wire = require('../src/protocol/wire.cjs');
-const { parseChat, toolChunk } = require('../src/protocol/acp.cjs');
+const { parseChat, toolChunk } = require('../src/protocol/native-chat-codec.cjs');
 const { serveChat, buildRequestBody } = require('../src/protocol/inference.cjs');
 const { s, v, m, str, num, fields } = wire;
 

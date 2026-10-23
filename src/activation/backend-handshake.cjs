@@ -2,8 +2,25 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { runtimeIdentity, controlFile, PORT, MANAGEMENT_PROTOCOL } = require('../runtime/backend.cjs');
-const { RuntimeError, pause, compareVersion } = require('./errors.cjs');
+const { runtimeIdentity } = require('../runtime/source-identity.cjs');
+const { controlFile, MANAGEMENT_PROTOCOL } = require('../runtime/contract.cjs');
+const { PORT } = require('../runtime/port.cjs');
+const { RuntimeError } = require('./errors.cjs');
+
+function pause(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new RuntimeError('cancelled')); return; }
+    const finish = () => { signal?.removeEventListener('abort', cancel); resolve(); };
+    const timer = setTimeout(finish, ms);
+    const cancel = () => { clearTimeout(timer); signal?.removeEventListener('abort', cancel); reject(new RuntimeError('cancelled')); };
+    signal?.addEventListener('abort', cancel, { once: true });
+  });
+}
+function compareVersion(left, right) {
+  const a = String(left).split('.').map(Number), b = String(right).split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) - (b[i] || 0);
+  return 0;
+}
 
 async function ensureBackend({ root, extensionPath, signal, log = () => {}, port = PORT, onCompatibleRuntime }, dependencies = {}) {
   const request = dependencies.fetch || fetch;

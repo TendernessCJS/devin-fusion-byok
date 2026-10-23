@@ -14,7 +14,7 @@ const http = require('node:http');
 const API = '/exa.api_server_pb.ApiServerService/';
 
 test('same-version Anthropic adapter changes invalidate the runtime source identity', () => {
-  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const filename = path.resolve(__dirname, '../src/runtime/source-identity.cjs');
   const realRequire = createRequire(filename);
   let adapterChanged = false;
   const module = { exports: {} };
@@ -111,7 +111,7 @@ test('monitor is authenticated, origin-blocked, and client validates runtime ide
   const data = await (await fetch(endpoint, { headers })).json();
   assert.equal(data.snapshot.version, 1); assert.equal(data.snapshot.records.length, 0);
   assert.ok(!JSON.stringify(data).includes(f.control().token));
-  const { readMonitor } = require('../src/runtime/monitor-client.cjs');
+  const { readMonitor } = require('../src/runtime/host/monitor-client.cjs');
   const result = await readMonitor({ root: f.root, port: f.backend.port });
   assert.equal(result.status, 'ready'); assert.equal(result.snapshot.summary.requests, 0);
   await assert.rejects(readMonitor({ root: f.root + '-wrong', port: f.backend.port }), /identity/);
@@ -119,7 +119,7 @@ test('monitor is authenticated, origin-blocked, and client validates runtime ide
 
 test('readMonitor retries once on connection-level failures', async t => {
   const f = await fixture(t);
-  const { readMonitor } = require('../src/runtime/monitor-client.cjs');
+  const { readMonitor } = require('../src/runtime/host/monitor-client.cjs');
   let calls = 0;
   const request = (url, options) => {
     calls += 1;
@@ -493,7 +493,7 @@ test('close waits for both the client response and the serveChat handler so late
 });
 
 test('same-version monitor stats changes invalidate the runtime source identity', () => {
-  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const filename = path.resolve(__dirname, '../src/runtime/source-identity.cjs');
   const realRequire = createRequire(filename);
   let statsChanged = false;
   const module = { exports: {} };
@@ -516,7 +516,7 @@ test('same-version monitor stats changes invalidate the runtime source identity'
 
 test('the host can push its richer observations and the backend serves them', async t => {
   const f = await fixture(t);
-  const { pushNativeModels } = require('../src/runtime/native-models.cjs');
+  const { pushNativeModels } = require('../src/runtime/host/native-models.cjs');
   const health = await f.health();
   assert.equal(health.nativeModelsIngest, 1, 'the ingest capability is advertised');
   const endpoint = f.base + '/_runtime/native-models';
@@ -557,7 +557,7 @@ test('the host can push its richer observations and the backend serves them', as
 
 test('a push is refused when identity, capability or the payload do not line up', async t => {
   const f = await fixture(t);
-  const { pushNativeModels } = require('../src/runtime/native-models.cjs');
+  const { pushNativeModels } = require('../src/runtime/host/native-models.cjs');
   const models = [{ uid: 'swe-2-high', label: 'F', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }];
   assert.deepEqual(await pushNativeModels({ root: f.root + '-wrong', port: f.backend.port, models }), { pushed: 0, reason: 'identity' });
   // Our own uids are never upstream observations, so a payload of only those is
@@ -579,7 +579,7 @@ test('a push is refused when identity, capability or the payload do not line up'
 
 test('the ingest endpoint validates and echoes the push revision', async t => {
   const f = await fixture(t);
-  const { pushNativeModels } = require('../src/runtime/native-models.cjs');
+  const { pushNativeModels } = require('../src/runtime/host/native-models.cjs');
   const endpoint = f.base + '/_runtime/native-models';
   const models = [{ uid: 'swe-2-high', label: 'F', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }];
   const post = body => fetch(endpoint, { method: 'POST',
@@ -703,7 +703,7 @@ test('the backend never stores our own uids, so a read cannot be poisoned', asyn
   const read = await (await fetch(endpoint, { headers })).json();
   assert.deepEqual(read.models.map(entry => entry.uid), ['swe-2-high']);
   // And the host's own reader agrees the payload is usable.
-  const { readNativeModels } = require('../src/runtime/native-models.cjs');
+  const { readNativeModels } = require('../src/runtime/host/native-models.cjs');
   const seen = await readNativeModels({ root: f.root, port: f.backend.port });
   assert.equal(seen.status, 'ready');
   assert.deepEqual(seen.models.map(entry => entry.uid), ['swe-2-high']);

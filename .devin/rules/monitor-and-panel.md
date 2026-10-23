@@ -20,6 +20,9 @@ description: "Apply when changing usage recording, attribution, time filtering, 
   小时推进日期。前后端复用 `src/monitor/stats.cjs` 的统计公式，明细/汇总/诊断使用同一记录集；无效区间不得回退全量。最近 5000 条保留记录不保证完整月账单，界面必须明确披露。
 - 面板控件的垂直高度统一由 CSS 令牌 `--control-h`（28px）驱动，`button`/`input`/`select` 都引用它，不要再写死各自的高度；同一行必须放下的「input + 按钮」容器用
   `.actions.nowrap`，以免 flex 折行把按钮挤到第二行（折行判定用 hypothetical size，与容器 max-content 宽度不一致是根因）。
+- 主面板浏览器代码已拆分：`panel/client.cjs` 拥有 state/busy/共享 selection/request/对话框/焦点与滚动注册表/锁定恢复与消息监听；
+  `panel/models-view.cjs`、`fusion-view.cjs`、`settings-view.cjs` 各导出 `pageMarkup` 与 `create*View(ui)`（经 toString 注入，bind 只绑一次）；
+  纯投影在 `panel/panel-state.cjs`（`publicState`/`nativeVendor`，`manager.cjs` 转导出），`panel/view.cjs` 只剩外壳、样式与装配。
 - 三个 webview（`src/panel/view.cjs` 主面板、`goal-view.cjs`、`context-view.cjs`）共用 `src/panel/theme.cjs` 的
   `baseStyles()`：控件（`button` 及 `.secondary/.quiet/.danger`、`input/select/textarea`、`input.switch`）、字号层级、
   页面边距（`--page-x`/`--page-top`/`--page-bottom`）、`ul/ol` reset、`.code-block`、指标原语
@@ -47,7 +50,7 @@ description: "Apply when changing usage recording, attribution, time filtering, 
   另有一类**派生值**：`inferenceServerUrl` 由运行端口派生、不再持久化；旧配置里等于派生值的副本由 `pruneRetiredKeys` 清理，
   不同值视为用户手工覆盖保留。新增/删除配置键时先想清属于哪类：**死键必须有清理路径**，
   否则用户配置会永久带着它而面板又删不掉（「已关闭的排除条目」在角色列表里渲染为无开关死行，面板提供「移除」按钮走 `forgetRoleRef`：BYOK ref 是配置权威、直接可删；native ref 必须
-  `nativeCatalogStatus === 'ready'` 才放行，防止盲窗期把「还没同步」误删成「真死了」）。配置清理一律走 `src/config.cjs` 的
+  `nativeCatalogStatus === 'ready'` 才放行，防止盲窗期把「还没同步」误删成「真死了」）。配置清理一律走 `src/config/config.cjs` 的
   `pruneRetiredKeys`（激活期一次性、幂等、键不存在即返回 `false` 不写盘），它现在是**所有退役键的唯一清理路径**：`sidekicks`、`fusionPresets`、
   `defaultFusionUid`、`fusionMatrix` 全在其中（2026-10-16：预设退役迁移已删除，那三个键不再有任何读取方，留着只会让用户配置永久带着删不掉的字段）。
 - **`context-diagnostics` 里的 `zero-size` 计数不是回归信号，唯一判据是「启动后是否继续增长」**。上游在启动阶段会送 `size: 0` 的

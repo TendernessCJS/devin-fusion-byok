@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { checkInjectionHealth } = require('../src/runtime/health.cjs');
+const { checkInjectionHealth } = require('../src/runtime/host/injection-health.cjs');
 
 const healthy = {
   backendStatus: 'running',

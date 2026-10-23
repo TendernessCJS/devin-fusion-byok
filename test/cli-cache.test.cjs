@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { CACHE_NAME, inspectCliCaches, refreshStaleCliCaches } = require('../src/runtime/cli-cache.cjs');
+const { CACHE_NAME, inspectCliCaches, refreshStaleCliCaches } = require('../src/runtime/host/cli-cache.cjs');
 const { buildCatalog, augmentCatalog, staleFusionUids } = require('../src/catalog.cjs');
 const { s, v, m } = require('../src/protocol/wire.cjs');
 const cat = (...parts) => Buffer.concat(parts.flat());

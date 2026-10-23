@@ -11,9 +11,8 @@ const { createSandboxLoader } = require('./helpers/sandbox.cjs');
 
 const filename = path.resolve(__dirname, '../src/extension.cjs');
 const realRequire = createRequire(filename);
-const actualBackend = require('../src/runtime/backend.cjs');
 const goalSource = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cjs'), 'utf8');
-const autoSource = fs.readFileSync(path.join(__dirname, '../src/runtime/auto-continue.cjs'), 'utf8');
+const autoSource = fs.readFileSync(path.join(__dirname, '../src/runtime/host/auto-continue.cjs'), 'utf8');
 const NATIVE_MAIN = '/native/main.js';
 const next = () => new Promise(resolve => setImmediate(resolve));
 
@@ -25,9 +24,9 @@ function loadWithStubbedVscode(source, name, api, extra = {}) {
     require(request) {
       if (request === 'node:crypto') return require('node:crypto');
       if (request === 'node:module') return { createRequire };
-      if (request === './acp-hook.cjs' || request === '../runtime/acp-hook.cjs') {
+      if (request === './acp-hook.cjs' || request === '../runtime/host/acp-hook.cjs') {
         const hook = { exports: {} };
-        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/host/acp-hook.cjs'), 'utf8'),
           { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
         return hook.exports;
       }
@@ -98,24 +97,24 @@ function fixture(t) {
     'node:fs': { ...fs, watchFile: (_file, _options, callback) => watchers.push(callback), unwatchFile: () => {} },
     'node:child_process': { ...require('node:child_process'),
       spawn: () => { const child = new EventEmitter(); child.unref = () => {}; return child; } },
-    './config.cjs': { readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
+    './config/config.cjs': { readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
       writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)),
-      defaultConfig: realRequire('./config.cjs').defaultConfig,
-      pruneRetiredKeys: realRequire('./config.cjs').pruneRetiredKeys,
-      discover: async () => 0 },
+      defaultConfig: realRequire('./config/config.cjs').defaultConfig,
+      pruneRetiredKeys: realRequire('./config/config.cjs').pruneRetiredKeys },
     './catalog.cjs': { normalizeFusionConfig: config => config,
       buildCatalog: config => ({ models: [], fusions: {}, matrixUids: new Set(), rolePool: { lead: [], sidekick: [] } }) },
-    './runtime/native-models.cjs': { readNativeModels: async () => ({ status: 'empty', models: [] }),
-      isUpstreamUid: realRequire('./runtime/native-models.cjs').isUpstreamUid,
+    './runtime/host/native-models.cjs': { readNativeModels: async () => ({ status: 'empty', models: [] }),
+      isUpstreamUid: realRequire('./runtime/host/native-models.cjs').isUpstreamUid,
       pushNativeModels: async () => ({ pushed: 0, reason: 'empty' }) },
-    './runtime/backend.cjs': { runtimeIdentity: () => identity, controlFile: actualBackend.controlFile, PORT: 39842, MANAGEMENT_PROTOCOL: 1 },
+    './runtime/source-identity.cjs': { runtimeIdentity: () => identity },
+    './runtime/contract.cjs': { ...realRequire('./runtime/contract.cjs'), rootIdentity: () => identity },
     './runtime/bridge.cjs': { createLsBridge: async () => ({ port: 4567, close() {} }) },
-    './runtime/ls-injection.cjs': { installLsInjection: async options => { await options.createBridge(1234); return { status: {}, dispose: async () => {} }; } },
-    './runtime/cli-cache.cjs': { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
+    './runtime/host/ls-injection.cjs': { installLsInjection: async options => { await options.createBridge(1234); return { status: {}, dispose: async () => {} }; } },
+    './runtime/host/cli-cache.cjs': { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
       inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
       refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } },
     './goal/continue.cjs': loadWithStubbedVscode(goalSource, 'goal/continue.cjs', api),
-    './runtime/auto-continue.cjs': loadWithStubbedVscode(autoSource, 'auto-continue.cjs', api),
+    './runtime/host/auto-continue.cjs': loadWithStubbedVscode(autoSource, 'auto-continue.cjs', api),
     './panel/manager.cjs': { ...realRequire('./panel/manager.cjs'), createManager: options => realRequire('./panel/manager.cjs').createManager(options) }
   };
   const loader = createSandboxLoader({ filename, overrides, globals: {

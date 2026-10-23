@@ -6,7 +6,7 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { restartApp, relaunchScript, relaunchCommand, appProbe, appBundle } = require('../src/runtime/app-restart.cjs');
+const { restartApp, relaunchScript, relaunchCommand, appProbe, appBundle } = require('../src/runtime/host/app-restart.cjs');
 const { createPanelController } = require('../src/panel/controller.cjs');
 
 test('the bundle is derived from the app root and rejected otherwise', () => {

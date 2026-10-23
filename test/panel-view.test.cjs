@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const { renderPanel } = require('../src/panel/view.cjs');
 
 class Element {
-  constructor(tag) { this.tag = tag; this.children = []; this.attributes = {}; this.listeners = {}; this.dataset = {};
+  constructor(tag) { this.tag = tag; this.children = []; this.attributes = {}; this.listeners = {}; this.listenerCounts = {}; this.dataset = {};
     this.classList = { add() {} }; this.style = {}; this.value = ''; this.textContent = ''; this.className = '';
     this.checked = false; this.disabled = false; this.open = false; this.scrollTop = 0;
     this.selectionStart = 0; this.selectionEnd = 0; this.ownerDocument = null; }
@@ -13,7 +13,7 @@ class Element {
   replaceChildren(...children) { this.children = children; }
   setAttribute(key, value) { this.attributes[key] = value; }
   getAttribute(key) { return this.attributes[key]; }
-  addEventListener(name, listener) { this.listeners[name] = listener; }
+  addEventListener(name, listener) { this.listenerCounts[name] = (this.listenerCounts[name] || 0) + 1; this.listeners[name] = listener; }
   removeEventListener(name) { delete this.listeners[name]; }
   querySelectorAll() { return []; }
   querySelector() { return null; }
@@ -38,7 +38,7 @@ function collect(node, tag, predicate = () => true) {
   return found;
 }
 
-function panel(controlTags = {}) {
+function panel(controlTags = {}, script = renderPanel({ nonce: 'safe', cspSource: 'test:' }).match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]) {
   const elements = new Map(), posts = [], listeners = [];
   let focused = true;
   const byId = id => { if (!elements.has(id)) { const node = new Element(controlTags[id] || 'div'); node.ownerDocument = document; elements.set(id, node); } return elements.get(id); };
@@ -50,13 +50,13 @@ function panel(controlTags = {}) {
   document.createElement = tag => {
     const node = new Element(tag);
     node.ownerDocument = document;
-    node.setAttribute = (key, value) => { node.attributes[key] = value; if (key === 'id' && !elements.has(value)) elements.set(value, node); };
+    node.setAttribute = (key, value) => { node.attributes[key] = value; if (key === 'id') elements.set(value, node); };
     return node;
   };
-  vm.runInNewContext(renderPanel({ nonce: 'safe', cspSource: 'test:' }).match(/<script[^>]*>([\s\S]*?)<\/script>/)[1],
+  vm.runInNewContext(script,
     { acquireVsCodeApi: () => ({ getState: () => ({}), setState() {}, postMessage: message => posts.push(message) }), document,
       window: { addEventListener: (name, listener) => { if (name === 'message') listeners.push(listener); } }, setTimeout: () => 0, clearTimeout() {} });
-  return { byId, posts, receive: data => { for (const listener of listeners) listener(data); },
+  return { byId, posts, listeners, receive: data => { for (const listener of listeners) listener(data); },
     activeElement: () => document.activeElement, scrollingElement: () => document.scrollingElement,
     setHasFocus: value => { focused = value; } };
 }
@@ -389,4 +389,88 @@ test('bulk toggles act on the search-filtered set and say so', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(update.payload.changes)),
     [{ id: 'flash-a', enabled: false }, { id: 'flash-b', enabled: false }],
     'only filtered models are touched');
+});
+
+test('a second state push does not stack listeners: one click still posts one request', async () => {
+  const { byId, posts, receive, listeners } = panel();
+  const messageRegistrations = listeners.length;
+  receive({ data: { type: 'state', state: state() } });
+  receive({ data: { type: 'state', state: state() } });
+  const toggle = collect(byId('models'), 'input', node => node.attributes['aria-label'] === '启用模型 Saved')[0];
+  assert.ok(toggle, 'the rebuilt model switch is in the live subtree');
+  toggle.listeners.change({ target: { checked: false } });
+  assert.equal(posts.filter(message => message.type === 'updateModels').length, 1,
+    'each rebuilt row must carry exactly one handler');
+  receive({ data: { type: 'result', id: posts.at(-1).id, ok: true } });
+  await Promise.resolve();
+  assert.equal(byId('add-provider').listenerCounts.click, 1, 'the add-provider bind ran exactly once');
+  assert.equal(byId('refresh-cache').listenerCounts.click, 1, 'the refresh-cache bind ran exactly once');
+  byId('refresh-cache').listeners.click();
+  assert.equal(posts.filter(message => message.type === 'refreshCliCaches').length, 1,
+    'static buttons are bound once, not once per render');
+  assert.equal(listeners.length, messageRegistrations, 'state pushes must not register further message listeners');
+});
+
+test('the harness detects a duplicated static bind through registration counts', () => {
+  const source = renderPanel({ nonce: 'safe', cspSource: 'test:' }).match(/<script[^>]*>([\s\S]*?)<\/script>/)[1];
+  const duplicated = source.replace('modelsView.bind();', 'modelsView.bind(); modelsView.bind();');
+  assert.notEqual(duplicated, source, 'the in-memory patch must hit the real bind site');
+  const { byId, listeners } = panel({}, duplicated);
+  assert.equal(byId('add-provider').listenerCounts.click, 2,
+    'the registration counter must expose a bind that ran twice');
+  assert.equal(listeners.length, panel().listeners.length, 'message registrations match the unpatched panel');
+});
+
+test('unlock restores an originally-disabled control as still disabled', async () => {
+  const { byId, posts, receive } = panel({ 'refresh-cache': 'button' });
+  const locked = () => ({ ...state(), enabled: false,
+    providers: [{ ...state().providers[0] }] });
+  receive({ data: { type: 'state', state: locked() } });
+  const deadSwitch = collect(byId('settings-general'), 'input', node => node.className === 'switch')[0];
+  assert.equal(deadSwitch.disabled, true, 'an off plugin disables the auto-continue switches');
+  byId('refresh-cache').listeners.click();
+  const request = posts.at(-1);
+  assert.equal(request.type, 'refreshCliCaches');
+  receive({ data: { type: 'state', state: locked() } });
+  receive({ data: { type: 'result', id: request.id, ok: true } });
+  await Promise.resolve();
+  const restored = collect(byId('settings-general'), 'input', node => node.className === 'switch')[0];
+  assert.equal(restored.disabled, true, 'a node locked while disabled stays disabled, never resurrected');
+  assert.equal(byId('refresh-cache').disabled, false);
+});
+
+test('provider selection, role/native search and fold state survive a state push', () => {
+  const { byId, receive } = panel();
+  const two = () => ({ ...state(), providers: [
+    { ...state().providers[0] },
+    { id: 'cpb', name: 'CPB', baseUrl: 'https://cpb.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true, models: [] }],
+    roleLists: { lead: [{ ref: { nativeUid: 'n1' }, label: 'Native One', native: true, available: true, selected: true, memberUids: ['n1'] },
+      { ref: { nativeUid: 'n2' }, label: 'Native Two', native: true, available: true, selected: false, defaultSelected: false, explicitIncluded: false, memberUids: ['n2'] }],
+      sidekick: [] } });
+  receive({ data: { type: 'state', state: two() } });
+  collect(byId('providers'), 'button', node => textOf(node).includes('CPB'))[0].listeners.click();
+  const fold = collect(byId('lead-role-list'), 'details', node => node.className === 'fold')[0];
+  assert.ok(fold, 'an unselected official model lands under the fold');
+  fold.open = true;
+  fold.listeners.toggle();
+  const roleSearchBox = collect(byId('role-lead'), 'input', node => node.attributes.type === 'search')[0];
+  roleSearchBox.value = 'two';
+  roleSearchBox.listeners.input({ target: roleSearchBox });
+  const nativeSearchBox = collect(byId('native-models'), 'input', node => node.attributes.type === 'search')[0];
+  nativeSearchBox.value = 'glm';
+  nativeSearchBox.listeners.input({ target: nativeSearchBox });
+  receive({ data: { type: 'state', state: two() } });
+  const selected = collect(byId('providers'), 'button', node => node.className.includes('selected'))[0];
+  assert.match(textOf(selected), /CPB/, 'the clicked provider stays selected');
+  assert.equal(collect(byId('role-lead'), 'input', node => node.attributes.type === 'search')[0].value, 'two',
+    'the role search text survives');
+  assert.equal(collect(byId('native-models'), 'input', node => node.attributes.type === 'search')[0].value, 'glm',
+    'the native search text survives');
+  assert.equal(collect(byId('lead-role-list'), 'details', node => node.className === 'fold').length, 0,
+    'a non-empty query hides the fold entirely, but the open flag is restored when it returns');
+  const roleSearch2 = collect(byId('role-lead'), 'input', node => node.attributes.type === 'search')[0];
+  roleSearch2.value = '';
+  roleSearch2.listeners.input({ target: roleSearch2 });
+  assert.equal(collect(byId('lead-role-list'), 'details', node => node.className === 'fold')[0].open, true,
+    'the fold restores its open state');
 });

@@ -59,11 +59,11 @@ function fixture(t, initial = {}) {
       const child = new EventEmitter(); child.unref = () => {};
       return child;
     } },
-    './config.cjs': {
+    './config/config.cjs': {
       readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
       writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)),
-      defaultConfig: realRequire('./config.cjs').defaultConfig,
-      pruneRetiredKeys: realRequire('./config.cjs').pruneRetiredKeys, discover: async () => 2,
+      defaultConfig: realRequire('./config/config.cjs').defaultConfig,
+      pruneRetiredKeys: realRequire('./config/config.cjs').pruneRetiredKeys,
     },
     './catalog.cjs': { staleFusionUids: () => [],
       buildCatalog: config => ({ models: config.providers?.length
@@ -72,16 +72,17 @@ function fixture(t, initial = {}) {
           { uid: 'fusion-dfbyok-another', label: 'CPA Fusion Alt', kind: 'matrix' }, ...extraCatalogModels] : [],
       fusions: config.providers?.length ? { 'fusion-dfbyok-selected': { label: 'CPA Fusion' }, 'fusion-dfbyok-another': { label: 'CPA Fusion Alt' } } : {},
       lastFusionSelection: config.lastFusionSelection, matrixUids }) },
-    './runtime/native-models.cjs': { readNativeModels: options => nativeRead(options),
-      isUpstreamUid: realRequire('./runtime/native-models.cjs').isUpstreamUid,
+    './runtime/host/native-models.cjs': { readNativeModels: options => nativeRead(options),
+      isUpstreamUid: realRequire('./runtime/host/native-models.cjs').isUpstreamUid,
       pushNativeModels: options => { pushes.push(options); return Promise.resolve(pushResult); } },
     './goal/continue.cjs': { installGoalContinue: () => null },
-    './runtime/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
+    './runtime/host/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
       return { status: () => ({}), reset() {}, cancelSession: () => false, dispose() {} }; } },
-    './runtime/acp-observer.cjs': { installAcpObserver: () => ({ dispose() {} }) },
-    './runtime/backend.cjs': { runtimeIdentity: () => identity, controlFile: actualBackend.controlFile, PORT: 39842, MANAGEMENT_PROTOCOL: 1 },
+    './runtime/host/acp-observer.cjs': { installAcpObserver: () => ({ dispose() {} }) },
+    './runtime/source-identity.cjs': { runtimeIdentity: () => identity },
+    './runtime/contract.cjs': { ...realRequire('./runtime/contract.cjs'), rootIdentity: () => identity },
     './runtime/bridge.cjs': { createLsBridge: async (_port, options) => { bridges.push(options); return { port: 4567, close() {} }; } },
-    './runtime/ls-injection.cjs': { installLsInjection: async options => {
+    './runtime/host/ls-injection.cjs': { installLsInjection: async options => {
       installed++; await options.createBridge(1234);
       if (injectionGate) { const gate = injectionGate; injectionGate = null; await gate; }
       return { status: { state: 'ready' }, dispose: async () => { disposed++; } };
@@ -90,7 +91,7 @@ function fixture(t, initial = {}) {
       managerOptions = options;
       return realRequire('./panel/manager.cjs').createManager(options);
     } },
-    './runtime/cli-cache.cjs': { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
+    './runtime/host/cli-cache.cjs': { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
       inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
       refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } },
   };

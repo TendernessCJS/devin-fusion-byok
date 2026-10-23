@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { serveChat } = require('../src/protocol/inference.cjs');
-const { discover } = require('../src/config.cjs');
+const { discover } = require('../src/models/discovery.cjs');
 const { forward, collect } = require('../src/runtime/bridge.cjs');
 
 async function listen(t, handler) {

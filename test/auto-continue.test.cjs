@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createManager } = require('../src/panel/manager.cjs');
 
-const source = fs.readFileSync(path.join(__dirname, '../src/runtime/auto-continue.cjs'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../src/runtime/host/auto-continue.cjs'), 'utf8');
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
 
 function fixture() {
@@ -34,7 +34,7 @@ function fixture() {
       if (name === 'node:module') return { createRequire };
       if (name === './acp-hook.cjs') {
         const hook = { exports: {} };
-        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+        vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/host/acp-hook.cjs'), 'utf8'),
           { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
         return hook.exports;
       }

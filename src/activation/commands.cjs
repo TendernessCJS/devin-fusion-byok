@@ -1,7 +1,7 @@
 'use strict';
-const { updateConfig } = require('../config-store.cjs');
+const { updateConfig } = require('../config/store.cjs');
 const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } = require('../lifecycle/owned-settings.cjs');
-const { globalSetting } = require('./errors.cjs');
+const { globalSetting } = require('./settings.cjs');
 const { teardown } = require('./teardown.cjs');
 const { isHostDisabled } = require('../lifecycle/host-disabled.cjs');
 

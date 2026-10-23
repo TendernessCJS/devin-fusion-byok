@@ -1,7 +1,8 @@
 'use strict';
 const { BACKEND_URL } = require('../runtime/port.cjs');
-const { modelEfforts, modelSupportsImages } = require('../model-capabilities.cjs');
-const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, configFor, leadFamilyBase, stableOrders, groupedOrders } = require('./identity.cjs');
+const { modelEfforts, modelSupportsImages } = require('../models/capabilities.cjs');
+const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, leadFamilyBase, stableOrders, groupedOrders } = require('./identity.cjs');
+const { configFor } = require('./codec.cjs');
 const { discoverOfficialRoles, discoverAdditionalNativeRoles, buildRoleLists } = require('./roles.cjs');
 
 function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analysis = null) {

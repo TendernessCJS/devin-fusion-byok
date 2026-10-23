@@ -1384,7 +1384,7 @@ test('staleFusionUids requires a populated `known` set instead of falling back t
 
 test('a throwing staleProbe is a safe no-op for refreshStaleCliCaches', () => {
   const os = require('node:os'), nodePath = require('node:path');
-  const { refreshStaleCliCaches } = require('../src/runtime/cli-cache.cjs');
+  const { refreshStaleCliCaches } = require('../src/runtime/host/cli-cache.cjs');
   const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'cli-cache-staleprobe-'));
   const name = 'model_configs_v5.bbbbbbbbbbbbbbbb.bin';
   const payload = Buffer.from('dfbyok-new-uid', 'utf8').toString('base64');

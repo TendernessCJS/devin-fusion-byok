@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseChat } = require('../src/protocol/acp.cjs');
+const { parseChat } = require('../src/protocol/native-chat-codec.cjs');
 const { buildAnthropicBody, createAnthropicAdapter } = require('../src/protocol/anthropic.cjs');
 
 const ANTHROPIC_FILE = path.join(__dirname, '..', '.refs', 'anthropic-sdk-typescript', 'src', 'resources', 'messages', 'messages.ts');

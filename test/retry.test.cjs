@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { isConnectionFailure, withConnectionRetry } = require('../src/runtime/retry.cjs');
+const { isConnectionFailure, withConnectionRetry } = require('../src/runtime/host/retry.cjs');
 
 test('isConnectionFailure reads the code directly and through error.cause', () => {
   assert.equal(isConnectionFailure(Object.assign(new Error('reset'), { code: 'ECONNRESET' })), true);

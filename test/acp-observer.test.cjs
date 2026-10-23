@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '../src/runtime/acp-observer.cjs'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../src/runtime/host/acp-observer.cjs'), 'utf8');
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -24,7 +24,7 @@ function fixture() {
     if (name === 'node:module') return { createRequire };
     if (name === './acp-hook.cjs') {
       const hook = { exports: {} };
-      vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/acp-hook.cjs'), 'utf8'),
+      vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/host/acp-hook.cjs'), 'utf8'),
         { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
       return hook.exports;
     }

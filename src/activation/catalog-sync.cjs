@@ -1,8 +1,8 @@
 'use strict';
-const { readNativeModels, pushNativeModels, isUpstreamUid } = require('../runtime/native-models.cjs');
-const { mergeNativeEntry, normalizeNativeEntry, normalizeAllowedUids } = require('../native-entry.cjs');
+const { readNativeModels, pushNativeModels, isUpstreamUid } = require('../runtime/host/native-models.cjs');
+const { mergeNativeEntry, normalizeNativeEntry, normalizeAllowedUids } = require('../models/native-entry.cjs');
 
-function installCatalogSync({ deps, shared }) {
+function installCatalogSync({ deps, shared, onChange }) {
   const { lifecycle, config, log } = deps;
   const PUSH_INTERVAL_MS = 5 * 1000;
   const ALLOWED_UNRESTRICTED_STREAK = 3;
@@ -26,11 +26,8 @@ function installCatalogSync({ deps, shared }) {
   const commit = ({ bumpRevision }) => {
     if (lifecycle.activationDisposed) return Promise.resolve();
     if (bumpRevision) shared.nativeRevision += 1;
-    const published = Promise.resolve(shared.management?.publish()).catch(() => {});
-    shared.updateStatusBar();
     if (shared.nativeModels.size !== shared.nativeSyncSize) { shared.nativeSyncSize = shared.nativeModels.size; log('native-sync', { count: shared.nativeSyncSize }); }
-    shared.pickerRefresh?.changed?.();
-    shared.checkCliCaches?.();
+    const published = Promise.resolve(onChange?.()).catch(() => {});
     shared.pushToBackend();
     return published;
   };

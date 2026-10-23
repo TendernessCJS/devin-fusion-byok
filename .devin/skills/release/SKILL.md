@@ -61,7 +61,7 @@ git tag --list 'v*' --sort=-v:refname | head -3
 npm test
 ```
 
-**应全绿 0 失败**。曾有的 `native-models-sync` 连接复用失败已由 `src/runtime/retry.cjs` 的 `withConnectionRetry` 修复（见 `AGENTS.md`「测试基线」）；出现任何失败先查清再继续，**不要为了通过测试而修改断言**。
+**应全绿 0 失败**。曾有的 `native-models-sync` 连接复用失败已由 `src/runtime/host/retry.cjs` 的 `withConnectionRetry` 修复（见 `AGENTS.md`「测试基线」）；出现任何失败先查清再继续，**不要为了通过测试而修改断言**。
 
 ## 3. 打包
 

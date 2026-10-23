@@ -8,7 +8,7 @@ const os = require('node:os');
 const { createRequire } = require('node:module');
 const vm = require('node:vm');
 const { startBackend, controlFile, runtimeIdentity } = require('../src/runtime/backend.cjs');
-const { readNativeModels } = require('../src/runtime/native-models.cjs');
+const { readNativeModels } = require('../src/runtime/host/native-models.cjs');
 const { collect } = require('../src/runtime/bridge.cjs');
 const { createManager } = require('../src/panel/manager.cjs');
 const { buildCatalog, buildRoleLists, collectAllowedUids } = require('../src/catalog.cjs');
@@ -289,7 +289,7 @@ test('readNativeModels still fails closed on malformed catalog entries', async t
   assert.equal(ok.status, 'ready', 'a structurally valid entry still reads back');
 });
 
-// Minimal installCatalogSync harness: only ../runtime/native-models.cjs is
+// Minimal installCatalogSync harness: only ../runtime/host/native-models.cjs is
 // stubbed, so the push/read paths never reach a real backend.
 function syncFixture({ read = async () => ({ status: 'ready', models: [] }) } = {}) {
   const logs = [], pushes = [];
@@ -300,8 +300,8 @@ function syncFixture({ read = async () => ({ status: 'ready', models: [] }) } = 
     module, exports: module.exports,
     AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
     require(name) {
-      if (name === '../runtime/native-models.cjs') return {
-        isUpstreamUid: realRequire('../runtime/native-models.cjs').isUpstreamUid,
+      if (name === '../runtime/host/native-models.cjs') return {
+        isUpstreamUid: realRequire('../runtime/host/native-models.cjs').isUpstreamUid,
         readNativeModels: read,
         pushNativeModels: options => { pushes.push(options); return Promise.resolve({ pushed: 0, reason: 'unavailable' }); },
       };
@@ -313,10 +313,11 @@ function syncFixture({ read = async () => ({ status: 'ready', models: [] }) } = 
   const shared = {
     nativeModels: new Map(), nativeAllowedUids: new Set(),
     nativeRevision: 0, lastPushedRevision: 0, lastPushAt: 0, nativeSyncSize: -1,
-    updateStatusBar: () => {},
   };
-  module.exports.installCatalogSync({ deps: { lifecycle, config: () => ({}), log: (event, data) => logs.push({ event, data }), root: '/nonexistent' }, shared });
-  return { shared, logs, pushes };
+  let changes = 0;
+  module.exports.installCatalogSync({ deps: { lifecycle, config: () => ({}), log: (event, data) => logs.push({ event, data }), root: '/nonexistent' },
+    shared, onChange: () => { changes += 1; } });
+  return { shared, logs, pushes, changes: () => changes };
 }
 
 const OBSERVED_ENTRY = { uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] };
@@ -327,6 +328,7 @@ test('the observation channel reports the synced catalog size too', () => {
   const entry = f.logs.find(line => line.event === 'native-sync');
   assert.ok(entry, 'observeNativeModels must log native-sync just like refresh does');
   assert.equal(entry.data.count, 1);
+  assert.equal(f.changes(), 1, 'the observation channel commits through onChange exactly once');
 });
 
 test('local observations survive a backend-empty refresh in the published view', async () => {
@@ -353,6 +355,7 @@ test('a failed read keeps the published catalog instead of wiping it', async () 
     'retaining the view must not advance the revision');
   assert.ok(f.logs.some(line => line.event === 'native-refresh-retained'),
     'the guard must be observable in logs');
+  assert.equal(f.changes(), 2, 'each refresh commits through onChange exactly once, including the retained path');
 });
 
 test('an authoritative empty answer still clears backend-sourced entries', async () => {

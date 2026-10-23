@@ -2,15 +2,17 @@
 const vscode = require('vscode');
 const fs = require('node:fs');
 const path = require('node:path');
-const { defaultConfig, pruneRetiredKeys, readConfig } = require('./config.cjs');
-const { readDoc, updateConfig, archiveCorrupt, recoverFromBackup } = require('./config-store.cjs');
+const { defaultConfig, pruneRetiredKeys, readConfig } = require('./config/config.cjs');
+const { readDoc, updateConfig, archiveCorrupt, recoverFromBackup } = require('./config/store.cjs');
 const { buildCatalog } = require('./catalog.cjs');
-const { installAutoContinue } = require('./runtime/auto-continue.cjs');
+const { installAutoContinue } = require('./runtime/host/auto-continue.cjs');
 const { installGoalContinue } = require('./goal/continue.cjs');
 const { createGoalController } = require('./goal/state.cjs');
 const { ensureBackend } = require('./activation/backend-handshake.cjs');
 const { safeError } = require('./activation/errors.cjs');
 const { installCatalogSync } = require('./activation/catalog-sync.cjs');
+const { installCacheSync } = require('./activation/cache-sync.cjs');
+const { createConfigSync } = require('./activation/config-sync.cjs');
 const { installEnable } = require('./activation/enable.cjs');
 const { installCommands } = require('./activation/commands.cjs');
 const { installPanel } = require('./activation/panel-install.cjs');
@@ -130,14 +132,13 @@ async function activate(context) {
     acpObservationSeq: 0, acpOwnModels: 0,
     pushTimer: undefined, lastPushAt: 0, nativeRevision: 0, lastPushedRevision: 0,
     nativeSyncSize: -1, cliCacheReport: null, contextObserver: undefined,
-    lastAutoError: undefined, lastAutoPlan: undefined,
     pushToBackend: undefined, refreshNativeModels: undefined,
     startNativeSync: undefined, observeNativeModels: undefined, observeAllowedUids: undefined,
     ensureEnabled: undefined,
     saveFusionChoice: undefined, reconcilePreference: undefined,
     disable: undefined, reconcileSelection: undefined,
     statusBar: undefined, updateStatusBar: undefined,
-    pickerRefresh: undefined, checkCliCaches: undefined,
+    pickerRefresh: undefined,
   };
   installContinuation();
   const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...shared.nativeModels.values()], shared.nativeAllowedUids); };
@@ -153,10 +154,19 @@ async function activate(context) {
     log('error', { code: safe.code }); vscode.window.showErrorMessage('Fusion BYOK：' + safe.message);
   } };
   const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run };
-  installCatalogSync({ deps, shared });
+  const cacheSync = installCacheSync({ deps, shared, publish: () => shared.management?.publish() });
+  installCatalogSync({ deps, shared, onChange: () => {
+    const published = Promise.resolve(shared.management?.publish()).catch(() => {});
+    shared.updateStatusBar();
+    cacheSync.changed();
+    return published;
+  } });
   installEnable({ deps, shared });
   installCommands({ deps, shared });
-  installPanel({ deps, shared });
+  const configSync = createConfigSync({ deps, shared,
+    changed: () => cacheSync.changed(), publish: () => shared.management.publish() });
+  installPanel({ deps, shared, cacheSync, afterChange: configSync.afterChange });
+  configSync.start();
   if (config().enabled !== false) await run(shared.ensureEnabled)();
   return { status: () => lifecycle.connection?.status, autoContinue: () => shared.autoContinue?.status() };
 }

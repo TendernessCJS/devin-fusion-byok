@@ -69,9 +69,9 @@ function fixture(t, options = {}) {
   // enable.cjs derives the managed env from runtime/port.cjs now, which loads
   // for real here (a leaf module with the same 39842 constant).
   const loader = createSandboxLoader({ filename, overrides: {
-    '../runtime/ls-injection.cjs': { installLsInjection: async () => ({ dispose: async () => {} }) },
+    '../runtime/host/ls-injection.cjs': { installLsInjection: async () => ({ dispose: async () => {} }) },
     '../runtime/bridge.cjs': { createLsBridge: async () => ({ port: 4567, close() {} }) },
-    '../runtime/acp-observer.cjs': { installAcpObserver: () => ({ dispose() {} }) },
+    '../runtime/host/acp-observer.cjs': { installAcpObserver: () => ({ dispose() {} }) },
     './backend-handshake.cjs': { ensureBackend: ({ onCompatibleRuntime }) => {
       onCompatibleRuntime?.({ version: 'test' });
       return Promise.resolve();

@@ -4,7 +4,7 @@
 // as shipped in the desktop bundle; only documented read-only RPCs are used.
 const net = require('node:net');
 const { s, v, m, num, parseFields } = require('../protocol/wire.cjs');
-const { post, metadata } = require('./protocol.cjs');
+const { post, metadata } = require('./remote-client.cjs');
 
 // Devin extracts page text on the client; the official redirect RPC returns no
 // body. Pages are therefore fetched here, after the same account policy check.

@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createPickerRefresh, signatureOf } = require('../src/runtime/picker-refresh.cjs');
+const { createPickerRefresh, signatureOf } = require('../src/runtime/host/picker-refresh.cjs');
 
 function harness({ models = [{ uid: 'a', label: 'A' }], fail = [] } = {}) {
   let clock = 1000, current = models;
