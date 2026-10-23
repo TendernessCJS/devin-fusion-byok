@@ -771,7 +771,7 @@ test('provider idle timeout outputs code 13 and target text, cancel does not ret
     res.on('close', () => clearTimeout(timer));
   }, 'openai-responses', { idleMs: 50, firstResponseMs: 500 });
   const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
-  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'First chunkProvider response could not be completed.');
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'First chunkProvider response timed out after 50ms.');
   assert.equal(num(result.messages.at(-1), 5), 13);
   assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_timeout'));
 });
@@ -836,7 +836,17 @@ test('firstResponse timeout triggers code 13 and upstream_timeout error', async 
     await new Promise(r => setTimeout(r, 200));
   }, 'openai-responses', { firstResponseMs: 30, idleMs: 500 });
   const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
-  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Provider response could not be completed.');
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Provider response timed out after 30ms.');
+  assert.equal(num(result.messages.at(-1), 5), 13);
+  assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_timeout'));
+});
+
+test('firstResponse timeout renders second-scale budgets', async t => {
+  const app = await bridge(t, async (req, res) => {
+    await new Promise(r => setTimeout(r, 2000));
+  }, 'openai-responses', { firstResponseMs: 1000, idleMs: 5000 });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Provider response timed out after 1s.');
   assert.equal(num(result.messages.at(-1), 5), 13);
   assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_timeout'));
 });

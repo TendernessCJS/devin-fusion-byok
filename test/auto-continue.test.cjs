@@ -50,7 +50,9 @@ function fixture() {
     });
   }
 
-  return { api, originalRegister, registrations, disposable, logs, install, matchesProviderError: module.exports.matchesProviderError };
+  return { api, originalRegister, registrations, disposable, logs, install,
+    matchesProviderError: module.exports.matchesProviderError,
+    matchesTerminalBlocker: module.exports.matchesTerminalBlocker };
 }
 
 function fakeScheduler() {
@@ -92,9 +94,21 @@ test('matchesProviderError recognizes exact suffix with and without period', () 
   assert.equal(f.matchesProviderError('Some prefix text... Provider response could not be completed.\n'), true);
   assert.equal(f.matchesProviderError('Provider response could not be completed and more text'), false);
   assert.equal(f.matchesProviderError('Mentioning Provider response could not be completed in a question?'), false);
+  assert.equal(f.matchesProviderError('Provider response timed out after 120s.'), true);
+  assert.equal(f.matchesProviderError('Error: Provider response timed out after 50ms.'), true);
+  assert.equal(f.matchesProviderError('Provider response timed out after 120s.\n'), true);
+  assert.equal(f.matchesProviderError('Provider response timed out after 120s and more text'), false);
+  assert.equal(f.matchesProviderError('Provider response timed out.'), false);
   assert.equal(f.matchesProviderError('Normal completed response.'), false);
   assert.equal(f.matchesProviderError(''), false);
   assert.equal(f.matchesProviderError(null), false);
+});
+
+test('matchesTerminalBlocker keeps timeouts retryable and terminal HTTP errors blocking', () => {
+  const f = fixture();
+  assert.equal(f.matchesTerminalBlocker('Provider response timed out after 120s.'), false);
+  assert.equal(f.matchesTerminalBlocker('Provider returned HTTP 400.'), true);
+  assert.equal(f.matchesTerminalBlocker('Provider returned HTTP 503.'), false);
 });
 
 test('auto continue handles v1 fail -> continue -> success with backoff and synthetic chunk', async t => {
@@ -168,6 +182,85 @@ test('auto continue handles v1 fail -> continue -> success with backoff and synt
   assert.ok(optimisticMsg);
   assert.equal(optimisticMsg.params.update.content.text, 'continue');
   assert.equal(optimisticMsg.params.update._meta['cognition.ai/isOptimistic'], true);
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'All done now successfully!' }
+      }
+    }
+  });
+
+  const finalResult = await prompt1;
+  assert.deepEqual(finalResult, { stopReason: 'end_turn' });
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('auto continue retries the upstream timeout text the same way as the generic error', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  const clientMessages = [];
+  const serverCalls = [];
+  let promptCount = 0;
+
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(request, token) {
+      serverCalls.push(request);
+      if (request.method === 'session/prompt') {
+        promptCount++;
+        return Promise.resolve({ stopReason: 'end_turn' });
+      }
+      return Promise.resolve({});
+    },
+    forwardClientRequest(request) {
+      clientMessages.push(request);
+    }
+  };
+
+  f.api.registerConnection(connector);
+
+  const prompt1 = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's1', prompt: [{ type: 'text', text: 'hello' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Error: Provider response timed out after 120s.' }
+      }
+    }
+  });
+
+  await new Promise(r => setImmediate(r));
+
+  assert.equal(scheduler.pendingCount(), 1);
+  assert.equal(promptCount, 1);
+
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+
+  const continueCall = serverCalls[1];
+  assert.equal(continueCall.method, 'session/prompt');
+  assert.equal(continueCall.params.prompt[0].text, 'continue');
+  assert.equal(continueCall.params.sessionId, 's1');
+  assert.equal(handle.status().autoContinueCount, 1);
 
   connector.forwardClientRequest({
     method: 'session/update',

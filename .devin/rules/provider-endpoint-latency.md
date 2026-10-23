@@ -43,3 +43,24 @@ DeepSeek Anthropic provider 的 4816 条记录中有 8 条非 success；当时�
 本次确认了插件主动超时和端点显式失败两种机制。响应头探针等待已包含连接、上传和服务端等待，历史首输出时间同样从请求开始计算；两者不能相加，否则会重复计时。现有数据不足以确认排队时长、请求体影响或延长超时后的成功率。
 
 记录本身不改变超时或重试。后续若调整预算或重试，应按实际请求路径验证取消、资源释放、部分输出和工具调用的重复风险，并保留有界等待。
+
+## 2026-10-24 00:02 一次「零字节」超时（Anthropic 端点，不是 relay）
+
+本地 00:02:26（UTC+8）本机会话实测。与上面两条 Proxy 失败**不是同一端点**，不能合并归因。
+
+- 通道：provider `DeepSeek` = `https://api.deepseek.com/anthropic/v1`（Anthropic Messages），providerId `provider-9f5adb21…`，模型 `deepseek-flash`、effort `high`；`monitor.jsonl` 记录 id `1d9c1743-…`。
+- 记录：`upstream_timeout`、`httpStatus 0`、`firstOutputMs` / `firstTextMs` 均为 null、`usageState: missing`、持续 **120,005 ms**；`runtime.log` 同时段 `chat-error` 的 transport 为 `AbortError`。与 `serveChat` 默认 `firstResponseLimit` 一致，是**插件计时器**取消，不是上游回的错误帧。
+- 对照（同一 provider、同一模型）：失败前 7.3s（16:02:19.573Z）一条 `inputTokens 312,984` 的请求 `firstTextMs 6,433`、总 7,078 ms 成功；失败后 16:06:46Z 起连续成功（输入降到约 178,718，疑似期间发生过压缩）。
+- 6 小时窗口（10:02:26Z–16:02:26Z，provider-9f5adb21）：**277 success / 2 error / 3 cancelled**。成功且 `firstOutputMs` 可用 277 条：p50 **2,498 ms**、p90 **25,743 ms**、p99 **52,944 ms**、max **85,081 ms**；`firstTextMs`：p50 **6,967 ms**、p90 **33,441 ms**、p99 **47,002 ms**、max **52,190 ms**。
+- 该 provider 全部 4,925 条 `deepseek-flash` 记录中 error 仅 4 条：`upstream_invalid_tool` 2 条（`httpStatus 200`）、`upstream_network` 1 条（ECONNRESET，1,798 ms，14:11:44Z）、`upstream_timeout` 1 条（本次）。
+
+边界：
+
+- 零字节 120s 只说明该请求在上限内**没拿到响应头**；日志无法区分 DNS、建连、TLS、上传、服务端排队卡在哪一步，也**不能**据此说该端点整体变慢——同尺寸请求在它前后几秒内都成功了。
+- 反过来，同尺寸成功也不能排除上下文规模的影响：这次失败紧接在 `inputTokens ≈ 313k` 之后，但同一规模的前一条成功，**规模不是充分条件**。
+- 因此**不建议**拿「调高上限」当处理方式：等待更久对零字节停滞没有证据收益；且 `firstResponseLimit` 是响应头预算，不是整次请求总时长。
+
+重试面（该次未开启，随后由用户开启 `autoContinueOnProviderError`）：
+
+- 超时现在有专属文案 `Provider response timed out after <预算>s/ms`（`src/protocol/inference.cjs` 按 `status` 选 `firstResponseLimit` 或 `idleLimit`）；`upstream_stream_error` / `upstream_stream_incomplete` / `upstream_network` 仍走通用文案 `Provider response could not be completed.`。两类文案都被 `src/runtime/host/auto-continue.cjs` 匹配为可重试目标（`TARGET_ERROR` + `TIMEOUT_RE`）；终止判定 `TERMINAL_BLOCKER_RE` 只匹配 `Provider returned HTTP 4xx/5xx.` 与格式类错误，所以这两类文案**都会**被自动重试。
+- 预算：`ERROR_ATTEMPT_LIMIT = 5`、`ERROR_WINDOW_MS = 10 min`，超出即停止，不会无限重试。

@@ -8,12 +8,18 @@ const INSTANCE = Symbol.for('devin-fusion-byok.auto-continue.v1');
 const ATTACHED = Symbol.for('devin-fusion-byok.auto-continue.attached');
 const TARGET_ERROR = 'Provider response could not be completed';
 const TRANSIENT_HTTP_RE = /Provider returned HTTP (?:408|429|500|502|503|504)\.$/;
+const TIMEOUT_RE = /Provider response timed out after \d+(?:ms|s)\.$/;
 const TERMINAL_BLOCKER_RE = /(?:Provider returned HTTP (?:4\d\d|5\d\d)\.|Provider response format is invalid\.)$/;
+
+function matchesTimeoutError(text) {
+  return typeof text === 'string' && TIMEOUT_RE.test(text.trimEnd());
+}
 
 function matchesProviderError(text) {
   if (typeof text !== 'string') return false;
   const trimmed = text.trimEnd();
   if (trimmed.endsWith(TARGET_ERROR) || trimmed.endsWith(TARGET_ERROR + '.')) return true;
+  if (matchesTimeoutError(trimmed)) return true;
   return TRANSIENT_HTTP_RE.test(trimmed);
 }
 
@@ -339,7 +345,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           if (turn.generation !== capturedGen) return;
           turn.consumed = true;
           const msg = typeof err?.message === 'string' ? err.message : (typeof err === 'string' ? err : '');
-          const isExactMsg = (msg === TARGET_ERROR || msg === TARGET_ERROR + '.');
+          const isExactMsg = msg === TARGET_ERROR || msg === TARGET_ERROR + '.' || matchesTimeoutError(msg);
           const options = getOptions() || {};
 
           if (isEnabled() && options.onProviderError !== false && isExactMsg && !sessionSuppressed(sessionId)) {
@@ -788,5 +794,6 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
 
 module.exports = {
   installAutoContinue,
-  matchesProviderError
+  matchesProviderError,
+  matchesTerminalBlocker
 };

@@ -472,7 +472,11 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     // passed through the stream catch — adopt it here for the error text.
     if (err?.code === 'attachment_unsupported') classifiedCode = 'attachment_unsupported';
     let errorText = 'Provider response could not be completed.';
-    if (classifiedCode === 'upstream_http' && status >= 400) {
+    if (classifiedCode === 'upstream_timeout') {
+      const budget = status ? idleLimit : firstResponseLimit;
+      const shown = budget >= 1000 ? `${Math.round(budget / 1000)}s` : `${budget}ms`;
+      errorText = `Provider response timed out after ${shown}.`;
+    } else if (classifiedCode === 'upstream_http' && status >= 400) {
       errorText = `Provider returned HTTP ${status}.`;
     } else if (classifiedCode === 'upstream_content_type' || classifiedCode === 'upstream_invalid_json' || classifiedCode === 'upstream_invalid_tool') {
       errorText = 'Provider response format is invalid.';
