@@ -58,6 +58,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/upstream-fork-release.md` | 同步 `upstream`、定/升版本号、发布、解 merge 冲突 |
 | `.devin/rules/provider-measurements.md` | **改 Responses/Anthropic/Chat 语义前必读**——供应商面实测事实，已推翻多处早期结论 |
 | `.devin/rules/provider-endpoint-latency.md` | **排查首响慢、`upstream_timeout`/`upstream_stream_error`，或要动超时预算时必读**——响应头探针、历史统计口径与超时路径的证据边界 |
+| `.devin/rules/provider-sdk-parity.md` | **判断某个 provider 线格式字段是否合法、该不该发，或更新 `.refs` 里的 SDK 时必读**——SDK 基线版本与更新方式、我们发送字段的合法性对照、原生无法表达因此刻意不发的字段、以及「REA 管不到 provider 线格式」的判据 |
 | `.devin/rules/testing-notes.md` | 写或调测试 |
 | `.devin/rules/retired-and-deadends.md` | 清理配置键、审「这段代码还活着吗」、疑惑旧字段为何还在 |
 | `.devin/rules/acp-protocol-fields.md` | 改 `src/protocol/*` 的 protobuf 字段号、核对原生请求/响应/用量字段 |
