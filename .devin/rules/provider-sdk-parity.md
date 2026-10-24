@@ -46,7 +46,7 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 | SDK 字段 | 原生有无对应 | 结论 |
 | --- | --- | --- |
 | Anthropic `thinking`（`budget_tokens` / `adaptive`） | 无 | 不请求扩展思考。`output_config.effort` 是**力度**，不等于开启思考；`anthropic.cjs` 的 thinking/signature/redacted 回放只在**上游自己吐**时才走到 |
-| Anthropic `cache_control`（缓存断点） | **部分**：只有 `prompt_cache_key` | 见下一节，这是唯一真有成本差的缺口 |
+| Anthropic `cache_control`（缓存断点） | **已实现**（见下节） | 由 `prompt_cache_key` 驱动，带 400 因果降级 |
 | OpenAI `verbosity` / `text.verbosity` | 无 | 力度已由目录里的 effort 变体表达 |
 | `prompt_cache_options` / `prompt_cache_retention` / `prompt_cache_breakpoint` | 无 | 默认即 implicit 缓存，行为等价；这些新字段第三方网关普遍不认 |
 | `max_tool_calls`（7.43 新增） | 无 | 不设上限 |
@@ -55,9 +55,26 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 
 ## 原生唯一的缓存信号是 `GetChatMessageRequest#27`
 
-`prompt_cache_key` 我们原样转发给 OpenAI（自动缓存即生效）。**Anthropic 没有等价参数**——它的缓存只能靠显式 `cache_control: {type:'ephemeral'}` 断点，所以我们发过去的每一轮都是全价重发整段历史。
+`prompt_cache_key` 原样转发给 OpenAI（自动缓存即生效）。**Anthropic 没有等价参数**——它的缓存必须靠显式 `cache_control: {type:'ephemeral'}` 断点，否则每轮全价重发整段历史。
 
-证据是我们自己已经读的两个数：`cache_read_input_tokens` / `cache_creation_input_tokens` 在 Anthropic 上**恒为 0**，而同样的计数器在 OpenAI 侧非 0。要把 f27 翻译成 Anthropic 断点属于**行为变更**，不是对齐：须先定「网关不认 400 时退回不发」的降级判据，并靠上述两个计数验证生效。
+**现在的实现**（`anthropic.cjs` 的 `buildAnthropicBody` 第 4 参 `options.cacheBreakpoints`）：
+
+- 仅当 `options.cacheBreakpoints === true` **且** 原生给了 f27 **且** 合并后的 `messages.length >= 2` 时打**一个**断点
+- 落点：**倒数第二条**消息里最后一个 `text`/`tool_result`/`tool_use`/`image`/`document` 块；**绝不打在最后一条**（那是本轮新内容，写不进缓存）
+- 只打在消息块上就够：Anthropic 的前缀顺序是 **tools → system → messages**，断点缓存「该块之前的一切」，因此一个消息级断点同时覆盖工具定义与 system，**不必**把 `system` 改成数组形态
+
+**降级：不靠关键词，靠因果**
+
+打点后收到 400 → 剥掉全部 `cache_control`（`stripCacheControl`）**重试一次**：
+
+- 重试**成功** ⇒ 就是断点导致的 ⇒ 把该 provider 写进 `<存储根>/provider-cache.json` 持久标记，此后不再打点，并记 `cache-breakpoint-disabled`（一次性，不每轮刷）
+- 重试**仍失败** ⇒ 与断点无关（上下文超限、参数错），照原样以 `upstream_http` 抛出，**不标记**
+
+之所以不用关键词匹配（现有 `tool_choice` / `store|include` 两条分支是关键词门控的）：网关拒绝措辞五花八门，猜错等于「以为降级了其实没降」。因果判定不需要维护词表，也不会被措辞变更悄悄打破。
+
+**状态文件纪律**：键是 `sha256(JSON.stringify([provider.id, provider.baseUrl]))`，文件里**不出现 apiKey、也不出现 baseUrl 明文**；上限 32 条按时间淘汰；临时文件 + `rename` 原子写，权限 `0o600`；缺失/非法 JSON/版本不符一律按空状态（全放行），不抛。用户改 `baseUrl` 会导致键变化，能力**自动重评**，无需清理逻辑。
+
+**尚未验证的事实（不要写成结论）**：生效判据是真实 provider 上 `cache_read_input_tokens` / `cache_creation_input_tokens` 从 0 变为非 0——这两个数我们已经在读并入库，但**截至本卷更新时还没有真实观测数据**。写任何「已生效」的断言前先拿到该数据。
 
 ## 为什么 REA 在这一层不适用（重要）
 
@@ -81,3 +98,4 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 - 改 `src/protocol/*` 的发送面之前，先读 `provider-measurements.md`（实测事实）与本卷（合法性/该不该发）。
 - 新增字段的唯一正当理由是「原生给了对应控制位」，不是「SDK 加了」。
 - 任何「我们发的字段 SDK 里没有」都视为缺陷；反之（SDK 有而我们不发）先查本卷的刻意不发表，别当成缺漏。
+- provider 侧的「能自愈的 400」目前只有三种：`tool_choice`、Responses 的 `store|include`、以及 Anthropic 的 `cache_control`。前两者语义面小、可按关键词判定；新增同类降级时优先用**因果判定**（改动后重试成功才算该因子导致），不要继续堆关键词。
