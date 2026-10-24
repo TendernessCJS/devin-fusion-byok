@@ -21,3 +21,25 @@ description: "provider-measurements 的实测依据——Proxy/DeepSeek 各面�
   按请求聚合三种回退，`scope`/`invalid` 属合法降级（换 provider/模型、空 items）**不计入**失败。
   - **DeepSeek 的 `encrypted_content` 是占位桩，不是真状态**（2026-10-17 实测，按本仓**真实发出的请求体**直探 `api.deepseek.com/v1/responses`：`store:false` + `include:['reasoning.encrypted_content']` + `reasoning:{effort:'high',summary:'auto'}`）：HTTP 200，`output` 为 `reasoning, message`，事件族完整；但 reasoning item 的 `encrypted_content` 仅 **38 字符**、`summary` 是**空数组**。回放这些 items 被接受（200、无错误事件），**但并不能减少推理开销**（见下条对照实验）。结论：状态通道在 DeepSeek 上**既无收益也无害**，真正的收益面是官方 Responses 转发面（Proxy）。
   - **判「某改动是否引入问题」必须带对照臂**（2026-10-17 实测，值得作为方法保留）：单臂看到「回放 reasoning 后 `response.incomplete` + 零文本」时，很容易归因成「回放导致推理暴涨」；加入「**丢弃 reasoning、只回放 message**」的对照臂后行为**完全相同**（A 回放 3010 / B 不回放 2522 推理 token），真因是 **DeepSeek 在 `effort:high` 下连一句 trivial 追问也要烧 1.7k–3k 推理 token**，在 4096 这类小预算上恰好卡边界（同一请求两次跑，一次耗尽 4096 → incomplete，一次 3010 → 正常）。真实预算（本仓默认 `maxOutputTokens` 131072）下不构成风险。
+
+## Kimi K3.1 Pro 字段探针（2026-10-25）
+
+真实 key 仅用于进程内请求、未打印或落盘。探针结论：
+
+- **Anthropic**：baseline / `medium` / `xhigh` effort 均 200；thinking 块 `signatureLength=0`。
+- **强制工具**：默认思考下 forced → 400 `tool_choice 'specified' is incompatible with thinking enabled`；forced + `thinking:{type:'disabled'}` → 200 且 `tool_use=probe_echo`。
+- **Chat**：`max_tokens:32` 与 `max_completion_tokens:32` 均恰输出 32 token、`finish_reason:'length'`；forced + thinking disabled + `reasoning_effort:'high'` → 200 / `tool_calls`。
+- **Responses**：forced + `thinking:{type:'disabled'}` → 400；`reasoning.effort:'none'` → 400。
+- **缓存**：顶层 `cache_control:{type:'ephemeral',ttl:'1h'}` → 200，但短请求 `cache_creation`/`cache_read` 全 0——只能证明字段被接受，不能证明缓存创建/命中或 TTL 生效。
+- **自动缓存命中**：真机第二轮示例 `input 49856` / `cached 49408`，共 8 轮中首轮未命中、其余 7 轮均命中；不断言它由消息级断点造成。
+
+### Kimi Responses 整窗回合与 `encrypted_content` 缺失（2026-10-25）
+
+- **真机流量**：Kimi Responses provider 7 个整窗回合 **7/7 `status:success` + HTTP 200 + `usageComplete`**，全部带工具；`chat-failed`/`provider-degraded`/`upstream-retry`/`tool-claim-mismatch`/`tool-name-unknown` 均 0；最新回合 `input 112828` / `cached 112384`。普通多轮与自动缓存正常。
+- **状态通道边界（非主链路失败）**：7 次全部 `state-envelope-skipped reason=invalid-item`，`state-envelope-size`/`-replayed` 均 0。跳过信封是既有安全降级，普通历史投影不受影响。
+- **根因（同参数真实非流式探针）**：请求含 `store:false` + `include:['reasoning.encrypted_content']` + `reasoning summary:'auto'`，HTTP 200 `completed`；reasoning item 只有 `id/status/summary/type`，**完全没有 `encrypted_content` 属性**（不是空串）；message item 合法。`validStateItem` 要求 `reasoning.encrypted_content` 为非空 string → 判 `invalid-item`。**不能把 Kimi 称为占位加密状态——它根本没提供该字段**（区别于 DeepSeek 的 38 字符占位桩）。
+- **处置**：当前不修协议、不放宽 `validStateItem`、不加厂商分支或重试；「把 `missing-encrypted-content` 记成更具体 reason」留待以后。
+
+### Moonshot 三面样本（2026-10-25）
+
+- Anthropic **15/15** success/200/usageComplete（14 工具回合 + 1 纯文本）；Chat **3/3**（2 工具 + 1 纯文本）；Responses **7/7**（7 工具）。仅作样本计数，**不做性能排名**。

@@ -37,7 +37,7 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
 
 ## Anthropic 兼容面：强制选择、思考与用量（2026-10-22 实测，DeepSeek + Moonshot）
 
-- **强制 `tool_choice` 与默认开启的思考互斥**：两家都返回 400（DeepSeek `Thinking mode does not support this tool_choice`、Moonshot `tool_choice 'specified' is incompatible with thinking enabled`），且**都支持** `thinking:{type:'disabled'}`。**DeepSeek 已验证「关闭思考 + 保留强制选择」→ 200 且只返回 `tool_use`**；Moonshot 该组合**尚未测**，别写成两家都验过。
+- **强制 `tool_choice` 与默认开启的思考互斥**：两家都返回 400（DeepSeek `Thinking mode does not support this tool_choice`、Moonshot `tool_choice 'specified' is incompatible with thinking enabled`），且**都支持** `thinking:{type:'disabled'}`。**DeepSeek 已验证「关闭思考 + 保留强制选择」→ 200 且只返回 `tool_use`**；Moonshot 已于 2026-10-25 补测：关闭思考 + 保留强制选择同样 200，且只返回指定的 `tool_use`。
   因此降级链定为**两步、有界**：①（仅 anthropic 且请求体原本没有 `thinking`）先注入 `thinking:{type:'disabled'}` 重试，**保住用户的强制选择**；②仍失败才把 `tool_choice` 降为 `auto`，并**把我们注入的 `thinking` 摘掉**——否则厂商若本来拒的是该字段，第三次会白失败。两次降级各自记 `provider-degraded`，`reason` 分别是 `thinking-disabled` / `tool-choice`。非 anthropic 路径没有这个杠杆，维持直接降级。判据仍是「HTTP 400 且错误文本包含 `tool_choice`」，`auto`/`none` 永不重试。
 - **`thinking_tokens` 必须映射，否则统计留空而非虚高**：SDK 的 `usage.output_tokens_details.thinking_tokens` 要被读成适配器内部的 `completion_tokens_details.reasoning_tokens`（`output_tokens` 本身是含思考的权威总数，不要改）。Moonshot 实测**返回**该字段、DeepSeek 不返回。此前推断「未映射会让可见 token/tps 虚高」**是错的**：`tracker` 有门控——只要有 thinking 块却拿不到 reasoningTokens，`visibleTokens`/`tps` 直接为 `null`。可见症状是**指标缺列**，不是数字偏大。
 - **思考不可控是能力缺口**：两家都不发 `thinking` 也返回 thinking 块（思考默认开），`budget_tokens` 能改思考量、`disabled` 能关，而本仓没有开关/预算入口。要加就得同时暴露「关」与「预算」，否则用户仍然无法约束成本。
@@ -47,6 +47,10 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
 - **DeepSeek 的 anthropic 面忽略 `cache_control`**（2026-10-25 实测）：13 条消息的同一请求，带断点与不带断点、热缓存下完全一致（`input_tokens 227` / `cache_read_input_tokens 384`），文档亦明示忽略。**因此 `cache_read_input_tokens` 非 0 不能证明断点生效**——DeepSeek 有独立的自动上下文缓存。
 - **DeepSeek 的自动缓存命中率很高**（同日 `monitor.jsonl` 实测）：单回合 `inputTokens 72,253` / `cachedTokens 70,656`（97.8%），Responses 面一直命中。别把「缓存计数为 0」当成常态，也别把非 0 归因给我们的断点。
 - **文档输入三面都不通**（同日探针）：Responses `input_file`、Anthropic `document` 均 **200 但被忽略**（模型回答「没有附件」）；Chat `file` 直接 400 `file must have a file_id or file_data`（DeepSeek 把 `file_data` 放在 content part 顶层，不是 OpenAI 的嵌套 `file` 对象）。**按本卷「附件走 `resource_link`、`documents` 恒为空」的实测，这三条映射真机不可达，故不改代码**，仅记录形状差异备查。
+- **Kimi K3.1 Pro 的当前 Anthropic 配置无需厂商特调**（2026-10-25 实测）：Fusion Anthropic + SWE 8 个整窗回合全 HTTP 200、`chat-failed`/`provider-degraded` 0；后续回合缓存稳定命中，`output_tokens_details.thinking_tokens` 已映射为非空 `reasoningTokens`。`medium`/`xhigh` effort 均 200，不能按文档枚举假定 400；thinking 块仍无 `signature`，不要据此宣称签名回放闭环。
+- **Kimi 的强制工具降级按协议面区分**：Anthropic 在默认思考下强制选择 400，注入 `thinking:{type:'disabled'}` 后 200 并保留指定工具；Chat 也能这样解除，但现有 Chat 链直接降 `auto`，会丢强制语义，只有真机需要时再改。Responses 的 `thinking:{type:'disabled'}` 仍 400，只能降 `auto`；`reasoning.effort:'none'` 也 400，不能作为关闭思考的替代。
+- **Kimi Chat 同时执行两种输出上限字段**：`max_tokens:32` 与 `max_completion_tokens:32` 都恰好输出 32 token、`finish_reason:'length'`。因此继续默认发 `max_tokens`，**不新增 `maxTokensField` 配置**；DeepSeek 的「后者被忽略」不能推广到 Kimi。
+- **Kimi Responses 可用但不返回 `encrypted_content`**（2026-10-25，7/7 success/200）：信封每轮 `invalid-item` 安全跳过；**不得放宽 `validStateItem`** 把无加密 reasoning 当可回放。
 
 ## Chat 面（`apiFormat: 'openai'`）实测（2026-10-22 DeepSeek `/v1`）
 
