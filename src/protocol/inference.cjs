@@ -326,7 +326,28 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
         signal: upstreamController.signal
       });
     };
-    let upstream = await send(body);
+    // A connection-layer failure before the first byte is retried exactly
+    // once after a bounded, abortable pause. The zero-output gate only proves
+    // no billable output reached the client; it cannot prove the provider
+    // never received the request, so it bounds duplication risk rather than
+    // guaranteeing the provider was never charged.
+    const RETRYABLE_CODES = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT']);
+    const connectFailure = err => RETRYABLE_CODES.has(err?.cause?.code || err?.code);
+    const pause = ms => new Promise(resolve => {
+      const done = () => { clearTimeout(timer); upstreamController.signal.removeEventListener('abort', done); resolve(); };
+      const timer = setTimeout(done, ms);
+      upstreamController.signal.addEventListener('abort', done, { once: true });
+    });
+    let upstream;
+    try {
+      upstream = await send(body);
+    } catch (error) {
+      if (!connectFailure(error) || upstreamController.signal.aborted || signal?.aborted || res.headersSent) throw error;
+      record({ event: 'upstream-retry', model: route.model, attempt: 1, transport: transportDetail(error) });
+      await pause(150);
+      if (upstreamController.signal.aborted || signal?.aborted) throw error;
+      upstream = await send(body);
+    }
     // Thinking-mode providers (DeepSeek, Moonshot) answer a forced/required
     // tool_choice with HTTP 400 — "Thinking mode does not support this
     // tool_choice" — instead of ignoring it, so a forced choice turns a working

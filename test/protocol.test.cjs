@@ -1654,3 +1654,111 @@ test('prompt_cache_key reaches the provider body only when set', () => {
   const proto = parseChat(Buffer.concat([s(2, 'sys'), s(21, 'uid'), nativeMessage(1, 'hi'), s(27, 'proto-key')]));
   assert.equal(buildRequestBody(proto, { model: 'm' }, { apiFormat: 'responses' }).prompt_cache_key, 'proto-key');
 });
+
+// A connection-layer failure before the first byte gets exactly one bounded
+// retry; anything later (stream read, HTTP status, timeout abort) does not.
+async function bridgeWithInjectedFailure(t, makeError) {
+  const requests = [], logs = [], metrics = [];
+  const upstream = await server(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    requests.push(req.url);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(event({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'retried-ok' }] }] } }));
+  }, t);
+  const realFetch = globalThis.fetch;
+  let fired = true;
+  // Only the provider request may fail — the test's own client fetch to the
+  // proxy shares the same global fetch and must pass through untouched.
+  globalThis.fetch = (url, init) => {
+    if (fired && String(url).startsWith(upstream.url)) { fired = false; return Promise.reject(makeError()); }
+    return realFetch(url, init);
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(nativeRequest()), route: { model: 'test-model', uid: 'local-cpa-lead' },
+      provider: { baseUrl: `${upstream.url}/v1`, apiKey: 'fake-provider-secret', apiFormat: 'openai-responses' },
+      res, log: event => logs.push(event), onMetrics: m => metrics.push(m) });
+  }, t);
+  return { proxy, upstream, requests, logs, metrics };
+}
+
+test('a first-byte connection failure is retried once and completes normally', async t => {
+  const app = await bridgeWithInjectedFailure(t, () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_SOCKET' } }));
+  const result = unpack(Buffer.from(await (await fetch(app.proxy.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'retried-ok');
+  assert.equal(app.requests.length, 1, 'the retried send is the only request the provider saw');
+  const retries = app.logs.filter(entry => entry.event === 'upstream-retry');
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0].attempt, 1);
+  assert.match(retries[0].transport, /UND_ERR_SOCKET/);
+  assert.equal(app.logs.find(entry => entry.event === 'chat-error'), undefined);
+  assert.equal(app.metrics.length, 1, 'usage is settled exactly once');
+});
+
+for (const code of ['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT']) {
+  test(`retry set hits ${code}`, async t => {
+    const app = await bridgeWithInjectedFailure(t, () => Object.assign(new TypeError('fetch failed'), { cause: { code } }));
+    const result = unpack(Buffer.from(await (await fetch(app.proxy.url)).arrayBuffer()));
+    assert.equal(result.messages.map(message => str(message, 3)).join(''), 'retried-ok');
+    assert.match(app.logs.find(entry => entry.event === 'upstream-retry')?.transport || '', new RegExp(code));
+  });
+}
+
+test('an aborted client or an abort-shaped failure is not retried', async t => {
+  const app = await bridgeWithInjectedFailure(t, () => Object.assign(new Error('aborted'), { name: 'AbortError' }));
+  await fetch(app.proxy.url);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.requests.length, 0, 'AbortError never reaches the provider');
+  assert.equal(app.logs.find(entry => entry.event === 'upstream-retry'), undefined);
+  const error = app.logs.find(entry => entry.event === 'chat-error');
+  assert.ok(error && error.code !== 'upstream_stream_error', 'the failure reports without a retry');
+});
+
+test('HTTP errors do not trigger the connection retry', async t => {
+  const requests = [], logs = [];
+  const upstream = await server((req, res) => { requests.push(1); res.writeHead(500); res.end('nope'); }, t);
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(nativeRequest()), route: { model: 'test-model', uid: 'x' },
+      provider: { baseUrl: `${upstream.url}/v1`, apiFormat: 'openai-responses' }, res, log: event => logs.push(event) });
+  }, t);
+  await fetch(proxy.url);
+  assert.equal(requests.length, 1);
+  assert.equal(logs.find(entry => entry.event === 'upstream-retry'), undefined);
+  assert.ok(logs.some(entry => entry.event === 'chat-error' && entry.code === 'upstream_http'));
+});
+
+test('a disconnect during stream read is never retried', async t => {
+  const requests = [], logs = [];
+  const upstream = await server((req, res) => {
+    requests.push(1);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    // Destroy only after the first frame is flushed: send() resolves on the
+    // response headers, so the failure lands inside the stream read.
+    res.write(event({ type: 'response.created', response: { status: 'in_progress' } }), () => req.socket.destroy());
+  }, t);
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(nativeRequest()), route: { model: 'test-model', uid: 'x' },
+      provider: { baseUrl: `${upstream.url}/v1`, apiFormat: 'openai-responses' }, res, log: event => logs.push(event) });
+  }, t);
+  await fetch(proxy.url);
+  assert.equal(requests.length, 1, 'stream-stage failure must not re-send');
+  assert.equal(logs.find(entry => entry.event === 'upstream-retry'), undefined);
+  assert.ok(logs.some(entry => entry.event === 'chat-error' && entry.code === 'upstream_stream_error'));
+});
+
+test('two consecutive connection failures yield exactly one retry and the same classification', async t => {
+  const requests = [], logs = [];
+  const upstream = await server(req => { requests.push(1); req.socket.destroy(); }, t);
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(nativeRequest()), route: { model: 'test-model', uid: 'x' },
+      provider: { baseUrl: `${upstream.url}/v1`, apiFormat: 'openai-responses' }, res, log: event => logs.push(event) });
+  }, t);
+  await fetch(proxy.url);
+  assert.equal(requests.length, 2, 'one retried send, no more');
+  const retries = logs.filter(entry => entry.event === 'upstream-retry');
+  assert.equal(retries.length, 1);
+  const errorLog = logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_network');
+  assert.equal(errorLog.transport, retries[0].transport, 'the reported transport enum is unchanged by retrying');
+});
