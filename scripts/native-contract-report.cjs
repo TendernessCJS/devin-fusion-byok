@@ -2,7 +2,7 @@
 // Read-only contract-drift snapshot for release evidence. Reuses the probe's
 // artifacts/marker tables — never writes, never touches caches.
 const fs = require('node:fs');
-const { REQUIRED, INFORMATIONAL, artifacts, sha256, scanMarkers } =
+const { REQUIRED, INFORMATIONAL, artifacts, sha256, scanMarkers, authStoreStatus } =
   require('../src/activation/native-contract.cjs');
 
 const DEFAULT_EXT = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf';
@@ -27,7 +27,8 @@ if (!fs.existsSync(extensionPath)) usage();
 
 (async () => {
   const files = artifacts(extensionPath);
-  const report = { version: null, artifacts: {}, missing: {}, informational: {}, status: 'ok' };
+  const report = { version: null, artifacts: {}, missing: {}, informational: {},
+    authStore: authStoreStatus(), status: 'ok' };
   try {
     const plist = fs.readFileSync(files.plist, 'utf8');
     report.version = (plist.match(/<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/) || [])[1] || null;
@@ -66,6 +67,7 @@ if (!fs.existsSync(extensionPath)) usage();
     for (const [m, r] of Object.entries(e.required)) console.log(`  required      ${r === 'hit' ? '✓' : '✗ MISSING'}  ${m}`);
     for (const [m, r] of Object.entries(e.informational)) console.log(`  informational ${r === 'hit' ? '✓' : '✗ absent'}  ${m}`);
   }
-  console.log(`\nverdict: ${report.status}${report.code ? ' (' + report.code + ')' : ''}`);
+  console.log(`\n凭据存储: ${report.authStore}`);
+  console.log(`verdict: ${report.status}${report.code ? ' (' + report.code + ')' : ''}`);
   process.exit(0);
 })().catch(e => { console.error('probe failed:', e.message); process.exit(1); });

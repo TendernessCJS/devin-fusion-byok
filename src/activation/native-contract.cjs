@@ -6,10 +6,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { credentialPath } = require('../fast-context/auth.cjs');
 
 const REQUIRED = {
   cli: ['GetCliModelConfigs', 'GetUserStatus', 'GetCliTeamSettings'],
-  ls: ['cascade_model_config_data'],
+  // GetUserJwt / GetWebSearchResults back the external Fast Context MCP: the
+  // hardcoded field numbers in src/fast-context/web.cjs fail loudly when the
+  // names go, but we want to know before that failure reaches users.
+  ls: ['cascade_model_config_data', 'GetUserJwt', 'GetWebSearchResults'],
   desktop: ['devin.refreshUserStatus', 'cascade_model_config_data'],
   chat: ['cognition.ai/auth', 'cognition.ai/subagent_context']
 };
@@ -83,6 +87,22 @@ function scanMarkers(file, markers) {
   });
 }
 
+// `windsurfAuthStatus` is a data-plane contract: absent from every binary
+// (probes cannot see it), yet auth.cjs reads it from the credential store.
+// Report-only — never drift, never logged, value never leaves the DB.
+function authStoreStatus({ platform = process.platform, home, env } = {}) {
+  try {
+    const dbPath = credentialPath({ platform, home, env });
+    if (!fs.existsSync(dbPath)) return 'missing';
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const row = db.prepare("SELECT 1 AS x FROM ItemTable WHERE key = 'windsurfAuthStatus'").get();
+      return row ? 'present' : 'missing';
+    } finally { db.close(); }
+  } catch { return 'unknown'; }
+}
+
 function appVersionOf(plist) {
   try {
     const text = fs.readFileSync(plist, 'utf8');
@@ -97,7 +117,7 @@ function writeCache(file, value) {
   fs.renameSync(tmp, file);
 }
 
-async function checkNativeContract({ extensionPath, cacheFile, log = () => {}, platform = process.platform } = {}) {
+async function checkNativeContract({ extensionPath, cacheFile, log = () => {}, platform = process.platform, probeAuthStore = authStoreStatus } = {}) {
   if (platform !== 'darwin') return { status: 'unsupported' };
   try {
     const files = artifacts(extensionPath);
@@ -151,16 +171,20 @@ async function checkNativeContract({ extensionPath, cacheFile, log = () => {}, p
     }
     const status = Object.keys(missing).length ? 'drift' : 'ok';
     const appVersion = appVersionOf(files.plist);
+    // Runs only on a real scan — the stat/signature fast paths never open the DB.
+    let authStore;
+    try { authStore = probeAuthStore({ platform }); } catch { authStore = 'unknown'; }
+    if (!['present', 'missing', 'unknown'].includes(authStore)) authStore = 'unknown';
     try {
-      writeCache(cacheFile, { signature, stat, appVersion, checkedAt: Date.now(), status, missing, informational });
+      writeCache(cacheFile, { signature, stat, appVersion, checkedAt: Date.now(), status, missing, informational, authStore });
     } catch {}
     if (status === 'drift') log('native-contract-drift', { appVersion, missing, informational });
     else log('native-contract-ok', { appVersion });
-    return { status, reused: false, appVersion, missing, informational };
+    return { status, reused: false, appVersion, missing, informational, authStore };
   } catch {
     log('native-contract-unavailable', { code: 'probe-failed' });
     return { status: 'unavailable', code: 'probe-failed' };
   }
 }
 
-module.exports = { REQUIRED, INFORMATIONAL, artifacts, findAppRoot, sha256, scanMarkers, checkNativeContract };
+module.exports = { REQUIRED, INFORMATIONAL, artifacts, findAppRoot, authStoreStatus, sha256, scanMarkers, checkNativeContract };

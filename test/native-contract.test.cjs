@@ -276,3 +276,39 @@ test('an unrecognised layout reports layout-unknown without writing a cache', as
   assert.deepEqual(logs.map(([k]) => k), ['native-contract-unavailable']);
   assert.equal(fs.existsSync(path.join(dir, 'native-contract.json')), false);
 });
+
+test('a missing Fast Context RPC on the LS binary reports drift', async () => {
+  const { extensionPath, cacheFile } = fakeApp({ lsMarkers: ALL_LS.filter(m => m !== 'GetUserJwt') });
+  const result = await checkNativeContract({ extensionPath, cacheFile });
+  assert.equal(result.status, 'drift');
+  assert.deepEqual(result.missing.ls, ['GetUserJwt']);
+});
+
+test('a fresh scan reports authStore in the result and the cache', async () => {
+  const { extensionPath, cacheFile } = fakeApp();
+  let probeCalls = 0;
+  const result = await checkNativeContract({ extensionPath, cacheFile,
+    probeAuthStore: () => { probeCalls++; return 'present'; } });
+  assert.equal(probeCalls, 1);
+  assert.equal(result.authStore, 'present');
+  const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+  assert.equal(cache.authStore, 'present');
+});
+
+test('a reused verdict never opens the credential store', async () => {
+  const { extensionPath, cacheFile } = fakeApp();
+  await checkNativeContract({ extensionPath, cacheFile });
+  let probeCalls = 0;
+  const result = await checkNativeContract({ extensionPath, cacheFile,
+    probeAuthStore: () => { probeCalls++; return 'present'; } });
+  assert.equal(result.reused, true);
+  assert.equal(probeCalls, 0, 'the stat fast path must not touch the database');
+});
+
+test('a failing authStore probe degrades to unknown without failing the run', async () => {
+  const { extensionPath, cacheFile } = fakeApp();
+  const result = await checkNativeContract({ extensionPath, cacheFile,
+    probeAuthStore: () => { throw Error('sqlite gone'); } });
+  assert.equal(result.status, 'ok');
+  assert.equal(result.authStore, 'unknown');
+});
