@@ -50,3 +50,9 @@ description: "Apply when changing self-update behaviour or the release contract 
   `restart_unsupported`；存活探测用 `ps -Ao comm=`（`pgrep` 会跳过祖先进程，而 helper 必在 App 进程树内时不可用）。
 
 - 重启 helper 的 child 必须处理异步 `error`，不能只 catch `spawn()` 的同步异常。launchctl 提交失败才回退一次 shell；**提交超时不回退、不 quit**（结果不确定，迟到成功可能造成双 helper）。shell 必须确认 `spawn` 后才 unref/quit；派生失败、提前退出或超时均报错且不退出应用。error/exit/timeout 只结算一次，迟到事件不得再次回退、quit 或形成未处理 error。真实重启仍由用户确认，测试只能使用隔离假进程。
+
+## 信任根与不可信输入
+
+- 更新链的信任根是 **GitHub TLS**：资产名由已校验版本推导、`browser_download_url` 必须与推导值严格相等、`digest` 必须是 `sha256:<64hex>`——缺任一项即 `installable:false`，不降级为「无 digest 也装」。
+- `verifyPackage` 用 `/usr/bin/unzip -p` 读不可信 zip 的两个条目，是有意的最小暴露：只读 stdout、`maxBuffer` 1 MB、超时 15 s。**无代码签名校验**；包内身份（`package.json` 的 name/publisher/version 与 vsixmanifest 的 `Identity`）交叉校验是唯一的包身份边界。
+- 含 `<!` 或 `&` 的 vsixmanifest 直接拒绝（防实体注入），重复 Identity 属性判失败。

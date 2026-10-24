@@ -50,3 +50,9 @@
   `providers` 数组时后提交者覆盖先提交者；深层合并不在本层解决。
 - `updateConfig` 不做乐观并发校验：跨进程互斥完全靠 `.lock`，revision 仅用于观测与诊断。
 - 锁文件进程崩溃会残留，靠 stale 判定自愈；`config_busy` 超时应视为可重试，不要静默吞掉。
+
+## provider baseUrl 有意不做 SSRF 限制
+
+- 面板提交的 baseUrl 允许任意 host（含 localhost 与私网）——这是 BYOK 的设计意图（Ollama / 本地网关）。
+- 限制只到「scheme 必须 http/https、禁止内嵌凭据/查询串/片段、路径归一化」，**不阻止**向任意地址发带凭据请求；收紧前先想清它会让本地部署不可用。
+- `updateProxy` 是独立路径：凭据只出现在 CONNECT 头，面板只回显掩码。
