@@ -2,12 +2,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const fs = require('node:fs');
 const { modelEfforts } = require('../src/models/capabilities.cjs');
 const { buildCatalog, resolveAssignment } = require('../src/catalog.cjs');
 const { buildRequestBody } = require('../src/protocol/inference.cjs');
 const { createManager } = require('../src/panel/manager.cjs');
-const { rendererFile, loadFamilyPicker } = require('./helpers/installed-renderer.cjs');
+const { webappAvailable, loadWebappPicker } = require('./helpers/installed-renderer.cjs');
 const config = () => ({ providers: [{ id: 'load', name: 'load', apiFormat: 'openai-responses', models:
   ['gpt-6-astra', 'swe-2-high', 'swe-2-max', 'swe-2-medium'].map(id => ({ id, efforts: [] })) }],
   sidekicks: [{ providerId: 'load', model: 'swe-2-max' }, { nativeUid: 'swe-2-max' }] });
@@ -70,15 +69,16 @@ test('selected native Fusion effort resolves to the actual Responses and Chat AP
   assert.equal(buildRequestBody(request, { model: 'custom', effort: null }, { apiFormat: 'openai' }).reasoning_effort, undefined);
 });
 
-test('actual installed Fusion picker enables every GPT effort and imported Sidekick', { skip: !fs.existsSync(rendererFile) }, () => {
-  const native = loadFamilyPicker();
+test('actual installed Fusion picker enables every GPT effort and imported Sidekick', { skip: !webappAvailable }, () => {
+  const pick = loadWebappPicker();
   const catalog = buildCatalog(config(), OBSERVED_SWE);
-  const models = catalog.models.filter(m => m.kind === 'matrix').map(m => ({ modelUid: m.uid, disabled: false, familyUid: m.json.modelInfo.modelFamilyUid,
-    familyMetadata: Object.fromEntries(m.json.modelFamilyMetadata.entries.map(e => [e.key, e.value])) }));
-  const rows = native.rows(models);
-  assert.equal(rows.length, 1, 'mirrored entries join the single official Fusion family');
-  const variants = rows[0].family.models;
-  assert.equal(variants.length, models.length, 'every mirrored combination stays in the family');
+  const models = catalog.models.filter(m => m.kind === 'matrix').map(m => ({ modelUid: m.uid, disabled: false }));
+  const uids = models.map(m => m.modelUid);
+  const out = pick({ name: 'Model', options: uids.map(uid => ({ value: uid, name: uid })) },
+    { models, sorts: [{ name: 's', isDefault: true, groups: [{ name: 'g', modelUids: uids }] }] }, true);
+  assert.equal(out.catalogMisses.length, 0, 'every mirrored combination reaches the installed picker');
+  const variants = out.models;
+  assert.equal(variants.length, models.length, 'every mirrored combination stays selectable');
   for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
     assert.ok(variants.some(model => catalog.routes[catalog.fusions[model.modelUid].leadUid].effort === effort),
       effort + ' remains reachable through the family');

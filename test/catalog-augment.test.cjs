@@ -246,6 +246,31 @@ for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} c
   assert.equal(collectNativeModels(statusFixture().body, { rpc: 'GetAccount', format: proto }).length, 0);
 });
 
+test('collectNativeModels reads the bare UserStatus shape exactly like the envelope', () => {
+  // The auth hook receives the bare UserStatus message (model list at field 33
+  // of the payload itself); the bridge sees the f1→f33 envelope. Both must
+  // yield the same observations, and ambiguous payloads must yield none.
+  const entries = cat(
+    m(1, cat(s(1, 'Official SWE'), s(22, 'swe-2-max'), m(23, cat(s(20, 'swe-1p6'))))),
+    m(1, cat(s(1, 'Router'), s(22, 'swe-router'), m(23, cat(s(20, 'swe-1p6'), v(25, 1))))));
+  const bare = cat(v(1, 1), m(33, entries));
+  const envelope = m(1, m(33, entries));
+  const expected = [
+    { uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6'], isModelRouter: false, sources: ['entitlement'] },
+    { uid: 'swe-router', label: 'Router', disabled: false, harnessUids: ['swe-1p6'], isModelRouter: true, sources: ['entitlement'] }];
+  assert.deepEqual(collectNativeModels(bare, { rpc: lsStatus, format: proto }), expected);
+  assert.deepEqual(collectNativeModels(envelope, { rpc: lsStatus, format: proto }), expected,
+    'envelope and bare shapes are equivalent inputs');
+  for (const malformed of [
+    cat(m(33, entries), m(33, entries)),                // duplicated top-level f33
+    m(33, s(1, 'not-an-entry-list')),                   // f33 whose value is not a list
+    cat(v(1, 1), Buffer.from('dfbyok-marker-only')),    // no f33 at all
+  ]) {
+    assert.deepEqual(collectNativeModels(malformed, { rpc: lsStatus, format: proto }), [],
+      'an ambiguous or list-less payload is not a reliable status');
+  }
+});
+
 test('collectNativeModels keeps canonical observation fields through the shared normalizer', () => {
   const entry = { label: 'Full', modelUid: 'swe-full', disabled: false,
     modelInfo: { harnessUids: ['h'], isModelRouter: false, modelFamilyUid: 'fam-full', maxTokens: 200000 } };
@@ -462,7 +487,7 @@ test('a throwing staleProbe is a safe no-op for refreshStaleCliCaches', () => {
   const { refreshStaleCliCaches } = require('../src/runtime/host/cli-cache.cjs');
   const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'cli-cache-staleprobe-'));
   const name = 'model_configs_v5.bbbbbbbbbbbbbbbb.bin';
-  const payload = Buffer.from('dfbyok-new-uid', 'utf8').toString('base64');
+  const payload = m(1, cat(s(1, 'dfbyok-new-uid'), s(22, 'dfbyok-new-uid'))).toString('base64');
   const file = nodePath.join(dir, name);
   fs.writeFileSync(file, JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload }));
   const before = fs.readFileSync(file);

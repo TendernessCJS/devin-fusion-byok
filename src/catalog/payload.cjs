@@ -240,6 +240,118 @@ function jsonFusionMetadata(entry) {
   return entries.length ? entries : null;
 }
 
+
+// Structural gate shared by every boundary that consumes a model-catalog
+// payload (desktop auth store, CLI cache): a name or generation alone proves
+// nothing, so the bytes themselves must match one of the known list shapes
+// before anything is rewritten or confirmed. Flat configs keep repeated f1
+// model entries at the top level; `UserStatus` payloads keep them inside the
+// single f33 container — either the bare message (f1 is the `pro` varint) or
+// the response envelope (f1 wire2 carries the status whose f33 holds the list).
+// Every model entry must parse, carry exactly one non-empty f22 wire2 uid, and
+// keep any f1 label / f23 info record in the expected wire shape (f23 must
+// parse; known info fields keep their wire types, unknown fields are free).
+// An empty list is only legal when `allowEmpty` is set AND the surrounding
+// container itself is well-formed. Returns { ok, code, entries, uids } where
+// entries are the raw entry buffers — never the decoded uid guesses.
+function validateProtoCatalog(data, { rpc, allowEmpty = false } = {}) {
+  if (!Buffer.isBuffer(data)) return { ok: false, code: 'shape-unrecognized' };
+  const shape = rpcShape(rpc);
+  if (!shape) return { ok: false, code: 'shape-unrecognized' };
+  let parsed;
+  try { parsed = parseFields(data); } catch { return { ok: false, code: 'malformed-payload' }; }
+  const entries = [];
+  if (!shape.status) {
+    for (const field of parsed) {
+      if (field.number !== 1) continue;
+      if (field.wire !== 2) return { ok: false, code: 'shape-unrecognized' };
+      entries.push(field.value);
+    }
+  } else {
+    // Exactly one model-list container must exist: either the single envelope
+    // f1 wire2 carrying the status whose f33 holds the list, or the bare
+    // status's own top-level f33. An absent container is never a clean list —
+    // `allowEmpty` relaxes the entry count only after the container is proven.
+    // The bare status may carry one varint f1 (`pro`); the envelope shape
+    // carries exactly one wire2 f1 whose inner status owns the f33 — and an
+    // inner f1, when present, must itself be a single varint. Mixing bare and
+    // envelope f1 shapes, or repeating either, is drift.
+    let bareF1 = 0, envelopes = 0;
+    const containers = [];
+    for (const field of parsed) {
+      if (field.number === 1) {
+        if (field.wire === 0) { bareF1 += 1; if (bareF1 > 1) return { ok: false, code: 'shape-unrecognized' }; continue; }
+        if (field.wire !== 2) return { ok: false, code: 'shape-unrecognized' };
+        envelopes += 1;
+        if (envelopes > 1) return { ok: false, code: 'shape-unrecognized' };
+        let inner;
+        try { inner = parseFields(field.value); } catch { return { ok: false, code: 'malformed-payload' }; }
+        const innerF1 = inner.filter(part => part.number === 1);
+        if (innerF1.length > 1 || (innerF1.length === 1 && innerF1[0].wire !== 0)) {
+          return { ok: false, code: 'shape-unrecognized' };
+        }
+        const lists = inner.filter(part => part.number === 33);
+        if (lists.length !== 1 || lists[0].wire !== 2) return { ok: false, code: 'shape-unrecognized' };
+        containers.push(lists[0].value);
+      } else if (field.number === 33) {
+        if (field.wire !== 2) return { ok: false, code: 'shape-unrecognized' };
+        containers.push(field.value);
+      }
+    }
+    if (containers.length !== 1 || (bareF1 && envelopes)) return { ok: false, code: 'shape-unrecognized' };
+    let inner;
+    try { inner = parseFields(containers[0]); } catch { return { ok: false, code: 'malformed-payload' }; }
+    for (const field of inner) {
+      if (field.number !== 1) continue;
+      if (field.wire !== 2) return { ok: false, code: 'shape-unrecognized' };
+      entries.push(field.value);
+    }
+  }
+  const uids = [], seenUids = new Set();
+  for (const entry of entries) {
+    let parts;
+    try { parts = parseFields(entry); } catch { return { ok: false, code: 'malformed-payload' }; }
+    const uidFields = parts.filter(field => field.number === 22);
+    if (uidFields.length !== 1 || uidFields[0].wire !== 2 || !uidFields[0].value.length) {
+      return { ok: false, code: 'shape-unrecognized' };
+    }
+    const labels = parts.filter(field => field.number === 1);
+    if (labels.length > 1 || labels.some(field => field.wire !== 2)) return { ok: false, code: 'shape-unrecognized' };
+    const infos = parts.filter(field => field.number === 23);
+    if (infos.length > 1 || infos.some(field => field.wire !== 2)) return { ok: false, code: 'shape-unrecognized' };
+    if (infos.length === 1) {
+      let info;
+      try { info = parseFields(infos[0].value); } catch { return { ok: false, code: 'malformed-payload' }; }
+      // Known single-value info fields reject duplicates; f20 (harness list)
+      // is the only repeated one among them. Unknown fields stay free.
+      const counts = {};
+      for (const field of info) {
+        counts[field.number] = (counts[field.number] || 0) + 1;
+        if ([4, 22, 25, 23].includes(field.number) && counts[field.number] > 1) return { ok: false, code: 'shape-unrecognized' };
+        if ([4, 22, 25].includes(field.number) && field.wire !== 0) return { ok: false, code: 'shape-unrecognized' };
+        if ([20, 23].includes(field.number) && field.wire !== 2) return { ok: false, code: 'shape-unrecognized' };
+      }
+    }
+    const uid = uidFields[0].value.toString('utf8');
+    if (seenUids.has(uid)) return { ok: false, code: 'shape-unrecognized' };
+    seenUids.add(uid);
+    uids.push(uid);
+  }
+  if (!entries.length && !allowEmpty) return { ok: false, code: 'malformed-payload' };
+  return { ok: true, code: undefined, entries, uids };
+}
+
+// A uid is ours only by real prefix shape: `dfbyok-` itself, or a fusion
+// combination whose lead or sidekick component starts `dfbyok-` — so
+// `fusion-native-a-sidekick-dfbyok-b` counts while `x-lookalike-dfbyok-text`
+// never does. Substring checks are intentionally not used anywhere.
+function isOwnUid(uid) {
+  if (typeof uid !== 'string') return false;
+  if (uid.startsWith('dfbyok-')) return true;
+  if (!uid.startsWith('fusion-')) return false;
+  return uid.slice('fusion-'.length).split('-sidekick-').some(part => part.startsWith('dfbyok-'));
+}
+
 function jsonSidekick(entry) {
   return extractSidekickDimension(jsonFusionMetadata(entry));
 }
@@ -332,4 +444,4 @@ function jsonPickerLabels(payload) {
   return labels.size ? labels : null;
 }
 
-module.exports = { OBSERVE_SOURCE, rpcShape, rewriteMessage, reportFusionStatus, protoUid, metaFamilyUid, protoFamilyUid, protoDisabled, protoMetadata, CANONICAL_FAMILY_KEYS, protoFusionMetadata, extractSidekickDimension, protoSidekick, jsonAliasValue, jsonMetadata, jsonFusionMetadata, jsonSidekick, nativeEntries, reportNativeModels, defaultFusion, jsonKey, protoPickerLabels, jsonPickerLabels };
+module.exports = { OBSERVE_SOURCE, rpcShape, rewriteMessage, validateProtoCatalog, isOwnUid, reportFusionStatus, protoUid, metaFamilyUid, protoFamilyUid, protoDisabled, protoMetadata, CANONICAL_FAMILY_KEYS, protoFusionMetadata, extractSidekickDimension, protoSidekick, jsonAliasValue, jsonMetadata, jsonFusionMetadata, jsonSidekick, nativeEntries, reportNativeModels, defaultFusion, jsonKey, protoPickerLabels, jsonPickerLabels };

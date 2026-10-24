@@ -1,13 +1,11 @@
 'use strict';
-const { createRequire } = require('node:module');
 const { createContextState, usageRejectionReason, USAGE_REJECTIONS } = require('./context-state.cjs');
-const { restoreMember } = require('./acp-hook.cjs');
+const { loadAcpApi, restoreMember, createAcpRegistry } = require('./acp-hook.cjs');
 const KEY = Symbol.for('devin-fusion-byok.context-observer.v1');
 function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
-  const api = createRequire(nativeMainPath)('vscode').windsurfAcp;
-  if (!api || typeof api.registerConnection !== 'function') throw new Error('ACP unavailable');
+  const api = loadAcpApi(nativeMainPath, 'ACP unavailable');
   if (api[KEY]) return api[KEY];
-  const original = api.registerConnection, descriptor = Object.getOwnPropertyDescriptor(api, 'registerConnection');
+  const registry = createAcpRegistry(api);
   const connections = new Map();
   let disposed = false, registrations = 0, sessionUpdates = 0, usageUpdates = 0, acceptedUsageUpdates = 0, rejectedUsageUpdates = 0;
   let focusedSessionId = null, focusedAt = 0;
@@ -16,11 +14,9 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
   const FOCUS_METHODS = new Set(['session/prompt', 'session/load', 'session/resume', 'session/set_config_option']);
   const focus = id => { if (id && enabled()) { focusedSessionId = id; focusedAt = Date.now(); } };
   const usageRejections = Object.fromEntries(USAGE_REJECTIONS.map(key => [key, 0]));
-  const status = () => ({ state: disposed ? 'disposed' : isEnabled() ? 'observing' : 'disabled', connections: connections.size, registrations, sessionUpdates, usageUpdates, acceptedUsageUpdates, rejectedUsageUpdates, usageRejections: { ...usageRejections } });
+  const status = () => ({ state: disposed ? 'disposed' : isEnabled() ? 'observing' : 'disabled', connections: connections.size, registrations, sessionUpdates, usageUpdates, acceptedUsageUpdates, rejectedUsageUpdates, usageRejections: { ...usageRejections }, shadowed: registry.shadowed() });
   function enabled() { return !disposed && isEnabled(); }
   function attach(connector) {
-    if (connections.size >= 32 || connections.has(connector) || connector?.agentId !== 'devin-cli' || connector.bundled !== true || connector.location?.kind !== 'local' ||
-        typeof connector.sendRequest !== 'function' || typeof connector.forwardClientRequest !== 'function') return;
     const state = createContextState(), saved = [];
     const entry = { state, active: true, saved };
     function wrap(key, factory) {
@@ -32,6 +28,7 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
     }
     function safe(fn) { try { if (entry.active && enabled()) fn(); else state.clear(); } catch {} }
     function detach() {
+      if (!entry.active) return;
       entry.active = false; state.clear();
       for (const value of saved.reverse()) restoreMember(connector, value.key, value.wrapper, value.previous);
       connections.delete(connector);
@@ -88,11 +85,18 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
       connections.set(connector, { ...entry, detach });
     } catch { detach(); }
   }
-  function register(...args) {
-    const result = Reflect.apply(original, this, args);
-    if (!disposed) { registrations++; try { attach(args[0]); } catch {} }
-    return result;
-  }
+  const layer = registry.addLayer({
+    id: 'context-observer',
+    priority: 40,
+    attach(connector) {
+      registrations++;
+      if (connections.size >= 32 || connections.has(connector) || connector?.agentId !== 'devin-cli' || connector.bundled !== true || connector.location?.kind !== 'local' ||
+          typeof connector.sendRequest !== 'function' || typeof connector.forwardClientRequest !== 'function') return null;
+      attach(connector);
+      return connections.has(connector) ? connector : null;
+    },
+    detach(connector) { connections.get(connector)?.detach?.(); },
+  });
   const handle = {
     status,
     focused: () => focusedSessionId && enabled() ? { sessionId: focusedSessionId, at: focusedAt } : null,
@@ -106,13 +110,12 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
     dispose() {
       if (disposed) return;
       disposed = true;
-      restoreMember(api, 'registerConnection', register, descriptor);
-      for (const entry of [...connections.values()]) entry.detach();
+      layer.remove();
       if (api[KEY] === handle) delete api[KEY];
     },
   };
-  api.registerConnection = register;
-  Object.defineProperty(api, KEY, { value: handle, configurable: true });
+  try { Object.defineProperty(api, KEY, { value: handle, configurable: true }); }
+  catch (error) { layer.remove(); throw error; }
   return handle;
 }
 module.exports = { installContextObserver };

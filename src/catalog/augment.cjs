@@ -103,7 +103,7 @@ function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativ
 }
 
 /** Accept decoded wire messages; framing/compression is exclusively the caller's responsibility. */
-function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNativeModels, onSkip } = {}) {
+function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNativeModels, onSkip, retireOwn = false } = {}) {
   // Reported when the payload is left untouched for a reason the caller could
   // not infer from the bytes: silently returning the input looks exactly like
   // "nothing to do" and hid a shape mismatch that made every in-place cache
@@ -111,11 +111,14 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
   const skip = code => { try { onSkip?.(code, rpc); } catch {} };
   // `GetCliTeamSettings` carries its whole injection in the allowlist rewrite,
   // so it reports through the same channel as the catalog shapes below.
-  if (rpc === '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings') return augmentLocalModelChoices(data, format, catalog, skip);
+  if (rpc === '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings') return augmentLocalModelChoices(data, format, catalog, skip, retireOwn);
   const shape = rpcShape(rpc);
   if (!shape || !catalog) return data;
+  // `retireOwn` keeps the cleanup pass alive even when the emit is empty: the
+  // last own entry must still be removed, so the "nothing to emit" shortcut is
+  // only allowed on traffic that never rewrites (observation passthrough).
   if (!catalog.models?.length && !catalog.hiddenNativeModelUids?.length && !catalog.hiddenFusionUids?.length &&
-      typeof onFusionStatus !== 'function' && typeof onNativeModels !== 'function') return data;
+      typeof onFusionStatus !== 'function' && typeof onNativeModels !== 'function' && !retireOwn) return data;
   try {
     if (format.json === true) {
       if (!shape.status) return augmentJsonList(data, catalog, shape.sorts, onFusionStatus, onNativeModels, shape.source);
@@ -240,10 +243,21 @@ function collectNativeModels(data, { rpc, format = {} } = {}) {
       return nativeEntries(parsed.filter(field => field.number === 1 && field.wire === 2).map(field => field.value), false, shape.source, picker);
     }
     const statuses = parseFields(data).filter(field => field.number === 1);
-    if (statuses.length !== 1 || statuses[0].wire !== 2) return [];
-    const lists = parseFields(statuses[0].value).filter(field => field.number === 33);
-    if (lists.length !== 1 || lists[0].wire !== 2) return [];
-    const inner = parseFields(lists[0].value);
+    let inner;
+    if (statuses.length === 1 && statuses[0].wire === 2) {
+      // GetUserStatusResponse envelope: field 1 is the user_status message and
+      // the model list sits at its field 33.
+      const lists = parseFields(statuses[0].value).filter(field => field.number === 33);
+      if (lists.length !== 1 || lists[0].wire !== 2) return [];
+      inner = parseFields(lists[0].value);
+    } else {
+      // The bare UserStatus message (what setAuthStatus persists and the CLI
+      // caches) carries the model list at field 33 of the payload itself; its
+      // field 1 is the pro boolean, which is how it differs from the envelope.
+      const lists = parseFields(data).filter(field => field.number === 33);
+      if (lists.length !== 1 || lists[0].wire !== 2) return [];
+      inner = parseFields(lists[0].value);
+    }
     return nativeEntries(inner.filter(field => field.number === 1 && field.wire === 2).map(field => field.value), false, shape.source, protoPickerLabels(inner));
   } catch { return []; }
 }
@@ -288,8 +302,9 @@ function collectAllowedUids(data, { rpc, format = {} } = {}) {
 // The CLI intersects the model catalog with its configured choices. Register
 // only locally routed BYOK models; native choices and every other setting stay
 // byte-identical. A native Sidekick must already be in the native choice list.
-function augmentLocalModelChoices(data, format, catalog, skip = () => {}) {
-  if (!catalog?.models?.length) return data;
+function augmentLocalModelChoices(data, format, catalog, skip = () => {}, retireOwn = false) {
+  if (!catalog?.models?.length && !retireOwn) return data;
+  if (!catalog?.models) catalog = { models: [] };
   try {
     const key = format.json ? jsonKey(data, 'allowedModelUids', 'allowed_model_uids') : null;
     const parsed = format.json ? null : parseFields(data);

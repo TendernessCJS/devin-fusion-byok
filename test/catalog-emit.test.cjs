@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels } = require('../src/catalog.cjs');
 const { fields, str, num, s, v, m } = require('../src/protocol/wire.cjs');
 const { cat, proto, json, lsStatus, config, OBSERVED_SWE, catalog, getNested, configs, statusFixture } = require('./helpers/catalog-fixtures.cjs');
-const { rendererFile, loadFamilyPicker, loadAcpPicker } = require('./helpers/installed-renderer.cjs');
+const { webappAvailable, loadWebappPicker } = require('./helpers/installed-renderer.cjs');
 
 test('stable model identities and independent Lead/Sidekick orders survive reordering and label changes', () => {
   const reordered = config();
@@ -216,46 +216,47 @@ test('a valid user status without catalog gains only catalog data', () => {
   assert.equal(fields(getNested(output, 1, 33), 2).length, 1);
 });
 
-test('installed native Fusion grouping includes every custom Lead and both available Sidekicks', { skip: !fs.existsSync(rendererFile) }, () => {
-  const renderer = loadFamilyPicker();
-  const models = catalog.models.filter(model => model.kind === 'matrix').map(model => ({
-    modelUid: model.uid, label: model.label, disabled: false, familyUid: model.json.modelInfo.modelFamilyUid,
-    familyMetadata: Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value])),
-  }));
-  const official = { modelUid: 'fusion-official', label: 'Official', disabled: false, familyUid: 'fusion', familyMetadata: {
-    Lead: { order: 1, name: 'Official Lead' }, Effort: { order: 2, name: 'Medium' },
-    Sidekick: { order: 1, name: 'SWE-2 Medium' }, 'Fast Mode': { order: 0, name: '' },
-    'Recommended Sidekick': { order: 0, name: 'SWE-2 Medium' },
-  } };
-  const rows = renderer.rows([official, ...models]);
-  // Everything we mirror declares familyUid 'fusion', so the picker folds the
-  // whole cross product into the single official Fusion row instead of adding
-  // rows of its own — that is what makes our models selectable in the native
-  // card rather than a parallel catalog the user has to find.
-  assert.equal(rows.length, 1);
-  const family = rows[0].family;
-  assert.equal(family.familyUid, 'fusion');
-  assert.equal(family.models.length, models.length + 1, 'every mirrored variant joins the family');
-  const values = Object.fromEntries(family.dimensions.map(dim => [dim.name, dim.values.map(value => value.name)]));
-  for (const model of models) {
-    const meta = model.familyMetadata;
-    assert.ok(values.Lead.includes(meta.Lead.name), model.modelUid + ' is offered as a Lead value');
-    assert.ok(values.Sidekick.includes(meta.Sidekick.name), model.modelUid + ' is offered as a Sidekick value');
-    if (meta.Effort) assert.ok(values.Effort.includes(meta.Effort.name), model.modelUid + ' is offered as an Effort value');
-  }
+test('installed webapp picker lists every custom Lead and both available Sidekicks', { skip: !webappAvailable }, () => {
+  const pick = loadWebappPicker();
+  const models = catalog.models.filter(model => model.kind === 'matrix');
+  const uids = ['fusion-official', ...models.map(model => model.uid)];
+  const result = pick(
+    { name: 'Model', options: uids.map(uid => ({ value: uid, name: uid })) },
+    { models: uids.map(uid => ({ modelUid: uid, disabled: false })),
+      sorts: [{ name: 'Recommended', isDefault: true, groups: [{ name: 'Fusion', modelUids: uids }] }] },
+    true);
+  // The webapp picker renders catalog∩configOptions under catalog.sorts;
+  // anything missing from either side is a miss, not a row.
+  assert.equal(result.catalogMisses.length, 0, 'no mirrored uid is dropped as a catalog miss');
+  const rendered = new Set(result.models.map(model => model.modelUid));
+  for (const model of models) assert.ok(rendered.has(model.uid), model.uid + ' is offered in the installed picker');
+  assert.ok(rendered.has('fusion-official'), 'the official Fusion row survives alongside our mirrors');
 });
 
-test('installed ACP picker requires own UIDs in session config_options as well as the user status catalog', { skip: !fs.existsSync(rendererFile) }, () => {
-  const acp = loadAcpPicker();
+test('installed ACP picker requires own UIDs in session config_options as well as the user status catalog', { skip: !webappAvailable }, () => {
+  const pick = loadWebappPicker();
   const models = catalog.models.map(model => ({ modelUid: model.uid, disabled: false }));
-  const oldSession = { options: [{ value: 'fusion-official', name: 'Official' }] };
-  assert.equal(acp.filter(oldSession, models).length, 0);
-  const updatedSession = { options: [{ group: 'BYOK', options: models.map(model => ({ value: model.modelUid, name: model.modelUid })) }] };
-  assert.equal(acp.filter(updatedSession, models).length, catalog.models.length);
+  const catalogOf = ms => ({ models: ms, sorts: [{ name: 's', isDefault: true, groups: [{ name: 'g', modelUids: ms.map(m => m.modelUid) }] }] });
+  const option = values => ({ name: 'Model', options: values });
+  // Catalog presence alone does not render a model — the configOption must
+  // advertise the uid too (and vice versa, catalog misses are dropped).
+  const officialOnly = pick(option([{ value: 'fusion-official', name: 'Official' }]),
+    catalogOf([{ modelUid: 'fusion-official', disabled: false }, ...models]), true);
+  assert.equal(officialOnly.models.length, 1);
+  // The strict catalog path (non-empty rendered set) is where misses are
+  // counted; an option uid absent from the catalog is reported, not rendered.
+  const withoutCatalog = pick(option([{ value: 'fusion-official', name: 'Official' }, { value: 'dfbyok-ghost', name: 'x' }]),
+    catalogOf([{ modelUid: 'fusion-official', disabled: false }]), true);
+  assert.deepEqual(withoutCatalog.catalogMisses, ['dfbyok-ghost']);
+  const updatedSession = option([{ value: 'fusion-official' },
+    { group: 'BYOK', options: models.map(model => ({ value: model.modelUid, name: model.modelUid })) }]);
+  const full = pick(updatedSession, catalogOf([{ modelUid: 'fusion-official', disabled: false }, ...models]), true);
+  assert.equal(full.catalogMisses.length, 0);
+  assert.equal(full.models.length, catalog.models.length + 1);
 });
 
-test('the installed picker selects every canonical native Sidekick on generated combinations', { skip: !fs.existsSync(rendererFile) }, () => {
-  const picker = loadFamilyPicker();
+test('the installed picker selects every canonical native Sidekick on generated combinations', { skip: !webappAvailable }, () => {
+  const picker = loadWebappPicker();
   const fixture = JSON.parse(fs.readFileSync(__dirname + '/fixtures/real-picker.json', 'utf8'));
   const protoFamily = family => m(30, cat(s(1, 'Fusion'), ...(family || []).map(dim =>
     m(2, cat(s(1, dim.key), m(2, cat(v(1, dim.order), s(2, dim.name), v(3, dim.controlType ?? 0))))))));
@@ -269,11 +270,14 @@ test('the installed picker selects every canonical native Sidekick on generated 
   const officialModel = record => ({ modelUid: record.uid, label: record.label, disabled: !!record.disabled, familyUid: 'fusion',
     familyMetadata: Object.fromEntries((record.family || []).map(dim => [dim.key, { order: dim.order, name: dim.name }])) });
   const models = [...fixture.fusions.map(officialModel), ...result.models.filter(model => model.kind === 'matrix').map(pickerModel)];
-  const rows = picker.rows(models);
-  assert.equal(rows.length, 1, 'our combinations live inside the official Fusion family');
-  const family = rows[0].family;
+  const uids = models.map(model => model.modelUid);
+  const out = picker({ name: 'Model', options: uids.map(uid => ({ value: uid, name: uid })) },
+    { models, sorts: [{ name: 's', isDefault: true, groups: [{ name: 'Fusion', modelUids: uids }] }] }, true);
+  assert.equal(out.catalogMisses.length, 0, 'our combinations live inside the installed picker catalog');
+  const rendered = new Set(out.models.map(model => model.modelUid));
   for (const uid of ['swe-2-medium', 'swe-2-high', 'gpt-5-6-luna-high', 'gpt-5-6-sol-high', 'glm-5-2']) {
-    const variant = family.models.find(model => result.fusions[model.modelUid]?.sidekickUid === uid);
+    const variant = models.find(model => result.fusions[model.modelUid]?.sidekickUid === uid);
+    assert.ok(variant && rendered.has(variant.modelUid), uid + ' resolves to a selectable mirrored combination');
     assert.ok(variant && !variant.disabled, uid + ' resolves to a selectable mirrored combination');
     assert.equal(resolveAssignment({ fusionLeadRouterUid: variant.modelUid }, json, result).assignment.modelUid, uid);
   }
