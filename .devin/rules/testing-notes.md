@@ -38,6 +38,13 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   （`~/Library/Application Support/Devin/logs/*/window*/exthost/output_logging_*/1-Devin Fusion BYOK.log`）；早期 `runtime.log` 的超时条目不带 `rpc`，当前已带 `rpc` 与 backend 注入的 `peerPort`。历史改前同期 10 分钟 30 条 `phase:body`，改后 0 条。
   **预期副作用**：protocol 三个新文件进了 `SOURCE_FILES`，`sourceId` 必变，首次重载会让 backend **重启一次**——这是新代码生效的
   正确行为，不要误判为重载循环（判据仍是 `ready` 只出现 1 次）。
+- **`sourceId` 只能拿「安装副本」现算，用仓库副本算必然不一致**（2026-10-25 实测，同一坑连踩两次）：
+  `source-identity.cjs` 的哈希输入是静态 require 闭包，而 `src/runtime/contract.cjs` 里有 `require('../../package.json')`，
+  所以 **`package.json` 在哈希里**。Devin 安装器会**重写安装副本的 `package.json`**（tab 缩进 + 追加 `__metadata.{installedTimestamp,size}`；
+  实测仓库 1,969 B → 安装 1,898 B），于是同一份源码两处的 `sourceId` **必然不同**（实测仓库 `1ee28376…` vs 安装 `cfd7ed28…`）。
+  正确判据：`require('<安装目录>/src/runtime/source-identity.cjs').runtimeIdentity('<storageRoot>', true)` 与
+  `runtime-control.json` 的 `sourceId`/`rootId` 比对；「`src/` 逐字节一致」要另用 `diff -rq` 单独验，两者别混。
+  副产品：`__metadata` 每次安装都变，所以**重装同版本也会换 `sourceId`**——这正好让 backend 重启到新代码，不是缺陷。
 - **Goal 与 Fast Context 不在本 fork 的验收范围内**（2026-10-16 决定）：两者是上游自带、由上游验证过的**额外功能**，本机不使用，因此**不要**为它们安排真实 Devin 窗口的端到端验收，也不要因为「只有模拟/合成测试」而把它们列为待补缺口。核心逻辑与上游同源或纯搬迁；fork 只改过它们的视图层（`panel/goal-view.cjs`、`panel/fast-context-view.cjs` 的共享 DOM 助手改造），那部分由本仓自身的视图测试覆盖。**精力投在 BYOK + Fusion 基础功能上。**
 - **`test/sdk-contract.test.cjs` 是防 SDK 漂移的契约测试**（2026-10-16 加）：它**读** `.refs/` 里的官方 SDK 源码，把我们的手写常量与 SDK 字面量做交叉断言——Anthropic `StopReason` 每个成员都必须映射进共享处理器认识的集合、`OutputConfig.effort` 每个取值都必须能到达 `output_config.effort`、`ReasoningEffort` 必须仍覆盖我方取值集合、`ToolChoice` 四个成员接口与出站形状一致、`ThinkingBlockParam.signature` 必须仍是**必需**字段（它一旦变可选，「只在签名在场时回放思考」这条规则就该重审）。
   `.refs/` 被 gitignore，**CI 上不存在**，所以各用例都用 `{ skip: ... }` 在文件缺失时跳过；但「**文件在、却解析不出来**」必须**失败**并提示 layout changed——两者不可混同，否则 SDK 换写法时测试会静默失效。**改这些常量时必须同步跑该文件**，别只看全量计数（CI 上它是 skipped，全绿没有信息量）。

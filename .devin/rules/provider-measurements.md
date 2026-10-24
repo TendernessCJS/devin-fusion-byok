@@ -52,7 +52,12 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
 
 - `/models`、`/chat/completions` 均 200；`tool_calls`/强制 `tool_choice` 完整（正常工具调用返回 `finish_reason: "tool_calls"`）。
 - **`max_completion_tokens` 不只是「静默接受」，而是被完全忽略**（2026-10-25 实测）：设 40 仍输出 **3234** completion tokens、`finish_reason: "stop"`；改发 `max_tokens: 40` 立刻 `finish_reason: "length"` 且正好 40。故 Chat 面发 **`max_tokens`**，并对「400 且错误正文点名该字段」做一次换名回退（`provider-degraded reason=max-tokens-field`）——官方 OpenAI 推理模型只认另一个名字，是镜像情况。
-- Chat 面**目前只跑过协议级探针**（本机会话流量全在 `openai-responses`），所以「改完真的会截断」需要在 Chat provider 上跑一个回合确认。
+- Chat 面**已有整窗真机流量**（2026-10-25，Fusion「BYOK Chat + 官方 sidekick / SWE」实跑）：修复前 **33 回合全部** `status: success` + HTTP 200；
+  那时发的是被忽略的 `max_completion_tokens`（值 = route 上限 **393216**），实际生效的是 DeepSeek 自己的默认（思考 64K / 非思考 8K），
+  单回合输出最大 **4,239**、从未触顶，缓存命中 **99.8%**（`inputTokens 113,078` / `cachedTokens 112,896`）。
+  修复后改发 `max_tokens: 393216`（恰为 DeepSeek 文档上限 384K），11 回合全 200、`provider-degraded` **0 次**——该字段被直接接受，换名回退未被需要。
+- 直接因果证据（同日探针，用本仓 `buildRequestBody` 直发真实端点）：`max_completion_tokens: 40` → 输出 **3234** tokens / `finish_reason "stop"`；
+  `max_tokens: 40` → `finish_reason "length"`、正好 40 tokens。注：小上限下思考会吃掉全部预算，出现「`length` + 零可见文本」是**已记录的刻意行为**（见本卷 `response.incomplete` 条）。
 - **思考 token 有无取决于"面"，不取决于厂商**：同一 `deepseek-flash`，Chat 面给
   `completion_tokens_details.reasoning_tokens`（15/17 >0），Anthropic 面给 `thinking_tokens`（0/34）。掉列先看路由。
 - `tps` 仅 `hasTools === false` 时计算（`monitor/store.cjs`）；Chat 至今每请求都带工具 → 全 `null` 是**设计**。
