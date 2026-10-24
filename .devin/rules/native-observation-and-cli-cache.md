@@ -16,15 +16,12 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   `unsupported`（旧协议的 `nativeModelsProtocol !== 1`）由 `readNativeModels` 返回；`unavailable`（连接失败/身份校验失败/超时/载荷非法）由 `catalog-sync` 的
   catch 合成（`catalog-sync.cjs:68`），**它不是目录结论**。`refreshNativeModels` 必须在
   `clear()` 之前拦它：视图非空时**保留已发布条目**、只把 `nativeCatalogStatus` 置为 `unavailable`，并走一次 `commit({ bumpRevision: false })`（面板要看到
-  「无法连接插件本地服务」，但视图没变就不该推进 revision），同时打 `native-refresh-retained`。否则后端换进程的那几秒（实测 12 秒）会把 885 条清成 0，
-  picker 显示「没有模型」。**`empty` 必须继续清空**——陈旧条目清理依赖它，一起保护掉会让陈旧条目永久留存。冷启动不受此保护（首帧视图本来就空，无可保留）；
+  「无法连接插件本地服务」，但视图没变就不该推进 revision），同时打 `native-refresh-retained`。否则后端换进程的那几秒会把已发布条目清成 0、picker 显示「没有模型」（实测数字见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。**`empty` 必须继续清空**——陈旧条目清理依赖它，一起保护掉会让陈旧条目永久留存。冷启动不受此保护（首帧视图本来就空，无可保留）；
   也不要为此让宿主去读 `native-cache.json`，那会造出第二个 cache 读者。
 - 原生目录由空变有（或目录签名变化）→ 触发 `pickerRefresh.changed()`；**当前线上不接任何刷新命令**（`lightCommands: []`，且
   `createPickerRefresh` 的**默认值本身就是 `[]`**——历史上默认值曾是 `['devin.reloadAcpConnections']`、只有生产显式传空才安全，
-  任何一处漏传就会重新引入风暴，因此默认值必须是安全的那一侧）：`devin.reloadAcpConnections` 实测会断开全部 ACP 连接（用户可见「ACP connection closed」+
-  会话区刷新），且每次执行后 5–35 秒内整个窗口被重载（2026-10-14 真机，reload 循环达每小时十余次）。数据正确性完全由 cli-cache 原地刷新兜底，新会话读到的是新 payload；
-  **不得回退到 `devin.newConversation` 之类开会话的命令**，重新接命令前必须先在真机确认其不会断开 ACP。另：扩展宿主对该窗口反复重启的另一嫌疑是 `saveReceipt`
-  往**安装目录**写 `.fusion-byok-storage.json`（POINTERS）——目录被监视则每次 activate 都触发重启，现已改为 roots 不变则不写；不得往
+  任何一处漏传就会重新引入风暴，因此默认值必须是安全的那一侧）：实测的风暴与影响见 `.devin/rules/native-observation-and-cli-cache-forensics.md`。数据正确性完全由 cli-cache 原地刷新兜底，新会话读到的是新 payload；
+  **不得回退到 `devin.newConversation` 之类开会话的命令**，重新接命令前必须先在真机确认其不会断开 ACP。另一嫌疑（`saveReceipt` 往安装目录写 POINTERS）的叙述见 `.devin/rules/native-observation-and-cli-cache-forensics.md`；不得往
   `context.extensionPath` 里新增任何周期性/激活期写文件。
 
 - `augmentLocalModelChoices` 的门控是「Fusion 需要其原生 uid 出现在字段 7 允许列表里、普通 BYOK 不需要」——盲窗（原生观测为空）下 Fusion 整组被丢而普通
@@ -35,32 +32,23 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   `src/runtime/host/cli-cache.cjs` 按「payload 含 `dfbyok` 判定我方身份、含 dfbyok 但缺当前 uid 判定陈旧」**原地重写 payload**：改写前先按
   `CACHE_RPC` 映射缓存名→RPC 路径、经 `augmentCatalog` 重算，且新 payload 必须「不丢任何已出现的期望 uid 且字节有变化」才落盘（否则 `no-improvement`
   跳过——允许净缩，清陈旧也是改进）；落盘前把原始字节写到 `<file>.bak`（原子写、`0o600`；**每次重写都覆盖，只保留最近一次**，不是首次重写前的原件），envelope 的
-  `version`/`identity_digest`/`fetched_at_secs` 原样保留。**绝不改名、绝不写 `.stale`**——实测（2026-10-24）删掉全部 `model_configs*` 后，CLI 在约 1 分钟内只重建了
-  **v6**（两个身份，字节数与删除前完全一致，v1–v5 一个没回来），且由哪条路径、在什么时机触发这次重建未确认；更早一次改写 `model_configs_v5` 后实测两小时零
-  `GetCliModelConfigs`、picker 一直空——所以改名/删除**不能**当刷新手段。不碰无 dfbyok 标记的其他身份文件；仅在重写到
+  `version`/`identity_digest`/`fetched_at_secs` 原样保留。**绝不改名、绝不写 `.stale`**：改名/删除**不能**当刷新手段（删除与改写的实验过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。不碰无 dfbyok 标记的其他身份文件；仅在重写到
   `model_configs` 时才经 `pickerRefresh.force()` 让 picker 重取（`team_settings`/`user_status` 由 CLI 自身节奏重拉、无需断 ACP
-  即生效），且 `force()` 与 `changed()` 共用 `cliCacheMs` 间隔——刷新风暴不得变成 ACP 断开风暴（实测曾 30 秒内连断 3 次）。Composer
+  即生效），且 `force()` 与 `changed()` 共用 `cliCacheMs` 间隔——刷新风暴不得变成 ACP 断开风暴。Composer
   模型缺失排障时先看缓存新鲜度，backend 注入日志（`afterOwn`）证明不了 picker 侧可见性。面板「设置 → CLI 缓存 → 刷新缓存」走同一个
   `checkCliCaches({ force: true })`（`refreshCliCaches` 消息），只做原地重写、不引入新的刷新通道；`cliCacheStatus()` 把最近一次报告交给面板渲染，
   不要在那里触发写入。**自动检查只看 uid 存在性**（`missing`/`staleProbe`），所以「uid 齐全但条目形态过时」它一律跳过——这正是 `force` 存在的理由：强制模式绕过门控、
-  直接比较 augment 后的字节，只有真差异才落盘（因此连按不churn，实测二次调用即 `no-improvement`）。**重写是「比对后替换」而非盲目覆盖**（2026-10-16）：CLI
-  自己也写这些文件（它经 bridge 拿增强目录再落盘），所以落盘前会重读一次、要求字节与所增强的那份**完全一致**，不一致就跳过（`concurrent-write`，等下一轮自动检查重读）——否则会用「旧
-  payload 的增强结果」覆盖 CLI 刚写入的更新版本，静默丢掉它存的内容；窗口是「重读→rename」之间的几微秒。`.bak` 写的是**所增强的那份原始字节**（不是再次新读的、可能已属新世代的版本）。修
+  直接比较 augment 后的字节，只有真差异才落盘。**重写是「比对后替换」而非盲目覆盖**：落盘前重读、要求字节与所增强的那份**完全一致**，不一致就跳过（`concurrent-write`）——否则会用旧 payload 的增强结果覆盖 CLI 刚写入的更新版本、静默丢掉它存的内容（发现过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。`.bak` 写的是**所增强的那份原始字节**（不是再次新读的、可能已属新世代的版本）。修
   emit 形态后**必须**走一次强制刷新或让配置变动触发自动重写，否则旧形态条目会一直留在缓存里（2026-10-14：信息性维度加 `order` 的修复就是这样落地的）。
   **`GetUserStatus` 有两种载荷形状，按 f1 的 wire type 判别**：响应是 `GetUserStatusResponse` 信封（f1 = `user_status` message，
   模型列表在其 f33），而 CLI 落盘的缓存是**裸 `UserStatus`**（f1 = `pro` bool，模型列表直接在 payload 的 f33，实测顶层 f33 = 526 条条目 + 3
-  个排序区）。2026-10-16：原地修复路径只认信封形状，裸形状下 `rewriteMessage(data, 1, …)` 抛 `Ambiguous` 被 `catch` 吞掉 → 每次重写都逐字节相同 →
-  记成 `no-improvement` 并**上报成功**（实测 `user_status` 期望 uid 236/456、8 个已退役 fusion uid 滞留，且只认信封的 `staleFusionUids`
-  对同一份 payload 报 0）。修复后对同一份真实缓存的强制刷新：236/456 → 456/456、陈旧 fusion uid 8 → 0，且二次/三次强刷仍为 `no-improvement`（不
-  churn）。`staleFusionUids` 现在扫描 payload 本身 + 它携带的每个 f1 message（覆盖 flat / 信封 / 裸三种形状）。`augmentCatalog` 接受
+  个排序区）。`staleFusionUids` 现在扫描 payload 本身 + 它携带的每个 f1 message（覆盖 flat / 信封 / 裸三种形状）。`augmentCatalog` 接受
   `onSkip(code)`（`shape-unrecognized`/`transform-failed`），**三个 RPC 都接**（`GetCliTeamSettings` 的允许列表改写同样上报，
   此前它是唯一剩下的静默路径）；`refreshStaleCliCaches` 把「上报了 skip 且期望 uid 仍缺」记为失败码而非
   `no-improvement`——**静默返回输入等于关掉这条链路的所有自检**，面板据此显示「未改动（原因）」而不是「无需重写」。bridge 侧不要把跳过码按进程去重（扩展宿主长期存活，
-  形状在会话中途变化只会打一次），而是把它作为 `skipped` 字段**搭在每次响应都打的 `catalog` 行**上。回归防线是 `test/cli-cache.test.cjs` 的端到端用例（真实裸形状
-  payload → 真实 `augmentCatalog` → 真实重写链路）：**它在本修复之前必然失败**，而此前分层的单测都放过——catalog 侧用信封形状构造 payload，cache 侧用合成
-  augmenter，缺口正好在接缝上。
+  形状在会话中途变化只会打一次），而是把它作为 `skipped` 字段**搭在每次响应都打的 `catalog` 行**上。回归防线是 `test/cli-cache.test.cjs` 的端到端用例（真实裸形状 payload → 真实 `augmentCatalog` → 真实重写链路，事故全程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。
 - 加载 `src/extension.cjs` 的测试 fixture 必须 stub `./runtime/host/cli-cache.cjs`（或把 `dir` 指向临时目录），
-  **绝不可触及真实 `~/.cache/devin/cli`**——历史上未 stub 的 fixture 曾把用户真实缓存改名搬走、清空 picker；
+  **绝不可触及真实 `~/.cache/devin/cli`**（fixture 误触真实缓存的事故叙述见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）；
   `inspectCliCaches`/`refreshStaleCliCaches` 的 `dir` 参数必填（非空字符串，否则抛 `TypeError`）就是为了堵这个口子。
 
 - **原生观测的两条通道必须按「谁更完整」合并，不能后者覆盖**：backend 看的是 CLI 侧流量（CLI 常读自己的缓存、很少重取 → 它的观测可能长期是 seed 的贫化形态），扩展宿主看的是原生扩展 UI
