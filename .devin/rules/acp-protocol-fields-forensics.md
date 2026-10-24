@@ -63,6 +63,15 @@ tail -c +<偏移> <bundle> | head -c 600
 | `#23` ModelInfo 及内层 `#23` | `m(23, …)`，内层作家族标识 | `F_MODEL_INFO = 23`，内层 `F_ALIAS = 23` |
 | 出站 chunk | `3` text / `5` stop_reason / `6` tool calls / `7` usage / `9` thinking / `10` signature | 「answer text in response field **#3**」，测试用 `writeVarintField(5, …)` 表示 stop_reason |
 
-- **使用结论**：再质疑这些字段号先看这张表——两份独立实现同时错的概率远低于单方读数错误；但**这不是新证据源**，表外字段仍以本仓实测为准。
+- **使用结论**：再质疑这些字段号先看这张表——两份独立实现同时错的概率远低于单方读数错误；但**这不是新证据源**，表外字段、以及与本机读数冲突的任何断言，一律以本机 REA 为准。
+
+### 冲突时以本机 REA 为准
+
+外部实现的**注释与文档头不等于它的实现**，更不等于本机 schema；两侧冲突时以本机 `newFieldList` 为准。
+
+- **案例 1（`GetChatMessageRequest` `#16`）**：对方 `src/session-continuity.js` 文档头写「stable protobuf session_id (**#16**)」，其代码 `writeStringField(16, …)` 的注释自认「这是 `cascade_id`，不是 session id；新 web schema 在 #28 加了 `session_id`，我们不发」。本机 bundle 实测：`16 = cascade_id`、`28 = session_id`。
+- **案例 2（同消息 `#22`）**：对方注释写「`#22` request_id，故意不发」。本机 bundle 实测：`22 = execution_id`（其 `request_id` 在出站响应里是 `GetChatMessageResponse#17`）。
+- **案例 3（`#18`，已在上一轮记录）**：对方只有注释提到 `#18` 是上下文窗口，代码并未解析该字段。
+- **方法论**：交叉验证要同时落到**对方的解析代码**和**本机 schema** 两侧；连续三例说明只读注释会引入假事实。本机取证见上文「怎么读权威字段号」——`newFieldList` 字面量是唯一权威，LS 二进制描述符只证存在性、不含字段号。
 - **反例**（附到「不要猜数值枚举」）：对方 `docs/HISTORY-LEDGER-2026-07-late.md`（~147 行）曾按 protobuf 变体名顺序猜「`StopReason 4 = max_turn_requests`」，被付费实测推翻（4 是付费层正常完成）——后果是完整付费响应被报成截断，按 length 续写的客户端会无限续写。
 - **交叉确认**：对方 `docs/DEVIN-CONNECT-CUTOVER.md`（~434 行）列的 stop reason 集合 `end_turn, max_tokens, max_turn_requests, refusal, cancelled` 与本仓 `src/runtime/host/auto-continue.cjs` 的处理集合一致。
