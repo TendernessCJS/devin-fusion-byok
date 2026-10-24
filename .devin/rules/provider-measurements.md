@@ -14,7 +14,7 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
 - **已实测的「供应商面」行为逐字搬到 `provider-measurements-forensics.md`**（Proxy 身份特征、`previous_response_id` 400、篡改 `encrypted_content` 的 502、回放非强制、信封真实尺寸与四个信封日志事件 `state-envelope-size`/`-oversize`/`-replayed`/`-replay-failed`、DeepSeek 占位桩、对照臂方法）。**判「某改动是否引入问题」前必须先读那份证据**，其中两条方法禁令直接适用：必须带对照臂（单臂归因已错过一次）；篡改校验失败只在官方面（转发面 502）显现，DeepSeek 不校验。
   由此产生的契约留在本卷：`replayMatches` 保守（scope/assistant 文本/工具 `id`+`name`+规范化参数任一不符即静默回退、绝不发出）；状态通道**恒开不改变可用性**；改该通道必须在 42 KB 信封尺寸上实测。
   - **`response.incomplete` 不触发零输出兜底，得到的是「空答 + stop 3」**（2026-10-17 实测闭环，代码依据 `inference.cjs` 的 `case 'response.incomplete'`）：incomplete 被映射为 stop reason 3（长度截断），而 `upstream_empty_output` 守卫**只覆盖 `reason === 2`**。因此截断且未产出文本时，用户看到的是一条**空消息**而非错误——这是**刻意的**（provider 确实截断了，stop 3 本身就是诚实的截断信号），排障时不要当成 bug。复现方式：小 `max_output_tokens` 配高 effort。
-- **协议事件名以官方 SDK 为权威，别靠猜**（2026-10-16，2026-10-22 升级快照）：官方 SDK 以**只读副本**放在仓库外——本机为 `.refs/openai-node`（`openai@7.41.0`，Apache-2.0，https://github.com/openai/openai-node ）与 `.refs/anthropic-sdk-typescript`（`@anthropic-ai/sdk@1.1.0`，MIT）。该目录**被 `.gitignore` 忽略、不进仓库也不进 VSIX**，clone 本仓的人需自行获取才能对照；**只读参考，不得把 SDK 代码写进 `src/`**，若要写入必须同批在 `THIRD_PARTY_NOTICES.md` 补署名。`.refs/openai-node` 的 `ResponseStreamEvent` 联合是 Responses **HTTP 流**事件的全集（7.41.0 为 **59** 个成员，本仓处理 18 个 + 1 个扩展 `response.reasoning.delta`，未处理 41 个——**按联合成员逐个解析 `type` 字面量统计，不要全文 grep**：全文扫描会把 `response.steer.*`、`response.create` 等 WebSocket/客户端事件一起算进来，历史上因此误报成「64 个、缺 46 个」）。
+- **协议事件名以官方 SDK 为权威，别靠猜**（2026-10-16，2026-10-22 升级快照）：官方 SDK 以**只读副本**放在仓库外——本机为 `.refs/openai-node`（`openai@7.43.0`，Apache-2.0，https://github.com/openai/openai-node ）与 `.refs/anthropic-sdk-typescript`（`@anthropic-ai/sdk@1.3.0`，MIT）。该目录**被 `.gitignore` 忽略、不进仓库也不进 VSIX**，clone 本仓的人需自行获取才能对照；**只读参考，不得把 SDK 代码写进 `src/`**，若要写入必须同批在 `THIRD_PARTY_NOTICES.md` 补署名。`.refs/openai-node` 的 `ResponseStreamEvent` 联合是 Responses **HTTP 流**事件的全集（7.43.0 仍为 **59** 个成员（升级时逐个 diff 过，联合零增删），本仓处理 18 个 + 1 个扩展 `response.reasoning.delta`，未处理 41 个——**按联合成员逐个解析 `type` 字面量统计，不要全文 grep**：全文扫描会把 `response.steer.*`、`response.create` 等 WebSocket/客户端事件一起算进来，历史上因此误报成「64 个、缺 46 个」）。
   `src/resources/shared.ts` 的 `ReasoningEffort` 是 effort 取值全集。据此对照出的真实缺口已修：缺 `response.refusal.delta/done`（拒答文本会被**静默丢弃**，
   与「假 anthropic 端点」同属静默失败）、缺 `response.reasoning_text.delta`（当前推理正文事件名）、缺三个 `.done` 变体（只发 done 的供应商会丢内容）。
   两个易踩的字段名陷阱：**`response.refusal.done` 带的是 `refusal` 字段而不是 `text`**（`output_text.done`/`reasoning_text.done` 才是 `text`）；
@@ -44,11 +44,15 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
 - **base path 是厂商相关**：Moonshot 上 `/anthropic/messages` 为 **404**、`/anthropic/v1/messages` 才 200；DeepSeek 两个路径都 200（宽容，不是规范）。面板填厂商文档给的 `…/anthropic` 在 Moonshot 上**必然 404**，排障先看这一条。
 - **签名闭环只在有签名的厂商成立**：DeepSeek 返回 36 字符签名且原样回放 200；Moonshot 不返回签名，所以续轮只能省略 signed thinking 块（`FOREIGN_STATE_PREFIX` 之外，脱敏数据另有 `dfbyok-redacted-v1:` 通道，见 `acp-protocol-fields.md`）。缺签名不等于工具多轮不可用，需厂商专项测试再下结论。**补测（2026-10-22）：把 `signature` 删掉再回放，DeepSeek 仍返回 200**——它不校验签名，所以
   「签名回放 200」不能证明我们保真，只有真 Anthropic 端点能戳穿；同理，本地全绿也不代表签名通道正确。
+- **DeepSeek 的 anthropic 面忽略 `cache_control`**（2026-10-25 实测）：13 条消息的同一请求，带断点与不带断点、热缓存下完全一致（`input_tokens 227` / `cache_read_input_tokens 384`），文档亦明示忽略。**因此 `cache_read_input_tokens` 非 0 不能证明断点生效**——DeepSeek 有独立的自动上下文缓存。
+- **DeepSeek 的自动缓存命中率很高**（同日 `monitor.jsonl` 实测）：单回合 `inputTokens 72,253` / `cachedTokens 70,656`（97.8%），Responses 面一直命中。别把「缓存计数为 0」当成常态，也别把非 0 归因给我们的断点。
+- **文档输入三面都不通**（同日探针）：Responses `input_file`、Anthropic `document` 均 **200 但被忽略**（模型回答「没有附件」）；Chat `file` 直接 400 `file must have a file_id or file_data`（DeepSeek 把 `file_data` 放在 content part 顶层，不是 OpenAI 的嵌套 `file` 对象）。**按本卷「附件走 `resource_link`、`documents` 恒为空」的实测，这三条映射真机不可达，故不改代码**，仅记录形状差异备查。
 
 ## Chat 面（`apiFormat: 'openai'`）实测（2026-10-22 DeepSeek `/v1`）
 
-- `/models`、`/chat/completions` 均 200；`tool_calls`/强制 `tool_choice` 完整；`reasoning_effort`、`max_completion_tokens`
-  被**静默接受**——接受不等于生效。
+- `/models`、`/chat/completions` 均 200；`tool_calls`/强制 `tool_choice` 完整（正常工具调用返回 `finish_reason: "tool_calls"`）。
+- **`max_completion_tokens` 不只是「静默接受」，而是被完全忽略**（2026-10-25 实测）：设 40 仍输出 **3234** completion tokens、`finish_reason: "stop"`；改发 `max_tokens: 40` 立刻 `finish_reason: "length"` 且正好 40。故 Chat 面发 **`max_tokens`**，并对「400 且错误正文点名该字段」做一次换名回退（`provider-degraded reason=max-tokens-field`）——官方 OpenAI 推理模型只认另一个名字，是镜像情况。
+- Chat 面**目前只跑过协议级探针**（本机会话流量全在 `openai-responses`），所以「改完真的会截断」需要在 Chat provider 上跑一个回合确认。
 - **思考 token 有无取决于"面"，不取决于厂商**：同一 `deepseek-flash`，Chat 面给
   `completion_tokens_details.reasoning_tokens`（15/17 >0），Anthropic 面给 `thinking_tokens`（0/34）。掉列先看路由。
 - `tps` 仅 `hasTools === false` 时计算（`monitor/store.cjs`）；Chat 至今每请求都带工具 → 全 `null` 是**设计**。

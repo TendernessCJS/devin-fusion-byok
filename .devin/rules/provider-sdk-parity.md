@@ -74,7 +74,7 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 
 **状态文件纪律**：键是 `sha256(JSON.stringify([provider.id, provider.baseUrl]))`，文件里**不出现 apiKey、也不出现 baseUrl 明文**；上限 32 条按时间淘汰；临时文件 + `rename` 原子写，权限 `0o600`；缺失/非法 JSON/版本不符一律按空状态（全放行），不抛。用户改 `baseUrl` 会导致键变化，能力**自动重评**，无需清理逻辑。
 
-**尚未验证的事实（不要写成结论）**：生效判据是真实 provider 上 `cache_read_input_tokens` / `cache_creation_input_tokens` 从 0 变为非 0——这两个数我们已经在读并入库，但**截至本卷更新时还没有真实观测数据**。写任何「已生效」的断言前先拿到该数据。
+**尚未验证的事实（不要写成结论）**：生效判据是真实 provider 上 `cache_read_input_tokens` / `cache_creation_input_tokens` 从 0 变为非 0——这两个数我们已经在读并入库，但**截至本卷更新时还没有真实观测数据**。写任何「已生效」的断言前先拿到该数据。实测边界（2026-10-25，DeepSeek）：DeepSeek 的 anthropic 面忽略该字段（带/不带断点用量完全一致），其自动缓存独立生效；所以「缓存计数变为非 0」只有在真 Anthropic 端点上才算断点生效的证据。
 
 ## 为什么 REA 在这一层不适用（重要）
 
