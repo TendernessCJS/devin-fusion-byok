@@ -18,11 +18,11 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   **移动调用方无需改桩键；被依赖文件本身改路径时须同步桩键**。相对 require 若没有桩，就在**同一个 vm 上下文**递归加载（共享模块缓存与 realm，否则 `instanceof`/单例守卫会碎）；解析不到、或
   require 到既无桩又非内置/`vscode` 的模块时**直接抛错**——绝不回退到真实 `require`，回退会静默绕过桩、把桩测试变成假绿。
 - **`globals`（立即化的 `setTimeout`、注入的 `fetch`）默认只作用于入口文件**，`shareGlobals` 谓词目前只额外覆盖 `src/activation/*`。这不是随意选择：
-  拆分前那整段代码都在 `extension.cjs` 里、本来就用立即定时器；而 `goal/state.cjs` 等**必须**保持真实定时器——实测让它共享立即定时器会引入 goal
+  拆分前那整段代码都在 `extension.cjs` 里、本来就用立即定时器；而 `goal/controller.cjs` 等**必须**保持真实定时器——实测让它共享立即定时器会引入 goal
   调度竞态（`missing-report` 误杀 `disabled` 状态）。需要扩范围时先确认真实语义是哪一侧。
 - 每个 fixture 结束要调 `assertStubsUsed()`（`t.after` 里或独立用例）：桩键拼错、或某个桩因为重构而不再被命中，都要能红——否则「桩写了但没接线」和
   「桩正确」长得一模一样，这类失效正是把 11 个桩键从字面量改成路径匹配时最容易被引入的。
-- **装载器改造引入的 realm 保真度变化已逐处核过（2026-10-18）**：非桩模块（`goal/state.cjs`、`panel/controller.cjs`、`picker-refresh.cjs`、
+- **装载器改造引入的 realm 保真度变化已逐处核过（2026-10-18）**：非桩模块（`goal/controller.cjs`、`panel/controller.cjs`、`picker-refresh.cjs`、
   `catalog/augment.cjs` 等）现在运行在 VM realm 内，此前是真实 realm。全仓 17 处 `instanceof` 分两类，**都不构成隐患**：① 两侧同 realm（如
   `activation/errors.cjs` 的 `RuntimeError`、`catalog/*` 之间的 Set）——抽出的模块与它在沙箱内创建的 Set/实例同处一个 realm；② 落在被桩替换的模块里
   （`panel/manager.cjs` 的 `allowedUids instanceof Set` 在 fixture 里从不真跑）。**但规则仍然成立**：任何**由测试构造、传入沙箱**的对象（如

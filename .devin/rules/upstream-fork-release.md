@@ -75,7 +75,7 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 
 - 结构性冲突：upstream 仍在改**单体** `src/extension.cjs`，而本 fork 已把它拆成 `src/activation/`（`extension.cjs` 仅 154 行）。直接 merge 会在该文件大面积冲突且语义错位 → **不 merge，按结构映射手工移植**。
 - **5 项全部已移植**（提交 `3d07548`，随后 `d660869` 升 0.3.49 并完成真机验收）：① `src/lifecycle/host-disabled.cjs` —— 用户在扩展管理器里禁用插件时恢复自有设置，否则 `WINDSURF_API_SERVER_URL` 会一直指向已死的 backend，把用户的 Devin CLI 打坏（正好命中本仓最重的注入面）；② `config.goalEnabled` 开关 —— Goal 默认关闭；③ 外部 MCP（`code_search`/`web_search`/`web_read_url` + 账号检测 + 开关，默认关闭）；④ 页面读取（≤5 次 https 重定向、拒私有主机、不执行脚本）；⑤ 稳定 launcher。
-- **结构映射规则（下次照做）**：`panel/model.cjs → panel/manager.cjs`、`runtime/goal-state.cjs → goal/state.cjs`、单体 `extension.cjs → src/activation/*` + `lifecycle` 槽。**不要让上游的旧名文件复活**（会变成没有调用方的孤儿）。
+- **结构映射规则（下次照做）**：`panel/model.cjs → panel/manager.cjs`、`runtime/goal-state.cjs → goal/controller.cjs`、单体 `extension.cjs → src/activation/*` + `lifecycle` 槽。**不要让上游的旧名文件复活**（会变成没有调用方的孤儿）。
 - **刻意保留的 fork 差异，不要被上游覆盖**：版本号（自管）、`repository` 字段、面板 tab 顺序、`postState` 队列与 `reloadWindow`、DOM 助手前缀（`byId(x,'fc-')`）。
 - **边界**：Goal 与对外 MCP 属**上游拥有**代码，本机不做 e2e 验收（见 `testing-notes.md`）；「仓库测试全绿」不等于「本机验过」。
 

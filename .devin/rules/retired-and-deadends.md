@@ -38,7 +38,7 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   | `src/extension.cjs` | `package.json` 的 `main` |
   | `src/runtime/backend.cjs` | `ensureBackend` 用 `process.execPath` 派生（也被 `extension.cjs` require，故在依赖图内） |
   | `src/fast-context/server.cjs` | `npm run mcp:fast-context`（自带 `require.main` 块） |
-  | `src/goal/report.cjs` | `goal/state.cjs` 把绝对路径拼进 shell 命令（`extension.cjs` 的 `reportCliPath`） |
+  | `src/goal/report.cjs` | `goal/controller.cjs` 把绝对路径拼进 shell 命令（`extension.cjs` 的 `reportCliPath`） |
   | `src/lifecycle/uninstall.cjs` | `package.json` 的 `vscode:uninstall`，VS Code 卸载扩展时执行 |
   | `<globalStorage>/fusion-mcp.cjs`（**运行期生成，仓库里没有**） | `fast-context/launcher.cjs` 写出，外部 MCP 客户端（Claude Code / Codex / Cursor）按面板复制的配置启动它 → 再拉起 `fast-context/server.cjs` 的最新安装副本 |
 
