@@ -21,7 +21,6 @@ const { parseFields } = require('../../protocol/wire.cjs');
 const { validateProtoCatalog, isOwnUid } = require('../../catalog/payload.cjs');
 
 const CACHE_NAME = /^(user_status|team_settings)\.[0-9a-f]{16}\.bin$/;
-const OWN_MARKER = 'dfbyok-';
 const CACHE_RPC = {
   user_status: '/exa.language_server_pb.LanguageServerService/GetUserStatus',
   model_configs_v5: '/exa.language_server_pb.LanguageServerService/GetCliModelConfigs',
@@ -107,7 +106,8 @@ function coverageOf({ dirState, items }) {
       supported += 1;
       if (item.modelConfigs) generations.push({ generation: item.generation, name: item.name,
         fetchedAt: item.read.envelope.fetched_at_secs,
-        own: (item.read.uids || []).some(isOwnUid) });
+        own: (item.read.uids || []).some(isOwnUid),
+        ownCount: (item.read.uids || []).filter(isOwnUid).length });
     } else if (item.bucket === 'legacy') legacy.push({ name: item.name, generation: item.generation });
     else if (item.bucket === 'unsupported') unsupported.push({ name: item.name, generation: item.generation });
   }
@@ -212,7 +212,7 @@ function ownedIn(kind, payload, expected) {
 // `dir` is required so no caller can silently aim at the real user cache.
 function inspectCliCaches({ dir, expectedUids = [], staleProbe, retire = true } = {}) {
   requireDir(dir);
-  const expected = [...new Set(expectedUids)].filter(uid => typeof uid === 'string' && uid.includes(OWN_MARKER));
+  const expected = [...new Set(expectedUids)].filter(isOwnUid);
   const entries = [], rejected = [];
   const scanned = inspect(dir);
   if (scanned.dirState !== 'ok') {
@@ -377,5 +377,5 @@ function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, fo
   return { checked, refreshed, skipped, errors, coverage };
 }
 
-module.exports = { CACHE_NAME, OWN_MARKER, CACHE_RPC, MAX_CACHE_BYTES, defaultDir, rpcFor,
+module.exports = { CACHE_NAME, CACHE_RPC, MAX_CACHE_BYTES, defaultDir, rpcFor,
   inspectCliCacheCoverage, inspectCliCaches, refreshStaleCliCaches };

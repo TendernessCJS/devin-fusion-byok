@@ -56,6 +56,26 @@ test('inspectCliCaches reports missing uids only for backend-owned files', () =>
   assert.deepEqual(byName['model_configs_v5.bbbbbbbbbbbbbbbb.bin'], [OWN[0], OWN[1]]);
 });
 
+test('expected uids are recognised by prefix shape, not by substring', () => {
+  const dir = tmpdir();
+  writeCache(dir, 'user_status.dddddddddddddddd.bin', OWN);
+  // `x-lookalike-dfbyok-text` carries the marker text but is not ours: keeping
+  // it in `expected` would report it missing on every scan forever.
+  const { expected, entries } = inspectCliCaches({ dir, expectedUids: [...OWN, 'x-lookalike-dfbyok-text'] });
+  assert.deepEqual(expected, OWN);
+  assert.deepEqual(entries[0].missing, []);
+});
+
+
+test('coverage generations carry a per-identity own count', () => {
+  const dir = tmpdir();
+  writeCache(dir, 'model_configs_v6.aaaa1111bbbb2222.bin', [OWN[0], OWN[1], 'native-model-z']);
+  const coverage = inspectCliCacheCoverage({ dir });
+  const gen = coverage.generations.find(entry => entry.name === 'model_configs_v6.aaaa1111bbbb2222.bin');
+  assert.equal(gen.own, true);
+  assert.equal(gen.ownCount, 2, 'ownCount counts uids, not boolean ownership');
+});
+
 test('inspectCliCaches and refreshStaleCliCaches require an explicit dir', () => {
   assert.throws(() => inspectCliCaches({ expectedUids: OWN }), TypeError);
   assert.throws(() => inspectCliCaches({ dir: '', expectedUids: OWN }), TypeError);
@@ -468,7 +488,7 @@ test('inspectCliCacheCoverage reports missing and unreadable directories', () =>
   writeCache(dir, 'model_configs_v5.aaaaaaaaaaaaaaaa.bin', OWN);
   const coverage = inspectCliCacheCoverage({ dir });
   assert.deepEqual(coverage, { dirState: 'ok', supported: 1, legacy: [], unsupported: [],
-    generations: [{ generation: 5, name: 'model_configs_v5.aaaaaaaaaaaaaaaa.bin', fetchedAt: 1, own: true }],
+    generations: [{ generation: 5, name: 'model_configs_v5.aaaaaaaaaaaaaaaa.bin', fetchedAt: 1, own: true, ownCount: 3 }],
     current: { generation: 5, name: 'model_configs_v5.aaaaaaaaaaaaaaaa.bin', fetchedAt: 1 }, dynamic: false });
   assert.equal(JSON.stringify(inspectCliCacheCoverage({ dir })), JSON.stringify(coverage),
     'coverage is fully determined by the directory contents — it feeds deduplicated panel state');
