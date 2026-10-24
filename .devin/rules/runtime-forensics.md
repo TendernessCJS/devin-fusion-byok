@@ -49,3 +49,7 @@ description: "Apply when diagnosing why injection or catalog changes appear not 
   「渲染端→桥」与「宿主→LS」稳定为 6/6 一一对应。所以**不要把某一时刻的 `lsof` 计数当作架构常量**；连接归属必须按 **pid** 判（`lsof` 的进程名被
   截断成 `Devin\x20`，按名字匹配会全部落空或全命中），`WebKit/Chromium` 侧真正持有 socket 的是 network service 进程而非渲染进程本体。
 - **桥已保留传输层 gzip（2026-10-19）**：旧版解压后明文回写曾放大约 28.8×；修复后实测 `47,222 B → 73,935 B`（1.566×，新增目录条目的真实开销）。不得把旧测量当现状，也不得通过放宽改写降低体积；逐消息压缩仍按原逻辑展平。
+
+- **回合提前结束用 `acp-turn` 判定**：`session/prompt` settle 记 `{stopReason, ok, code, durationMs}`（只枚举/布尔/耗时，
+  不记正文/sessionId/metadata）。CLI 自己的 devin-cli.log 只有 span、没有 stopReason；`session/prompt` 385ms 被关且
+  `turn_stats` 紧跟 close 的实测场景里，`acp-turn.stopReason` 是区分 `max_turn_requests`/`end_turn`/`cancelled` 的唯一通道。

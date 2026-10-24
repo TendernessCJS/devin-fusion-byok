@@ -154,6 +154,11 @@ const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
   「`$EXT` 指向已安装的旧版本」是同一事实的两面）。
   也不要拿 `.obsolete` 当判据：实测（2026-10-18，0.3.48→0.3.51 连续三轮升级后）该文件是 **0 字节空文件**、mtime 就是当次安装时刻，旧目录仍在磁盘上。
   唯一可靠的判据组合是 **`extensions.json` 里只剩新版一条** + **运行进程路径指向新版**。
+- **备份目录绝不能留在 `~/.devin/extensions/` 下**（实测 2026-10-24 踩坑）：用 `cp -R … local.devin-fusion-byok-0.3.58.bak-<时间戳>` 做备份后重载，
+  Devin 会把该目录当成版本更高的扩展加载，`extensions.json` 的 `location` 直接指向备份目录，**正式目录被忽略**——现象是「装完重载却像没生效」
+  （本次表现为新加的 `upstream-retry` 从不触发）。判据用 sourceId 而不是文件比对：`/health` 的 `sourceId` 吻合才是真的在跑新代码，
+  `node -e 'require("<扩展目录>/src/runtime/source-identity.cjs").runtimeIdentity("/tmp/x",true).sourceId'` 算出期望值再比。
+  备份一律放 `~/.devin/extension-backups/`；已经误放过时，移出备份目录并把 `extensions.json` 的 `location` 改回正式目录，再重载。
 - **旧扩展目录需手动清理**（每次升级留一个，约 950 KB）：注册表已不引用、无进程句柄，`rm -rf ~/.devin/extensions/local.devin-fusion-byok-<旧版本>` 安全。
   删除后复核：`/health` 的 pid 不变、`runtime.log` 继续 `chat-complete status:200`、`extensions.json` 仍只有新版。
 - `runtime.log` 出现 `ready port 39842 version <version>`

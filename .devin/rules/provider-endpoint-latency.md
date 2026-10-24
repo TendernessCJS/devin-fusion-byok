@@ -64,3 +64,19 @@ DeepSeek Anthropic provider 的 4816 条记录中有 8 条非 success；当时�
 
 - 超时现在有专属文案 `Provider response timed out after <预算>s/ms`（`src/protocol/inference.cjs` 按 `status` 选 `firstResponseLimit` 或 `idleLimit`）；`upstream_stream_error` / `upstream_stream_incomplete` / `upstream_network` 仍走通用文案 `Provider response could not be completed.`。两类文案都被 `src/runtime/host/auto-continue.cjs` 匹配为可重试目标（`TARGET_ERROR` + `TIMEOUT_RE`）；终止判定 `TERMINAL_BLOCKER_RE` 只匹配 `Provider returned HTTP 4xx/5xx.` 与格式类错误，所以这两类文案**都会**被自动重试。匹配失败只在 tail 末尾 400 字符含「provider response」时记 `auto-continue-miss`（只记 `reason`/`tailLength`/布尔量/`stopReason`，绝不记正文），据此区分 `tail-mismatch`/`session-suppressed`/`retry-disallowed`/`reject-mismatch`。
 - 预算：`ERROR_ATTEMPT_LIMIT = 5`、`ERROR_WINDOW_MS = 10 min`，超出即停止，不会无限重试。
+
+## 供应商侧首字节前连接失败的有界重试（Devin 3.11.216 / CLI 3000.11.216）
+
+实测：runtime.log/monitor.jsonl 累计 12 次 `upstream_network` 全部发生在 `firstOutputMs: null`、`usageComplete: false`
+（零字节输出即断）：ECONNRESET 3、UND_ERR_SOCKET 3、EPIPE 3、UND_ERR_CONNECT_TIMEOUT 2、upstream_timeout(AbortError) 1；
+同轮上下文内紧接的后续请求多数直接成功。宿主→本地 backend 已有 `withConnectionRetry` 覆盖同类失败，供应商侧此前没有。
+
+`src/protocol/inference.cjs` 在第一次 `send(body)` rejection 上做一次有界重试，判据：
+
+- 仅连接层中断可重试：`err?.cause?.code || err?.code` ∈ `{UND_ERR_SOCKET, ECONNRESET, EPIPE, UND_ERR_CONNECT_TIMEOUT}`；
+  不碰消息文本、HTTP 状态、DNS/TLS、AbortError。
+- 前置：客户端与 upstream signal 均未 abort、尚未向客户端写字节（`res.headersSent`）。
+- 固定 150ms，可被 `upstreamController.signal` 立即打断；打断则抛原错误。
+- 重试前记 `upstream-retry`（仅 transportDetail 枚举值）；成功不另记（`chat-complete` 覆盖），失败仍记原 `chat-error`。
+- **禁止在已有输出后重试**：读流阶段（reader.read()/SSE/`upstream_stream_error`）与 HTTP 非 2xx 一律不重试；
+  「0 字节客户端输出」只是本插件允许重试的边界，不证明供应商未接收或执行请求，不能保证不重复计费。

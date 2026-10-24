@@ -56,3 +56,15 @@ description: "Apply when writing or debugging tests — the installed-renderer s
 - **传输取消用例的判据是「请求到达目标阶段 + 服务端 socket 实际 close」**：不用固定 sleep 触发 abort，也不只断言 reject——要条件等待到 `slowHits`/`closes` 递增。
 - `test/fixtures/real-picker.json` 是 **0.3.11 时期**真实 picker 响应的快照（文件名不再带版本，来源记在这里）；更新它必须说明取自哪个版本。
 - 读 `test/fixtures/**` 一律用 `__dirname` 拼绝对路径，禁止 CWD 相对路径（曾导致从其他目录单跑 ENOENT）。
+
+## installed-renderer 双能力探测（批次 C 后）
+
+- `test/helpers/installed-renderer.cjs` 分 legacy / webapp 两套：`legacyAvailable`（旧
+  `windsurf-chat-client/index.js`）与 `webappAvailable`（`devin-webapp-host/assets` 目录存在）。
+  webapp 用例 skip **只依据 `webappAvailable`**，不再看旧 renderer 文件。
+- 安装根可用参数或 `DFBYOK_TEST_APP_ROOT` 覆盖，默认 `/Applications/Devin.app/Contents/Resources/app`；
+  assets listing 与文件内容按 root 缓存。仅 assets 目录不存在可 skip；目录存在但候选缺失、重复、
+  不可读或锚点漂移必须 fail-loud，不得在能力探测阶段把解析失败转成 unavailable。
+- `native-field-contract.test.cjs` 从 webapp assets 的 protobuf-es `newFieldList` 描述文本按字段号断言；
+  只锁定实际读取的字段，新字段（ModelInfo f26、ChatMessagePrompt f22、ModelUsageStats f13、
+  GetChatMessageRequest f28）只登记存在性。仅 assets 目录缺失可 skip，目录存在却没有 schema 锚点必须 fail。

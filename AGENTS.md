@@ -22,7 +22,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 - **backend 代码禁用动态 require**——`sourceId()` 的哈希输入是加载期从字面量 require 图自动推导的，动态 specifier 会让推导直接抛错、backend 起不来。
 - **不要让任何人「恢复」`message_nodes` 按 `message_id` 反查归属**（实测 31 秒全表扫描）；归属只查 `tool_call_state`。
 - **不要恢复任何 picker 刷新命令**（`lightCommands` 必须保持 `[]`；曾导致每 5–35 秒重载整个窗口）。
-- **CLI 缓存绝不改名、绝不写 `.stale`**（该 CLI 版本不会因文件缺失补拉，改名会把 picker 打空且不自愈）。
+- **CLI 缓存绝不改名、绝不写 `.stale`**（v6 实测会自愈、v1–v5 不会，自愈时机不可依赖；改名仍可能把 picker 打空）；`model_configs*` 可写性按文件内容判定，不按代际白名单——合法信封的未来代际照常重写。
 - **日志禁止**写入 `apiKey`、控制令牌、`authorization` 头、对话正文。
 - **永不向 `upstream` 推送**；`origin` 才是推送目标。
 

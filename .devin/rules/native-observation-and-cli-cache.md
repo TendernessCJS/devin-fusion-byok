@@ -35,8 +35,9 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   `src/runtime/host/cli-cache.cjs` 按「payload 含 `dfbyok` 判定我方身份、含 dfbyok 但缺当前 uid 判定陈旧」**原地重写 payload**：改写前先按
   `CACHE_RPC` 映射缓存名→RPC 路径、经 `augmentCatalog` 重算，且新 payload 必须「不丢任何已出现的期望 uid 且字节有变化」才落盘（否则 `no-improvement`
   跳过——允许净缩，清陈旧也是改进）；落盘前把原始字节写到 `<file>.bak`（原子写、`0o600`；**每次重写都覆盖，只保留最近一次**，不是首次重写前的原件），envelope 的
-  `version`/`identity_digest`/`fetched_at_secs` 原样保留。**绝不改名、绝不写 `.stale`**——该 CLI 版本不会因文件缺失而补拉
-  `model_configs_v5`，改名会把 picker 打空且不自愈（实测两小时零 `GetCliModelConfigs`）；不碰无 dfbyok 标记的其他身份文件；仅在重写到
+  `version`/`identity_digest`/`fetched_at_secs` 原样保留。**绝不改名、绝不写 `.stale`**——实测（2026-10-24）删掉全部 `model_configs*` 后，CLI 在约 1 分钟内只重建了
+  **v6**（两个身份，字节数与删除前完全一致，v1–v5 一个没回来），且由哪条路径、在什么时机触发这次重建未确认；更早一次改写 `model_configs_v5` 后实测两小时零
+  `GetCliModelConfigs`、picker 一直空——所以改名/删除**不能**当刷新手段。不碰无 dfbyok 标记的其他身份文件；仅在重写到
   `model_configs` 时才经 `pickerRefresh.force()` 让 picker 重取（`team_settings`/`user_status` 由 CLI 自身节奏重拉、无需断 ACP
   即生效），且 `force()` 与 `changed()` 共用 `cliCacheMs` 间隔——刷新风暴不得变成 ACP 断开风暴（实测曾 30 秒内连断 3 次）。Composer
   模型缺失排障时先看缓存新鲜度，backend 注入日志（`afterOwn`）证明不了 picker 侧可见性。面板「设置 → CLI 缓存 → 刷新缓存」走同一个
@@ -89,3 +90,30 @@ description: "Apply when changing native catalog observation or its cache, CLI c
 - **已知代价（有意取舍，勿回退）**：若某次 allowlist 变化只被 CLI 通道看到而宿主通道没看到，宿主保持旧集合
   并留下 `diverged` 日志，直到宿主自己观测到。这是为避免「旧副本覆盖新事实」，**不要**在后继改动里悄悄恢复
   「最后到达者赢」。
+
+## CLI 缓存世代与 coverage（Devin 3.11.216 / CLI 3000.11.216 实测后新增）
+
+- `model_configs_v6.<16hex>.bin` 是当前 CLI 版本在写的格式；**可写性按内容判定，代际号只用于展示**——
+  `model_configs*`（含无后缀=v1）一律是候选：信封+载荷校验通过即 supported（任意 `_vN` 可写，
+  由 `rpcFor` 前缀派生 `GetCliModelConfigs`）；非 JSON → `legacy`（历史残留）；
+  是 JSON 但校验失败 → `unsupported`（未来格式，请更新插件）。supported 中 `_vN`>6 → `coverage.dynamic`。
+- 写入资格（任意代际、内容判定同上）：>64MiB 先 statSync 拒绝不读；JSON 信封必须
+  `{version:1, identity_digest 非空字符串, fetched_at_secs 安全整数, payload 严格 base64}`；
+  model_configs 须有合法 f1 wire2 条目、唯一非空 f22 UID；零字节是合法空表且不取得写资格。
+  输出也须校验；仅 expected 为空且原 UID 全属我方时可退役为空表，已知字段类型须合法；
+  仅 UID 中的自有前缀可判归属，label/其他字段含 marker 不算。user_status 校验裸/信封内真实目录，
+  team_settings 从 f7 UID 允许列表判归属。JSON 解析失败须保留原始字节分类，不能把损坏 JSON 当 legacy。
+  `read-failed`/`too-large` 只进 `skipped` 稳定 code、不计 supported/legacy；其余校验失败
+  同时进 `skipped`（`unsupported-envelope`/`malformed-payload`）与 coverage 分类，字节不变。
+- `coverage`：`{dirState, supported, legacy:[{name,generation}], unsupported:[...],
+  generations:[{generation,name,fetchedAt,own}], current, dynamic}`，
+  `current` = supported model_configs 中最大 generation（同代取 `fetched_at_secs` 最新），
+  纯由目录内容决定；它不是 CLI 实际读取代际的观测，面板应称「检测到兼容缓存 vN」，不得宣称「当前使用」。
+  目录缺失不得表现为「全部正常」。
+- `expectedUids` 为空**仍执行一次检查**，让已识别的我方陈旧条目走保守 retirement；
+  真实模型 UID/允许列表中的自有条目不在 expected 时也须触发退役；缓存/auth 使用显式 retireOwn，
+  空 emit 不能早退而留下最后一个已删模型。保留原生与未知字段，二次检查不得 churn。
+  无 known UID 依据时不得删 native 形态组合、不得伪造空目录清空。
+  `loading`/`unavailable` 下 `retire:false` 硬闸禁删自有条目；retirement 只在权威态允许（`retire-withheld`）；权威首达 `nativeRevision`+1 补写。
+- 面板语义：未知代际/格式异常 = 「未处理/请更新插件」，与 `no-improvement` 的「无需重写」分开；
+  health 映射：coverage 缺失或 dirState≠ok → unknown，unsupported 或写失败 → bad，legacy 不影响。
