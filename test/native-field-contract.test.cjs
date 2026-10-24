@@ -64,6 +64,13 @@ test('newer fields are registered without being relied on', { skip: !source }, (
   assert.ok(descriptor('exa.chat_pb.ChatMessagePrompt').has(22), 'ChatMessagePrompt.f22 generation_model_uid registered');
   assert.ok(descriptor('exa.codeium_common_pb.ModelUsageStats').has(13), 'ModelUsageStats.f13 used_provider_plan registered');
   assert.ok(descriptor('exa.api_server_pb.GetChatMessageRequest').has(28), 'GetChatMessageRequest.f28 session_id registered');
+  // Presence-only: we pass GetChatMessageResponse through untouched, so these
+  // register the fields exist — not that we decode or depend on them.
+  const chatResponse = descriptor('exa.api_server_pb.GetChatMessageResponse');
+  assert.equal(chatResponse.get(29)?.kind, 'message', 'GetChatMessageResponse.f29 notifications registered');
+  assert.equal(chatResponse.get(29)?.name, 'notifications');
+  assert.equal(chatResponse.get(30)?.kind, 'message', 'GetChatMessageResponse.f30 model_change registered');
+  assert.equal(chatResponse.get(30)?.name, 'model_change');
 });
 
 test('mutation proof: a dropped field number makes the contract fail', { skip: !source }, () => {
