@@ -1,0 +1,1276 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { fixture, fakeScheduler } = require('./helpers/auto-continue-fixture.cjs');
+
+test('matchesProviderError recognizes exact suffix with and without period', () => {
+  const f = fixture();
+  assert.equal(f.matchesProviderError('Provider response could not be completed'), true);
+  assert.equal(f.matchesProviderError('Provider response could not be completed.'), true);
+  assert.equal(f.matchesProviderError('Some prefix text... Provider response could not be completed'), true);
+  assert.equal(f.matchesProviderError('Some prefix text... Provider response could not be completed.\n'), true);
+  assert.equal(f.matchesProviderError('Provider response could not be completed and more text'), false);
+  assert.equal(f.matchesProviderError('Mentioning Provider response could not be completed in a question?'), false);
+  assert.equal(f.matchesProviderError('Provider response timed out after 120s.'), true);
+  assert.equal(f.matchesProviderError('Error: Provider response timed out after 50ms.'), true);
+  assert.equal(f.matchesProviderError('Provider response timed out after 120s.\n'), true);
+  assert.equal(f.matchesProviderError('Provider response timed out after 120s and more text'), false);
+  assert.equal(f.matchesProviderError('Provider response timed out.'), false);
+  assert.equal(f.matchesProviderError('Normal completed response.'), false);
+  assert.equal(f.matchesProviderError(''), false);
+  assert.equal(f.matchesProviderError(null), false);
+});
+
+test('matchesTerminalBlocker keeps timeouts retryable and terminal HTTP errors blocking', () => {
+  const f = fixture();
+  assert.equal(f.matchesTerminalBlocker('Provider response timed out after 120s.'), false);
+  assert.equal(f.matchesTerminalBlocker('Provider returned HTTP 400.'), true);
+  assert.equal(f.matchesTerminalBlocker('Provider returned HTTP 503.'), false);
+});
+
+test('auto continue handles v1 fail -> continue -> success with backoff and synthetic chunk', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  let enabled = true;
+  const handle = f.install({
+    isEnabled: () => enabled,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  const clientMessages = [];
+  const serverCalls = [];
+  let promptCount = 0;
+
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(request, token) {
+      serverCalls.push(request);
+      if (request.method === 'session/prompt') {
+        promptCount++;
+        return Promise.resolve({ stopReason: 'end_turn' });
+      }
+      return Promise.resolve({});
+    },
+    forwardClientRequest(request) {
+      clientMessages.push(request);
+    }
+  };
+
+  f.api.registerConnection(connector);
+
+  const prompt1 = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's1', prompt: [{ type: 'text', text: 'hello' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Error: Provider response could not be completed' }
+      }
+    }
+  });
+
+  await new Promise(r => setImmediate(r));
+
+  assert.equal(scheduler.pendingCount(), 1);
+  assert.equal(promptCount, 1);
+
+  scheduler.advance(1000);
+  assert.equal(promptCount, 1);
+
+  scheduler.advance(1000);
+  assert.equal(promptCount, 2);
+
+  const continueCall = serverCalls[1];
+  assert.equal(continueCall.method, 'session/prompt');
+  assert.equal(continueCall.params.prompt[0].type, 'text');
+  assert.equal(continueCall.params.prompt[0].text, 'continue');
+  assert.equal(continueCall.params.sessionId, 's1');
+
+  const optimisticMsg = clientMessages.find(m => m.params?.update?.sessionUpdate === 'user_message_chunk');
+  assert.ok(optimisticMsg);
+  assert.equal(optimisticMsg.params.update.content.text, 'continue');
+  assert.equal(optimisticMsg.params.update._meta['cognition.ai/isOptimistic'], true);
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'All done now successfully!' }
+      }
+    }
+  });
+
+  const finalResult = await prompt1;
+  assert.deepEqual(finalResult, { stopReason: 'end_turn' });
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('auto continue retries the upstream timeout text the same way as the generic error', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  const clientMessages = [];
+  const serverCalls = [];
+  let promptCount = 0;
+
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(request, token) {
+      serverCalls.push(request);
+      if (request.method === 'session/prompt') {
+        promptCount++;
+        return Promise.resolve({ stopReason: 'end_turn' });
+      }
+      return Promise.resolve({});
+    },
+    forwardClientRequest(request) {
+      clientMessages.push(request);
+    }
+  };
+
+  f.api.registerConnection(connector);
+
+  const prompt1 = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's1', prompt: [{ type: 'text', text: 'hello' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Error: Provider response timed out after 120s.' }
+      }
+    }
+  });
+
+  await new Promise(r => setImmediate(r));
+
+  assert.equal(scheduler.pendingCount(), 1);
+  assert.equal(promptCount, 1);
+
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+
+  const continueCall = serverCalls[1];
+  assert.equal(continueCall.method, 'session/prompt');
+  assert.equal(continueCall.params.prompt[0].text, 'continue');
+  assert.equal(continueCall.params.sessionId, 's1');
+  assert.equal(handle.status().autoContinueCount, 1);
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'All done now successfully!' }
+      }
+    }
+  });
+
+  const finalResult = await prompt1;
+  assert.deepEqual(finalResult, { stopReason: 'end_turn' });
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('a provider-like tail that fails matching logs a miss with lengths only, no content', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(request) {
+      if (request.method === 'session/prompt') return Promise.resolve({ stopReason: 'end_turn' });
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const prompt = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-miss', prompt: [{ type: 'text', text: 'hi' }] } });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-miss', update: { sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'Provider response could not be completed. Try again later.' } } }
+  });
+  await prompt;
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 0);
+  const miss = f.logs.find(l => l.event === 'auto-continue-miss');
+  assert.ok(miss, 'a provider-like but non-matching tail must produce a miss record');
+  assert.equal(miss.data.reason, 'tail-mismatch');
+  assert.equal(miss.data.endsWithGeneric, false);
+  assert.equal(miss.data.tailLength > 0, true);
+  assert.equal(JSON.stringify(f.logs).includes('Try again later'), false, 'the miss record must never carry tail content');
+});
+
+test('an ordinary turn produces no miss log', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(request) {
+      if (request.method === 'session/prompt') return Promise.resolve({ stopReason: 'end_turn' });
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const prompt = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-ok', prompt: [{ type: 'text', text: 'hi' }] } });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-ok', update: { sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'All done successfully!' } } }
+  });
+  await prompt;
+  await new Promise(r => setImmediate(r));
+  assert.equal(f.logs.some(l => l.event === 'auto-continue-miss'), false);
+});
+
+test('a session suppressed mid-turn reports session-suppressed instead of retrying', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  let suppressed = false;
+  const handle = f.install({ isEnabled: () => true, scheduler, isSessionSuppressed: () => suppressed });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(request) {
+      if (request.method === 'session/prompt') return Promise.resolve({ stopReason: 'end_turn' });
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const prompt = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-sup', prompt: [{ type: 'text', text: 'hi' }] } });
+  suppressed = true;
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-sup', update: { sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'Provider response could not be completed.' } } }
+  });
+  await prompt;
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 0);
+  const miss = f.logs.find(l => l.event === 'auto-continue-miss');
+  assert.ok(miss, 'a suppressed session must still produce a miss record');
+  assert.equal(miss.data.reason, 'session-suppressed');
+});
+
+test('auto continue handles v2 idle completion, duplicate idle suppression, and backoff', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  const clientMessages = [];
+  const serverCalls = [];
+  let promptCalls = 0;
+
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    get protocolVersion() { return 2; },
+    sendRequest(request) {
+      serverCalls.push(request);
+      if (request.method === 'session/prompt') {
+        promptCalls++;
+        return Promise.resolve({ acknowledgment: true });
+      }
+      return Promise.resolve({});
+    },
+    forwardClientRequest(request) {
+      clientMessages.push(request);
+    }
+  };
+
+  f.api.registerConnection(connector);
+
+  await connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's2', prompt: [{ type: 'text', text: 'start' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's2',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'm1',
+        content: { type: 'text', text: 'Some text... Provider response could not be completed.' }
+      }
+    }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's2',
+      update: {
+        sessionUpdate: 'state_update',
+        state: 'idle'
+      }
+    }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's2',
+      update: {
+        sessionUpdate: 'state_update',
+        state: 'idle'
+      }
+    }
+  });
+
+  assert.equal(scheduler.pendingCount(), 1);
+  assert.equal(promptCalls, 1);
+
+  scheduler.advance(2000);
+  assert.equal(promptCalls, 2);
+
+  const synthetic = clientMessages.find(m => m.params?.update?.sessionUpdate === 'user_message');
+  assert.ok(synthetic);
+  assert.equal(synthetic.params.update.content[0].type, 'text');
+  assert.equal(synthetic.params.update.content[0].text, 'continue');
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's2',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'm2',
+        content: { type: 'text', text: 'Failed again: Provider response could not be completed' }
+      }
+    }
+  });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's2',
+      update: {
+        sessionUpdate: 'state_update',
+        state: 'idle'
+      }
+    }
+  });
+
+  assert.equal(scheduler.pendingCount(), 1);
+  scheduler.advance(2000);
+  assert.equal(promptCalls, 2);
+  scheduler.advance(2000);
+  assert.equal(promptCalls, 3);
+});
+
+test('manual cancel cancels scheduled retry and resolves v1 turn', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(request) {
+      if (request.method === 'session/prompt') {
+        return Promise.resolve({ stopReason: 'end_turn' });
+      }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+
+  f.api.registerConnection(connector);
+
+  const promptPromise = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-cancel', prompt: [{ type: 'text', text: 'hi' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-cancel',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Provider response could not be completed.' }
+      }
+    }
+  });
+
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1);
+
+  await connector.sendRequest({
+    method: 'session/cancel',
+    params: { sessionId: 's-cancel' }
+  });
+
+  assert.equal(scheduler.pendingCount(), 0);
+  const result = await promptPromise;
+  assert.deepEqual(result, { stopReason: 'end_turn' });
+
+  scheduler.advance(10000);
+  assert.equal(handle.status().autoContinueCount, 0);
+});
+
+test('subsequent normal text or subagent update cancels eligibility', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(request) {
+      return Promise.resolve({ stopReason: 'end_turn' });
+    },
+    forwardClientRequest() {}
+  };
+
+  f.api.registerConnection(connector);
+
+  const promptPromise = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-normal', prompt: [{ type: 'text', text: 'hi' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-normal',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Provider response could not be completed' }
+      }
+    }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-normal',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: ' - recovered and finished normally.' }
+      }
+    }
+  });
+
+  await promptPromise;
+  assert.equal(scheduler.pendingCount(), 0);
+
+  const subagentPromise = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-sub', prompt: [{ type: 'text', text: 'hi' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-sub',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Provider response could not be completed' },
+        _meta: { 'cognition.ai/subagent_context': { parentAgentId: 'main', runId: 'sub-1' } }
+      }
+    }
+  });
+
+  await subagentPromise;
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('foreign connectors and non-local locations are ignored', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  let promptCalls = 0;
+  const cloudConnector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'cloud' },
+    protocolVersion: 1,
+    sendRequest() {
+      promptCalls++;
+      return Promise.resolve({ stopReason: 'end_turn' });
+    }
+  };
+
+  f.api.registerConnection(cloudConnector);
+  await cloudConnector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 'cloud-s', prompt: [{ type: 'text', text: 'test' }] }
+  });
+
+  assert.equal(handle.status().connections, 0);
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('reset and toggle off clears pending timers and active turns', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  let enabled = true;
+  const handle = f.install({
+    isEnabled: () => enabled,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    get protocolVersion() { return 2; },
+    sendRequest() { return Promise.resolve({}); },
+    forwardClientRequest() {}
+  };
+
+  f.api.registerConnection(connector);
+
+  await connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-reset', prompt: [{ type: 'text', text: 'run' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-reset',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'm1',
+        content: { type: 'text', text: 'Provider response could not be completed' }
+      }
+    }
+  });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-reset',
+      update: { sessionUpdate: 'state_update', state: 'idle' }
+    }
+  });
+
+  assert.equal(scheduler.pendingCount(), 1);
+
+  handle.reset();
+  assert.equal(scheduler.pendingCount(), 0);
+
+  enabled = false;
+  scheduler.advance(10000);
+  assert.equal(handle.status().autoContinueCount, 0);
+});
+
+test('cancellation before first response, reset/dispose during in-flight auto, and multi-session isolation', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  let promptResolveS1;
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') {
+        if (req.params?.sessionId === 's-early-cancel') {
+          return Promise.resolve({ stopReason: 'cancelled' });
+        }
+        if (req.params?.sessionId === 'session-1') {
+          return new Promise(resolve => { promptResolveS1 = resolve; });
+        }
+        return Promise.resolve({ stopReason: 'end_turn' });
+      }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+
+  f.api.registerConnection(connector);
+
+  const cancelledPrompt = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-early-cancel', prompt: [{ type: 'text', text: 'hi' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-early-cancel',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Provider response could not be completed' }
+      }
+    }
+  });
+
+  const res = await cancelledPrompt;
+  assert.equal(res.stopReason, 'cancelled');
+  assert.equal(scheduler.pendingCount(), 0);
+
+  const promptS1 = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 'session-1', prompt: [{ type: 'text', text: 's1' }] }
+  });
+  const promptS2 = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 'session-2', prompt: [{ type: 'text', text: 's2' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Provider response could not be completed' }
+      }
+    }
+  });
+
+  promptResolveS1({ stopReason: 'end_turn' });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1);
+
+  handle.reset();
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('rejected exact error triggers auto continue whereas arbitrary error or auth does not', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  let promptCount = 0;
+  let failWithExact = true;
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') {
+        promptCount++;
+        if (failWithExact) {
+          return Promise.reject(new Error('Provider response could not be completed'));
+        }
+        return Promise.reject(new Error('Authentication failed / 401 Unauthorized'));
+      }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+
+  f.api.registerConnection(connector);
+
+  const p1 = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-rej-exact', prompt: [{ type: 'text', text: 'hi' }] }
+  });
+
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1);
+
+  failWithExact = false;
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+
+  await assert.rejects(p1, /Authentication failed/);
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('v2 requires_action interleaving and state transitions clear pending retry', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    get protocolVersion() { return 2; },
+    sendRequest() { return Promise.resolve({}); },
+    forwardClientRequest() {}
+  };
+
+  f.api.registerConnection(connector);
+
+  await connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-v2-req', prompt: [{ type: 'text', text: 'hi' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-v2-req',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'm1',
+        content: { type: 'text', text: 'Provider response could not be completed' }
+      }
+    }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-v2-req',
+      update: { sessionUpdate: 'state_update', state: 'requires_action' }
+    }
+  });
+
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('actual session/cancel before native deferred result settles original promise without hang', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  let nativeResolve;
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') {
+        return new Promise(resolve => { nativeResolve = resolve; });
+      }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+
+  const promptPromise = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-cancel-before', prompt: [{ type: 'text', text: 'hi' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-cancel-before',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Provider response could not be completed' } }
+    }
+  });
+
+  await connector.sendRequest({
+    method: 'session/cancel',
+    params: { sessionId: 's-cancel-before' }
+  });
+
+  nativeResolve({ stopReason: 'cancelled' });
+  const result = await promptPromise;
+  assert.equal(result.stopReason, 'cancelled');
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('auto inflight cancel, reset, dispose properly settles awaited original promise', { timeout: 1000 }, async t => {
+  for (const action of ['cancel', 'reset', 'dispose']) {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({ isEnabled: () => true, scheduler });
+
+    let nativeResolve1;
+    let nativeResolveAuto;
+    let callIndex = 0;
+    const connector = {
+      agentId: 'devin-cli',
+      bundled: true,
+      location: { kind: 'local' },
+      protocolVersion: 1,
+      sendRequest(req) {
+        if (req.method === 'session/prompt') {
+          callIndex++;
+          if (callIndex === 1) return new Promise(r => { nativeResolve1 = r; });
+          if (callIndex === 2) return new Promise(r => { nativeResolveAuto = r; });
+        }
+        return Promise.resolve({});
+      },
+      forwardClientRequest() {}
+    };
+    f.api.registerConnection(connector);
+
+    const originalPrompt = connector.sendRequest({
+      method: 'session/prompt',
+      params: { sessionId: 's-inflight-' + action, prompt: [{ type: 'text', text: 'hi' }] }
+    });
+
+    connector.forwardClientRequest({
+      method: 'session/update',
+      params: {
+        sessionId: 's-inflight-' + action,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Provider response could not be completed' } }
+      }
+    });
+
+    nativeResolve1({ stopReason: 'end_turn' });
+    await new Promise(r => setImmediate(r));
+    assert.equal(scheduler.pendingCount(), 1);
+
+    scheduler.advance(2000);
+    assert.equal(callIndex, 2);
+
+    if (action === 'cancel') {
+      await connector.sendRequest({
+        method: 'session/cancel',
+        params: { sessionId: 's-inflight-' + action }
+      });
+    } else if (action === 'reset') {
+      handle.reset();
+    } else if (action === 'dispose') {
+      handle.dispose();
+    }
+
+    nativeResolveAuto({ stopReason: 'end_turn' });
+    const finalRes = await originalPrompt;
+    assert.equal(finalRes.stopReason, 'end_turn');
+    assert.equal(scheduler.pendingCount(), 0);
+    handle.dispose();
+  }
+});
+
+test('double failures then success in v1 with exact backoff 2s then 4s and zero leftover timers', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') {
+        promptCount++;
+        return Promise.resolve({ stopReason: 'end_turn' });
+      }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+
+  const p = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-double', prompt: [{ type: 'text', text: 'run' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-double',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Provider response could not be completed' } }
+    }
+  });
+
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1);
+  scheduler.advance(1999);
+  assert.equal(promptCount, 1);
+  scheduler.advance(1);
+  assert.equal(promptCount, 2);
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-double',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Provider response could not be completed' } }
+    }
+  });
+
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1);
+  scheduler.advance(3999);
+  assert.equal(promptCount, 2);
+  scheduler.advance(1);
+  assert.equal(promptCount, 3);
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-double',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Now successful response.' } }
+    }
+  });
+
+  const res = await p;
+  assert.equal(res.stopReason, 'end_turn');
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('v2 rejected auto prompt is safely handled without unhandled rejection', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    get protocolVersion() { return 2; },
+    sendRequest(req) {
+      if (req.method === 'session/prompt') {
+        promptCount++;
+        if (promptCount === 1) return Promise.resolve({ acknowledgment: true });
+        return Promise.reject(new Error('Network error on auto continue'));
+      }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+
+  await connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-v2-rej', prompt: [{ type: 'text', text: 'start' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-v2-rej',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Provider response could not be completed' } }
+    }
+  });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-v2-rej', update: { sessionUpdate: 'state_update', state: 'idle' } }
+  });
+
+  assert.equal(scheduler.pendingCount(), 1);
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+  await new Promise(r => setImmediate(r));
+  assert.ok(f.logs.some(l => l.event === 'auto-continue-send-error'));
+});
+
+test('ack with non-string stopReason never retries and settles deferred', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(req) {
+      return Promise.resolve({ stopReason: undefined });
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+
+  const p = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-ack-test', prompt: [{ type: 'text', text: 'hi' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-ack-test',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Provider response could not be completed' } }
+    }
+  });
+
+  const res = await p;
+  assert.equal(res.stopReason, undefined);
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('actual thought and tool kinds reset tail so error in thought is never retried', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest() { return Promise.resolve({ stopReason: 'end_turn' }); },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+
+  const p = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-thought', prompt: [{ type: 'text', text: 'think' }] }
+  });
+
+  for (const kind of ['agent_thought_chunk', 'agent_thought', 'tool_call_update', 'tool_call_content_chunk']) {
+    connector.forwardClientRequest({
+      method: 'session/update',
+      params: {
+        sessionId: 's-thought',
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Provider response could not be completed' } }
+      }
+    });
+    connector.forwardClientRequest({
+      method: 'session/update',
+      params: {
+        sessionId: 's-thought',
+        update: { sessionUpdate: kind, content: { type: 'text', text: 'internal note' } }
+      }
+    });
+  }
+
+  await p;
+  assert.equal(scheduler.pendingCount(), 0);
+});
+
+test('frozen connector rollback cleans up on partial attachment failure', t => {
+  const f = fixture();
+  const handle = f.install({ isEnabled: () => true });
+  t.after(() => handle.dispose());
+
+  const frozenConnector = Object.freeze({
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest() { return Promise.resolve({}); },
+    forwardClientRequest() {}
+  });
+
+  assert.doesNotThrow(() => {
+    f.api.registerConnection(frozenConnector);
+  });
+  assert.equal(handle.status().connections, 0);
+});
+
+test('native call contract: register passthrough, sync/rejection identity, dispose restores connector methods', async t => {
+  const f = fixture();
+  const handle = f.install({ isEnabled: () => true });
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(request) { if (request.throw) throw request.throw; return request.reply; },
+    forwardClientRequest(request) { if (request.throw) throw request.throw; return request.reply; }
+  };
+  const originalSend = connector.sendRequest, originalForward = connector.forwardClientRequest;
+
+  const customThis = { marker: true };
+  const registration = f.api.registerConnection.call(customThis, connector, 'extra-arg');
+  assert.equal(registration, f.disposable, 'the native registration object is returned untouched');
+  const call = f.registrations.at(-1);
+  assert.equal(call.thisArg, customThis, 'registerConnection keeps the caller thisArg');
+  assert.deepEqual(call.args, [connector, 'extra-arg'], 'registerConnection forwards every argument');
+  assert.equal(handle.status().connections, 1, 'the eligible connector is still attached');
+
+  const reply = {};
+  assert.equal(connector.sendRequest({ method: 'session/cancel', params: { sessionId: 's1' }, reply }), reply,
+    'a synchronous native result keeps its identity');
+  const boom = new Error('native send failure');
+  assert.throws(() => connector.sendRequest({ method: 'session/cancel', params: { sessionId: 's1' }, throw: boom }),
+    error => error === boom, 'a synchronous native throw propagates unwrapped');
+  const rejected = Promise.reject(boom);
+  assert.equal(connector.sendRequest({ method: 'session/cancel', params: { sessionId: 's1' }, reply: rejected }), rejected,
+    'a native Promise comes back as itself, not re-wrapped');
+  await assert.rejects(rejected, error => error === boom);
+  assert.equal(connector.forwardClientRequest({ method: 'session/update', reply }), reply);
+  assert.throws(() => connector.forwardClientRequest({ throw: boom }), error => error === boom,
+    'forwardClientRequest failures stay failures, never swallowed into success');
+
+  handle.dispose();
+  t.after(() => handle.dispose());
+  assert.equal(f.api.registerConnection, f.originalRegister);
+  assert.equal(connector.sendRequest, originalSend);
+  assert.equal(connector.forwardClientRequest, originalForward);
+  assert.doesNotThrow(() => handle.dispose(), 'dispose is idempotent');
+});
+
+test('integration: serveChat simulated ACP adapter end-to-end failure then success in same session', { timeout: 2000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: true, untilPlanComplete: false }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  const { serveChat } = require('../src/protocol/inference.cjs');
+  const wire = require('../src/protocol/wire.cjs');
+  const http = require('node:http');
+
+  let attempt = 0;
+  const upstream = http.createServer((req, res) => {
+    attempt++;
+    if (attempt === 1) {
+      res.writeHead(429, { 'content-type': 'text/plain' });
+      res.end('Too Many Requests');
+    } else {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"type":"response.output_text.delta","delta":"Success on retry!"}\r\n\r\n');
+      res.write('data: {"type":"response.completed","response":{"status":"completed","output":[]}}\r\n\r\n');
+      res.end();
+    }
+  }).listen(0, '127.0.0.1');
+  await new Promise(r => upstream.once('listening', r));
+  t.after(() => upstream.close());
+  const upstreamPort = upstream.address().port;
+
+  let incomingPromptCount = 0;
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    async sendRequest(req) {
+      if (req.method === 'session/prompt') {
+        incomingPromptCount++;
+        assert.equal(req.params?.sessionId, 's-real-integ');
+        if (incomingPromptCount === 2) {
+          assert.equal(req.params?.prompt?.[0]?.text, 'continue');
+        }
+        const chunks = [];
+        const fakeRes = new http.ServerResponse({ method: 'POST', httpVersionMajor: 1, httpVersionMinor: 1 });
+        fakeRes.assignSocket(new (require('node:net').Socket)());
+        fakeRes.write = chunk => { chunks.push(chunk); return true; };
+        fakeRes.end = chunk => { if (chunk) chunks.push(chunk); };
+
+        await serveChat({
+          request: { modelUid: 'test-model', systemPrompt: '', messages: [] },
+          route: { model: 'test-model' },
+          provider: { baseUrl: `http://127.0.0.1:${upstreamPort}/v1`, apiKey: 'key', apiFormat: 'responses' },
+          res: fakeRes
+        });
+
+        const fullBuffer = Buffer.concat(chunks);
+        const messages = [];
+        for (let offset = 0; offset < fullBuffer.length;) {
+          const flags = fullBuffer[offset];
+          const length = fullBuffer.readUInt32BE(offset + 1);
+          let data = fullBuffer.subarray(offset + 5, offset + 5 + length);
+          offset += 5 + length;
+          if (!(flags & 2)) messages.push(data);
+        }
+        let extractedText = '';
+        let stopReasonVal = 2;
+        for (const msg of messages) {
+          const fields = wire.parseFields(msg);
+          for (const fld of fields) {
+            if (fld.number === 3) extractedText += fld.value.toString('utf8');
+            if (fld.number === 5) {
+              const numVal = Number(fld.value);
+              if (numVal === 13) stopReasonVal = 13;
+            }
+          }
+        }
+
+        if (extractedText) {
+          connector.forwardClientRequest({
+            method: 'session/update',
+            params: {
+              sessionId: req.params?.sessionId,
+              update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: extractedText } }
+            }
+          });
+        }
+
+        return { stopReason: stopReasonVal === 13 ? 'unknown_error' : 'end_turn' };
+      }
+      return {};
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+
+  const p = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-real-integ', prompt: [{ type: 'text', text: 'call model' }] }
+  });
+
+  while (scheduler.pendingCount() === 0) {
+    await new Promise(r => setTimeout(r, 10));
+  }
+  assert.equal(incomingPromptCount, 1);
+  assert.equal(scheduler.pendingCount(), 1);
+
+  scheduler.advance(2000);
+  const res = await p;
+  assert.equal(res.stopReason, 'end_turn');
+  assert.equal(incomingPromptCount, 2);
+  assert.equal(scheduler.pendingCount(), 0);
+  assert.equal(attempt, 2);
+});
