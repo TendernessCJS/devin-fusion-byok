@@ -212,6 +212,7 @@ test('proxyRequestBytes enforces length, redirect and abort contracts end to end
   });
   const proxyServer = http.createServer((req, res) => res.writeHead(501).end());
   const connected = [];
+  const tunnels = [];
   let slowHits = 0, closes = 0;
   proxyServer.on('connect', (req, socket) => {
     connected.push(req.url);
@@ -220,7 +221,12 @@ test('proxyRequestBytes enforces length, redirect and abort contracts end to end
       socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       upstream.pipe(socket); socket.pipe(upstream);
     });
-    upstream.once('error', () => socket.destroy());
+    tunnels.push(socket, upstream);
+    // Both tunnel ends must swallow socket errors: a mid-body abort can reset
+    // the client socket while the upstream is still writing, and an
+    // unlistened 'error' event would fail the whole file.
+    socket.on('error', () => upstream.destroy());
+    upstream.on('error', () => socket.destroy());
     upstream.once('close', () => socket.destroy());
     socket.once('close', () => upstream.destroy());
   });
@@ -253,6 +259,7 @@ test('proxyRequestBytes enforces length, redirect and abort contracts end to end
     assert.ok(closes > closesBefore, 'the mid-body abort destroys the origin socket');
   } finally {
     updateUrl.allowedUrl = original;
+    for (const sock of tunnels) sock.destroy();
     target.close(); proxyServer.close();
   }
 });
