@@ -122,9 +122,17 @@ function panelStyles() {
     .role-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; }
     .setting + .setting { border-top: 1px solid var(--border); }
+    .list-head { padding: 12px 14px; font-weight: 600; border-bottom: 1px solid var(--border); }
+    .list-note { margin: 0; padding: 10px 14px; border-top: 1px solid var(--border); }
+    #settings-general > .hint + .hint { margin-top: 4px; }
+    .cache-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    #cache-report { margin: 0; line-height: 1.6; }
+    #cache-report:empty { display: none; }
     .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 20; max-width: min(560px, calc(100vw - 32px)); display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-radius: var(--radius-container); border: 1px solid var(--border); background: var(--vscode-editorWidget-background, #252526); box-shadow: 0 4px 16px var(--vscode-widget-shadow, #0006); }
     .toast[data-tone="error"] { border-color: var(--vscode-inputValidation-errorBorder, #be1100); color: var(--error); }
     .toast[data-tone="success"] { color: var(--ok); }
+    .toast button.quiet { color: inherit; padding: 0 2px; font-size: 14px; line-height: 1; }
+    .toast button.quiet:hover { background: transparent; opacity: .7; }
     .monitor-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
     .monitor-controls select { width: auto; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .monitor-pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; }

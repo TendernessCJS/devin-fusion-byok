@@ -281,6 +281,73 @@ test('a cache report without rewrites says so instead of staying blank', () => {
   assert.match(textOf(byId('cache-report')), /没有找到本插件写入的缓存文件/);
 });
 
+test('unknown cache generations are reported as unhandled, never as up to date', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 1,
+    refreshed: [], skipped: [], errors: [], coverage: { dirState: 'ok', supported: 1,
+      legacy: [{ name: 'model_configs.bin', generation: 1 }],
+      unsupported: [{ name: 'model_configs_v9.0011223344556677.bin', generation: 9 }] } } } } });
+  const report = textOf(byId('cache-report'));
+  assert.match(report, /未知代际缓存 model_configs_v9/);
+  assert.match(report, /未处理/);
+  assert.match(report, /历史缓存文件 model_configs\.bin/);
+  assert.doesNotMatch(report, /已是最新/, 'an unknown generation must not read as nothing to do');
+  assert.doesNotMatch(textOf(byId('cache-report')), /兼容缓存 v/, 'unsupported JSON is not a supported generation');
+  assert.doesNotMatch(textOf(byId('cache-report')), /当前使用/, 'disk presence never claims the active reader version');
+  // A supported v6 file shows the active generation; multiple supported
+  // generations on disk list them all; a future valid envelope is dynamic.
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 2,
+    refreshed: [], skipped: [], errors: [], coverage: { dirState: 'ok', supported: 2, legacy: [], unsupported: [],
+      generations: [
+        { generation: 5, name: 'model_configs_v5.aaaaaaaaaaaaaaaa.bin', fetchedAt: 1, own: true },
+        { generation: 6, name: 'model_configs_v6.0011223344556677.bin', fetchedAt: 2, own: true }],
+      current: { generation: 6, name: 'model_configs_v6.0011223344556677.bin', fetchedAt: 2 }, dynamic: false } } } } });
+  assert.match(textOf(byId('cache-report')), /检测到兼容缓存 v6（同时在盘 v5、v6）/);
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 1,
+    refreshed: [], skipped: [], errors: [], coverage: { dirState: 'ok', supported: 1, legacy: [], unsupported: [],
+      generations: [{ generation: 9, name: 'model_configs_v9.0011223344556677.bin', fetchedAt: 1, own: true }],
+      current: { generation: 9, name: 'model_configs_v9.0011223344556677.bin', fetchedAt: 1 }, dynamic: true } } } } });
+  const v9report = textOf(byId('cache-report'));
+  assert.match(v9report, /检测到兼容缓存 v9/);
+  assert.match(v9report, /检测到新代际 v9，格式兼容，可动态处理/);
+  // All three segments — check result, generation, desktop catalog — share one
+  // line joined by the same separator the header status row uses.
+  receive({ data: { type: 'state', state: { ...state(), desktopCatalog: { state: 'ready' }, cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 1,
+    refreshed: [], skipped: [], errors: [], coverage: { dirState: 'ok', supported: 1, legacy: [], unsupported: [],
+      generations: [{ generation: 6, name: 'model_configs_v6.0011223344556677.bin', fetchedAt: 1, own: true }],
+      current: { generation: 6, name: 'model_configs_v6.0011223344556677.bin', fetchedAt: 1 }, dynamic: false } } } } });
+  const merged = textOf(byId('cache-report'));
+  const segments = merged.split(' · ');
+  assert.equal(segments.length, 3, merged);
+  assert.equal(segments[0], '检查了 1 个文件，内容已是最新');
+  assert.equal(segments[1], '检测到兼容缓存 v6');
+  assert.equal(segments[2], '原生目录已提交');
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 0,
+    refreshed: [], skipped: [], errors: [], coverage: { dirState: 'unreadable', supported: 0, legacy: [], unsupported: [] } } } } });
+  assert.match(textOf(byId('cache-report')), /不可读/);
+});
+
+test('the auto-continue heading lives inside the same card as its two switches', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: state() } });
+  const general = byId('settings-general');
+  const card = collect(general, 'div', node => node.className.split(' ').includes('list'))
+    .find(node => collect(node, 'div', item => item.className === 'list-head' && textOf(item) === '自动继续').length);
+  assert.ok(card, 'one .list card carries a 自动继续 .list-head');
+  assert.equal(collect(card, 'div', node => node.className === 'setting').length, 2, 'both switches share the card');
+});
+
+test('the cache group exposes one toolbar with a primary and a secondary button', () => {
+  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const toolbar = html.match(/<div class="cache-toolbar">([\s\S]*?)<\/div>/);
+  assert.ok(toolbar, 'the cache group carries a single .cache-toolbar');
+  assert.match(toolbar[1], /<button id="refresh-cache" type="button">刷新缓存<\/button>/);
+  assert.match(toolbar[1], /<button id="refresh-desktop-catalog" type="button" class="secondary">刷新模型目录<\/button>/);
+  assert.equal(html.match(/id="cache-report"/g).length, 1, 'the aggregated report is a single node');
+  assert.doesNotMatch(html, /id="cache-generation"|id="desktop-catalog-report"/,
+    'the generation and catalog lines are merged into #cache-report');
+});
+
 const FAMILY_FIXTURE = [
   { id: 'glm-5.2', label: 'GLM-5.2', variants: 3, efforts: ['No Thinking', 'High', 'Max'], toggles: ['1M Context'],
     hidden: true,
@@ -473,4 +540,12 @@ test('provider selection, role/native search and fold state survive a state push
   roleSearch2.listeners.input({ target: roleSearch2 });
   assert.equal(collect(byId('lead-role-list'), 'details', node => node.className === 'fold')[0].open, true,
     'the fold restores its open state');
+});
+
+test('a retire-withheld skip renders the deferred-cleanup wording', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-24T12:00:00.000Z', checked: 1,
+    refreshed: [], errors: [], skipped: [{ name: 'model_configs_v6.aaaaaaaaaaaaaaaa.bin', reason: 'retire-withheld' }],
+    coverage: { dirState: 'ok', supported: 1, legacy: [], unsupported: [], generations: [], current: null, dynamic: false } } } } });
+  assert.match(textOf(byId('cache-report')), /官方目录未就绪，暂不清理/);
 });

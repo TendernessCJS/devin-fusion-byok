@@ -32,8 +32,9 @@ function fastContextStyles() {
     .fc-switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 6px; }
     .fc-pill { font-size: 11px; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
     .fc-pill[data-on="true"] { color: var(--ok); border-color: var(--ok); }
-    .fc-step-title { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-    .fc-num { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font-size: 11px; font-weight: 600; color: var(--vscode-button-foreground, #fff); background: var(--accent); flex: none; }
+    .fc-step-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .fc-step-title h3 { margin: 0; font-size: 14px; line-height: 20px; }
+    .fc-num { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font-size: 11px; font-weight: 600; line-height: 1; color: var(--vscode-button-foreground, #fff); background: var(--accent); flex: none; }
     .fc-root { display: flex; gap: 8px; }
     .fc-root select { flex: 1; min-width: 0; }
     .fc-seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 6px; padding: 2px; gap: 2px; }
