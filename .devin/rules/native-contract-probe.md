@@ -16,3 +16,4 @@
 - **纪律**：探针只读，**不得据此自动降级或关闭任何功能**；drift 写一条 `native-contract-drift` 并在面板显示「桌面主 bundle 缺少 …」；`reused`/`unavailable`/`unsupported` 静默。
 - **报告脚本**：`node scripts/native-contract-report.cjs [--json]` 输出四产物 sha256 与标记命中快照，发布前留档 diff。只读。
 - **已知边界**：只覆盖字符串级契约——字段号语义、行为、消息形状变化查不出来。
+- **缓存键** = `stat`/`signature` + `PROBE_VERSION`：**改标记表或探针语义必须 +1**，否则旧判定被复用、新标记永不扫描。实测依据：0.5.1→0.5.2 真机缓存缺 `authStore` 键（0.5.1 写入），证明旧 `ok` 被复用、`GetUserJwt`/`GetWebSearchResults` 未被扫描。
