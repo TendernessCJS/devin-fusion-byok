@@ -61,3 +61,11 @@ description: "Apply when changing usage recording, attribution, time filtering, 
 - **面板 `health` 字段必须完全确定、不含时间戳**：它走同一条 `postState` JSON 去重，任何每次调用都变的字段会让面板每 3 秒重渲染并杀掉搜索焦点（同 `at` 事故的机制）。
   `checkInjectionHealth` 的输入只取自既有共享槽（backendStatus/bridgeState/env/cliCache/acp 计数），返回值由输入唯一决定。ACP 信号必须**三态**：首个
   `session/new` 观测（`acpObserved > 0`）之前判 `unknown`，否则每次窗口重载都会误报「会话无本插件条目」。
+
+## webview 安全不变量
+
+- **CSP**（`src/panel/view.cjs`）：`default-src 'none'`；`style-src`/`script-src` 用 per-render 24 字节随机 nonce 白名单（`renderPanel({ nonce })`，nonce 同用于 `<style>`/`<script>`）；`img-src 'none'`、`font-src 'none'`、`connect-src 'none'`、`base-uri 'none'`、`form-action 'none'`。`connect-src 'none'` 意味着即便注入脚本也无法外联；**不要为加图标放宽 `img-src`**——三个 webview 的 `localResourceRoots` 都是 `[]`，放了也拿不到本地资源。
+- **DOM 构造**（`src/panel/dom.cjs`）：只用 `createElement` + `textContent`；`element()` 对危险属性**直接抛错**，拒绝清单按小写比较：`href`、`src`、`srcset`、`action`、`formaction`、`srcdoc`、`data`、`poster`、`background`、`xlink:href`（`data-*` 自定义属性不受影响）。
+- **入站消息**：只认显式 `type ===` 白名单，未知类型忽略，字段逐个校验。
+- **外链**：`openExternal` 只接受已校验快照的 `releaseUrl`，不接受 webview 传入的任意 URL。
+- 纪律：以上不变量只在 `src/panel/**` 与对应测试里；任何放宽必须在同一改动里补测试，否则属静默降级。

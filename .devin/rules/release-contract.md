@@ -56,3 +56,5 @@ description: "Apply when changing self-update behaviour or the release contract 
 - 更新链的信任根是 **GitHub TLS**：资产名由已校验版本推导、`browser_download_url` 必须与推导值严格相等、`digest` 必须是 `sha256:<64hex>`——缺任一项即 `installable:false`，不降级为「无 digest 也装」。
 - `verifyPackage` 用 `/usr/bin/unzip -p` 读不可信 zip 的两个条目，是有意的最小暴露：只读 stdout、`maxBuffer` 1 MB、超时 15 s。**无代码签名校验**；包内身份（`package.json` 的 name/publisher/version 与 vsixmanifest 的 `Identity`）交叉校验是唯一的包身份边界。
 - 含 `<!` 或 `&` 的 vsixmanifest 直接拒绝（防实体注入），重复 Identity 属性判失败。
+
+- 一键安装**只走 `execFile` 数组参数**：`run(cli, ['--install-extension', file], { timeout: 120000, maxBuffer: 1 MB })`，`cli` = `<appRoot>/bin/devin-desktop`，要求 `darwin` + 绝对路径 + 文件存在；**不得退化成 `exec` + 字符串拼接**。`createUpdateHost` 的 `run`/`request` 注入仅供测试驱动，生产默认 `execFile`/`requestBytes`。护栏：`test/update.test.cjs` 的 argv 断言（数组参数、argv0 绝对路径、options 无 `shell`）。
