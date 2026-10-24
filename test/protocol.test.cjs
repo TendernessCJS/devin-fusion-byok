@@ -1886,6 +1886,19 @@ test('a 400 naming max_tokens retries once with max_completion_tokens', async t 
   assert.equal(unpack(body).messages.map(m => str(m, 3)).join(''), 'capped');
 });
 
+test('a 400 naming max_tokens that keeps failing logs no degrade', async t => {
+  const logs = [];
+  const { requests } = await direct(t,
+    { systemPrompt: '', messages: [{ role: 'user', content: 'hi' }], tools: [], maxTokens: 8192 },
+    (req, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'max_tokens is not supported' } }));
+    }, { logs });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].max_completion_tokens, 8192);
+  assert.equal(logs.filter(e => e.event === 'provider-degraded').length, 0);
+});
+
 test('a chat body without a limit sends neither token cap field', () => {
   const body = buildRequestBody(
     { systemPrompt: '', messages: [{ role: 'user', content: 'hi' }], tools: [] },

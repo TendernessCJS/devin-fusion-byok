@@ -459,7 +459,9 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
         const { max_tokens: cap, ...rest } = body;
         body = { ...rest, max_completion_tokens: cap };
         upstream = await send(body);
-        record({ event: 'provider-degraded', model: route.model, reason: 'max-tokens-field' });
+        // Only a successful rename proves the field was the cause; a retry that
+        // still fails has some other problem and must not read as "degraded".
+        if (upstream.ok) record({ event: 'provider-degraded', model: route.model, reason: 'max-tokens-field' });
       }
     }
     clearTimer();
