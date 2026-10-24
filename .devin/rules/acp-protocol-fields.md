@@ -103,6 +103,7 @@ trigger: model_decision
 
 ## 已核实的语义结论
 
+- `ClientModelConfig#10` 是 provider 枚举：`1=SWE/Cognition 2=OpenAI 3=Anthropic 4=Google 7=Moonshot 9=Zhipu`；本仓只发 1 与 2（`src/catalog/codec.cjs` 的 `provider: fusion ? 1 : 2`，Fusion 组合=1、纯 BYOK=2）。
 - **CLI 侧 `GetUserStatus` 与渲染端不是同一个 service**（2026-10-18 实测）：CLI 打到 api server 的是
   `exa.seat_management_pb.SeatManagementService/GetUserStatus`（伴随 `SeatManagementService/GetCliTeamSettings` 与
   `api_server_pb.ApiServerService/GetCliModelConfigs`，一次认证引导共 7 条：`GetUserStatus`×5、其余各 1）；渲染端经 LS 走的是

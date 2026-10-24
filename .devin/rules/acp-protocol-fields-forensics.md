@@ -47,3 +47,22 @@ tail -c +<偏移> <bundle> | head -c 600
 出站映射（**失败要响亮，不许退回静默丢**）：文档在 Responses 走 `{type:'input_file',file_data|file_url,filename}`（`file_data` 是**原始 base64**）、Chat 走 `{type:'file',file:{file_data,filename}}`（Chat **没有** URL 形态）、Anthropic 走 `{type:'document',source:{type:'base64',media_type:'application/pdf'}}`，`text/plain` 用 `{type:'text',media_type:'text/plain',data:<base64 解码后的原文>}`。**视频三种协议都无载荷**，直接抛 `attachment_unsupported`（detail `video`）；Anthropic 上 pdf/text-plain 之外的文档 mime 同样抛。该码已进 `allowedCodes`，文案是 `Attached media is not supported by this provider protocol.`；`buildRequestBody` 在取响应之前抛，外层 catch 必须单独认领，否则会被归成 `upstream_network`。
 
 `GetChatMessageRequest` **字段 27 `prompt_cache_key`**：原生已带，此前不读。现读成 `request.promptCacheKey`，Responses 与 Chat 原样写 `body.prompt_cache_key`；**Anthropic 不发**（它要的是分段 `cache_control`）。省略该键不等于自动缓存失效，别据此判命中率。
+
+## 外部独立实现互证（dwgx/WindsurfAPI）
+
+另一份**独立逆向**落在同一组字段号上：`dwgx/WindsurfAPI`（本地克隆 `.refs/WindsurfAPI`，HEAD `b00b3b9`）是 CLI → `server.codeium.com` 的上游 Connect-RPC 代理，与我们客户端侧实现逆的是同一批 `exa.api_server_pb`/`exa.chat_pb` 消息。该仓没有 `.proto`，字段号写在手写的 `parseFields` 与注释里（`src/devin-connect-catalog.js` 顶部 `F_*` 常量）。
+
+| 字段 | 我们（`src/catalog/codec.cjs`） | 对方 |
+| --- | --- | --- |
+| `#1` label | `s(1, config.label)` | `F_LABEL = 1` |
+| `#4` disabled | 读侧 `num(entry,4) === 1` | `F_DISABLED = 4` |
+| `#5` supportsImages | `v(5,1)` | `F_SUPPORTS_IMAGES = 5` |
+| `#10` provider | `v(10, config.provider)` | `F_PROVIDER = 10` |
+| `#18` 上下文窗口 | `v(18, config.maxTokens)` | 仅其注释称 `#18` 是上下文窗口（免费档默认 200000），**代码未解析该字段** |
+| `#22` selector / model_uid | `s(22, config.modelUid)` | `F_SELECTOR = 22` |
+| `#23` ModelInfo 及内层 `#23` | `m(23, …)`，内层作家族标识 | `F_MODEL_INFO = 23`，内层 `F_ALIAS = 23` |
+| 出站 chunk | `3` text / `5` stop_reason / `6` tool calls / `7` usage / `9` thinking / `10` signature | 「answer text in response field **#3**」，测试用 `writeVarintField(5, …)` 表示 stop_reason |
+
+- **使用结论**：再质疑这些字段号先看这张表——两份独立实现同时错的概率远低于单方读数错误；但**这不是新证据源**，表外字段仍以本仓实测为准。
+- **反例**（附到「不要猜数值枚举」）：对方 `docs/HISTORY-LEDGER-2026-07-late.md`（~147 行）曾按 protobuf 变体名顺序猜「`StopReason 4 = max_turn_requests`」，被付费实测推翻（4 是付费层正常完成）——后果是完整付费响应被报成截断，按 length 续写的客户端会无限续写。
+- **交叉确认**：对方 `docs/DEVIN-CONNECT-CUTOVER.md`（~434 行）列的 stop reason 集合 `end_turn, max_tokens, max_turn_requests, refusal, cancelled` 与本仓 `src/runtime/host/auto-continue.cjs` 的处理集合一致。
