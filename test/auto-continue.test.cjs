@@ -2408,3 +2408,150 @@ test('a rejected onStopped promise is contained without unhandled rejections', a
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(unhandled, false, 'the callback rejection is caught');
 });
+
+test('max_turn_requests with a pending plan schedules one continue', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-mtr', prompt: [{ type: 'text', text: 'do task' }] } });
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-mtr',
+    update: { sessionUpdate: 'plan', entries: [{ content: 'Step 1', status: 'pending' }] } } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1);
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+});
+
+test('cancelled and refusal never continue even with a pending plan', { timeout: 1000 }, async t => {
+  for (const stopReason of ['cancelled', 'refusal']) {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({
+      isEnabled: () => true,
+      getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+      scheduler
+    });
+    t.after(() => handle.dispose());
+    let promptCount = 0;
+    const connector = {
+      agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+      sendRequest(req) {
+        if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason }); }
+        return Promise.resolve({});
+      },
+      forwardClientRequest() {}
+    };
+    f.api.registerConnection(connector);
+    const settled = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-' + stopReason, prompt: [{ type: 'text', text: 'do' }] } });
+    connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-' + stopReason,
+      update: { sessionUpdate: 'plan', entries: [{ content: 'Step 1', status: 'pending' }] } } });
+    const result = await settled;
+    assert.equal(result.stopReason, stopReason, 'the native resolve passes through');
+    await new Promise(r => setImmediate(r));
+    assert.equal(scheduler.pendingCount(), 0, stopReason);
+    assert.equal(promptCount, 1, stopReason);
+  }
+});
+
+test('max_turn_requests does not continue when untilPlanComplete is off', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: false }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-mtr-off', prompt: [{ type: 'text', text: 'do' }] } });
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-mtr-off',
+    update: { sessionUpdate: 'plan', entries: [{ content: 'Step 1', status: 'pending' }] } } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 0);
+  assert.equal(promptCount, 1);
+});
+
+test('v2 idle with max_turn_requests and a pending plan schedules one continue', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0, lastPrompt;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 2,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; lastPrompt = req; return Promise.resolve({ acknowledgment: true }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-v2-mtr', prompt: [{ type: 'text', text: 'task' }] } });
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-v2-mtr',
+    update: { sessionUpdate: 'plan', entries: [{ content: 'Step 1', status: 'pending' }] } } });
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-v2-mtr',
+    update: { sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' } } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1);
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+  assert.equal(lastPrompt.params.sessionId, 's-v2-mtr');
+  assert.equal(lastPrompt.params.prompt[0].text, 'continue');
+});
+
+test('v2 idle with cancelled never continues even with a pending plan', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 2,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ acknowledgment: true }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-v2-cancel', prompt: [{ type: 'text', text: 'task' }] } });
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-v2-cancel',
+    update: { sessionUpdate: 'plan', entries: [{ content: 'Step 1', status: 'pending' }] } } });
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-v2-cancel',
+    update: { sessionUpdate: 'state_update', state: 'idle', stopReason: 'cancelled' } } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 0);
+  assert.equal(promptCount, 1);
+});

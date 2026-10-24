@@ -33,6 +33,7 @@ function matchesTerminalBlocker(text) {
 
 const ERROR_ATTEMPT_LIMIT = 5;
 const ERROR_WINDOW_MS = 10 * 60 * 1000;
+const PLAN_CONTINUABLE = new Set(['end_turn', 'max_tokens', 'max_turn_requests']);
 
 const RESET_METHODS = new Set([
   'session/cancel',
@@ -309,7 +310,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const hasPendingPlan = checkHasPendingPlan(turn);
           const isBlocked = matchesTerminalBlocker(turn.tail);
           const shouldRetryPlan = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true &&
-            hasPendingPlan && (res.stopReason === 'end_turn' || res.stopReason === 'max_tokens');
+            hasPendingPlan && PLAN_CONTINUABLE.has(res.stopReason);
 
           if (shouldRetryError) {
             turn.lastResult = { value: res, isReject: false };
@@ -507,7 +508,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             const isBlocked = matchesTerminalBlocker(turn.tail);
             const shouldRetryError = !turn.retryDisallowed && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && isError;
             const hasPendingPlan = checkHasPendingPlan(turn);
-            const allowedPlanReason = update.stopReason === 'end_turn' || update.stopReason === 'max_tokens';
+            const allowedPlanReason = PLAN_CONTINUABLE.has(update.stopReason);
             const shouldRetryPlan = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true && hasPendingPlan && allowedPlanReason;
 
             if (shouldRetryError) {
