@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { checkNativeContract, scanMarkers, sha256, artifacts, REQUIRED, INFORMATIONAL } = require('../src/activation/native-contract.cjs');
+const { checkNativeContract, scanMarkers, sha256, artifacts, PROBE_VERSION, REQUIRED, INFORMATIONAL } = require('../src/activation/native-contract.cjs');
 
 const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'native-contract-'));
 
@@ -311,4 +311,30 @@ test('a failing authStore probe degrades to unknown without failing the run', as
     probeAuthStore: () => { throw Error('sqlite gone'); } });
   assert.equal(result.status, 'ok');
   assert.equal(result.authStore, 'unknown');
+});
+
+test('a cache from an older probe version is always rescanned', async () => {
+  const { extensionPath, cacheFile } = fakeApp();
+  await checkNativeContract({ extensionPath, cacheFile });
+  // Simulate a 0.5.1-era cache: same artifacts, same bytes, but no probe key.
+  // Only the probe check can force a rescan — nothing else changed.
+  const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+  delete cache.probe;
+  fs.writeFileSync(cacheFile, JSON.stringify(cache));
+  const logs = [];
+  const result = await checkNativeContract({ extensionPath, cacheFile, log: (k, v) => logs.push([k, v]) });
+  assert.equal(result.reused, false, 'a versionless cache must never be trusted');
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(logs.map(([k]) => k), ['native-contract-ok']);
+  const rewritten = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+  assert.equal(rewritten.probe, PROBE_VERSION);
+});
+
+test('a matching probe version still reuses the cache', async () => {
+  const { extensionPath, cacheFile } = fakeApp();
+  await checkNativeContract({ extensionPath, cacheFile });
+  const logs = [];
+  const result = await checkNativeContract({ extensionPath, cacheFile, log: (k, v) => logs.push([k, v]) });
+  assert.equal(result.reused, true);
+  assert.equal(logs.length, 0, 'a valid cache hit must not rescan or log');
 });

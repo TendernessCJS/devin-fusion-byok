@@ -27,6 +27,10 @@ const INFORMATIONAL = {
 const CHUNK = 4 * 1024 * 1024;
 const OVERLAP = 64;
 const SIZE_CAP = 400 * 1024 * 1024;
+// Bump whenever the marker tables or probe semantics change: cached verdicts
+// are keyed on probe, otherwise an old 'ok' would be reused forever and new
+// markers would never be scanned.
+const PROBE_VERSION = 1;
 
 const ARTIFACT_KEYS = ['cli', 'ls', 'desktop', 'chat'];
 const APP_ANCHOR = path.join('out', 'vs', 'workbench', 'workbench.desktop.main.js');
@@ -146,7 +150,7 @@ async function checkNativeContract({ extensionPath, cacheFile, log = () => {}, p
     }
     let cache = null;
     try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch {}
-    const cacheOk = cache && (cache.status === 'ok' || cache.status === 'drift');
+    const cacheOk = cache && cache.probe === PROBE_VERSION && (cache.status === 'ok' || cache.status === 'drift');
     if (cacheOk && cache.stat && JSON.stringify(cache.stat) === JSON.stringify(stat)) {
       return { status: cache.status, reused: true, appVersion: cache.appVersion,
         missing: cache.missing || {}, informational: cache.informational || {} };
@@ -176,7 +180,7 @@ async function checkNativeContract({ extensionPath, cacheFile, log = () => {}, p
     try { authStore = probeAuthStore({ platform }); } catch { authStore = 'unknown'; }
     if (!['present', 'missing', 'unknown'].includes(authStore)) authStore = 'unknown';
     try {
-      writeCache(cacheFile, { signature, stat, appVersion, checkedAt: Date.now(), status, missing, informational, authStore });
+      writeCache(cacheFile, { signature, stat, probe: PROBE_VERSION, appVersion, checkedAt: Date.now(), status, missing, informational, authStore });
     } catch {}
     if (status === 'drift') log('native-contract-drift', { appVersion, missing, informational });
     else log('native-contract-ok', { appVersion });
@@ -187,4 +191,4 @@ async function checkNativeContract({ extensionPath, cacheFile, log = () => {}, p
   }
 }
 
-module.exports = { REQUIRED, INFORMATIONAL, artifacts, findAppRoot, authStoreStatus, sha256, scanMarkers, checkNativeContract };
+module.exports = { PROBE_VERSION, REQUIRED, INFORMATIONAL, artifacts, findAppRoot, authStoreStatus, sha256, scanMarkers, checkNativeContract };
