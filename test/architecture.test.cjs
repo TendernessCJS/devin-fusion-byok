@@ -51,6 +51,27 @@ test('the backend require closure contains no host, UI, feature or transport mod
     'the backend process must stay limited to its serving modules');
 });
 
+// Inverse of the deny-list above: a deny-list lets a brand-new top-level
+// directory into the backend closure by default, which is exactly the leak
+// this guard exists to catch. Measured tops: protocol:8, catalog:8, config:1,
+// runtime:7, models:2, monitor:2, root:1 (catalog.cjs).
+const BACKEND_ALLOWED_TOP_DIRS = ['protocol', 'catalog', 'config', 'runtime', 'models', 'monitor'];
+const BACKEND_ALLOWED_ROOT_FILES = ['catalog.cjs'];
+test('every top-level entry in the backend closure sits inside the allow-list', () => {
+  const closure = createSourceGraph().closure(path.join(srcRoot, 'runtime/backend.cjs'));
+  const unexpected = [];
+  for (const file of closure) {
+    const relative = path.relative(srcRoot, file);
+    if (relative.startsWith('..')) continue; // repo-root deps like package.json
+    const parts = relative.split(path.sep);
+    if (parts.length === 1) {
+      if (!BACKEND_ALLOWED_ROOT_FILES.includes(relative)) unexpected.push(relative);
+    } else if (!BACKEND_ALLOWED_TOP_DIRS.includes(parts[0])) unexpected.push(relative);
+  }
+  assert.deepEqual(unexpected, [],
+    'a new host-side top-level entry must be explicitly added to the allow-list: ' + unexpected.join(', '));
+});
+
 test('lightweight clients never reach the backend implementation or the hash walker', () => {
   const graph = createSourceGraph();
   for (const client of ['runtime/host/native-models.cjs', 'runtime/host/monitor-client.cjs']) {
