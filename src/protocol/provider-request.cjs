@@ -117,7 +117,11 @@ function buildRequestBody(request, route, provider, onState = () => {}, options 
   if (request.promptCacheKey) body.prompt_cache_key = request.promptCacheKey;
   if (request.disableParallelToolCalls === true) body.parallel_tool_calls = false;
   const maxTokens = request.maxTokens ?? route.maxOutputTokens ?? route.maxTokens ?? provider.maxOutputTokens ?? provider.maxTokens;
-  if (Number.isSafeInteger(maxTokens) && maxTokens > 0) body[chat ? 'max_completion_tokens' : 'max_output_tokens'] = maxTokens;
+  // Measured on DeepSeek /chat/completions: `max_completion_tokens` is accepted
+  // and ignored (cap 40 produced 3234 output tokens, finish_reason "stop"),
+  // while `max_tokens` truncates. Official OpenAI reasoning models want the
+  // other spelling, so the 400 fallback in inference.cjs renames it once.
+  if (Number.isSafeInteger(maxTokens) && maxTokens > 0) body[chat ? 'max_tokens' : 'max_output_tokens'] = maxTokens;
   if (route.effort) {
     if (chat) body.reasoning_effort = route.effort;
     else body.reasoning = { effort: route.effort, ...(route.effort === 'none' ? {} : { summary: 'auto' }) };

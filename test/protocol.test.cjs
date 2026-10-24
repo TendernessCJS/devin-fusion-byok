@@ -190,7 +190,7 @@ test('openai menu format selects Chat Completions and configured output limit is
   const chatBody = buildRequestBody(request, { model: 'chosen-model', maxOutputTokens: 8192 }, { apiFormat: 'openai', maxTokens: 4096 });
   assert.ok(Array.isArray(chatBody.messages));
   assert.equal(chatBody.input, undefined);
-  assert.equal(chatBody.max_completion_tokens, 8192);
+  assert.equal(chatBody.max_tokens, 8192);
   const responsesBody = buildRequestBody(request, { model: 'chosen-model', maxOutputTokens: 8192 }, { apiFormat: 'responses' });
   assert.equal(responsesBody.max_output_tokens, 8192);
 });
@@ -1853,4 +1853,69 @@ test('a claimed tool finish without tool blocks logs the mismatch only', async t
   assert.equal(claims.length, 1);
   assert.deepEqual(claims[0], { event: 'tool-claim-mismatch', textChunks: 1, toolChunks: 0 });
   assert.ok(unpack(body).messages.length > 0, 'the turn completes normally with text');
+});
+
+test('Chat bodies send the output limit as max_tokens', () => {
+  const limited = { systemPrompt: '', messages: [{ role: 'user', content: 'hi' }], tools: [], maxTokens: 8192 };
+  const body = buildRequestBody(limited, { model: 'm' }, { apiFormat: 'openai' });
+  assert.equal(body.max_tokens, 8192);
+  assert.equal('max_completion_tokens' in body, false);
+});
+
+test('a 400 naming max_tokens retries once with max_completion_tokens', async t => {
+  const logs = [];
+  let attempt = 0;
+  const { requests, body } = await direct(t,
+    { systemPrompt: '', messages: [{ role: 'user', content: 'hi' }], tools: [], maxTokens: 8192 },
+    (req, res) => {
+      if (++attempt === 1) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'max_tokens is not supported; use max_completion_tokens' } }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(event({ choices: [{ delta: { content: 'capped' }, finish_reason: 'stop' }] }));
+      res.end('data: [DONE]\n\n');
+    }, { logs });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].max_tokens, 8192);
+  assert.equal('max_completion_tokens' in requests[0], false);
+  assert.equal(requests[1].max_completion_tokens, 8192);
+  assert.equal('max_tokens' in requests[1], false);
+  assert.ok(logs.some(e => e.event === 'provider-degraded' && e.reason === 'max-tokens-field'));
+  assert.equal(unpack(body).messages.map(m => str(m, 3)).join(''), 'capped');
+});
+
+test('a chat body without a limit sends neither token cap field', () => {
+  const body = buildRequestBody(
+    { systemPrompt: '', messages: [{ role: 'user', content: 'hi' }], tools: [] },
+    { model: 'm' }, { apiFormat: 'openai' });
+  assert.equal('max_tokens' in body, false);
+  assert.equal('max_completion_tokens' in body, false);
+});
+
+test('an anthropic 400 about max_tokens never triggers the rename retry', async t => {
+  const logs = [];
+  const { requests } = await direct(t,
+    { systemPrompt: '', messages: [{ role: 'user', content: 'hi' }], tools: [] },
+    (req, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'max_tokens: must be greater than 0' } }));
+    }, { apiFormat: 'anthropic', logs });
+  assert.equal(requests.length, 1);
+  assert.ok('max_tokens' in requests[0]);
+  assert.equal(logs.filter(e => e.event === 'provider-degraded' && e.reason === 'max-tokens-field').length, 0);
+});
+
+test('a plain-text stop finish logs no tool-claim-mismatch', async t => {
+  const logs = [];
+  const { body } = await direct(t,
+    { systemPrompt: '', messages: [{ role: 'user', content: 'hi' }], tools: [] },
+    (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(event({ choices: [{ delta: { content: 'plain text' }, finish_reason: 'stop' }] }));
+      res.end('data: [DONE]\n\n');
+    }, { logs });
+  assert.equal(logs.filter(e => e.event === 'tool-claim-mismatch').length, 0);
+  assert.equal(unpack(body).messages.map(m => str(m, 3)).join(''), 'plain text');
 });

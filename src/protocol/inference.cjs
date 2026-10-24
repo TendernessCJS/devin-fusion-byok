@@ -23,6 +23,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
   const texts = new Map();
   let terminal = false;
   let reason = 2;
+  let chatFinish = null;
   let finished = false;
   let usage = null;
   const getCall = (index, itemId) => {
@@ -121,6 +122,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
           }
           if (choice.finish_reason) {
             terminal = true;
+            chatFinish = choice.finish_reason;
             reason = choice.finish_reason === 'length' ? 3 : choice.finish_reason === 'content_filter' ? 11 : 2;
           }
         }
@@ -202,7 +204,10 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
         }
         tools.push({ id: call.id, name: call.name, arguments: args, isCustomToolCall: Boolean(call.custom) });
       }
-      if (reason === 2 && tools.length === 0) {
+      // `stop` is an ordinary plain-text end; only an upstream claim of a tool
+      // finish with zero tool blocks is a mismatch. The Responses path carries
+      // no such claim marker, so chatFinish stays null there.
+      if (reason === 2 && tools.length === 0 && (chatFinish === 'tool_calls' || chatFinish === 'function_call')) {
         onDiag({ event: 'tool-claim-mismatch', textChunks: texts.size, toolChunks: 0 });
       }
       if (reason === 2 && !tools.length && !texts.size) {
@@ -443,6 +448,18 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
           cacheSupport.disable(provider);
           record({ event: 'cache-breakpoint-disabled', model: route.model, reason: '400' });
         }
+      } else if (chat && !anthropic && typeof body.max_tokens === 'number'
+          && /max_?(?:completion_)?tokens/i.test(detail)) {
+        // DeepSeek ignores `max_completion_tokens` but honours `max_tokens`;
+        // official OpenAI reasoning models are the mirror image. One rename
+        // retry, gated on the error naming the field so unrelated 400s
+        // (context length, bad schema) still surface unchanged. `chat` also
+        // covers anthropic here, which legitimately sends `max_tokens` — the
+        // explicit !anthropic guard keeps it out of this rename.
+        const { max_tokens: cap, ...rest } = body;
+        body = { ...rest, max_completion_tokens: cap };
+        upstream = await send(body);
+        record({ event: 'provider-degraded', model: route.model, reason: 'max-tokens-field' });
       }
     }
     clearTimer();
