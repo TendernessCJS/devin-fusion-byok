@@ -1,8 +1,6 @@
 'use strict';
 const fs = require('node:fs');
 const { safeError } = require('./errors.cjs');
-const { teardown } = require('./teardown.cjs');
-
 function createConfigSync({ deps, shared, changed, publish }) {
   const { lifecycle, config, configFile, vscode, context, log } = deps;
   const afterChange = async type => {
@@ -24,10 +22,11 @@ function createConfigSync({ deps, shared, changed, publish }) {
         lastAutoPlan = currentAutoPlan;
         lifecycle.resetAutoContinue?.();
       }
-      if (currentConfig.enabled === false) void teardown(lifecycle).catch(() => log('disable-cleanup-error'));
+      if (currentConfig.enabled === false) void shared.disable().catch(() => log('disable-cleanup-error'));
       else {
         void shared.ensureEnabled().catch(error => { const safe = safeError(error); if (safe.code !== 'cancelled') log('error', { code: safe.code }); });
         void shared.reconcilePreference();
+        changed?.();
       }
       void publish()?.catch(() => {});
     }

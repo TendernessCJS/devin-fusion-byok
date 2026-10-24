@@ -25,7 +25,7 @@ function installCatalogSync({ deps, shared, onChange }) {
   // which made that counter under-report.
   const commit = ({ bumpRevision }) => {
     if (lifecycle.activationDisposed) return Promise.resolve();
-    if (bumpRevision) shared.nativeRevision += 1;
+    if (bumpRevision) { shared.nativeRevision += 1; lifecycle.publication?.changed(); }
     if (shared.nativeModels.size !== shared.nativeSyncSize) { shared.nativeSyncSize = shared.nativeModels.size; log('native-sync', { count: shared.nativeSyncSize }); }
     const published = Promise.resolve(onChange?.()).catch(() => {});
     shared.pushToBackend();
@@ -70,6 +70,13 @@ function installCatalogSync({ deps, shared, onChange }) {
       catch { result = { status: 'unavailable', models: [] }; }
       if (abort.signal.aborted || generation !== lifecycle.activationGeneration || lifecycle.activationDisposed || config().enabled === false) return;
       shared.nativeCatalogStatus = result.status;
+      // The first transition into an authoritative state must bump the
+      // revision even when the models are identical: the activation-time cache
+      // check ran additive-only before this point, and the owed retirement
+      // has to be triggered exactly once when authority arrives.
+      const authoritative = result.status === 'ready' || result.status === 'empty' || result.status === 'unsupported';
+      const authorityFlip = authoritative && shared.nativeAuthoritative !== true;
+      shared.nativeAuthoritative = authoritative;
       // A failed read is not an empty catalog. Rebuilding from an unavailable
       // answer publishes 0 entries for as long as a backend swap takes
       // (measured 12s across a source-identity change), which the picker and
@@ -78,7 +85,7 @@ function installCatalogSync({ deps, shared, onChange }) {
       // the backend-sourced ones, since locally observed ones are re-added below.
       if (result.status === 'unavailable' && shared.nativeModels.size) {
         log('native-refresh-retained', { status: result.status, count: shared.nativeModels.size });
-        await commit({ bumpRevision: false });
+        await commit({ bumpRevision: authorityFlip });
         return;
       }
       // A refresh rebuilds the merged view from scratch, so the revision bump
@@ -100,7 +107,7 @@ function installCatalogSync({ deps, shared, onChange }) {
         const prior = shared.nativeModels.get(entry.uid);
         shared.nativeModels.set(entry.uid, observed.has(entry.uid) ? mergeNativeEntry(entry, prior) : mergeNativeEntry(prior, entry));
       }
-      let changed = shared.nativeModels.size !== previousByUid.size;
+      let changed = authorityFlip || shared.nativeModels.size !== previousByUid.size;
       if (!changed) {
         for (const [uid, entry] of shared.nativeModels) {
           if (previousByUid.get(uid) !== JSON.stringify(entry)) { changed = true; break; }

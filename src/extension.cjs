@@ -20,7 +20,8 @@ const { teardown } = require('./activation/teardown.cjs');
 // Shared lifecycle state across activate/teardown/deactivate.
 const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
   cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
-  connection: undefined, acpObserver: undefined, runtimeWaitAbort: undefined,
+  connection: undefined, acpObserver: undefined, authStatus: undefined, publication: undefined,
+  nativeRefresh: undefined, log: undefined, runtimeWaitAbort: undefined,
   restoreOnHostDisable: undefined,
   activationGeneration: 0, reconcileHalted: true, activationDisposed: true };
 
@@ -127,7 +128,7 @@ async function activate(context) {
     nativeAllowedMode: 'restricted', nativeAllowedEmptyStreak: 0,
     nativeAllowedObserved: false, nativeAllowedDiverged: false,
     management: undefined, manager: undefined,
-    nativeCatalogStatus: 'loading', backendStatus: 'stopped',
+    nativeCatalogStatus: 'loading', nativeAuthoritative: false, backendStatus: 'stopped',
     syncPending: undefined, syncAbort: undefined, syncTimer: undefined,
     acpObservationSeq: 0, acpOwnModels: 0,
     pushTimer: undefined, lastPushAt: 0, nativeRevision: 0, lastPushedRevision: 0,
@@ -154,6 +155,13 @@ async function activate(context) {
     log('error', { code: safe.code }); vscode.window.showErrorMessage('Fusion BYOK：' + safe.message);
   } };
   const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run };
+  lifecycle.log = log;
+  lifecycle.nativeRefresh = () => vscode.commands.executeCommand('devin.refreshUserStatus');
+  const createPublication = () => require('./activation/catalog-publication.cjs').createCatalogPublication({
+    getCatalog: catalog, refreshUserStatus: lifecycle.nativeRefresh,
+    isCurrent: () => !lifecycle.activationDisposed && config().enabled !== false,
+    log });
+  lifecycle.publication = createPublication();
   const cacheSync = installCacheSync({ deps, shared, publish: () => shared.management?.publish() });
   installCatalogSync({ deps, shared, onChange: () => {
     const published = Promise.resolve(shared.management?.publish()).catch(() => {});
@@ -164,7 +172,8 @@ async function activate(context) {
   installEnable({ deps, shared });
   installCommands({ deps, shared });
   const configSync = createConfigSync({ deps, shared,
-    changed: () => cacheSync.changed(), publish: () => shared.management.publish() });
+    changed: () => { cacheSync.changed(); lifecycle.publication?.changed(); },
+    publish: () => shared.management.publish() });
   installPanel({ deps, shared, cacheSync, afterChange: configSync.afterChange });
   configSync.start();
   if (config().enabled !== false) await run(shared.ensureEnabled)();

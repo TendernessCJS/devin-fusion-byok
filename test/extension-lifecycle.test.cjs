@@ -24,7 +24,16 @@ function fixture(t, initial = {}) {
   const state = new Map(Object.entries(initial.state || {})), commands = new Map(), logs = [], notices = [], watchers = [], preferenceListeners = [];
   const updates = [], bridges = [];
   let disposed = 0, installed = 0, managerOptions, autoContinueOptions, warningResult;
-  const cacheChecks = [];
+  const cacheChecks = [], executed = [], authOptions = [], restoreCalls = [];
+  let authDisposed = 0, authRestoreResult = { ok: true, code: 'restored' }, acpDisposed = 0, bridgeDisposeError = null;
+  const authHandle = {
+    deactivated: 0,
+    deactivate() { this.deactivated += 1; },
+    drain: () => Promise.resolve(true),
+    restore: options => { restoreCalls.push(options); return Promise.resolve(authRestoreResult); },
+    dispose() { authDisposed += 1; },
+    status: { state: 'observing', calls: 0, rewrites: 0 },
+  };
   const settings = {
     inspect: key => ({ globalValue: globals[key] }),
     get: () => { throw new Error('Merged workspace settings must not be copied into global settings'); },
@@ -35,7 +44,8 @@ function fixture(t, initial = {}) {
     workspace: { getConfiguration: () => settings,
       onDidChangeConfiguration: fn => { preferenceListeners.push(fn); return { dispose() {} }; } },
     extensions: { getExtension: () => ({ extensionPath: '/native', packageJSON: { main: 'main.js', version: 'test' } }) },
-    commands: { registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; } },
+    commands: { registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
+      executeCommand: command => { executed.push(command); return Promise.resolve(); } },
     window: {
       createOutputChannel: () => ({ appendLine: value => logs.push(value), show() {}, dispose() {} }),
       showInformationMessage: text => notices.push(text), showErrorMessage: text => notices.push(text),
@@ -66,6 +76,7 @@ function fixture(t, initial = {}) {
       pruneRetiredKeys: realRequire('./config/config.cjs').pruneRetiredKeys,
     },
     './catalog.cjs': { staleFusionUids: () => [],
+      catalogSignature: realRequire('./catalog/signature.cjs').catalogSignature,
       buildCatalog: config => ({ models: config.providers?.length
         ? [{ uid: 'dfbyok-own', label: 'own', kind: 'model' },
           { uid: 'fusion-dfbyok-selected', label: 'CPA Fusion', kind: 'matrix' },
@@ -78,14 +89,15 @@ function fixture(t, initial = {}) {
     './goal/continue.cjs': { installGoalContinue: () => null },
     './runtime/host/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
       return { status: () => ({}), reset() {}, cancelSession: () => false, dispose() {} }; } },
-    './runtime/host/acp-observer.cjs': { installAcpObserver: () => ({ dispose() {} }) },
+    './runtime/host/acp-observer.cjs': { installAcpObserver: () => ({ dispose() { acpDisposed += 1; } }) },
+    './runtime/host/auth-status.cjs': { installAuthStatusInjection: options => { authOptions.push(options); return authHandle; } },
     './runtime/source-identity.cjs': { runtimeIdentity: () => identity },
     './runtime/contract.cjs': { ...realRequire('./runtime/contract.cjs'), rootIdentity: () => identity },
     './runtime/bridge.cjs': { createLsBridge: async (_port, options) => { bridges.push(options); return { port: 4567, close() {} }; } },
     './runtime/host/ls-injection.cjs': { installLsInjection: async options => {
       installed++; await options.createBridge(1234);
       if (injectionGate) { const gate = injectionGate; injectionGate = null; await gate; }
-      return { status: { state: 'ready' }, dispose: async () => { disposed++; } };
+      return { status: { state: 'ready' }, dispose: async () => { disposed++; if (bridgeDisposeError) throw bridgeDisposeError; } };
     } },
     './panel/manager.cjs': { ...realRequire('./panel/manager.cjs'), createManager: options => {
       managerOptions = options;
@@ -118,6 +130,9 @@ function fixture(t, initial = {}) {
     setWarningResult: value => { warningResult = value; },
     firePreference: (key = 'devin.acp.agentPreferences') => Promise.all(preferenceListeners.map(fn => fn({ affectsConfiguration: name => name === key }))),
     cacheChecks: () => cacheChecks,
+    executed: () => executed, authOptions: () => authOptions, restoreCalls: () => restoreCalls,
+    authDisposed: () => authDisposed, setAuthRestore: value => { authRestoreResult = value; },
+    acpDisposed: () => acpDisposed, setBridgeDisposeError: error => { bridgeDisposeError = error; },
     settle: async (ticks = 20) => { for (let index = 0; index < ticks; index++) await next(); },
     counts: () => ({ installed, disposed }) };
 }
@@ -820,7 +835,170 @@ test('activation wires the injection health snapshot into panel state', async t 
   const manager = realRequire('./panel/manager.cjs').createManager(f.managerOptions());
   const health = manager.state().health;
   assert.ok(health && Array.isArray(health.items), 'panel state carries the health snapshot');
-  assert.equal(health.items.length, 5, 'backend, bridge, env, cache and acp are always reported');
-  assert.equal(health.items.map(item => item.id).join(','), 'backend,bridge,env,cache,acp',
+  assert.equal(health.items.length, 6, 'backend, bridge, env, cache, catalog and acp are always reported');
+  assert.equal(health.items.map(item => item.id).join(','), 'backend,bridge,env,cache,catalog,acp',
     'the sandboxed manager crosses realms, so compare the id list as a string');
+});
+
+test('enable installs the auth hook with the event contract and publishes through one refresh command', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  assert.equal(f.authOptions().length, 1, 'the auth-status hook is installed once');
+  const options = f.authOptions()[0];
+  for (const key of ['isEnabled', 'onNativeModels', 'onPublication', 'getCatalog']) {
+    assert.equal(typeof options[key], 'function', key + ' is wired');
+  }
+  assert.equal(f.executed().filter(command => command === 'devin.refreshUserStatus').length, 1,
+    'the first publication issues exactly one coalesced refresh — the bare executeCommand call is gone');
+  // Until the hook reports a matching applied signature the catalog stays unconfirmed.
+  const manager = realRequire('./panel/manager.cjs').createManager(f.managerOptions());
+  const catalogState = () => manager.state().health.items.find(item => item.id === 'catalog').state;
+  assert.equal(catalogState(), 'unknown', 'pending publication is unverified, not green');
+  const { catalogSignature } = require('../src/catalog.cjs');
+  options.onPublication({ phase: 'applied', callId: 1, signature: catalogSignature(options.getCatalog()) });
+  assert.equal(catalogState(), 'ok', 'a confirmed applied signature is the only green path');
+});
+
+test('the disable command serializes teardown and runs the bounded passthrough restore', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  const disable = f.commands.get('devinFusionByok.disable');
+  await Promise.all([disable(), disable()]);
+  assert.equal(f.notices.filter(text => text === 'Fusion BYOK 已停用，原生连接已恢复。').length, 1,
+    'concurrent disable invocations share one teardown');
+  assert.equal(f.restoreCalls().length, 1, 'explicit disable runs exactly one passthrough verification');
+  assert.equal(typeof f.restoreCalls()[0].command, 'function');
+  assert.ok(f.authDisposed() >= 1, 'the hook is removed after the restore attempt');
+});
+
+test('a passthrough restore that still sees own entries is logged unverified, never claimed', async t => {
+  const f = fixture(t);
+  f.setAuthRestore({ ok: false, code: 'restore-unverified' });
+  await f.activate(f.context);
+  await f.settle();
+  await f.commands.get('devinFusionByok.disable')();
+  assert.ok(f.logs.some(line => line.includes('desktop-catalog-restore') && line.includes('restore-unverified')),
+    'an unverified restore is recorded, not reported as recovered');
+});
+
+test('a normal unload disposes the hook without firing a restore refresh', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  const refreshes = f.executed().length;
+  await f.deactivate();
+  assert.equal(f.restoreCalls().length, 0, 'deactivate never starts a network verification');
+  assert.equal(f.executed().length, refreshes, 'deactivate issues no refresh commands');
+  assert.ok(f.authDisposed() >= 1);
+});
+
+test('hook events arriving after teardown cannot revive the publication', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  const options = f.authOptions()[0];
+  await f.deactivate();
+  const refreshes = f.executed().length;
+  options.onPublication({ phase: 'applied', callId: 1, signature: 'late' });
+  options.onPublication({ phase: 'cleared', callId: 2 });
+  await f.settle();
+  assert.equal(f.executed().length, refreshes, 'late hook events are inert');
+});
+
+test('external enabled=false through the watcher shares the same serialized disable path', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  const config = JSON.parse(fs.readFileSync(f.configFile, 'utf8'));
+  config.enabled = false;
+  fs.writeFileSync(f.configFile, JSON.stringify(config));
+  await f.watchers[0]();
+  await f.settle();
+  assert.equal(f.notices.filter(text => text === 'Fusion BYOK 已停用，原生连接已恢复。').length, 1,
+    'the watcher path now runs the same restore+report disable as the command');
+  assert.equal(f.restoreCalls().length, 1, 'external disable also verifies the stored catalog');
+});
+
+test('an LS bridge dispose failure still removes the auth and ACP wrappers', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  f.setBridgeDisposeError(new Error('ls teardown boom'));
+  await assert.rejects(f.deactivate(), /ls teardown boom/);
+  assert.ok(f.authDisposed() >= 1, 'the auth hook is removed even though the bridge dispose threw');
+  assert.ok(f.acpDisposed() >= 1, 'the ACP wrapper is removed even though the bridge dispose threw');
+});
+
+test('an unverified catalog restore reports the partial outcome, never unconditional success', async t => {
+  const f = fixture(t);
+  f.setAuthRestore({ ok: false, code: 'restore-unverified' });
+  await f.activate(f.context);
+  await f.settle();
+  await f.commands.get('devinFusionByok.disable')();
+  assert.deepEqual(f.notices.filter(text => text.startsWith('Fusion BYOK 已停用')),
+    ['Fusion BYOK 已停用，连接设置已恢复；桌面模型目录恢复尚未确认。'],
+    'an unverified restore must not read as fully recovered');
+});
+
+test('a bridge dispose failure still restores owned settings before the error surfaces', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  assert.equal(f.globals.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL, 'http://127.0.0.1:39842', 'enable wrote the plugin URL');
+  f.setBridgeDisposeError(new Error('ls teardown boom'));
+  await f.commands.get('devinFusionByok.disable')();
+  assert.ok(!Object.hasOwn(f.globals.agentEnv['devin-cli'], 'WINDSURF_API_SERVER_URL'),
+    'the plugin URL is reverted even when the bridge dispose throws');
+  assert.equal(f.globals.agentEnv['devin-cli'].KEEP, 'user-value', 'user-owned values survive');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT))).changes.length, 0,
+    'the receipt is fully discharged');
+  assert.ok(!f.notices.includes('Fusion BYOK 已停用，原生连接已恢复。'),
+    'a teardown error must not be masked as a clean restore');
+});
+
+test('ensureEnabled waits out an in-flight disable before reinstalling', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  assert.equal(f.authOptions().length, 1);
+  // Gate the passthrough restore so the disable is provably still running when
+  // the external enable path fires through the real watcher callback.
+  let release;
+  f.setAuthRestore(new Promise(resolve => { release = () => resolve({ ok: true, code: 'restored' }); }));
+  const pending = f.commands.get('devinFusionByok.disable')();
+  await f.settle(10);
+  assert.equal(f.restoreCalls().length, 1, 'the restore probe is armed inside the gated disable');
+  f.managerOptions().write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: true });
+  // The watcher path awaits ensureEnabled internally; awaiting it here would
+  // deadlock against the gated restore, so it is fired and let to queue.
+  const enabling = f.managerOptions().afterChange('setEnabled');
+  await f.settle(5);
+  assert.equal(f.authOptions().length, 1, 'the pending enable cannot install while the disable owns teardown');
+  release();
+  await pending;
+  await enabling;
+  await f.settle();
+  assert.equal(f.authOptions().length, 2, 'the new generation installs exactly one fresh hook');
+  assert.equal(f.authDisposed(), 1, 'the old generation handle is disposed, the new one alive');
+});
+
+test('an event from the previous generation hook cannot move the new publisher', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  const first = f.authOptions()[0];
+  await f.commands.get('devinFusionByok.disable')();
+  f.managerOptions().write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: true });
+  await f.managerOptions().afterChange('setEnabled');
+  await f.settle();
+  assert.equal(f.authOptions().length, 2);
+  const { catalogSignature } = realRequire('./catalog/signature.cjs');
+  const before = f.authOptions().length;
+  first.onPublication({ phase: 'applied', callId: 9, signature: catalogSignature(first.getCatalog()) });
+  await f.settle();
+  assert.equal(f.authOptions().length, before, 'the stale handle emits into a pinned closure');
+  // The new generation's hook remains the live one: its events alone decide.
+  assert.equal(f.authDisposed(), 1);
 });

@@ -20,15 +20,27 @@ function installCacheSync({ deps, shared, publish }) {
   context.subscriptions.push(shared.pickerRefresh);
   // The CLI intersects its picker with per-identity caches under
   // ~/.cache/devin/cli; a cache written before a config change keeps the old
-  // uid digests and drops the affected entries. This CLI never re-fetches a
-  // missing file, so stale caches are refreshed in place by rewriting the
-  // payload through the same augmentation the backend applies.
+  // uid digests and drops the affected entries. Only v6 is rebuilt after a
+  // deletion (measured 2026-10-24) and the trigger/timing is unconfirmed, so
+  // stale caches are refreshed in place by rewriting the payload through the
+  // same augmentation the backend applies.
+  // Retirement is only safe once the native catalog is authoritative: while it
+  // is still loading or the read failed the Fusion matrix has no leads, so
+  // every mirrored combination looks stale — `retire:false` pins the rewrite to
+  // additive-only and stored own entries can never be deleted early (measured
+  // 2026-10-24: an activation-time check stripped all 150 combos from the cache
+  // because installPanel runs before ensureEnabled starts the native sync).
+  const nativeAuthoritative = () => shared.nativeCatalogStatus !== 'loading' && shared.nativeCatalogStatus !== 'unavailable';
   const check = ({ force = false } = {}) => {
     try {
       if (config().enabled === false) return shared.cliCacheReport;
+      const retire = nativeAuthoritative();
+      if (!retire && !shared.cliCacheDeferred) {
+        shared.cliCacheDeferred = true;
+        log('cli-cache-deferred', { status: shared.nativeCatalogStatus });
+      } else if (retire) shared.cliCacheDeferred = false;
       const current = catalog();
       const expectedUids = current.models.map(model => model.uid);
-      if (!expectedUids.length) return shared.cliCacheReport;
       const emittedFusionUids = new Set(Object.keys(current.fusions || {}));
       const knownUids = new Set([...Object.keys(current.routes || {}), ...emittedFusionUids, ...shared.nativeModels.keys()]);
       const excludedUids = role => {
@@ -42,9 +54,12 @@ function installCacheSync({ deps, shared, publish }) {
         return set;
       };
       const excluded = { lead: excludedUids('lead'), sidekick: excludedUids('sidekick') };
-      const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force,
+      const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force, retire,
         staleProbe: payload => staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded }),
-        augment: (payload, rpc, report) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current, onSkip: report }) });
+        // retireOwn mirrors the readiness gate: while the native catalog is
+        // not authoritative the augmenter stays additive-only as well, so an
+        // empty emit cannot strip the last own entry early.
+        augment: (payload, rpc, report) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current, retireOwn: retire, onSkip: report }) });
       // The report is part of panel state, and panel state is deduplicated by
       // its JSON. Restamping `at` on every automatic check made each 3s sync
       // look like a change, so the panel re-rendered forever — killing the
@@ -52,9 +67,10 @@ function installCacheSync({ deps, shared, publish }) {
       // the outcome was established instead, and keep the previous object when
       // the outcome is unchanged (only a manual, forced check always restamps).
       const summary = { checked: result.checked, refreshed: result.refreshed,
-        skipped: result.skipped || [], errors: result.errors || [] };
+        skipped: result.skipped || [], errors: result.errors || [], coverage: result.coverage };
       const previous = shared.cliCacheReport && JSON.stringify({ checked: shared.cliCacheReport.checked,
-        refreshed: shared.cliCacheReport.refreshed, skipped: shared.cliCacheReport.skipped, errors: shared.cliCacheReport.errors });
+        refreshed: shared.cliCacheReport.refreshed, skipped: shared.cliCacheReport.skipped,
+        errors: shared.cliCacheReport.errors, coverage: shared.cliCacheReport.coverage });
       if (force || previous !== JSON.stringify(summary)) shared.cliCacheReport = { at: new Date().toISOString(), ...summary };
       if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed, force });
       for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });

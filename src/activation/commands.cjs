@@ -67,7 +67,7 @@ function installCommands({ deps, shared }) {
     if (!choices.length) { shared.management?.open(); vscode.window.showInformationMessage('Fusion 组合在 Devin 的模型选择器里选（打开 Fusion 卡片）；控制面板的「Fusion」页用来决定哪些模型能出现在那张卡片的下拉里。'); return; }
     const choice = await vscode.window.showQuickPick(choices, { title: '选择 Fusion 组合', matchOnDescription: true }); if (!choice) return;
     await shared.saveFusionChoice(choice.uid);
-    vscode.window.showInformationMessage('Fusion 模型已保存，请新建 Devin Local 会话。');
+    vscode.window.showInformationMessage('已保存插件组合设置；请在 Devin 模型选择器确认选择（当前会话可能保留此前选择）。');
   })));
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.status', () => { log('status', { runtime: lifecycle.connection?.status, models: config().providers.map(p => ({ name: p.name, models: p.models.length })) }); deps.output.show(true); }));
   // Restores only the settings values this extension wrote and the user has not
@@ -94,13 +94,28 @@ function installCommands({ deps, shared }) {
     await context.globalState.update('savedEnv', undefined);
     await context.globalState.update('managedEnv', undefined);
   };
-  shared.disable = async () => {
-    try { lifecycle.goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); }
-    shared.backendStatus = 'stopped';
-    updateConfig(configFile, current => { if (current.enabled === false) return false; current.enabled = false; return true; });
-    await teardown(lifecycle);
-    await restoreOwnedSettings();
-    vscode.window.showInformationMessage('Fusion BYOK 已停用，原生连接已恢复。');
+  // Every disable path (panel switch, disable command, external enabled=false
+  // edit) serializes through the same in-flight promise so a config watcher
+  // firing mid-teardown cannot start a second teardown in parallel.
+  let disablePromise = null;
+  shared.disable = () => {
+    disablePromise ??= (async () => {
+      try { lifecycle.goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); }
+      shared.backendStatus = 'stopped';
+      updateConfig(configFile, current => { if (current.enabled === false) return false; current.enabled = false; return true; });
+      // Owned settings restore must run even when the LS bridge dispose threw —
+      // a broken bridge can never orphan the user's environment values.
+      let verdict;
+      try { verdict = await teardown(lifecycle, { restore: true }); }
+      finally { await restoreOwnedSettings(); }
+      vscode.window.showInformationMessage(verdict?.ok
+        ? 'Fusion BYOK 已停用，原生连接已恢复。'
+        : 'Fusion BYOK 已停用，连接设置已恢复；桌面模型目录恢复尚未确认。');
+    })().finally(() => { disablePromise = null; shared.disablePromise = undefined; });
+    // Exposed so ensureEnabled can wait out an in-flight restore instead of
+    // installing hooks the old teardown finally would strip again.
+    shared.disablePromise = disablePromise;
+    return disablePromise;
   };
   // Disabling in the extension manager restarts the extension host and never runs
   // the disable command; without this the native CLI keeps pointing at a runtime

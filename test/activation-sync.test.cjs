@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { createSandboxLoader } = require('./helpers/sandbox.cjs');
 
-function cacheSyncFixture(t, { refreshResult, picker } = {}) {
-  const logs = [], calls = [], publishCalls = [], executed = [];
+function cacheSyncFixture(t, { refreshResult, picker, models = [{ uid: 'm1' }] } = {}) {
+  const logs = [], calls = [], publishCalls = [], executed = [], augOptions = [];
   const result = refreshResult || { checked: 1, refreshed: [], skipped: [], errors: [] };
   const tracker = picker || {
     primed: 0, changedCalls: 0, disposed: 0,
@@ -16,26 +16,36 @@ function cacheSyncFixture(t, { refreshResult, picker } = {}) {
   const loader = createSandboxLoader({
     filename: path.resolve(__dirname, '../src/activation/cache-sync.cjs'),
     overrides: {
-      '../catalog.cjs': { staleFusionUids: () => new Set(), augmentCatalog: payload => payload },
+      '../catalog.cjs': { staleFusionUids: () => new Set(),
+        augmentCatalog: (payload, options) => { augOptions.push(options); return payload; } },
       '../runtime/host/cli-cache.cjs': {
         defaultDir: () => '/nonexistent',
-        refreshStaleCliCaches: options => { calls.push(options); return result; },
+        refreshStaleCliCaches: options => { calls.push(options); augOptions.length = 0; return { ...result, callsOptions: options }; },
       },
       '../runtime/host/picker-refresh.cjs': { createPickerRefresh: () => tracker },
     },
   });
   t.after(() => loader.assertStubsUsed('cache-sync fixture'));
-  const shared = { cliCacheReport: null, nativeModels: new Map(), acpObservationSeq: 0, acpOwnModels: 0 };
+  const shared = { cliCacheReport: null, nativeModels: new Map(), acpObservationSeq: 0, acpOwnModels: 0, nativeCatalogStatus: 'ready' };
   const deps = {
     log: (event, data) => logs.push({ event, data }),
     config: () => ({}),
-    catalog: () => ({ models: [{ uid: 'm1' }], fusions: {}, routes: {} }),
+    catalog: () => ({ models, fusions: {}, routes: {} }),
     vscode: { commands: { executeCommand: command => { executed.push(command); return Promise.resolve(); } } },
     context: { subscriptions: [] },
   };
   const sync = loader.module.exports.installCacheSync({ deps, shared, publish: async () => { publishCalls.push(1); } });
-  return { sync, shared, tracker, logs, calls, publishCalls, executed, subscriptions: deps.context.subscriptions };
+  return { sync, shared, tracker, logs, calls, augOptions, publishCalls, executed, subscriptions: deps.context.subscriptions };
 }
+
+test('an empty catalog still runs the check so recognized stale own entries can retire', t => {
+  const coverage = { dirState: 'ok', supported: 1, legacy: [], unsupported: [] };
+  const f = cacheSyncFixture(t, { models: [], refreshResult: { checked: 1, refreshed: [], skipped: [], errors: [], coverage } });
+  const report = f.sync.check();
+  assert.equal(f.calls.length, 1, 'the empty-catalog early return used to skip the cleanup pass entirely');
+  assert.deepEqual(f.calls[0].expectedUids, []);
+  assert.deepEqual(report.coverage, coverage, 'the report carries the directory coverage through to the panel');
+});
 
 test('the picker signature tracker is primed and registered without a panel', t => {
   const f = cacheSyncFixture(t);
@@ -110,7 +120,6 @@ test('a failing cache probe logs and keeps the previous report', t => {
 
 function configSyncFixture(t, { initial = {} } = {}) {
   const logs = [], unwatchCalls = [], watchers = [], preferenceListeners = [];
-  let tornDown = 0;
   const loader = createSandboxLoader({
     filename: path.resolve(__dirname, '../src/activation/config-sync.cjs'),
     overrides: {
@@ -118,7 +127,6 @@ function configSyncFixture(t, { initial = {} } = {}) {
         watchFile: (file, options, listener) => { watchers.push({ file, options, listener }); },
         unwatchFile: (file, listener) => { unwatchCalls.push({ file, listener }); },
       },
-      './teardown.cjs': { teardown: async () => { tornDown += 1; } },
     },
   });
   t.after(() => loader.assertStubsUsed('config-sync fixture'));
@@ -144,7 +152,7 @@ function configSyncFixture(t, { initial = {} } = {}) {
   return {
     sync, shared, logs, watchers, unwatchCalls, preferenceListeners, subscriptions: deps.context.subscriptions,
     enabled, reconciled, preference, disabled, changedCalls, publishCalls, resets, suspends,
-    tornDown: () => tornDown, prefDisposed: () => prefDisposed,
+    prefDisposed: () => prefDisposed,
     setConfig: next => { current = next; },
   };
 }
@@ -196,7 +204,7 @@ test('the config watcher tears down on disable and resets auto-continue flags on
   f.sync.start();
   f.setConfig({ enabled: false, autoContinueOnProviderError: false });
   f.watchers[0].listener();
-  assert.equal(f.tornDown(), 1);
+  assert.equal(f.disabled.length, 1, 'the watcher routes through the serialized shared disable path');
   assert.equal(f.resets.length, 1, 'a changed auto flag must reset the auto-continue budget');
   assert.equal(f.publishCalls.length, 1);
   f.watchers[0].listener();
@@ -220,4 +228,38 @@ test('the preference listener ignores unrelated configuration sections', t => {
   assert.equal(f.preference.length, 0);
   f.preferenceListeners[0]({ affectsConfiguration: section => section === 'devin.acp.agentPreferences' });
   assert.equal(f.preference.length, 1);
+});
+
+test('the readiness gate switches retirement: loading is additive-only, ready retires', t => {
+  const f = cacheSyncFixture(t);
+  f.shared.nativeCatalogStatus = 'loading';
+  f.sync.check();
+  assert.equal(f.calls.at(-1).retire, false, 'a loading native catalog forbids retirement');
+  f.calls.at(-1).augment(Buffer.from('x'), '/r', () => {});
+  assert.equal(f.augOptions.at(-1).retireOwn, false, 'augment stays additive-only while loading');
+  f.shared.nativeCatalogStatus = 'ready';
+  f.sync.check();
+  assert.equal(f.calls.at(-1).retire, true, 'a ready native catalog allows retirement');
+  f.calls.at(-1).augment(Buffer.from('x'), '/r', () => {});
+  assert.equal(f.augOptions.at(-1).retireOwn, true, 'augment retires only under authority');
+  // unsupported/empty also count as authoritative; unavailable does not.
+  for (const [status, expected] of [['unsupported', true], ['empty', true], ['unavailable', false]]) {
+    f.shared.nativeCatalogStatus = status;
+    f.sync.check();
+    assert.equal(f.calls.at(-1).retire, expected, status);
+  }
+});
+
+test('cli-cache-deferred logs once per non-authoritative spell', t => {
+  const f = cacheSyncFixture(t);
+  f.shared.nativeCatalogStatus = 'loading';
+  f.sync.check(); f.sync.check(); f.sync.check();
+  assert.equal(f.logs.filter(line => line.event === 'cli-cache-deferred').length, 1,
+    'consecutive deferred checks log only once');
+  f.shared.nativeCatalogStatus = 'ready';
+  f.sync.check();
+  f.shared.nativeCatalogStatus = 'unavailable';
+  f.sync.check();
+  assert.equal(f.logs.filter(line => line.event === 'cli-cache-deferred').length, 2,
+    'a new non-authoritative spell logs again');
 });

@@ -313,6 +313,7 @@ function syncFixture({ read = async () => ({ status: 'ready', models: [] }) } = 
   const shared = {
     nativeModels: new Map(), nativeAllowedUids: new Set(),
     nativeRevision: 0, lastPushedRevision: 0, lastPushAt: 0, nativeSyncSize: -1,
+    nativeAuthoritative: false,
   };
   let changes = 0;
   module.exports.installCatalogSync({ deps: { lifecycle, config: () => ({}), log: (event, data) => logs.push({ event, data }), root: '/nonexistent' },
@@ -389,6 +390,9 @@ test('readNativeModels passes a valid family uid through and ignores malformed o
 
 test('a stale backend allowlist echo cannot overwrite the host set', async () => {
   const f = syncFixture({ read: async () => ({ status: 'ready', models: [], allowedUids: ['A1'] }) });
+  // This scenario presupposes an already-authoritative catalog: the echo
+  // semantics being tested are independent of the first-authority bump.
+  f.shared.nativeAuthoritative = true;
   f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1', 'A2'] });
   const revision = f.shared.nativeRevision;
   await f.shared.refreshNativeModels();
@@ -665,4 +669,22 @@ test('the raw CLI channel needs three consecutive empty verdicts to lift a restr
     'a confirmed host submission resets the raw streak even when nothing changed');
   assert.equal(await f.post({ models: [entry], allowedMode: 'unrestricted' }), 200);
   assert.equal((await f.get()).allowedMode, 'unrestricted', 'a confirmed unrestricted applies without the streak');
+});
+
+test('a status flip into authority bumps the revision even with identical models', async () => {
+  let result = { status: 'ready', models: [OBSERVED_ENTRY] };
+  const f = syncFixture({ read: async () => result });
+  await f.shared.refreshNativeModels();
+  const baseline = f.shared.nativeRevision;
+  result = { status: 'unavailable', models: [] };
+  await f.shared.refreshNativeModels();
+  const retained = f.shared.nativeRevision;
+  assert.equal(f.shared.nativeCatalogStatus, 'unavailable');
+  // The retained branch keeps the model set — an identical-content flip back
+  // to authoritative must still republish once.
+  const before = f.shared.nativeModels.size;
+  result = { status: 'ready', models: [OBSERVED_ENTRY] };
+  await f.shared.refreshNativeModels();
+  assert.equal(f.shared.nativeModels.size, before, 'the model content is unchanged');
+  assert.ok(f.shared.nativeRevision > retained, 'the authority flip alone advances the revision');
 });

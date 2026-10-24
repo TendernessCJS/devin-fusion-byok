@@ -4,6 +4,7 @@ const { readReceipt, remember, saveReceipt, valueAt } = require('../lifecycle/ow
 const { installLsInjection } = require('../runtime/host/ls-injection.cjs');
 const { createLsBridge } = require('../runtime/bridge.cjs');
 const { installAcpObserver } = require('../runtime/host/acp-observer.cjs');
+const { installAuthStatusInjection } = require('../runtime/host/auth-status.cjs');
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
 const { globalSetting } = require('./settings.cjs');
@@ -27,7 +28,12 @@ function installEnable({ deps, shared }) {
   const { lifecycle, config, vscode, context, log, catalog, nativeMain } = deps;
   let enableQueue = Promise.resolve();
   shared.ensureEnabled = () => {
-    const operation = enableQueue.then(() => {
+    const operation = enableQueue.then(async () => {
+      // A disable in flight owns the teardown until its restore verdict lands:
+      // enabling now must wait it out instead of installing hooks that the old
+      // finally block would strip again underneath.
+      const disabling = shared.disablePromise;
+      if (disabling) { try { await disabling; } catch {} }
       if (lifecycle.activationDisposed || config().enabled === false || lifecycle.connection) return;
       return enable();
     });
@@ -93,6 +99,37 @@ function installEnable({ deps, shared }) {
       return;
     }
     lifecycle.connection = injected;
+    // The publication coordinator owns every refresh of the stored desktop
+    // catalog; the hook only reports what each native call actually carried.
+    lifecycle.publication ??= require('./catalog-publication.cjs').createCatalogPublication({
+      getCatalog: catalog, refreshUserStatus: lifecycle.nativeRefresh,
+      isCurrent: () => generation === lifecycle.activationGeneration && config().enabled !== false && !lifecycle.activationDisposed,
+      log });
+    // Pin the publisher this generation's events belong to: a previous
+    // hook's late native settle must never confirm a newer coordinator.
+    const publisher = lifecycle.publication;
+    const publish = event => {
+      if (generation !== lifecycle.activationGeneration || lifecycle.publication !== publisher) return;
+      try { publisher?.observe(event); } catch {}
+    };
+    try {
+      lifecycle.authStatus?.dispose?.();
+      lifecycle.authStatus = installAuthStatusInjection({ nativeMainPath: nativeMain, getCatalog: catalog, log,
+        isEnabled: () => generation === lifecycle.activationGeneration && config().enabled !== false && !lifecycle.activationDisposed,
+        onNativeModels: entries => { try { shared.observeNativeModels?.(entries); } catch {} },
+        onPublication: publish });
+      // A foreign wrapper that won the method after our install leaves the hook
+      // deaf — surface it as the same degraded state as a missing hook instead
+      // of waiting for the watchdog to notice.
+      if (lifecycle.authStatus?.shadowed?.()) publish({ phase: 'failed', code: 'hook-unavailable' });
+      // The stored authStatus was written before this hook existed (or by a
+      // window where it is absent); the first publication republishes the
+      // merged catalog instead of waiting for the next scheduled native write.
+      publisher?.changed();
+    } catch {
+      log('auth-status-injection-unavailable');
+      publish({ phase: 'failed', code: 'hook-unavailable' });
+    }
     try { if (nativeMain) { lifecycle.acpObserver?.dispose?.(); lifecycle.acpObserver = installAcpObserver({ nativeMainPath: nativeMain, log, onModels: counts => { shared.acpObservationSeq++; shared.acpOwnModels = counts.ownModels; } }); } }
     catch { log('acp-observer-error'); }
     shared.startNativeSync();
