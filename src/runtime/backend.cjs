@@ -8,6 +8,7 @@ const { buildCatalog, resolveAssignment } = require('../catalog.cjs');
 const wire = require('../protocol/wire.cjs');
 const { parseChat } = require('../protocol/native-chat-codec.cjs');
 const { serveChat } = require('../protocol/inference.cjs');
+const { createCacheSupport } = require('../protocol/cache-support.cjs');
 const { forward, collect } = require('./bridge.cjs');
 const { createRuntimeControl } = require('./backend-control.cjs');
 const { normalizeNativeEntry, loadNativeCache, saveNativeCache, normalizeAllowedUids } = require('./native-cache.cjs');
@@ -35,6 +36,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     const { createMonitor } = require('../monitor/store.cjs');
     monitor = createMonitor({ root });
   } catch { log('monitor-unavailable'); }
+  const cacheSupport = createCacheSupport({ root });
   const recordMetrics = data => {
     if (!monitor) return;
     try { monitor.record(data); } catch {}
@@ -251,7 +253,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
           response.on('close', () => { if (!response.writableFinished) abort.abort(); });
           log('inference', { model: route.model, effort: route.effort, tools: chat.tools.map(t => t.name) });
           await serveChat({ request: chat, route, provider, res: response, signal: abort.signal,
-            log: ({ event, ...data }) => log(event, data), onMetrics: recordMetrics });
+            log: ({ event, ...data }) => log(event, data), onMetrics: recordMetrics, cacheSupport });
           return;
         }
       }

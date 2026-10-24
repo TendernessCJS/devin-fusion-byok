@@ -10,7 +10,7 @@ const { randomUUID } = require('node:crypto');
 const { frame } = require('./wire.cjs');
 const { textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk } = require('./native-chat-codec.cjs');
 const { createTracker } = require('./tracker.cjs');
-const { anthropicHeaders, createAnthropicAdapter } = require('./anthropic.cjs');
+const { anthropicHeaders, createAnthropicAdapter, stripCacheControl } = require('./anthropic.cjs');
 const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem, sizeBucket } = require('./state-envelope.cjs');
 const { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody } = require('./provider-request.cjs');
 const { readErrorDetail, parseEvent, events, usageSnapshot } = require('./provider-events.cjs');
@@ -245,7 +245,16 @@ function transportDetail(err) {
   return [...new Set(parts.filter(Boolean))].join('/');
 }
 
-async function serveChat({ request, route, provider, res, signal, log = () => {}, timeouts = {}, onMetrics = () => {} }) {
+// True when the request body carries any explicit cache breakpoint; only the
+// Anthropic body builder emits them, so the 400 degrade below can safely test
+// for their presence instead of tracking them out of band.
+function hasCacheControl(body) {
+  const marked = list => Array.isArray(list) && list.some(block => block && typeof block === 'object' && block.cache_control !== undefined);
+  if (marked(body?.tools) || (Array.isArray(body?.system) && marked(body.system))) return true;
+  return Array.isArray(body?.messages) && body.messages.some(message => marked(message?.content));
+}
+
+async function serveChat({ request, route, provider, res, signal, log = () => {}, timeouts = {}, onMetrics = () => {}, cacheSupport = null }) {
   const id = randomUUID();
   const metrics = createTracker({ id, route, provider });
   let outcome = 'error', outcomeCode = null;
@@ -315,10 +324,11 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
   try {
     const { url, chat, anthropic } = endpoint(provider);
     const replay = { replayed: 0, bytes: 0, items: 0, mismatch: 0, unparsable: 0, oversize: 0 };
+    const cacheBreakpoints = cacheSupport ? Boolean(cacheSupport.enabledFor(provider)) : false;
     let body = buildRequestBody(request, route, provider, stat => {
       if (stat.outcome === 'replayed') { replay.replayed += 1; replay.bytes = Math.max(replay.bytes, stat.bytes); replay.items = Math.max(replay.items, stat.items || 0); }
       else if (stat.outcome in replay) replay[stat.outcome] += 1;
-    });
+    }, { cacheBreakpoints });
     if (replay.replayed) record({ event: 'state-envelope-replayed', model: route.model, bytes: replay.bytes, bucket: sizeBucket(replay.bytes), items: replay.items });
     if (replay.mismatch + replay.unparsable + replay.oversize > 0) record({ event: 'state-envelope-replay-failed', model: route.model, mismatch: replay.mismatch, unparsable: replay.unparsable, oversize: replay.oversize });
     // Pre-flight: a turn with no non-whitespace text, no attachment and no
@@ -423,6 +433,16 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
         body = stripped;
         upstream = await send(body);
         record({ event: 'provider-degraded', model: route.model, reason: 'responses-state' });
+      } else if (anthropic && cacheBreakpoints && hasCacheControl(body)) {
+        // A 400 recoverable only by stripping the breakpoint proves the marker
+        // caused it — that success is what marks the provider. A retry that
+        // still fails has a different cause and must not disable anything.
+        body = stripCacheControl(body);
+        upstream = await send(body);
+        if (upstream.ok) {
+          cacheSupport.disable(provider);
+          record({ event: 'cache-breakpoint-disabled', model: route.model, reason: '400' });
+        }
       }
     }
     clearTimer();

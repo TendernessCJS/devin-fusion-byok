@@ -58,8 +58,8 @@ function contentOf(message, chat) {
   return parts;
 }
 
-function buildRequestBody(request, route, provider, onState = () => {}) {
-  if (isAnthropicFormat(provider.apiFormat)) return buildAnthropicBody(request, route, provider);
+function buildRequestBody(request, route, provider, onState = () => {}, options = {}) {
+  if (isAnthropicFormat(provider.apiFormat)) return buildAnthropicBody(request, route, provider, options);
   const chat = isChatFormat(provider.apiFormat);
   const messages = [];
   // History tool calls flagged custom must round-trip as custom_tool_call items,

@@ -16,6 +16,12 @@ const FOREIGN_STATE_PREFIX = 'dfbyok-';
 // state envelope, distinguished by prefix.
 const REDACTED_PREFIX = 'dfbyok-redacted-v1:';
 
+// Anthropic has no prompt_cache_key equivalent; prompt caching needs an
+// explicit ephemeral breakpoint. One marker on the last cacheable block of
+// the penultimate message reuses the shared prefix — the final message is
+// the new turn content, so a breakpoint there buys nothing.
+const CACHEABLE_BLOCK = new Set(['text', 'tool_result', 'tool_use', 'image', 'document']);
+
 function isAnthropicFormat(format = '') { return format === 'anthropic'; }
 
 function anthropicHeaders(apiKey) {
@@ -54,7 +60,7 @@ function toolInput(args) {
   } catch { return {}; }
 }
 
-function buildAnthropicBody(request, route, provider) {
+function buildAnthropicBody(request, route, provider, options = {}) {
   const system = request.systemPrompt ? [request.systemPrompt] : [];
   const messages = [];
   const push = (role, blocks) => {
@@ -105,7 +111,35 @@ function buildAnthropicBody(request, route, provider) {
     if (request.disableParallelToolCalls === true && body.tool_choice?.type !== 'none')
       body.tool_choice = { ...(body.tool_choice || { type: 'auto' }), disable_parallel_tool_use: true };
   }
+  if (options.cacheBreakpoints === true && request.promptCacheKey && messages.length >= 2) {
+    const blocks = messages.at(-2).content;
+    for (let index = blocks.length - 1; index >= 0; index--) {
+      if (CACHEABLE_BLOCK.has(blocks[index]?.type)) {
+        blocks[index].cache_control = { type: 'ephemeral' };
+        break;
+      }
+    }
+  }
   return body;
+}
+
+// Returns a copy without any cache_control markers; the input stays untouched
+// so the original request body can still be compared or logged as sent.
+function stripCacheControl(body) {
+  const cleanBlock = block => {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) return block;
+    const { cache_control: _cacheControl, ...rest } = block;
+    return rest;
+  };
+  const stripped = { ...body };
+  if (Array.isArray(body.tools)) stripped.tools = body.tools.map(cleanBlock);
+  if (Array.isArray(body.system)) stripped.system = body.system.map(cleanBlock);
+  if (Array.isArray(body.messages)) {
+    stripped.messages = body.messages.map(message => (message && typeof message === 'object'
+      ? { ...message, content: Array.isArray(message.content) ? message.content.map(cleanBlock) : message.content }
+      : message));
+  }
+  return stripped;
 }
 
 // ACP has no pause semantics, so pause_turn still ends as a normal stop, but
@@ -192,4 +226,4 @@ function createAnthropicAdapter() {
   };
 }
 
-module.exports = { ANTHROPIC_VERSION, isAnthropicFormat, anthropicHeaders, buildAnthropicBody, createAnthropicAdapter };
+module.exports = { ANTHROPIC_VERSION, isAnthropicFormat, anthropicHeaders, buildAnthropicBody, stripCacheControl, createAnthropicAdapter };
