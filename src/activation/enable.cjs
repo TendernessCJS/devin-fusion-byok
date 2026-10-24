@@ -24,6 +24,8 @@ function loopbackExemption(vscode) {
   return typeof proxy === 'string' && proxy.trim() ? '127.0.0.1,localhost,::1' : null;
 }
 
+const { checkNativeContract } = require('./native-contract.cjs');
+
 function installEnable({ deps, shared }) {
   const { lifecycle, config, vscode, context, log, catalog, nativeMain } = deps;
   let enableQueue = Promise.resolve();
@@ -134,6 +136,13 @@ function installEnable({ deps, shared }) {
     catch { log('acp-observer-error'); }
     shared.startNativeSync();
     log('activated', { nativeVersion: native.packageJSON.version, storage: deps.root });
+    // Post-activation drift probe: async and unobserved by the flow; the
+    // result is surfaced through `lifecycle.nativeContract` for the panel.
+    void checkNativeContract({
+      extensionPath: native.extensionPath,
+      cacheFile: path.join(deps.root, 'native-contract.json'),
+      log
+    }).then(result => { lifecycle.nativeContract = result; }).catch(() => {});
   }
 }
 

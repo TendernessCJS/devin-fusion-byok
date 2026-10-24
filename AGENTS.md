@@ -44,6 +44,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/catalog-and-picker.md` | 改 picker 可见性契约、角色白名单、陈旧条目判定与清理、推送门控、`nativeFamilies`、维度 order |
 | `.devin/rules/context-and-compaction.md` | 改声明的上下文窗口（ModelInfo `f4`/`maxTokens`）、或怀疑「是不是扩展触发了压缩」 |
 | `.devin/rules/native-observation-and-cli-cache.md` | 改原生目录观测与缓存、CLI 缓存原地重写、配置键分类清理 |
+| `.devin/rules/native-contract-probe.md` | 改探针标记表、缓存判定，或排查「Devin 升级后插件静默失效」时必读 |
 | `.devin/rules/config-and-storage.md` | 改 config.json 读写、面板提交、损坏恢复 |
 | `.devin/rules/monitor-and-panel.md` | 改用量记录/归属/时间筛选、面板 webview 样式、busy 锁定、state 去重与焦点保留 |
 | `.devin/rules/release-contract.md` | 改自更新与发布契约（资产名、tag、digest、`updateProxy`、重启 helper） |

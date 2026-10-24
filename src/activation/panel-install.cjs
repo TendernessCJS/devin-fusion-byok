@@ -48,6 +48,7 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     refreshCliCaches: () => cacheSync.refresh(), cliCacheStatus: () => shared.cliCacheReport,
     refreshDesktopCatalog: async () => { lifecycle.publication?.changed({ force: true }); await shared.management?.publish(); },
     desktopCatalogStatus: () => lifecycle.publication?.status() || null,
+    nativeContract: () => lifecycle.nativeContract || null,
     health: readHealth,
     selectFusion: shared.saveFusionChoice,
     afterChange });

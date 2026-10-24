@@ -172,7 +172,26 @@ function createSettingsView(ui) {
           segments.push(text);
         }
         if (coverage.dynamic) segments.push('检测到新代际 v' + Math.max(...gens.filter(g => g > 6)) + '，格式兼容，可动态处理');
+        // Multiple model_configs identities can coexist on disk while the CLI
+        // only reads one; surface the per-identity own count so the split is
+        // observable. A single identity is the common case — stay quiet.
+        const configs = (coverage.generations || []).filter(entry => /^model_configs_v\d+\.[0-9a-f]+\.bin$/.test(entry.name || ''))
+          .sort((a, b) => (a.fetchedAt || 0) - (b.fetchedAt || 0));
+        if (configs.length >= 2) {
+          segments.push(configs.map(entry =>
+            '身份 ' + entry.name.split('.')[1].slice(0, 6) + ' 自有 ' + (entry.ownCount ?? 0)).join(' / '));
+        }
       }
+    }
+    const contract = state().nativeContract;
+    if (contract && contract.status === 'drift') {
+      const ARTIFACT_NAMES = { cli: 'CLI', ls: 'LS', desktop: '桌面主 bundle', chat: '聊天 bundle' };
+      const MARKER_NAMES = { 'artifact-missing': '文件不存在', 'too-large': '文件过大' };
+      const missing = Object.entries(contract.missing || {}).map(([artifact, markers]) =>
+        (ARTIFACT_NAMES[artifact] || artifact) + ' 缺少 ' +
+        markers.map(marker => MARKER_NAMES[marker] || marker).join('、')).join('，');
+      segments.push('原生契约可能已变化：' + missing +
+        (contract.appVersion ? '（Devin ' + contract.appVersion + '）' : ''));
     }
     const status = state().desktopCatalog;
     const catalogText = !status || typeof status !== 'object' ? '' :

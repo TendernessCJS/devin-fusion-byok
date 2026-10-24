@@ -59,13 +59,14 @@ function modelPatch(input, previous) {
   if (model.maxOutputTokens > model.contextWindow) fail('最大输出长度不能超过上下文长度。');
   return model;
 }
-function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, refreshDesktopCatalog = null, desktopCatalogStatus = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown', health = () => null }) {
+function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, refreshDesktopCatalog = null, desktopCatalogStatus = () => null, nativeContract = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown', health = () => null }) {
   let queue = Promise.resolve();
   let pendingImport;
   const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey]);
   const state = () => {
     const config = read(), status = nativeCatalogStatus();
     const result = publicState(config, nativeModels(), autoContinueStatus(), status, cliCacheStatus(), nativeAllowedUids());
+    result.nativeContract = nativeContract() || null;
     result.nativeCatalogStatus = status;
     result.backendStatus = backendStatus();
     result.desktopCatalog = desktopCatalogStatus();

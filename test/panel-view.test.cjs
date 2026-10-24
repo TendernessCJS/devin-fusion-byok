@@ -195,6 +195,33 @@ test('the settings tab exposes the CLI cache refresh and reports the last run', 
   assert.ok(posts.some(message => message.type === 'refreshCliCaches'), 'the button asks the host to refresh');
 });
 
+
+test('the cache report splits own counts by identity only when two coexist', () => {
+  const { byId, receive } = panel();
+  const gens = (items) => ({ dirState: 'ok', supported: items.length, legacy: [], unsupported: [],
+    generations: items, current: { generation: 6, name: items[items.length - 1].name, fetchedAt: items[items.length - 1].fetchedAt },
+    dynamic: false });
+  const base = { at: '2026-10-16T12:00:00.000Z', checked: 2, refreshed: [], skipped: [], errors: [] };
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { ...base, coverage: gens([
+    { generation: 6, name: 'model_configs_v6.22718a016192f32f.bin', fetchedAt: 1, own: true, ownCount: 153 },
+    { generation: 6, name: 'model_configs_v6.c87a25aaaaaaaaaa.bin', fetchedAt: 2, own: false, ownCount: 0 }]) } } } });
+  assert.match(textOf(byId('cache-report')), /身份 22718a 自有 153 \/ 身份 c87a25 自有 0/);
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { ...base, coverage: gens([
+    { generation: 6, name: 'model_configs_v6.22718a016192f32f.bin', fetchedAt: 1, own: true, ownCount: 153 }]) } } } });
+  assert.doesNotMatch(textOf(byId('cache-report')), /身份/, 'a single identity stays quiet');
+});
+
+test('a contract drift result renders a warning while ok stays silent', () => {
+  const { byId, receive } = panel();
+  const cliCache = { at: '2026-10-16T12:00:00.000Z', checked: 1, refreshed: [], skipped: [], errors: [] };
+  receive({ data: { type: 'state', state: { ...state(), cliCache,
+    nativeContract: { status: 'drift', appVersion: '3.11.216', missing: { cli: ['GetCliModelConfigs'] } } } } });
+  assert.match(textOf(byId('cache-report')), /原生契约可能已变化：CLI 缺少 GetCliModelConfigs（Devin 3\.11\.216）/);
+  receive({ data: { type: 'state', state: { ...state(), cliCache,
+    nativeContract: { status: 'ok', appVersion: '3.11.216' } } } });
+  assert.doesNotMatch(textOf(byId('cache-report')), /原生契约/);
+});
+
 test('an injection failure in the cache report reads as untouched, not as up to date', () => {
   const { byId, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-16T12:00:00.000Z', checked: 2, refreshed: [],
@@ -548,4 +575,27 @@ test('a retire-withheld skip renders the deferred-cleanup wording', () => {
     refreshed: [], errors: [], skipped: [{ name: 'model_configs_v6.aaaaaaaaaaaaaaaa.bin', reason: 'retire-withheld' }],
     coverage: { dirState: 'ok', supported: 1, legacy: [], unsupported: [], generations: [], current: null, dynamic: false } } } } });
   assert.match(textOf(byId('cache-report')), /官方目录未就绪，暂不清理/);
+});
+
+test('a reused drift verdict still renders the contract warning', () => {
+  const { byId, receive } = panel();
+  const cliCache = { at: '2026-10-16T12:00:00.000Z', checked: 1, refreshed: [], skipped: [], errors: [] };
+  receive({ data: { type: 'state', state: { ...state(), cliCache,
+    nativeContract: { status: 'drift', reused: true, appVersion: '9.9.9', missing: { cli: ['GetCliModelConfigs'] } } } } });
+  assert.match(textOf(byId('cache-report')), /原生契约可能已变化：CLI 缺少 GetCliModelConfigs（Devin 9\.9\.9）/,
+    'drift must not disappear just because the result came from cache');
+  receive({ data: { type: 'state', state: { ...state(), cliCache,
+    nativeContract: { status: 'ok', reused: true, appVersion: '9.9.9' } } } });
+  assert.doesNotMatch(textOf(byId('cache-report')), /原生契约/);
+});
+
+test('bundle-level drift markers render readable artifact and marker names', () => {
+  const { byId, receive } = panel();
+  const cliCache = { at: '2026-10-16T12:00:00.000Z', checked: 1, refreshed: [], skipped: [], errors: [] };
+  receive({ data: { type: 'state', state: { ...state(), cliCache,
+    nativeContract: { status: 'drift', appVersion: '3.11.216',
+      missing: { desktop: ['devin.refreshUserStatus'], chat: ['artifact-missing'] } } } } });
+  const report = textOf(byId('cache-report'));
+  assert.match(report, /桌面主 bundle 缺少 devin.refreshUserStatus/);
+  assert.match(report, /聊天 bundle 缺少 文件不存在/);
 });
