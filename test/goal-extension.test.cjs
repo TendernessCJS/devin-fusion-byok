@@ -11,7 +11,7 @@ const { createSandboxLoader } = require('./helpers/sandbox.cjs');
 
 const filename = path.resolve(__dirname, '../src/extension.cjs');
 const realRequire = createRequire(filename);
-const goalSource = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cjs'), 'utf8');
+const goalSource = fs.readFileSync(path.join(__dirname, '../src/goal/continue-hook.cjs'), 'utf8');
 const autoSource = fs.readFileSync(path.join(__dirname, '../src/runtime/host/auto-continue.cjs'), 'utf8');
 const NATIVE_MAIN = '/native/main.js';
 const next = () => new Promise(resolve => setImmediate(resolve));
@@ -113,7 +113,7 @@ function fixture(t) {
     './runtime/host/cli-cache.cjs': { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
       inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
       refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } },
-    './goal/continue.cjs': loadWithStubbedVscode(goalSource, 'goal/continue.cjs', api),
+    './goal/continue-hook.cjs': loadWithStubbedVscode(goalSource, 'goal/continue-hook.cjs', api),
     './runtime/host/auto-continue.cjs': loadWithStubbedVscode(autoSource, 'auto-continue.cjs', api),
     './panel/manager.cjs': { ...realRequire('./panel/manager.cjs'), createManager: options => realRequire('./panel/manager.cjs').createManager(options) }
   };

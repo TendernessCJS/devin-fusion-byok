@@ -6,14 +6,14 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const vm = require('node:vm');
-const { createGoalController } = require('../src/goal/state.cjs');
-const { installGoalContinue } = require('../src/goal/continue.cjs');
+const { createGoalController } = require('../src/goal/controller.cjs');
+const { installGoalContinue } = require('../src/goal/continue-hook.cjs');
 const store = require('../src/goal/store.cjs');
 const reportCli = require('../src/goal/report.cjs');
 
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
 const autoSource = fs.readFileSync(path.join(__dirname, '../src/runtime/host/auto-continue.cjs'), 'utf8');
-const goalSource = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cjs'), 'utf8');
+const goalSource = fs.readFileSync(path.join(__dirname, '../src/goal/continue-hook.cjs'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function loadModule(source, filename, api) {
@@ -66,7 +66,7 @@ function integration(t, protocolVersion) {
   const scheduler = fakeScheduler();
   const sessions = new Map([['s1', 'idle']]);
   const api = { registerConnection() { return { dispose() {} }; } };
-  const goal = loadModule(goalSource, 'goal/continue.cjs', api);
+  const goal = loadModule(goalSource, 'goal/continue-hook.cjs', api);
   const goalContinue = goal.installGoalContinue({ nativeMainPath: NATIVE_MAIN, isEnabled: () => true });
   const autoContinue = installAuto(scheduler, sessionId => goalContinue.hasActiveGoal(sessionId), api);
   const transport = {

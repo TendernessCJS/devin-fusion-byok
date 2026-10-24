@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '../src/goal/continue.cjs'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../src/goal/continue-hook.cjs'), 'utf8');
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
 
 function fixture() {
@@ -31,7 +31,7 @@ function fixture() {
       }
       assert.fail('unexpected require ' + name);
     }
-  }, { filename: 'goal/continue.cjs' });
+  }, { filename: 'goal/continue-hook.cjs' });
   return { api, original, logs, registrations, registration, install: options => module.exports.installGoalContinue({ nativeMainPath: NATIVE_MAIN, log: (e, d) => logs.push({ e, d }), ...options }) };
 }
 function connector(overrides = {}) {

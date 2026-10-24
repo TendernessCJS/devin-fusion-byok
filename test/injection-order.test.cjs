@@ -1,7 +1,7 @@
 'use strict';
 
 // R0 structural guardrail for the ACP monkeypatch layers: three independent
-// installers (goal/continue, runtime/auto-continue, runtime/acp-observer) each
+// installers (goal/continue-hook, runtime/auto-continue, runtime/acp-observer) each
 // wrap the same `api.registerConnection`. The current invariant is that
 // disposing in exact reverse install order restores every patch. Disposing in
 // `deactivate()` order (auto -> goal -> observer) leaves stale wrappers today;
@@ -71,7 +71,7 @@ function fixture() {
   const originalSend = connector.sendRequest;
   const originalForward = connector.forwardClientRequest;
   const descriptor = Object.getOwnPropertyDescriptor(api, 'registerConnection');
-  const goal = loadModule('goal/continue.cjs', api);
+  const goal = loadModule('goal/continue-hook.cjs', api);
   const auto = loadModule('runtime/host/auto-continue.cjs', api);
   const observer = loadModule('runtime/host/acp-observer.cjs', api);
   function installAll() {

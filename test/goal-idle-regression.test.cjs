@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { createGoalController } = require('../src/goal/state.cjs');
+const { createGoalController } = require('../src/goal/controller.cjs');
 const store = require('../src/goal/store.cjs');
 const reportCli = require('../src/goal/report.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -17,7 +17,7 @@ function fixture(t, protocolVersion) {
   const api = { registerConnection() { return { dispose() {} }; } };
   const module = { exports: {} };
   const createRequire = () => () => ({ windsurfAcp: api });
-  const source = fs.readFileSync(process.env.GOAL_CONTINUE_TEST_SOURCE || path.resolve(__dirname, '../src/goal/continue.cjs'), 'utf8');
+  const source = fs.readFileSync(process.env.GOAL_CONTINUE_TEST_SOURCE || path.resolve(__dirname, '../src/goal/continue-hook.cjs'), 'utf8');
   vm.runInNewContext(source, {
     module, exports: module.exports,
     require(name) {
@@ -31,7 +31,7 @@ function fixture(t, protocolVersion) {
       }
       assert.fail('unexpected require ' + name);
     }
-  }, { filename: 'goal/continue.cjs' });
+  }, { filename: 'goal/continue-hook.cjs' });
   const transport = module.exports.installGoalContinue({ nativeMainPath: '/isolated/native.js', isEnabled: () => true });
   const timers = new Map();
   let timerId = 0;

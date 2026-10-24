@@ -86,7 +86,7 @@ function fixture(t, initial = {}) {
     './runtime/host/native-models.cjs': { readNativeModels: options => nativeRead(options),
       isUpstreamUid: realRequire('./runtime/host/native-models.cjs').isUpstreamUid,
       pushNativeModels: options => { pushes.push(options); return Promise.resolve(pushResult); } },
-    './goal/continue.cjs': { installGoalContinue: () => null },
+    './goal/continue-hook.cjs': { installGoalContinue: () => null },
     './runtime/host/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
       return { status: () => ({}), reset() {}, cancelSession: () => false, dispose() {} }; } },
     './runtime/host/acp-observer.cjs': { installAcpObserver: () => ({ dispose() { acpDisposed += 1; } }) },

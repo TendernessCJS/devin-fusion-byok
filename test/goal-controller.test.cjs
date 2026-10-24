@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { createGoalController } = require('../src/goal/state.cjs');
+const { createGoalController } = require('../src/goal/controller.cjs');
 const store = require('../src/goal/store.cjs');
 const reportCli = require('../src/goal/report.cjs');
 
