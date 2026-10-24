@@ -243,3 +243,52 @@ test('src/update.cjs stays a pure compatibility facade over update/updater.cjs',
   for (const key of ['compareVersions', 'parseVersion', 'releaseInfo', 'allowedUrl', 'requestBytes', 'verifyPackage', 'createUpdater', 'createUpdateHost'])
     assert.equal(facade[key], impl[key]);
 });
+
+test('createUpdateHost installs through execFile argv and never a shell string', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path'),
+    crypto = require('node:crypto'), { execFileSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-host-'));
+  const appRoot = path.join(dir, 'app');
+  fs.mkdirSync(path.join(appRoot, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(appRoot, 'bin', 'devin-desktop'), '#!/bin/sh\n');
+  const storage = path.join(dir, 'storage');
+  // A real zip is required: verifyPackage runs the genuine /usr/bin/unzip.
+  const stage = path.join(dir, 'stage');
+  fs.mkdirSync(path.join(stage, 'extension'), { recursive: true });
+  fs.writeFileSync(path.join(stage, 'extension', 'package.json'),
+    JSON.stringify({ name: 'devin-fusion-byok', publisher: 'local', version: '9.9.9' }));
+  fs.writeFileSync(path.join(stage, 'extension.vsixmanifest'),
+    '<?xml version="1.0"?><PackageManifest><Identity Id="devin-fusion-byok" Publisher="local" Version="9.9.9"/></PackageManifest>');
+  const vsix = path.join(dir, 'devin-fusion-byok-9.9.9.vsix');
+  execFileSync('/usr/bin/zip', ['-q', '-r', vsix, '.'], { cwd: stage });
+  const bytes = fs.readFileSync(vsix);
+  const pkg = require('../package.json');
+  const releaseBody = JSON.stringify({ tag_name: 'v9.9.9', assets: [{ name: 'devin-fusion-byok-9.9.9.vsix',
+    size: bytes.length, digest: 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex'),
+    browser_download_url: `${PAGE}/download/v9.9.9/devin-fusion-byok-9.9.9.vsix` }] });
+  const calls = [];
+  const run = async (file, argv, options) => { calls.push([file, argv, options]); return { stdout: '', stderr: '' }; };
+  const { createUpdateHost } = require('../src/update/updater.cjs');
+  const updater = createUpdateHost({
+    vscode: { env: { appRoot },
+      commands: { registerCommand: () => ({ dispose() {} }), executeCommand: async () => undefined },
+      window: { showWarningMessage: async () => '安装更新', showInformationMessage: async () => undefined } },
+    context: { globalState: { get: (k, d) => d, update: async () => {} },
+      globalStorageUri: { fsPath: storage }, subscriptions: [] },
+    onChange() {}, proxy: () => '', run,
+    request: async url => url.includes('/download/') ? bytes : Buffer.from(releaseBody)
+  });
+  try {
+    await updater.check();
+    assert.equal(updater.snapshot().canInstall, true, 'a newer digest-verified release is installable');
+    await updater.installUpdate();
+    assert.equal(updater.snapshot().phase, 'installed');
+    assert.equal(calls.length, 1, 'install ran exactly once');
+    const [file, argv, options] = calls[0];
+    assert.ok(path.isAbsolute(file) && file.endsWith('/bin/devin-desktop'), 'argv0 is the packaged CLI path');
+    assert.ok(Array.isArray(argv), 'arguments must stay an array, never a shell string');
+    assert.equal(argv[0], '--install-extension');
+    assert.ok(path.isAbsolute(argv[1]) && argv[1].endsWith('.vsix'), 'argv1 is the downloaded package path');
+    assert.equal('shell' in options, false, 'no shell option may ever appear');
+  } finally { updater.dispose(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

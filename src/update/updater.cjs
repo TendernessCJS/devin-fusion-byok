@@ -124,13 +124,13 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
     dispose() { disposed = true; clearInterval(timer); abort?.abort(); }
   };
 }
-function createUpdateHost({ vscode, context, onChange, proxy }) {
+function createUpdateHost({ vscode, context, onChange, proxy, run = execFile, request }) {
   const cli = path.join(vscode.env?.appRoot || '', 'bin', 'devin-desktop');
   const supported = process.platform === 'darwin' && path.isAbsolute(cli) && fs.existsSync(cli);
   let updater;
-  updater = createUpdater({ currentVersion: require('../../package.json').version, globalState: context.globalState, storagePath: context.globalStorageUri.fsPath, onChange, proxy,
+  updater = createUpdater({ currentVersion: require('../../package.json').version, globalState: context.globalState, storagePath: context.globalStorageUri.fsPath, onChange, proxy, request,
     confirm: async state => await vscode.window.showWarningMessage(`安装 Fusion BYOK ${state.latestVersion}？不会自动重载当前窗口。`, { modal: true }, '安装更新') === '安装更新',
-    install: supported ? async ({ path: file }) => { await execFile(cli, ['--install-extension', file], { timeout: 120000, maxBuffer: 1024 * 1024 }); } : undefined,
+    install: supported ? async ({ path: file }) => { await run(cli, ['--install-extension', file], { timeout: 120000, maxBuffer: 1024 * 1024 }); } : undefined,
     notify: async state => { const action = await vscode.window.showInformationMessage(`Fusion BYOK ${state.latestVersion} 已发布。`, '查看更新', '忽略此版本'); if (action === '查看更新') await vscode.commands.executeCommand('devinFusionByok.openPanel'); else if (action === '忽略此版本') await updater.ignore(); }
   });
   const command = vscode.commands.registerCommand('devinFusionByok.checkUpdates', async () => { await updater.check({ force: true }); await vscode.commands.executeCommand('devinFusionByok.openPanel'); });
