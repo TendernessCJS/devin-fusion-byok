@@ -4,6 +4,14 @@ const { loadAcpApi, restoreMember, createAcpRegistry } = require('./acp-hook.cjs
 
 const INSTANCE = Symbol.for('devin-fusion-byok.acp-observer.v1');
 const METHODS = new Set(['session/new', 'session/load', 'session/resume', 'session/set_config_option']);
+// session/prompt is tracked separately from METHODS so the acp-models counters
+// stay untouched: a prompt settle only yields the turn diagnostic below.
+const TURN_METHOD = 'session/prompt';
+// Only a lowercase snake enum word is a real ACP code — anything else is
+// diagnostic noise and collapses to null rather than being logged.
+const ENUM = /^[a-z][a-z_]{0,39}$/;
+const enumValue = value => typeof value === 'string' && ENUM.test(value) ? value : null;
+const stopReasonOf = enumValue;
 
 function modelCounts(source, rpc) {
   const options = Array.isArray(source) ? source
@@ -29,8 +37,12 @@ function modelCounts(source, rpc) {
  * Observe future native ACP registrations without issuing agent requests.
  * Logs only method names and model counts; never requests, response bodies,
  * session IDs, labels, model UID values, metadata, or credentials.
+ * Additionally, each session/prompt settle is logged as `acp-turn` — only
+ * {stopReason, ok, code, durationMs}, all enum/boolean/number fields — so a
+ * turn that ends early can be attributed to max_turn_requests, end_turn or
+ * cancelled without ever seeing prompt text or tool output.
  */
-function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
+function installAcpObserver({ nativeMainPath, log = () => {}, onModels, now = Date.now } = {}) {
   if (typeof nativeMainPath !== 'string' || !nativeMainPath || typeof log !== 'function') {
     throw new TypeError('nativeMainPath and a log function are required');
   }
@@ -40,6 +52,7 @@ function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
   const registry = createAcpRegistry(api, { log });
   const records = new Map();
   let disposed = false, responses = 0, last = null, lastUpdate = null;
+  let turns = 0, lastTurn = null;
 
   function observe(response, rpc) {
     if (disposed) return;
@@ -71,6 +84,27 @@ function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
           if (result && typeof result.then === 'function') {
             result.then(value => { observe(value, rpc); }, () => {});
           } else observe(result, rpc);
+        }
+        if (!disposed && rpc === TURN_METHOD) {
+          const startedAt = now();
+          const settled = entry => {
+            if (disposed) return;
+            turns++;
+            lastTurn = entry;
+            try { log('acp-turn', entry); } catch (_) {}
+          };
+          if (result && typeof result.then === 'function') {
+            result.then(value => {
+              settled(Object.freeze({ stopReason: stopReasonOf(value?.stopReason), ok: true, code: null,
+                durationMs: Math.max(0, Math.round(now() - startedAt)) }));
+            }, error => {
+              settled(Object.freeze({ stopReason: null, ok: false, code: enumValue(error?.code),
+                durationMs: Math.max(0, Math.round(now() - startedAt)) }));
+            });
+          } else {
+            settled(Object.freeze({ stopReason: stopReasonOf(result?.stopReason), ok: true, code: null,
+              durationMs: Math.max(0, Math.round(now() - startedAt)) }));
+          }
         }
       } catch (_) { /* Preserve original return values, throws and rejections. */ }
       return result;
@@ -125,7 +159,7 @@ function installAcpObserver({ nativeMainPath, log = () => {}, onModels } = {}) {
 
   const handle = {
     get status() {
-      return Object.freeze({ state: disposed ? 'disposed' : 'observing', connections: records.size, responses, last, lastUpdate, shadowed: registry.shadowed() });
+      return Object.freeze({ state: disposed ? 'disposed' : 'observing', connections: records.size, responses, last, lastUpdate, turns, lastTurn, shadowed: registry.shadowed() });
     },
     dispose() {
       if (disposed) return;

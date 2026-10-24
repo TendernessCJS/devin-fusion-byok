@@ -79,8 +79,12 @@ test('never inspects authentication params or logs unrelated methods', async () 
     const request = { method, get params() { throw new Error('Request body must remain unread'); } };
     await connection.sendRequest(request);
   }
-  assert.equal(f.logs.length, 0);
+  // session/prompt is turn-diagnosed, never model-counted; the other methods
+  // produce nothing at all.
+  assert.deepEqual(f.logs.map(entry => entry.event), ['acp-turn']);
+  assert.deepEqual(Object.keys(f.logs[0].counts).sort(), ['code', 'durationMs', 'ok', 'stopReason']);
   assert.equal(handle.status.responses, 0);
+  assert.equal(handle.status.turns, 1);
   assert.equal(f.calls.length, 4);
 });
 
@@ -241,4 +245,81 @@ test('unrelated session/update notifications pass through without observation or
   assert.equal(handle.status.responses, 0);
   assert.equal(handle.status.lastUpdate, null);
   handle.dispose();
+});
+
+test('a resolved session/prompt logs acp-turn with only the enum verdict fields', async () => {
+  const f = fixture(), handle = f.install();
+  const resolved = Promise.resolve({ stopReason: 'max_turn_requests', sessionId: 'private-session',
+    _meta: { secret: 'x' }, usage: { tokens: 9 } });
+  const connection = f.connection(resolved);
+  f.api.registerConnection(connection);
+  await connection.sendRequest({ method: 'session/prompt' });
+  assert.equal(f.logs.length, 1);
+  const entry = f.logs[0];
+  assert.equal(entry.event, 'acp-turn');
+  assert.deepEqual(Object.keys(entry.counts).sort(), ['code', 'durationMs', 'ok', 'stopReason']);
+  assert.equal(entry.counts.stopReason, 'max_turn_requests');
+  assert.equal(entry.counts.ok, true);
+  assert.equal(entry.counts.code, null);
+  assert.equal(typeof entry.counts.durationMs, 'number');
+  const serialized = JSON.stringify(f.logs);
+  assert.ok(!serialized.includes('private-session') && !serialized.includes('secret'),
+    'no session, metadata or usage content is ever logged');
+});
+
+test('a malformed or absent stopReason collapses to null and never leaks', async () => {
+  const f = fixture(), handle = f.install();
+  for (const stopReason of [undefined, { complex: 'private' }, 'SHOUTING', 'has space', 'has"quote',
+      'way_too_long_' + 'x'.repeat(60)]) {
+    const connection = f.connection(Promise.resolve({ stopReason }));
+    f.api.registerConnection(connection);
+    await connection.sendRequest({ method: 'session/prompt' });
+  }
+  assert.equal(f.logs.length, 6);
+  assert.ok(f.logs.every(entry => entry.counts.stopReason === null && entry.counts.ok === true && entry.counts.code === null));
+  const serialized = JSON.stringify(f.logs);
+  for (const forbidden of ['private', 'SHOUTING', 'has space', 'has"quote']) assert.ok(!serialized.includes(forbidden), forbidden);
+});
+
+test('a rejected session/prompt logs ok:false with the error code and the rejection still reaches the caller', async () => {
+  const f = fixture(), handle = f.install();
+  const boom = Object.assign(new Error('boom'), { code: 'cancelled' });
+  const connection = f.connection(Promise.reject(boom));
+  f.api.registerConnection(connection);
+  await assert.rejects(connection.sendRequest({ method: 'session/prompt' }), error => error === boom,
+    'the original rejection object is rethrown unchanged');
+  assert.equal(f.logs.length, 1);
+  assert.equal(f.logs[0].counts.ok, false);
+  assert.equal(f.logs[0].counts.code, 'cancelled');
+  assert.equal(f.logs[0].counts.stopReason, null);
+});
+
+test('session/new never produces acp-turn and turn timing honours the injected clock', async () => {
+  let tick = 100;
+  const f = fixture();
+  const handle = f.install({ now: () => (tick += 7) });
+  // A model-list method is not a turn: no acp-turn, existing counts intact.
+  const conn = f.connection(Promise.resolve({ configOptions: [] }));
+  f.api.registerConnection(conn);
+  await conn.sendRequest({ method: 'session/new' });
+  assert.equal(f.logs.filter(e => e.event === 'acp-turn').length, 0);
+  assert.equal(handle.status.responses, 1);
+  assert.equal(handle.status.turns, 0);
+  // Deterministic clock: two now() calls 7 apart → durationMs is exact.
+  const conn2 = f.connection(Promise.resolve({ stopReason: 'end_turn' }));
+  f.api.registerConnection(conn2);
+  await conn2.sendRequest({ method: 'session/prompt' });
+  assert.equal(f.logs.at(-1).counts.durationMs, 7);
+  // After dispose a pending settle is inert.
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const conn3 = f.connection(pending);
+  f.api.registerConnection(conn3);
+  conn3.sendRequest({ method: 'session/prompt' });
+  handle.dispose();
+  release({ stopReason: 'end_turn' });
+  await pending.catch(() => {});
+  assert.equal(f.logs.filter(e => e.event === 'acp-turn').length, 1, 'no post-dispose turn log');
+  assert.equal(handle.status.turns, 1);
+  assert.deepEqual(handle.status.lastTurn, f.logs.at(-1).counts);
 });
