@@ -39,7 +39,7 @@ test('monitor browser script compiles, uses text nodes, and preserves zero versu
   const detailed = new Map(byId('monitor-summary').children.map(tile => [tile.children[1].textContent, tile.children[0].textContent]));
   assert.equal(detailed.get('平均首输出 s'), '0'); assert.equal(detailed.get('平均正文首字 s'), '0.025');
   assert.equal(byId('monitor-status').hidden, true);
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   assert.match(html, /id="usage-monitor"/); assert.match(html, /connect-src 'none'/);
   new vm.Script(html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]);
 });
@@ -79,7 +79,7 @@ test('session options show titles and relative times instead of internal slugs',
   byId('monitor-session').value = 'puddle-airmail';
   byId('monitor-session').listeners.change();
   assert.equal(byId('monitor-session').title, '审查全局规则 · 30 分钟前', 'select tooltip follows the chosen option');
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   assert.match(html, /\.monitor-controls select \{[^}]*text-overflow: ellipsis/, 'the session selector truncates with an ellipsis');
 });
 test('long titles reach the option and select tooltips intact, empty titles still fall back', () => {
@@ -162,7 +162,7 @@ test('an unchanged session list does not rebuild the selector', () => {
 });
 
 test('usage monitor renders once inside the usage tab', () => {
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   const monitor = html.indexOf('id="usage-monitor"');
   assert.equal(html.indexOf('id="usage-monitor"', monitor + 1), -1, 'usage monitor markup appears once');
   assert.ok(monitor > html.indexOf('id="view-usage"'), 'usage monitor sits in the usage tab');
@@ -788,7 +788,7 @@ test('provider and model selects populate from records and narrow the table', ()
 });
 
 test('the markup offers 今天 and the two filter selects', () => {
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   assert.match(html, /<option value="today">今天<\/option>/);
   assert.match(html, /id="monitor-provider"/);
   assert.match(html, /id="monitor-model"/);

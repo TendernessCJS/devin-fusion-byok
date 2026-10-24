@@ -9,9 +9,11 @@ function escapeAttribute(value) {
 function domHelpersSource(indent = '') {
   const source = `const byId = (id, prefix = '') => document.getElementById(prefix + id);
 const text = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+const FORBIDDEN_ATTRS = new Set(['href', 'src', 'srcset', 'action', 'formaction', 'srcdoc', 'data', 'poster', 'background', 'xlink:href']);
 const element = (tag, attributes, ...children) => {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attributes || {})) {
+    if (FORBIDDEN_ATTRS.has(key.toLowerCase())) throw new Error('dom: forbidden attribute ' + key);
     if (key === 'class') node.className = value;
     else if (key === 'text') node.textContent = String(value ?? '');
     else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);

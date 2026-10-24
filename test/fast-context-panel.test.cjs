@@ -13,7 +13,7 @@ const { readEnabled, writeEnabled, storageDir } = require('../src/fast-context/s
 const tempDir = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fc-panel-')));
 
 test('the control panel tab is named for everything it offers, not just code search', () => {
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   assert.match(html, /data-tab="fastcontext"[^>]*>对外提供 MCP<\/button>/);
   assert.doesNotMatch(html, />Fast Context<\/button>/);
   assert.match(html, /<h2>对外提供 MCP<\/h2>/);
@@ -37,7 +37,7 @@ test('the control panel tab is named for everything it offers, not just code sea
 });
 
 test('the account check button runs the self check and renders each capability', async () => {
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   const script = html.slice(html.lastIndexOf('<script'), html.lastIndexOf('</script>'));
   const listeners = {}, nodes = {}, posted = [], windowListeners = [];
   const node = id => nodes[id] ||= { id, dataset: {}, textContent: '', disabled: false, checked: false, value: '', title: '', className: '',

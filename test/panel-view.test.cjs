@@ -38,7 +38,7 @@ function collect(node, tag, predicate = () => true) {
   return found;
 }
 
-function panel(controlTags = {}, script = renderPanel({ nonce: 'safe', cspSource: 'test:' }).match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]) {
+function panel(controlTags = {}, script = renderPanel({ nonce: 'safe' }).match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]) {
   const elements = new Map(), posts = [], listeners = [];
   let focused = true;
   const byId = id => { if (!elements.has(id)) { const node = new Element(controlTags[id] || 'div'); node.ownerDocument = document; elements.set(id, node); } return elements.get(id); };
@@ -67,7 +67,7 @@ const state = () => ({ enabled: true, providers: [{ id: 'cpa', name: 'CPA', base
   autoContinueStatus: 'unavailable' });
 
 test('all controls share the --control-h height token so rows align', () => {
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   assert.match(html, /--control-h: 28px/);
   assert.match(html, /button \{ min-height: var\(--control-h\)/);
   assert.match(html, /input:not\(\[type="checkbox"\]\), select \{ min-height: var\(--control-h\)/);
@@ -79,7 +79,7 @@ test('all controls share the --control-h height token so rows align', () => {
 });
 
 test('the tab strip puts models first and Fusion second', () => {
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   assert.deepEqual([...html.matchAll(/data-tab="([a-z]+)"/g)].map(match => match[1]),
     ['models', 'fusion', 'usage', 'goal', 'fastcontext', 'settings']);
   const first = html.indexOf('id="view-models"'), second = html.indexOf('id="view-fusion"');
@@ -109,7 +109,7 @@ test('the Fusion tab hosts the role grids that drive the official Fusion card', 
   assert.ok(fold, 'deselected official models move under the fold');
   assert.deepEqual(titles(fold), ['Claude Haiku 5.5'], 'the fold carries the rest of the official models');
   assert.match(fold.children[0].textContent, /更多官方模型（1）/);
-  assert.doesNotMatch(renderPanel({ nonce: 'safe', cspSource: 'test:' }), /id="role-group"/,
+  assert.doesNotMatch(renderPanel({ nonce: 'safe' }), /id="role-group"/,
     'the role picker no longer lives in settings');
 });
 
@@ -365,7 +365,7 @@ test('the auto-continue heading lives inside the same card as its two switches',
 });
 
 test('the cache group exposes one toolbar with a primary and a secondary button', () => {
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   const toolbar = html.match(/<div class="cache-toolbar">([\s\S]*?)<\/div>/);
   assert.ok(toolbar, 'the cache group carries a single .cache-toolbar');
   assert.match(toolbar[1], /<button id="refresh-cache" type="button">刷新缓存<\/button>/);
@@ -506,7 +506,7 @@ test('a second state push does not stack listeners: one click still posts one re
 });
 
 test('the harness detects a duplicated static bind through registration counts', () => {
-  const source = renderPanel({ nonce: 'safe', cspSource: 'test:' }).match(/<script[^>]*>([\s\S]*?)<\/script>/)[1];
+  const source = renderPanel({ nonce: 'safe' }).match(/<script[^>]*>([\s\S]*?)<\/script>/)[1];
   const duplicated = source.replace('modelsView.bind();', 'modelsView.bind(); modelsView.bind();');
   assert.notEqual(duplicated, source, 'the in-memory patch must hit the real bind site');
   const { byId, listeners } = panel({}, duplicated);
@@ -598,4 +598,30 @@ test('bundle-level drift markers render readable artifact and marker names', () 
   const report = textOf(byId('cache-report'));
   assert.match(report, /桌面主 bundle 缺少 devin.refreshUserStatus/);
   assert.match(report, /聊天 bundle 缺少 文件不存在/);
+});
+
+test('element() refuses attribute keys that could navigate or load resources', () => {
+  const { domHelpersSource } = require('../src/panel/dom.cjs');
+  const node = () => ({ attributes: {}, children: [], setAttribute(k, v) { this.attributes[k] = v; },
+    addEventListener(n, f) { (this.listeners = this.listeners || []).push([n, f]); },
+    append(child) { this.children.push(child); } });
+  const document = { createElement: node, createTextNode: t => t };
+  const element = new Function('document', `${domHelpersSource()}
+return element;`)(document);
+  for (const key of ['href', 'src', 'srcset', 'action', 'formaction', 'srcdoc', 'data', 'poster', 'background'])
+    assert.throws(() => element('a', { [key]: 'x' }), new RegExp('forbidden attribute ' + key.replace(':', '\\:')), key);
+  const ok = element('div', { class: 'a', text: 'b', title: 'allowed' });
+  assert.equal(ok.className, 'a');
+  assert.equal(ok.textContent, 'b');
+  assert.equal(ok.attributes.title, 'allowed', 'ordinary attributes still pass through');
+});
+
+test('the main panel CSP denies everything except nonced styles and scripts', () => {
+  const html = renderPanel({ nonce: 'safe' });
+  const csp = html.match(/Content-Security-Policy" content="([^"]+)"/)[1];
+  for (const directive of ["default-src 'none'", "style-src 'nonce-safe'", "script-src 'nonce-safe'",
+    "img-src 'none'", "connect-src 'none'", "base-uri 'none'", "form-action 'none'"])
+    assert.ok(csp.includes(directive), directive + ' missing from ' + csp);
+  assert.ok(html.includes('<script nonce="safe">'), 'the script carries the nonce');
+  assert.ok(html.includes('nonce="safe"'), 'styles share the same nonce');
 });

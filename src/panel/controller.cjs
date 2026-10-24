@@ -71,7 +71,7 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
     lastState = undefined;
     const current = panel;
-    panel.webview.html = renderPanel({ nonce: crypto.randomBytes(24).toString('base64'), cspSource: panel.webview.cspSource });
+    panel.webview.html = renderPanel({ nonce: crypto.randomBytes(24).toString('base64') });
     const messages = panel.webview.onDidReceiveMessage(async message => {
       if (!message || typeof message.id !== 'string' || message.id.length > 100 || typeof message.type !== 'string') return;
       if (message.type === 'monitor.refresh') { await refreshMonitor(); return; }

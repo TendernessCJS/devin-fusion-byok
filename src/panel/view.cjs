@@ -45,14 +45,14 @@ function goalMarkup() {
 }
 
 
-function renderPanel({ nonce, cspSource }) {
+function renderPanel({ nonce }) {
   const safeNonce = escapeAttribute(nonce);
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${safeNonce}'; script-src 'nonce-${safeNonce}'; img-src ${escapeAttribute(cspSource || "'none'")}; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${safeNonce}'; script-src 'nonce-${safeNonce}'; img-src 'none'; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none';">
   <title>Fusion BYOK</title>
   <style nonce="${safeNonce}">${baseStyles()}${panelStyles()}${fastContextStyles()}</style>
 </head>

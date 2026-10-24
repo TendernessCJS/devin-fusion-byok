@@ -25,7 +25,7 @@ test('the base layer contains no view-specific selectors', () => {
 });
 
 test('every webview embeds the shared base layer instead of its own page chrome', () => {
-  const views = { panel: renderPanel({ nonce: 'safe', cspSource: 'test:' }), goal: goalHtml('nonce'), context: contextHtml('nonce') };
+  const views = { panel: renderPanel({ nonce: 'safe' }), goal: goalHtml('nonce'), context: contextHtml('nonce') };
   for (const [name, html] of Object.entries(views)) {
     assert.ok(html.includes('--control-h: 28px'), name);
     assert.ok(html.includes('min-height: var(--control-h)'), name);
@@ -34,14 +34,14 @@ test('every webview embeds the shared base layer instead of its own page chrome'
 });
 
 test('spacing utilities are defined once, in the base layer only', () => {
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   const count = needle => html.split(needle).length - 1;
   assert.equal(count('.mt { margin-top: 12px; }'), 1, '.mt must be defined exactly once');
   assert.equal(count('.mb { margin-bottom: 12px; }'), 1, '.mb must be defined exactly once');
 });
 
 test('metric tile primitives are defined once, in the base layer only', () => {
-  const html = renderPanel({ nonce: 'safe', cspSource: 'test:' });
+  const html = renderPanel({ nonce: 'safe' });
   const count = needle => html.split(needle).length - 1;
   assert.equal(count('.tiles { display: grid;'), 1, '.tiles must be defined exactly once');
   assert.equal(count('.tile-value { display: block;'), 1, '.tile-value must be defined exactly once');
