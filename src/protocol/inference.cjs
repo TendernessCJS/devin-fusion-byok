@@ -15,7 +15,7 @@ const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem, sizeBucket } 
 const { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody } = require('./provider-request.cjs');
 const { readErrorDetail, parseEvent, events, usageSnapshot } = require('./provider-events.cjs');
 
-function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onStateSize = () => {}) {
+function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onStateSize = () => {}, onDiag = () => {}, declaredTools = null) {
   const calls = new Map();
   const itemIndexes = new Map();
   const stateItems = new Map();
@@ -177,7 +177,14 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
       }
       const tools = [];
       const orderedCalls = [...calls.entries()].sort(([left], [right]) => typeof left === 'number' && typeof right === 'number' ? left - right : 0);
+      const unknownReported = new Set();
       if (reason === 2) for (const [, call] of orderedCalls) {
+        // Diagnostic only: an undeclared name still forwards the block — the
+        // model's spelling may legitimately differ from our normalisation.
+        if (declaredTools && call.name && !declaredTools.has(call.name) && !unknownReported.has(call.name)) {
+          unknownReported.add(call.name);
+          onDiag({ event: 'tool-name-unknown', name: call.name, declaredCount: declaredTools.size });
+        }
         const args = call.complete ?? call.arguments;
         if (!call.name || !call.id || typeof args !== 'string') {
           const err = new Error('Incomplete tool call');
@@ -194,6 +201,9 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
           throw err;
         }
         tools.push({ id: call.id, name: call.name, arguments: args, isCustomToolCall: Boolean(call.custom) });
+      }
+      if (reason === 2 && tools.length === 0) {
+        onDiag({ event: 'tool-claim-mismatch', textChunks: texts.size, toolChunks: 0 });
       }
       if (reason === 2 && !tools.length && !texts.size) {
         const err = new Error('Upstream completed without output');
@@ -311,6 +321,23 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     });
     if (replay.replayed) record({ event: 'state-envelope-replayed', model: route.model, bytes: replay.bytes, bucket: sizeBucket(replay.bytes), items: replay.items });
     if (replay.mismatch + replay.unparsable + replay.oversize > 0) record({ event: 'state-envelope-replay-failed', model: route.model, mismatch: replay.mismatch, unparsable: replay.unparsable, oversize: replay.oversize });
+    // Pre-flight: a turn with no non-whitespace text, no attachment and no
+    // tool-call/tool-result content must fail before any upstream request —
+    // the native side does not guard this path.
+    {
+      const messages = request.messages || [];
+      const last = messages.at(-1) || {};
+      const hasText = typeof last.content === 'string' && last.content.trim() !== '';
+      const hasAttachment = (last.images?.length || last.documents?.length || last.videos?.length) > 0;
+      const hasTool = (last.toolCalls?.length || 0) > 0 || last.role === 'tool';
+      // Zero messages means there is no turn to judge here (the caller supplied
+      // only a system prompt); only an existing last message can be empty.
+      if (messages.length > 0 && !hasText && !hasAttachment && !hasTool) {
+        const err = new Error('This turn has no text or attachment to send.');
+        err.code = 'request_empty_content';
+        throw err;
+      }
+    }
     const headers = {
       'content-type': 'application/json',
       accept: 'text/event-stream',
@@ -435,11 +462,13 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       }
     }
 
+    const declaredTools = new Set((request.tools || []).map(tool => tool.name));
     const stream = processor(id, route.uid || request.modelUid, chat, write, !chat ? stateScope(provider, route) : null,
       reason => record({ event: 'state-envelope-skipped', model: route.model, reason }),
       ({ bytes, dropped }) => dropped
         ? record({ event: 'state-envelope-oversize', model: route.model, bytes, limit: MAX_STATE_BYTES })
-        : record({ event: 'state-envelope-size', model: route.model, bytes, bucket: sizeBucket(bytes) }));
+        : record({ event: 'state-envelope-size', model: route.model, bytes, bucket: sizeBucket(bytes) }),
+      event => record(event), declaredTools);
     try {
       const adapt = anthropic ? createAnthropicAdapter() : event => [event];
       upstream: for await (const raw of events(rawChunksWithTimeout(upstream.body))) {
@@ -456,7 +485,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
           'upstream_timeout', 'upstream_http', 'upstream_content_type',
           'upstream_stream_error', 'upstream_stream_incomplete',
           'upstream_invalid_tool', 'upstream_invalid_json', 'upstream_network', 'upstream_empty_output',
-          'upstream_text_mismatch', 'attachment_unsupported'
+          'upstream_text_mismatch', 'attachment_unsupported', 'request_empty_content'
         ]);
         classifiedCode = allowedCodes.has(err?.code) ? err.code : 'upstream_stream_error';
       }
@@ -492,6 +521,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     // buildRequestBody throws before any response arrives, so its code never
     // passed through the stream catch — adopt it here for the error text.
     if (err?.code === 'attachment_unsupported') classifiedCode = 'attachment_unsupported';
+    if (err?.code === 'request_empty_content') classifiedCode = 'request_empty_content';
     let errorText = 'Provider response could not be completed.';
     if (classifiedCode === 'upstream_timeout') {
       const budget = status ? idleLimit : firstResponseLimit;
@@ -507,6 +537,8 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       errorText = 'Provider response was inconsistent.';
     } else if (classifiedCode === 'attachment_unsupported') {
       errorText = 'Attached media is not supported by this provider protocol.';
+    } else if (classifiedCode === 'request_empty_content') {
+      errorText = 'This turn has no text or attachment to send.';
     }
 
     try {

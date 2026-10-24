@@ -1762,3 +1762,95 @@ test('two consecutive connection failures yield exactly one retry and the same c
   assert.equal(errorLog.code, 'upstream_network');
   assert.equal(errorLog.transport, retries[0].transport, 'the reported transport enum is unchanged by retrying');
 });
+
+async function direct(t, request, upstreamHandler, { apiFormat = 'openai', logs = [] } = {}) {
+  const requests = [];
+  const upstream = await server(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    requests.push(JSON.parse(Buffer.concat(chunks) || '{}'));
+    await upstreamHandler(req, res);
+  }, t);
+  // Serve via a real HTTP hop so res is a genuine ServerResponse.
+  const proxy = await server((req, res) => {
+    serveChat({ request, route: { model: 'm', uid: 'u' },
+      provider: { baseUrl: `${upstream.url}/v1`, apiFormat }, res, log: event => logs.push(event) });
+  }, t);
+  const body = await new Promise((resolve, reject) => {
+    http.get(proxy.url + '/x', res => { const c = []; res.on('data', d => c.push(d)); res.on('end', () => resolve(Buffer.concat(c))); }).on('error', reject);
+  });
+  return { requests, logs, body };
+}
+const userRequest = messages => ({ systemPrompt: '', messages, tools: [] });
+
+const fakeRes = () => ({ writeHead() {}, write() { return true; }, end() {}, on() {}, once() {}, off() {},
+  headersSent: false, writableEnded: false, destroyed: false, removeEventListener() {}, addEventListener() {} });
+
+test('a whitespace-only turn fails before any upstream request', async t => {
+  const realFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = (...a) => { fetchCalls++; return realFetch(...a); };
+  const res = fakeRes();
+  const written = [];
+  res.write = chunk => { written.push(chunk); return true; };
+  try {
+    await serveChat({ request: userRequest([{ role: 'user', content: '   \n\t ' }]), route: { model: 'm', uid: 'u' },
+      provider: { baseUrl: 'http://127.0.0.1:1/v1', apiFormat: 'openai' }, res });
+  } finally { globalThis.fetch = realFetch; }
+  assert.equal(fetchCalls, 0, 'no upstream request may leave the process');
+  const text = Buffer.concat(written).toString();
+  assert.ok(text.includes('no text or attachment'), 'the client is told the turn was empty');
+
+  for (const message of [
+    { role: 'user', content: '', images: [{ base64Data: 'aGk=', mimeType: 'image/png' }] },
+    { role: 'user', content: '', documents: [{ base64Data: 'aGk=', mimeType: 'application/pdf', filename: 'a.pdf' }] },
+    { role: 'tool', content: 'tool output text', toolCallId: 'c1' }
+  ]) {
+    const err = await serveChat({ request: userRequest([message]), route: { model: 'm', uid: 'u' },
+      provider: { baseUrl: 'http://127.0.0.1:1/v1', apiFormat: 'openai' }, res: fakeRes() }).catch(e => e);
+    assert.notEqual(err.code, 'request_empty_content', 'attachments and tool results are not empty turns');
+  }
+
+  // No messages at all is not an empty turn: the caller supplied only a system
+  // prompt, so there is no last message to judge (the serveChat integration
+  // path in test/auto-continue-stream.test.cjs sends exactly this shape).
+  const noMessages = await serveChat({ request: userRequest([]), route: { model: 'm', uid: 'u' },
+    provider: { baseUrl: 'http://127.0.0.1:1/v1', apiFormat: 'openai' }, res: fakeRes() }).catch(e => e);
+  assert.notEqual(noMessages.code, 'request_empty_content', 'a message-less request is not judged empty');
+});
+
+test('an undeclared tool name logs once and still forwards the call', async t => {
+  const logs = [];
+  const { requests, body } = await direct(t,
+    { systemPrompt: '', messages: [{ role: 'user', content: 'go' }],
+      tools: [{ name: 'read', description: '', parameters: {}, strict: false }] },
+    (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(event({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'Read', arguments: '{}' } }] } }] }));
+      res.write(event({ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'Read' } }] }, finish_reason: 'tool_calls' }] }));
+      res.end('data: [DONE]\n\n');
+    }, { logs });
+  const unknown = logs.filter(e => e.event === 'tool-name-unknown');
+  assert.equal(unknown.length, 1, 'same name across two frames logs once');
+  assert.deepEqual(Object.keys(unknown[0]).sort(), ['declaredCount', 'event', 'name']);
+  assert.equal(unknown[0].name, 'Read');
+  assert.equal(unknown[0].declaredCount, 1);
+  const { messages } = unpack(body);
+  const forwarded = messages.some(data => fields(data, 6).some(entry => str(entry.value, 2) === 'Read'));
+  assert.ok(forwarded, 'the block is still forwarded unchanged');
+});
+
+test('a claimed tool finish without tool blocks logs the mismatch only', async t => {
+  const logs = [];
+  const { body } = await direct(t,
+    { systemPrompt: '', messages: [{ role: 'user', content: 'hi' }], tools: [] },
+    (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(event({ choices: [{ delta: { content: 'plain text' }, finish_reason: 'tool_calls' }] }));
+      res.end('data: [DONE]\n\n');
+    }, { logs });
+  const claims = logs.filter(e => e.event === 'tool-claim-mismatch');
+  assert.equal(claims.length, 1);
+  assert.deepEqual(claims[0], { event: 'tool-claim-mismatch', textChunks: 1, toolChunks: 0 });
+  assert.ok(unpack(body).messages.length > 0, 'the turn completes normally with text');
+});
