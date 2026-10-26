@@ -14,6 +14,8 @@ description: "Apply when judging whether a provider wire field is legitimate, up
 
 参照物（不是我们的对照实现）：Devin.app 自带 **`@anthropic-ai/sdk 0.82.0`**，**没有** `openai`。
 
+**未发布预警（2026-10-26 核对）**：`openai-node` 远端 HEAD 已领先 `v7.43.0` 7 笔，其中 `d8931e7f` 给 Responses 的**显式缓存断点**加 `ttl?: '30m' | '12h'`，并注明断点从请求的 `prompt_cache_options.ttl` 继承——即下文「刻意不发」里的 `prompt_cache_options` 正在变成带生命周期的正式能力。**此时不跟进**：npm 仍是 7.43.0，而契约测试读 `src/**/*.ts`，钉未发布 HEAD 会把预览字段记成稳定契约。发布后按上文流程更新，并重评 `prompt_cache_options` 该不该发。
+
 ## 更新方式：必须是 git 克隆，不能是 npm tarball
 
 `test/sdk-contract.test.cjs` 读的是 `src/resources/messages/messages.ts` 这类 **TypeScript 源码**；npm 包里只有编译产物（`resources/*.mjs` 与 `.d.mts`），**没有 `src/`**——拿 tarball 覆盖会让契约测试解析不出而红。
