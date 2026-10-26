@@ -15,6 +15,11 @@ const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem, sizeBucket } 
 const { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody } = require('./provider-request.cjs');
 const { readErrorDetail, parseEvent, events, usageSnapshot } = require('./provider-events.cjs');
 
+// A burst of resets means a second fixed offset tends to re-collide with the
+// same edge, so the pause is drawn from half to full budget instead of being
+// constant. Only one retry exists, so the worst case stays bounded.
+const RETRY_PAUSE_MS = 600;
+
 function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onStateSize = () => {}, onDiag = () => {}, declaredTools = null) {
   const calls = new Map();
   const itemIndexes = new Map();
@@ -315,6 +320,9 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     ? Math.min(timeouts.firstResponseMs, 2147483647) : 120000;
   const idleLimit = Number.isSafeInteger(timeouts?.idleMs) && timeouts.idleMs > 0
     ? Math.min(timeouts.idleMs, 2147483647) : 120000;
+  const retryBudget = Number.isSafeInteger(timeouts?.retryPauseMs) && timeouts.retryPauseMs >= 0
+    ? Math.min(timeouts.retryPauseMs, 5000) : RETRY_PAUSE_MS;
+  const retryPauseMs = () => retryBudget ? Math.round(retryBudget / 2 + Math.random() * retryBudget / 2) : 0;
 
   let activeTimer = null;
   const clearTimer = () => { if (activeTimer) { clearTimeout(activeTimer); activeTimer = null; } };
@@ -397,10 +405,12 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       upstream = await send(body);
     } catch (error) {
       if (!connectFailure(error) || upstreamController.signal.aborted || signal?.aborted || res.headersSent) throw error;
-      record({ event: 'upstream-retry', model: route.model, attempt: 1, transport: transportDetail(error) });
-      await pause(150);
+      const waitMs = retryPauseMs();
+      record({ event: 'upstream-retry', model: route.model, attempt: 1, transport: transportDetail(error), pauseMs: waitMs });
+      await pause(waitMs);
       if (upstreamController.signal.aborted || signal?.aborted) throw error;
       upstream = await send(body);
+      record({ event: 'upstream-retry-recovered', model: route.model, attempt: 1 });
     }
     // Thinking-mode providers (DeepSeek, Moonshot) answer a forced/required
     // tool_choice with HTTP 400 — "Thinking mode does not support this

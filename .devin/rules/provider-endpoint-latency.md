@@ -76,7 +76,8 @@ DeepSeek Anthropic provider 的 4816 条记录中有 8 条非 success；当时�
 - 仅连接层中断可重试：`err?.cause?.code || err?.code` ∈ `{UND_ERR_SOCKET, ECONNRESET, EPIPE, UND_ERR_CONNECT_TIMEOUT}`；
   不碰消息文本、HTTP 状态、DNS/TLS、AbortError。
 - 前置：客户端与 upstream signal 均未 abort、尚未向客户端写字节（`res.headersSent`）。
-- 固定 150ms，可被 `upstreamController.signal` 立即打断；打断则抛原错误。
-- 重试前记 `upstream-retry`（仅 transportDetail 枚举值）；成功不另记（`chat-complete` 覆盖），失败仍记原 `chat-error`。
+- 预算 600ms，实际等待取 50%–100% 的随机抖动（`timeouts.retryPauseMs` 可注入，`0` 供测试、上限 5000ms 夹取），可被 `upstreamController.signal` 立即打断；打断则抛原错误。
+- 重试前记 `upstream-retry`（`transport` 枚举 + `pauseMs`）；重试的那次 `send` 成功即记 `upstream-retry-recovered`（与随后读流是否失败无关）；两次都失败仍记原 `chat-error`。
+- 实测依据：2026-10-26 13:08–13:29Z 21 分钟窗口内 9 次 `upstream-retry`、6 次救回、3 次两连败（`UND_ERR_SOCKET`/`ECONNRESET`/`EPIPE`，`status:0`）；同期基线约 0.47 次/小时，故抖动窗口内密度约 70 倍——「固定偏移会重复撞同一段抖动」与「需要 recovered 事件来度量」的依据。
 - **禁止在已有输出后重试**：读流阶段（reader.read()/SSE/`upstream_stream_error`）与 HTTP 非 2xx 一律不重试；
   「0 字节客户端输出」只是本插件允许重试的边界，不证明供应商未接收或执行请求，不能保证不重复计费。
