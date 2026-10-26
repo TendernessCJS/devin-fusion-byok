@@ -37,7 +37,7 @@ function createRuntimeControl({ identity, instanceId, controlToken, managementPr
     }
     if (request.method === 'POST' && request.url === '/_runtime/native-models') {
       if (!authorized(request)) { response.writeHead(403); response.end(); return true; }
-      collect(request).then(body => {
+      collect(request, MAX_BODY_BYTES).then(body => {
         if (body.length > MAX_BODY_BYTES) throw new Error('too_large');
         const payload = JSON.parse(body.toString('utf8'));
         // The revision is an advisory monotonic marker from the pushing host;

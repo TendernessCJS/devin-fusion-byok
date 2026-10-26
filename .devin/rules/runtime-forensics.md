@@ -63,3 +63,13 @@ description: "Apply when diagnosing why injection or catalog changes appear not 
 - 失效判据分布：generation 绑定 6 处（`enable.cjs:64/91/93/99/114`、`catalog-sync.cjs:71`，其中 **4 处字面完全相同**）、generation 无关 8 处、abort 2 处；曾存在肯定/否定两种写法混用（`enable.cjs:120`）。
 - **`enable.cjs` 第 66–90 行之间没有失效检查**（读设置 → 存 receipt → `globalState.update`×2 → `settings.update`）：禁用发生在这些 `await` 期间时，写入仍会完成，下一处判据才发现。自愈依赖 teardown 按 receipt 还原，**但这条自愈没有测试断言**——做 `guarded()` 时先补这个测试再动控制流。
 - 本次审查的两处误判（已更正，别再重复）：① `catalog → runtime` **不是**层方向倒置，`port.cjs` 留在 `runtime/` 才能待在 backend 闭包内；② `goal/controller` 与 `auto-continue` **不是**「补丁 + 状态机」混排——前者本身就是 store/状态机（补丁在独立文件 `goal/continue-hook.cjs`），后者没有替换式补丁（走 `loadAcpApi`），它真实的混排是「错误文本匹配器 / 连接挂载 / 续跑状态机」三件事。
+
+## 运行中宿主是哪一份代码（host-build.json）
+
+backend `sourceId` 只覆盖 backend require 闭包；宿主侧改动（`activation/`、`panel/` 等）**不会**改变它，因此**不能**用它判断宿主代码新旧。
+
+宿主每次 `activate()` 会写 `<globalStorage>/host-build.json`：`{ id, files, version, extension, writtenAt }`。`id` 是对 `src/**/*.cjs` 的路径+内容 sha256（`node_modules`/`.git` 忽略），`files` 是参与哈希的文件数。
+
+读法：`cat "$HOME/Library/Application Support/Devin/User/globalStorage/local.devin-fusion-byok/host-build.json"`。`writtenAt` 晚于 vsix 落盘时间 ⇒ 运行中的宿主已是新代码；早于 ⇒ 还需要重载窗口。
+
+它是**诊断用**身份：不参与 backend 重启判定，也不得混入 `SOURCE_FILES`。

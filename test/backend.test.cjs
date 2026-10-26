@@ -778,3 +778,27 @@ test('close is bounded: an abandoned in-flight request hits drain-timeout and st
   await inflight;
   await assert.rejects(fetch(base + '/health'), 'the port is released once stopped resolves');
 });
+
+test('the collect limit stops pulling the stream at the boundary, not after 64 MiB', async () => {
+  const { Readable } = require('node:stream');
+  let pulled = 0;
+  const stream = new Readable({ read() { pulled += 1; this.push(Buffer.alloc(1024 * 1024)); } });
+  await assert.rejects(collect(stream, 4 * 1024 * 1024));
+  assert.ok(pulled < 10, '超限后必须立刻停止消费，而不是先读完 64 MiB（实测会拉到 64+ 次）');
+  const exact = new Readable({ read() { this.push(this._sent >= 4 ? null : (this._sent = (this._sent || 0) + 1, Buffer.alloc(1024 * 1024))); } });
+  assert.equal((await collect(exact, 4 * 1024 * 1024)).length, 4 * 1024 * 1024,
+    'exactly 4 MiB stays inside the limit');
+});
+
+test('an oversized native-models push is refused without changing served state', async t => {
+  const f = await fixture(t);
+  const endpoint = f.base + '/_runtime/native-models';
+  const before = await (await fetch(endpoint, { headers: { authorization: 'Bearer ' + f.control().token } })).json();
+  const oversized = JSON.stringify({ models: [], pad: 'x'.repeat(5 * 1024 * 1024) });
+  const response = await fetch(endpoint, { method: 'POST',
+    headers: { authorization: 'Bearer ' + f.control().token, 'content-type': 'application/json' }, body: oversized });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, 'invalid_payload');
+  const after = await (await fetch(endpoint, { headers: { authorization: 'Bearer ' + f.control().token } })).json();
+  assert.deepEqual(after, before, 'a refused ingest must not modify served state');
+});
