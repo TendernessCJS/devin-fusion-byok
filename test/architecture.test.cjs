@@ -370,20 +370,52 @@ const sharedWriterFiles = () => [
   ...fs.readdirSync(path.join(srcRoot, 'activation')).filter(name => name.endsWith('.cjs'))
     .map(name => path.join(srcRoot, 'activation', name)),
 ];
-const sharedWriterViolations = (readFile = fs.readFileSync) => {
+// Assignments and in-place mutations are both writes: `shared.x =` and
+// `shared.x.push(...)`/`shared.x.set(...)` etc. move state all the same.
+const WRITE_PATTERN = (holder, slot) => new RegExp(
+  String.raw`${holder}\.(${slot})\s*(?:\?\?=|\|\|=|=)(?!=)` +
+  String.raw`|${holder}\.(${slot})\.(?:set|delete|clear|push|add|splice)\s*\(`, 'g');
+const writeViolations = (holder, multiWriter, readFile = fs.readFileSync) => {
   const writers = new Map();
+  const pattern = WRITE_PATTERN(holder, '[A-Za-z][A-Za-z0-9]*');
   for (const file of sharedWriterFiles()) {
     const label = path.relative(srcRoot, file).split(path.sep).join('/');
-    for (const match of readFile(file, 'utf8').matchAll(/shared\.([A-Za-z][A-Za-z0-9]*)\s*(?:\?\?=|\|\|=|=)(?!=)/g)) {
-      if (!writers.has(match[1])) writers.set(match[1], new Set());
-      writers.get(match[1]).add(label);
+    for (const match of readFile(file, 'utf8').matchAll(pattern)) {
+      const slot = match[1] || match[2];
+      if (!writers.has(slot)) writers.set(slot, new Set());
+      writers.get(slot).add(label);
     }
   }
   const violations = [];
   for (const [slot, set] of writers) {
-    const actual = [...set].sort(), allowed = SHARED_MULTI_WRITER[slot];
+    const actual = [...set].sort(), allowed = multiWriter[slot];
     if (!allowed) { if (actual.length > 1) violations.push(slot + ' <- ' + actual.join(', ')); continue; }
     if (actual.join(',') !== [...allowed].sort().join(',')) violations.push(slot + ' <- ' + actual.join(', '));
+  }
+  return violations;
+};
+const sharedWriterViolations = (readFile = fs.readFileSync) => writeViolations('shared', SHARED_MULTI_WRITER, readFile);
+
+// deps.stores holds the three named slot groups split out of `shared`. Each
+// store has exactly one owning writer module; acpObservation is the stated
+// exception — enable.cjs owns its seq/ownModels, not the store factory file.
+const STORE_OWNER = {
+  nativeCatalog: ['activation/catalog-sync.cjs'],
+  cacheSync: ['activation/cache-sync.cjs'],
+  acpObservation: ['activation/enable.cjs'],
+};
+const storeWriterViolations = (readFile = fs.readFileSync) => {
+  const violations = [];
+  for (const [store, owners] of Object.entries(STORE_OWNER)) {
+    for (const file of sharedWriterFiles()) {
+      const label = path.relative(srcRoot, file).split(path.sep).join('/');
+      const pattern = new RegExp(
+        String.raw`stores\.${store}\.([A-Za-z][A-Za-z0-9]*)\s*(?:\?\?=|\|\|=|=)(?!=)` +
+        String.raw`|stores\.${store}\.([A-Za-z][A-Za-z0-9]*)\.(?:set|delete|clear|push|add|splice)\s*\(`, 'g');
+      for (const match of readFile(file, 'utf8').matchAll(pattern)) {
+        if (!owners.includes(label)) violations.push(`${store}.${match[1] || match[2]} <- ${label}`);
+      }
+    }
   }
   return violations;
 };
@@ -394,10 +426,24 @@ test('every shared activation slot has exactly one writer module', () => {
 });
 
 test('the shared writer guard rejects an injected second writer', () => {
-  const target = path.join(srcRoot, 'activation', 'enable.cjs');
+  const target = path.join(srcRoot, 'activation', 'catalog-sync.cjs');
   const violations = sharedWriterViolations(file => path.resolve(file) === target
-    ? fs.readFileSync(file, 'utf8') + '\nshared.pickerRefresh = () => {};\n'
+    ? fs.readFileSync(file, 'utf8') + '\nshared.backendStatus = \'x\';\n'
     : fs.readFileSync(file, 'utf8'));
-  assert.ok(violations.includes('pickerRefresh <- activation/cache-sync.cjs, activation/enable.cjs'),
-    'a second writer must be reported with both module labels');
+  assert.ok(violations.includes('backendStatus <- activation/catalog-sync.cjs, activation/commands.cjs, activation/enable.cjs'),
+    'a third writer of a whitelisted multi-writer slot must be reported');
+});
+
+test('every deps.stores slot is written only by its owning module', () => {
+  assert.deepEqual(storeWriterViolations(), [],
+    'a store slot written outside its owner must move the write or widen STORE_OWNER explicitly');
+});
+
+test('the store writer guard rejects an injected foreign writer', () => {
+  const target = path.join(srcRoot, 'activation', 'catalog-sync.cjs');
+  const violations = storeWriterViolations(file => path.resolve(file) === target
+    ? fs.readFileSync(file, 'utf8') + '\nstores.acpObservation.seq = 1;\n'
+    : fs.readFileSync(file, 'utf8'));
+  assert.ok(violations.includes('acpObservation.seq <- activation/catalog-sync.cjs'),
+    'a write from a non-owning module must be reported');
 });
