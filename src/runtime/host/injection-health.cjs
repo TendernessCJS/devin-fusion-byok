@@ -7,7 +7,7 @@
 // The result feeds panel state, which is deduplicated by JSON.stringify: every
 // field must be fully determined by the inputs — no timestamps, no counters,
 // nothing that changes between identical calls.
-function checkInjectionHealth({ enabled = true, backendStatus, bridgeState, envValue, expectedEnv, cliCache, desktopCatalog, acpObserved = 0, acpOwnModels = 0 } = {}) {
+function checkInjectionHealth({ enabled = true, backendStatus, bridgeState, bridgeHook, envValue, expectedEnv, cliCache, desktopCatalog, acpObserved = 0, acpOwnModels = 0 } = {}) {
   const items = [];
   if (enabled === false) {
     for (const [id, label] of [['backend', '后台服务'], ['bridge', '目录桥'], ['env', '推理入口'], ['cache', 'CLI 缓存'], ['catalog', '桌面目录'], ['acp', '会话模型']]) {
@@ -19,10 +19,15 @@ function checkInjectionHealth({ enabled = true, backendStatus, bridgeState, envV
     : (backendStatus === 'starting' || backendStatus === undefined) ? 'unknown' : 'bad';
   items.push({ id: 'backend', label: '后台服务', state: backendState,
     hint: '后台服务未运行：打开面板查看错误，或「停用并恢复连接」后重新启用。' });
-  const bridgeStatus = bridgeState === 'ready' ? 'ok'
+  // A shadowed http hook outranks the raw bridge state: the setPort path still
+  // works, but the heartbeat fallback is deaf, so even 'ready' is degraded.
+  const bridgeStatus = bridgeHook === 'shadowed' ? 'bad'
+    : bridgeState === 'ready' ? 'ok'
     : (bridgeState === undefined || bridgeState === 'waiting' || bridgeState === 'connecting') ? 'unknown' : 'bad';
   items.push({ id: 'bridge', label: '目录桥', state: bridgeStatus,
-    hint: '目录桥未建立：重新加载窗口；仍失败时查看「输出」面板的 Devin Fusion BYOK 通道。' });
+    hint: bridgeStatus === 'bad' && bridgeHook === 'shadowed'
+      ? '目录桥被其他扩展的 http 包装遮蔽：桥端口重发仍有效，但心跳兜底已失效。重新加载窗口后仍复现时，查看输出通道的 ls-http-hook-shadowed。'
+      : '目录桥未建立：重新加载窗口；仍失败时查看「输出」面板的 Devin Fusion BYOK 通道。' });
   const envState = envValue === expectedEnv && typeof envValue === 'string' && typeof expectedEnv === 'string' ? 'ok' : 'bad';
   items.push({ id: 'env', label: '推理入口', state: envState,
     hint: '推理入口被改写：检查设置里的 devin.acp.agentEnv，其他扩展或手工改动会覆盖它。' });

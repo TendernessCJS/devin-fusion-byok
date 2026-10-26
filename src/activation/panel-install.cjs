@@ -32,6 +32,7 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     enabled: config().enabled !== false,
     backendStatus: shared.backendStatus,
     bridgeState: lifecycle.connection?.status?.state,
+    bridgeHook: lifecycle.connection?.status?.httpHook,
     envValue: (() => { try { return vscode.workspace.getConfiguration('devin.acp').get('agentEnv')?.['devin-cli']?.WINDSURF_API_SERVER_URL ?? null; } catch { return null; } })(),
     expectedEnv: 'http://127.0.0.1:' + PORT,
     cliCache: stores.cacheSync.cliCacheReport,

@@ -88,3 +88,15 @@ test('the result carries no timestamp or otherwise unstable field', () => {
   assert.equal(JSON.stringify(checkInjectionHealth(healthy)), JSON.stringify(result),
     'identical inputs produce byte-identical output');
 });
+
+test('a shadowed http hook marks the bridge bad even while the state is ready', () => {
+  const result = checkInjectionHealth({ ...healthy, bridgeHook: 'shadowed' });
+  assert.equal(stateOf(result, 'bridge'), 'bad');
+  assert.equal(result.ok, false);
+});
+
+test('an installed http hook keeps an all-ok verdict', () => {
+  const result = checkInjectionHealth({ ...healthy, bridgeHook: 'installed' });
+  assert.equal(stateOf(result, 'bridge'), 'ok');
+  assert.equal(result.ok, true);
+});
