@@ -56,7 +56,8 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | 卷 | 何时必须读 |
 | --- | --- |
 | `.devin/rules/upstream-fork-release.md` | 同步 `upstream`、定/升版本号、发布、解 merge 冲突 |
-| `.devin/rules/provider-measurements.md` | **改 Responses/Anthropic/Chat 语义前必读**——供应商面实测事实，已推翻多处早期结论 |
+| `.devin/rules/provider-measurements.md` | **改 Responses 面或跨面契约前必读**——供应商面实测事实，已推翻多处早期结论；Anthropic/Chat 单面契约见下一条 |
+| `.devin/rules/provider-measurements-anthropic-chat.md` | **改 Anthropic 或 Chat 线格式语义前必读**——按协议面拆出的契约：强制选择×思考的两步降级、签名闭环边界、`cache_control` 被忽略、`max_tokens` 取舍、路由判定的两条通道 |
 | `.devin/rules/provider-measurements-forensics.md` | **排查「回放 reasoning 后行为异常」「某改动是否引入问题」或要动状态信封尺寸时必读**——Proxy/DeepSeek 各面的探针证据、对照臂方法与信封尺寸依据（实测证据，非契约） |
 | `.devin/rules/provider-endpoint-latency.md` | **排查首响慢、`upstream_timeout`/`upstream_stream_error`，或要动超时预算时必读**——响应头探针、历史统计口径与超时路径的证据边界 |
 | `.devin/rules/provider-sdk-parity.md` | **判断某个 provider 线格式字段是否合法、该不该发，或更新 `.refs` 里的 SDK 时必读**——SDK 基线版本与更新方式、我们发送字段的合法性对照、原生无法表达因此刻意不发的字段、以及「REA 管不到 provider 线格式」的判据 |

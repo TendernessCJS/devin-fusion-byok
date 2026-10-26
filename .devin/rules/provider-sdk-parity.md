@@ -95,7 +95,7 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 
 ## 纪律
 
-- 改 `src/protocol/*` 的发送面之前，先读 `provider-measurements.md`（实测事实）与本卷（合法性/该不该发）。
+- 改 `src/protocol/*` 的发送面之前，先读 `provider-measurements.md`（跨面与 Responses 实测事实）、`provider-measurements-anthropic-chat.md`（Anthropic / Chat 单面契约）与本卷（合法性/该不该发）。
 - 新增字段的唯一正当理由是「原生给了对应控制位」，不是「SDK 加了」。
 - 任何「我们发的字段 SDK 里没有」都视为缺陷；反之（SDK 有而我们不发）先查本卷的刻意不发表，别当成缺漏。
 - provider 侧的「能自愈的 400」目前只有三种：`tool_choice`、Responses 的 `store|include`、以及 Anthropic 的 `cache_control`。前两者语义面小、可按关键词判定；新增同类降级时优先用**因果判定**（改动后重试成功才算该因子导致），不要继续堆关键词。
