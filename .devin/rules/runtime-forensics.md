@@ -58,7 +58,7 @@ description: "Apply when diagnosing why injection or catalog changes appear not 
 
 - **`shared` 槽共 41 个**（`extension.cjs` 只声明 18 个，其余由各 installer 赋值）：**66 个写入点 / 226 个访问点 / 跨 7 个文件**；`catalog-sync.cjs` 单文件触及 **22** 个槽。
 - **只有 1 个槽被 ≥2 个文件写**：`backendStatus`（`commands` + `enable`）。其余 40 个都是单写者 ⇒「installer 互写对方的键」只在这一点成立，耦合的真实形态是**晚期绑定的 service locator**（读点全在回调内，install 阶段不取值），所以安装顺序并不像最初判断的那样脆弱。
-- 归属分组：`catalog-sync` 19 / `cache-sync` 5 / `commands` 5+3 函数槽 / `panel-install` 5 / `backendStatus` 1 / continuation 2。
+- 归属分组（2026-10-26 已按此落地）：`deps.stores.nativeCatalog` **22 槽**（owner `catalog-sync`）、`deps.stores.cacheSync` **3 槽**（owner `cache-sync`）、`deps.stores.acpObservation` **2 槽**（**owner 是 `enable`**，读者才是 `cache-sync`+`panel-install`——正因写者在外，它不能并进 cacheSync 私有状态）；仍在 `shared` 的 **14 槽**：`commands` 的 4 个函数槽、`panel-install` 5、`backendStatus` 1、continuation 2、`ensureEnabled`/`disablePromise` 2。
 - 测试伪造规模（拆分成本的主项）：只有 **2** 个测试文件实质构造 `shared`——`native-models-sync`（12 槽 / 690 行）与 `activation-sync`（3 槽 / 265 行）。
 - 失效判据分布：generation 绑定 6 处（`enable.cjs:64/91/93/99/114`、`catalog-sync.cjs:71`，其中 **4 处字面完全相同**）、generation 无关 8 处、abort 2 处；曾存在肯定/否定两种写法混用（`enable.cjs:120`）。
 - **`enable.cjs` 第 66–90 行之间没有失效检查**（读设置 → 存 receipt → `globalState.update`×2 → `settings.update`）：禁用发生在这些 `await` 期间时，写入仍会完成，下一处判据才发现。自愈依赖 teardown 按 receipt 还原，**但这条自愈没有测试断言**——做 `guarded()` 时先补这个测试再动控制流。
