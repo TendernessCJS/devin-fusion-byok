@@ -59,9 +59,9 @@
 
 ## 受管设置的写入/恢复串行边界
 
-`enable()` 里「保存 receipt → 两次 `globalState.update`（`savedEnv`/`managedEnv`）→ 条件 `agentEnv` 写入 → `reconcilePreference`」是**一个临界区**，由 `src/activation/managed-settings.cjs` 的 `critical()` 包住、同步登记在途 promise。
+`enable()` 里「保存 receipt → 两次 `globalState.update`（`savedEnv`/`managedEnv`）→ 条件 `agentEnv` 写入」是**一个临界区**，由 `src/activation/managed-settings.cjs` 的 `critical()` 包住、同步登记在途 promise。env 与 preference 写入**各自登记**自己的 critical（`commands.cjs` 的 `managedWrite` 包了 `saveFusionChoice`/`reconcileSelection` 两条面板侧写路径，`enable` 的 env 段单独一条），进入新写入前复核 `live`/closed，被拒绝时抛 `RuntimeError('cancelled')`；`reconcilePreference` 在 env critical 之外调用，避免在已开始排水的外层里再尝试新的嵌套入闸。UI publish 不占排水预算。
 
 - `disable()` 顺序：置 `enabled=false` → `drain()`（5 s 上限，超时记 `managed-settings-drain-timeout`）→ `teardown` → 恢复。恢复**必须重读**当前设置与 receipt——这是修复成立的机理：在途写入先落地，恢复再基于落地后的状态回滚。
-- drain 超时**仍照常恢复**，但跳过 `receipt.changes` 清空与 `savedEnv`/`managedEnv` 清除（`keepReceipt`），给下次恢复保留补偿依据。
+- drain 超时**仍照常恢复**（best-effort），但跳过 `receipt.changes` 清空与 `savedEnv`/`managedEnv` 清除（`keepReceipt`），给下次停用保留补偿依据；此时**不得提示成功**——面板 warning 明示「恢复尚未确认，已保留恢复记录」，`restoreOnHostDisable` 记 `host-disabled-settings-restore-pending` 而非 `restored`。
 - **撤回旧判断**：「停用期间写入仍会完成、但 teardown 会按 receipt 还原」是错的——receipt 只提供回滚依据，**不提供异步顺序**；没有 drain 时恢复的 snapshot 先取、在途写入后落，受管值会残留且 receipt 已被清空。
-- 边界：这只保证**单窗口内**的顺序；跨窗口并发写同一 globalState 不在本机制范围内。
+- 边界：这只保证**单窗口内**的顺序；跨窗口并发写同一 globalState 不在本机制范围内；超时后的残留靠下次停用补偿，不做自动修复承诺。

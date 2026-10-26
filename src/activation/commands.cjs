@@ -4,9 +4,19 @@ const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } 
 const { globalSetting } = require('./settings.cjs');
 const { teardown } = require('./teardown.cjs');
 const { isHostDisabled } = require('../lifecycle/host-disabled.cjs');
+const { live } = require('./liveness.cjs');
+const { RuntimeError } = require('./errors.cjs');
 
 function installCommands({ deps, shared }) {
   const { lifecycle, config, configFile, vscode, context, log, catalog, run, managedSettings } = deps;
+  // Every settings write goes through the gate so a disable can drain it before
+  // restoring; writes attempted after close are cancelled rather than landing
+  // on top of the restored values.
+  const managedWrite = async fn => {
+    if (!live(lifecycle, config)) throw new RuntimeError('cancelled');
+    try { return await managedSettings.critical(fn); }
+    catch (error) { if (error?.code === 'cancelled') throw new RuntimeError('cancelled'); throw error; }
+  };
   const refresh = async () => {
     shared.management.open();
     vscode.window.showInformationMessage('请选择供应商，点击「导入模型」，勾选要导入的模型后确认。');
@@ -15,11 +25,16 @@ function installCommands({ deps, shared }) {
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.openPanel', run(async () => shared.management.open())));
   require('../fast-context/config-ui.cjs').registerFastContext({ vscode, context });
   shared.saveFusionChoice = async uid => {
-    const settings = vscode.workspace.getConfiguration('devin.acp'); const preferences = globalSetting(settings, 'agentPreferences');
-    const receipt = readReceipt(deps.root, context.extensionPath), keys = ['devin.acp.agentPreferences', 'devin-cli', 'model'];
-    remember(receipt, keys, valueAt({ 'devin.acp.agentPreferences': preferences }, keys), uid);
-    saveReceipt(receipt);
-    await settings.update('agentPreferences', { ...preferences, 'devin-cli': { ...(preferences['devin-cli'] || {}), model: uid } }, vscode.ConfigurationTarget.Global);
+    await managedWrite(async () => {
+      const settings = vscode.workspace.getConfiguration('devin.acp'); const preferences = globalSetting(settings, 'agentPreferences');
+      const receipt = readReceipt(deps.root, context.extensionPath), keys = ['devin.acp.agentPreferences', 'devin-cli', 'model'];
+      remember(receipt, keys, valueAt({ 'devin.acp.agentPreferences': preferences }, keys), uid);
+      saveReceipt(receipt);
+      await settings.update('agentPreferences', { ...preferences, 'devin-cli': { ...(preferences['devin-cli'] || {}), model: uid } }, vscode.ConfigurationTarget.Global);
+    });
+    // Publishing must not stretch the drain budget, and a choice that landed
+    // while disabling is restored anyway — skip the side effects then.
+    if (!live(lifecycle, config)) return;
     rememberFusion(uid);
     await shared.management?.publish();
   };
@@ -58,7 +73,7 @@ function installCommands({ deps, shared }) {
       if (typeof current === 'string' && current) return;
       const remembered = rememberedFusion();
       if (remembered) await shared.saveFusionChoice(remembered);
-    }).catch(() => log('preference-reconcile-error'));
+    }).catch(error => { if (error?.code !== 'cancelled') log('preference-reconcile-error'); });
     reconcileQueue = operation;
     return operation;
   };
@@ -114,9 +129,10 @@ function installCommands({ deps, shared }) {
       let verdict;
       try { verdict = await teardown(lifecycle, { restore: true }); }
       finally { await restoreOwnedSettings({ keepReceipt: drained === false }); }
-      vscode.window.showInformationMessage(verdict?.ok
+      if (drained) vscode.window.showInformationMessage(verdict?.ok
         ? 'Fusion BYOK 已停用，原生连接已恢复。'
         : 'Fusion BYOK 已停用，连接设置已恢复；桌面模型目录恢复尚未确认。');
+      else vscode.window.showWarningMessage('Fusion BYOK 已停用，但设置写入等待超时；恢复尚未确认，已保留恢复记录，请稍后重试停用。');
     })().finally(() => { disablePromise = null; shared.disablePromise = undefined; });
     // Exposed so ensureEnabled can wait out an in-flight restore instead of
     // installing hooks the old teardown finally would strip again.
@@ -130,21 +146,25 @@ function installCommands({ deps, shared }) {
   lifecycle.restoreOnHostDisable = async () => {
     if (!isHostDisabled({ storageRoot: deps.root })) return;
     const drained = await managedSettings.drain();
+    if (!drained) log('managed-settings-drain-timeout', { phase: 'host-disable' });
     await restoreOwnedSettings({ keepReceipt: drained === false });
-    log('host-disabled-settings-restored');
+    log(drained ? 'host-disabled-settings-restored' : 'host-disabled-settings-restore-pending');
   };
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.disable', run(shared.disable)));
   shared.reconcileSelection = async () => {
-    const settings = vscode.workspace.getConfiguration('devin.acp');
-    const preferences = globalSetting(settings, 'agentPreferences'), current = preferences['devin-cli']?.model;
-    const isOwnSelection = uid => typeof uid === 'string' &&
-      (/^(?:fusion-)?dfbyok-/.test(uid) || (catalog().matrixUids instanceof Set && catalog().matrixUids.has(uid)));
-    if (!isOwnSelection(current) || catalog().models.some(model => model.uid === current)) return;
-    const receipt = readReceipt(deps.root, context.extensionPath);
-    const changes = receipt.changes.filter(change => change.path[0] === 'devin.acp.agentPreferences');
-    const restored = restoreObject({ 'devin.acp.agentPreferences': preferences }, changes).value['devin.acp.agentPreferences'];
-    if (isOwnSelection(restored['devin-cli']?.model)) delete restored['devin-cli'].model;
-    await settings.update('agentPreferences', restored, vscode.ConfigurationTarget.Global);
+    if (!live(lifecycle, config)) return;
+    await managedWrite(async () => {
+      const settings = vscode.workspace.getConfiguration('devin.acp');
+      const preferences = globalSetting(settings, 'agentPreferences'), current = preferences['devin-cli']?.model;
+      const isOwnSelection = uid => typeof uid === 'string' &&
+        (/^(?:fusion-)?dfbyok-/.test(uid) || (catalog().matrixUids instanceof Set && catalog().matrixUids.has(uid)));
+      if (!isOwnSelection(current) || catalog().models.some(model => model.uid === current)) return;
+      const receipt = readReceipt(deps.root, context.extensionPath);
+      const changes = receipt.changes.filter(change => change.path[0] === 'devin.acp.agentPreferences');
+      const restored = restoreObject({ 'devin.acp.agentPreferences': preferences }, changes).value['devin.acp.agentPreferences'];
+      if (isOwnSelection(restored['devin-cli']?.model)) delete restored['devin-cli'].model;
+      await settings.update('agentPreferences', restored, vscode.ConfigurationTarget.Global);
+    });
   };
 }
 

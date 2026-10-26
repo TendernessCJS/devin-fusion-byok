@@ -115,6 +115,12 @@ function fixture(t, initial = {}) {
       inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
       refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } },
   };
+  // Timeout-path tests get a short real drain budget; production keeps 5s.
+  if (initial.managedSettingsTimeoutMs) overrides['./activation/managed-settings.cjs'] = {
+    createManagedSettingsGate: options => realRequire('./activation/managed-settings.cjs')
+      .createManagedSettingsGate({ timeoutMs: initial.managedSettingsTimeoutMs }),
+  };
+  if (initial.hostDisabled) overrides['./lifecycle/host-disabled.cjs'] = { isHostDisabled: () => true };
   const loader = createSandboxLoader({ filename, overrides, globals: {
     AbortController, AbortSignal, setInterval, clearInterval, setTimeout: (fn, _ms) => setTimeout(fn, 0), clearTimeout,
     fetch: (...args) => fetchImpl(...args),
@@ -1023,7 +1029,7 @@ test('disable waits for an in-flight managed settings write before restoring', a
   const f = fixture(t);
   await f.activate(f.context); await f.settle();
   await f.commands.get('devinFusionByok.disable')();
-  const gate = f.gateSettingsUpdate('agentEnv');
+  const gate = f.gateSettingsUpdate('agentEnv'); t.after(() => gate.release());
   f.managerOptions().write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: true });
   const enabling = f.managerOptions().afterChange('setEnabled').catch(() => {});
   await gate.started;
@@ -1060,4 +1066,135 @@ test('disable waits through the globalState leg of a managed settings write', as
   assert.ok(!Object.hasOwn(f.globals.agentEnv['devin-cli'], 'WINDSURF_API_SERVER_URL'));
   assert.equal(f.globals.agentEnv['devin-cli'].KEEP, 'user-value');
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT))).changes.length, 0);
+});
+test('disable waits for an in-flight panel fusion choice and restore still wins', { timeout: 5000 }, async t => {
+  const f = fixture(t);
+  await f.activate(f.context); await f.settle();
+  const gate = f.gateSettingsUpdate('agentPreferences'); t.after(() => gate.release());
+  const choosing = f.managerOptions().selectFusion('fusion-dfbyok-selected').catch(() => {});
+  await gate.started;
+  const disabling = f.commands.get('devinFusionByok.disable')();
+  const early = await Promise.race([
+    disabling.then(() => 'done'),
+    f.settle(10).then(() => 'pending'),
+  ]);
+  assert.equal(early, 'pending', 'disable must wait for the in-flight preference write');
+  gate.release();
+  await Promise.allSettled([choosing, disabling]);
+  await f.settle();
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, 'native-max');
+  assert.equal(f.globals.agentPreferences['devin-cli'].effort, 'high');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT))).changes.length, 0);
+  assert.equal(JSON.parse(fs.readFileSync(f.configFile)).enabled, false);
+  assert.equal(f.counts().disposed, 1);
+  const receiptBefore = fs.readFileSync(path.join(f.root, RECEIPT), 'utf8');
+  await assert.rejects(f.managerOptions().selectFusion('fusion-dfbyok-selected'),
+    error => error?.code === 'cancelled');
+  assert.equal(fs.readFileSync(path.join(f.root, RECEIPT), 'utf8'), receiptBefore,
+    'a write attempted after close is cancelled, not applied');
+});
+test('disable waits for the enable-time preference write from the remembered combination', { timeout: 5000 }, async t => {
+  const f = fixture(t, { config: { lastFusionSelection: 'fusion-dfbyok-selected' },
+    globals: { agentPreferences: { 'devin-cli': { effort: 'high' } } } });
+  const gate = f.gateSettingsUpdate('agentPreferences'); t.after(() => gate.release());
+  const activating = f.activate(f.context).catch(() => {});
+  await gate.started;
+  const disabling = f.commands.get('devinFusionByok.disable')();
+  const early = await Promise.race([
+    disabling.then(() => 'done'),
+    f.settle(10).then(() => 'pending'),
+  ]);
+  assert.equal(early, 'pending');
+  gate.release();
+  await Promise.allSettled([activating, disabling]);
+  await f.settle();
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, undefined);
+  assert.equal(f.globals.agentPreferences['devin-cli'].effort, 'high');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT))).changes.length, 0);
+  assert.equal(f.counts().installed, 0, 'the superseded enable must not install a late hook');
+});
+test('disable waits for a preference reconciliation write in flight', { timeout: 5000 }, async t => {
+  const f = fixture(t, { config: { lastFusionSelection: 'fusion-dfbyok-selected' } });
+  await f.activate(f.context); await f.settle();
+  delete f.globals.agentPreferences['devin-cli'].model;
+  const gate = f.gateSettingsUpdate('agentPreferences'); t.after(() => gate.release());
+  const firing = f.firePreference().catch(() => {});
+  await gate.started;
+  const disabling = f.commands.get('devinFusionByok.disable')();
+  const early = await Promise.race([
+    disabling.then(() => 'done'),
+    f.settle(10).then(() => 'pending'),
+  ]);
+  assert.equal(early, 'pending');
+  gate.release();
+  await Promise.allSettled([firing, disabling]);
+  await f.settle();
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, undefined);
+  assert.equal(f.globals.agentPreferences['devin-cli'].effort, 'high');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT))).changes.length, 0);
+});
+test('disable waits for a selection reconciliation write in flight', { timeout: 5000 }, async t => {
+  const f = fixture(t);
+  await f.activate(f.context); await f.settle();
+  const stale = 'fusion-native-lead-sidekick-dfbyok-gone';
+  f.setMatrixUids([stale]);
+  f.globals.agentPreferences['devin-cli'].model = stale;
+  const gate = f.gateSettingsUpdate('agentPreferences'); t.after(() => gate.release());
+  const reconciling = f.managerOptions().afterChange('setRoleModel').catch(() => {});
+  await gate.started;
+  const disabling = f.commands.get('devinFusionByok.disable')();
+  const early = await Promise.race([
+    disabling.then(() => 'done'),
+    f.settle(10).then(() => 'pending'),
+  ]);
+  assert.equal(early, 'pending');
+  gate.release();
+  await Promise.allSettled([reconciling, disabling]);
+  await f.settle();
+  assert.equal(f.globals.agentPreferences['devin-cli'].model, undefined,
+    'the stale own selection must not survive restore');
+});
+test('a drain timeout keeps evidence, warns instead of claiming restore, and a later disable finishes', { timeout: 5000 }, async t => {
+  const f = fixture(t, { managedSettingsTimeoutMs: 30 });
+  await f.activate(f.context); await f.settle();
+  await f.commands.get('devinFusionByok.disable')();
+  const gate = f.gateSettingsUpdate('agentEnv'); t.after(() => gate.release());
+  f.managerOptions().write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: true });
+  const enabling = f.managerOptions().afterChange('setEnabled').catch(() => {});
+  await gate.started;
+  const noticesBefore = f.notices.length;
+  await f.commands.get('devinFusionByok.disable')();
+  const notices = f.notices.slice(noticesBefore);
+  assert.ok(notices.some(notice => notice.includes('恢复尚未确认')),
+    'a timed-out drain must not claim the settings were restored');
+  assert.ok(!notices.some(notice => notice.includes('已恢复')),
+    'both success wordings are reserved for a completed drain');
+  assert.ok(JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT))).changes.length > 0,
+    'the receipt stays as compensation evidence');
+  assert.ok(f.state.has('savedEnv') && f.state.has('managedEnv'),
+    'the saved originals stay for the same reason');
+  gate.release();
+  await Promise.allSettled([enabling]);
+  await f.settle();
+  await f.commands.get('devinFusionByok.disable')();
+  await f.settle();
+  assert.ok(!Object.hasOwn(f.globals.agentEnv['devin-cli'], 'WINDSURF_API_SERVER_URL'),
+    'the retained receipt lets the next disable finish the cleanup');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT))).changes.length, 0);
+});
+test('a host-disable drain timeout logs pending rather than restored', { timeout: 5000 }, async t => {
+  const f = fixture(t, { managedSettingsTimeoutMs: 30, hostDisabled: true });
+  await f.activate(f.context); await f.settle();
+  await f.commands.get('devinFusionByok.disable')();
+  const gate = f.gateSettingsUpdate('agentEnv'); t.after(() => gate.release());
+  f.managerOptions().write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: true });
+  const enabling = f.managerOptions().afterChange('setEnabled').catch(() => {});
+  await gate.started;
+  await f.deactivate();
+  assert.ok(f.logs.some(line => line.includes('host-disabled-settings-restore-pending')),
+    'a timed-out host-disable restore must log pending');
+  assert.ok(!f.logs.some(line => line.includes('host-disabled-settings-restored')),
+    'the restored event is reserved for a completed drain');
+  gate.release();
+  await Promise.allSettled([enabling]);
 });

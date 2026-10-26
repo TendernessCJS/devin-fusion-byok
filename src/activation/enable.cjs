@@ -94,9 +94,11 @@ function installEnable({ deps, shared }) {
         await context.globalState.update('savedEnv', saved);
         await context.globalState.update('managedEnv', desired);
         if (Object.keys(managed).some(k => !(k in desired)) || Object.entries(desired).some(([k, v]) => previous[k] !== v)) await settings.update('agentEnv', { ...existing, 'devin-cli': { ...previous, ...desired } }, vscode.ConfigurationTarget.Global);
-        if (superseded(lifecycle, config, generation)) return;
-        await shared.reconcilePreference();
       });
+      // The preference write registers through saveFusionChoice's own gate
+      // entry instead of nesting inside this critical section.
+      if (superseded(lifecycle, config, generation)) return;
+      await shared.reconcilePreference();
     } catch (error) {
       if (error?.code === 'cancelled') throw new RuntimeError('cancelled');
       throw error;
