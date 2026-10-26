@@ -6,8 +6,9 @@ const { REQUIRED, INFORMATIONAL, artifacts, sha256, scanMarkers, authStoreStatus
   require('../src/activation/native-contract.cjs');
 
 const DEFAULT_EXT = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf';
-const KEYS = ['cli', 'ls', 'desktop', 'chat'];
-const NAMES = { cli: 'CLI 二进制', ls: 'LS 二进制', desktop: '桌面主 bundle', chat: '聊天 bundle' };
+const KEYS = ['cli', 'ls', 'desktop', 'chat', 'acp'];
+const NAMES = { cli: 'CLI 二进制', ls: 'LS 二进制', desktop: '桌面主 bundle', chat: '聊天 bundle',
+  acp: 'ACP 客户端 bundle' };
 
 function usage() {
   console.error('usage: node scripts/native-contract-report.cjs [--extension-path=<abs>] [--json]');

@@ -15,13 +15,22 @@ const REQUIRED = {
   // names go, but we want to know before that failure reaches users.
   ls: ['cascade_model_config_data', 'GetUserJwt', 'GetWebSearchResults'],
   desktop: ['devin.refreshUserStatus', 'cascade_model_config_data'],
-  chat: ['cognition.ai/auth', 'cognition.ai/subagent_context']
+  chat: ['cognition.ai/auth', 'cognition.ai/subagent_context'],
+  // The ACP client bundle we wrap: session/update kinds, the method names our
+  // hooks key on, the _meta keys we emit, and the local connector's
+  // transport-down status. `reconnectingMaxDelay` is REQUIRED, not
+  // informational: isTerminalStatus drives crash cleanup, so a rename would
+  // silently blind us to local agent death.
+  acp: ['state_update', 'plan_update', 'available_commands_update', 'config_option_update',
+    'session/set_config_option', 'cognition.ai/clientMessageId', 'cognition.ai/isOptimistic',
+    'reconnectingMaxDelay']
 };
 const INFORMATIONAL = {
   cli: ['model_configs_v6', 'max_turn_requests', 'end_turn', 'refusal'],
   ls: ['GetUserStatus'],
   desktop: [],
-  chat: ['cognition.ai/finishedOutcome', 'cognition.ai/abort', 'cognition.ai/clientMessageId']
+  chat: ['cognition.ai/finishedOutcome', 'cognition.ai/abort', 'cognition.ai/clientMessageId'],
+  acp: ['plan_removed', '_session/elicitation', 'session/archive', '_cognition.ai/session/archive', 'ext/method']
 };
 
 const CHUNK = 4 * 1024 * 1024;
@@ -30,9 +39,9 @@ const SIZE_CAP = 400 * 1024 * 1024;
 // Bump whenever the marker tables or probe semantics change: cached verdicts
 // are keyed on probe, otherwise an old 'ok' would be reused forever and new
 // markers would never be scanned.
-const PROBE_VERSION = 1;
+const PROBE_VERSION = 2;
 
-const ARTIFACT_KEYS = ['cli', 'ls', 'desktop', 'chat'];
+const ARTIFACT_KEYS = ['cli', 'ls', 'desktop', 'chat', 'acp'];
 const APP_ANCHOR = path.join('out', 'vs', 'workbench', 'workbench.desktop.main.js');
 
 // The extension path we are handed is the *windsurf extension dir*, not the
@@ -51,7 +60,7 @@ function findAppRoot(extensionPath) {
 
 function artifacts(extensionPath) {
   const appRoot = findAppRoot(extensionPath);
-  const empty = { appRoot: null, cli: null, ls: null, desktop: null, chat: null, plist: null };
+  const empty = { appRoot: null, cli: null, ls: null, desktop: null, chat: null, acp: null, plist: null };
   if (!appRoot) return empty;
   return {
     appRoot,
@@ -59,6 +68,7 @@ function artifacts(extensionPath) {
     ls: path.join(appRoot, 'extensions', 'windsurf', 'bin', 'language_server_macos_arm'),
     desktop: path.join(appRoot, APP_ANCHOR),
     chat: path.join(appRoot, 'out', 'vs', 'workbench', 'windsurf-chat-client', 'index.js'),
+    acp: path.join(appRoot, 'extensions', 'windsurf', 'dist', 'extension.js'),
     plist: path.join(appRoot, '..', '..', 'Info.plist')
   };
 }
@@ -131,7 +141,7 @@ async function checkNativeContract({ extensionPath, cacheFile, log = () => {}, p
       log('native-contract-unavailable', { code: 'layout-unknown' });
       return { status: 'unavailable', code: 'layout-unknown' };
     }
-    // Missing desktop/chat bundles are drift, not unavailable: a renamed or
+    // Missing desktop/chat/acp bundles are drift, not unavailable: a renamed or
     // split bundle means an integration surface we can no longer verify, and
     // that must stay visible. cli/ls absence keeps the old unavailable path.
     const stat = {}, missing = {}, informational = {};

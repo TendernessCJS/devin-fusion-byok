@@ -11,11 +11,13 @@ const ALL_CLI = [...REQUIRED.cli, ...INFORMATIONAL.cli];
 const ALL_LS = [...REQUIRED.ls, ...INFORMATIONAL.ls];
 const ALL_DESKTOP = [...REQUIRED.desktop, ...INFORMATIONAL.desktop];
 const ALL_CHAT = [...REQUIRED.chat, ...INFORMATIONAL.chat];
+const ALL_ACP = [...REQUIRED.acp, ...INFORMATIONAL.acp];
 
 // Production layout: extensionPath is the windsurf extension dir itself
 // (what vscode.extensions.getExtension reports), not the devin subdir.
 function fakeApp({ cliMarkers = ALL_CLI, lsMarkers = ALL_LS,
-    desktopMarkers = ALL_DESKTOP, chatMarkers = ALL_CHAT, version = '3.11.216' } = {}) {
+    desktopMarkers = ALL_DESKTOP, chatMarkers = ALL_CHAT, acpMarkers = ALL_ACP,
+    version = '3.11.216' } = {}) {
   const root = tmpdir();
   const app = path.join(root, 'Devin.app', 'Contents', 'Resources', 'app');
   const ext = path.join(app, 'extensions', 'windsurf');
@@ -28,6 +30,7 @@ function fakeApp({ cliMarkers = ALL_CLI, lsMarkers = ALL_LS,
   write(path.join(ext, 'bin', 'language_server_macos_arm'), lsMarkers);
   write(path.join(app, 'out', 'vs', 'workbench', 'workbench.desktop.main.js'), desktopMarkers);
   write(path.join(app, 'out', 'vs', 'workbench', 'windsurf-chat-client', 'index.js'), chatMarkers);
+  write(path.join(ext, 'dist', 'extension.js'), acpMarkers);
   fs.writeFileSync(path.join(app, '..', '..', 'Info.plist'),
     `<?xml version="1.0"?><plist><dict><key>CFBundleShortVersionString</key>\n<string>${version}</string></dict></plist>`);
   return { root, extensionPath: ext, cacheFile: path.join(root, 'native-contract.json'),
@@ -42,11 +45,11 @@ test('first run scans, reports ok and writes a signature-keyed cache', async () 
   assert.equal(result.appVersion, '3.11.216');
   assert.deepEqual(logs.map(([k]) => k), ['native-contract-ok']);
   const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-  const sig = [files.cli, files.ls, files.desktop, files.chat]
+  const sig = [files.cli, files.ls, files.desktop, files.chat, files.acp]
     .map(f => sha256(f));
   const sigJoined = (await Promise.all(sig)).join(':');
   assert.equal(cache.signature, sigJoined);
-  assert.equal(Object.keys(cache.stat).length, 4, 'stat covers every artifact');
+  assert.equal(Object.keys(cache.stat).length, 5, 'stat covers every artifact');
   assert.deepEqual(result.missing, {});
   assert.equal(cache.status, 'ok');
 });
@@ -192,9 +195,9 @@ test('each artifact is scanned exactly once for both marker tiers', async () => 
   try {
     const result = await checkNativeContract({ extensionPath, cacheFile });
     assert.equal(result.status, 'ok');
-    const paths = [files.cli, files.ls, files.desktop, files.chat];
-    // Two read streams per artifact (one hash pass + one marker scan) = 8
-    // total; a ninth stream would mean a tier was split into a second scan.
+    const paths = [files.cli, files.ls, files.desktop, files.chat, files.acp];
+    // Two read streams per artifact (one hash pass + one marker scan) = 10
+    // total; an eleventh stream would mean a tier was split into a second scan.
     for (const file of paths) assert.equal(scanned.filter(f => f === file).length, 2, file);
   } finally { fs.createReadStream = orig; }
 });
@@ -262,7 +265,7 @@ test('the devin subdir path resolves to the same app root', async () => {
   const { extensionPath } = fakeApp();
   const viaExt = artifacts(extensionPath);
   const viaDevin = artifacts(path.join(extensionPath, 'devin'));
-  for (const key of ['appRoot', 'cli', 'ls', 'desktop', 'chat', 'plist'])
+  for (const key of ['appRoot', 'cli', 'ls', 'desktop', 'chat', 'acp', 'plist'])
     assert.equal(viaDevin[key], viaExt[key], `${key} must resolve identically`);
 });
 
@@ -337,4 +340,32 @@ test('a matching probe version still reuses the cache', async () => {
   const result = await checkNativeContract({ extensionPath, cacheFile, log: (k, v) => logs.push([k, v]) });
   assert.equal(result.reused, true);
   assert.equal(logs.length, 0, 'a valid cache hit must not rescan or log');
+});
+
+test('a missing required marker on the acp bundle reports drift', async () => {
+  const { extensionPath, cacheFile } = fakeApp({
+    acpMarkers: ALL_ACP.filter(m => m !== 'reconnectingMaxDelay') });
+  const result = await checkNativeContract({ extensionPath, cacheFile });
+  assert.equal(result.status, 'drift');
+  assert.deepEqual(result.missing.acp, ['reconnectingMaxDelay']);
+});
+
+test('a missing acp bundle is drift, not unavailable', async () => {
+  const { extensionPath, cacheFile } = fakeApp({ acpMarkers: null });
+  const logs = [];
+  const result = await checkNativeContract({ extensionPath, cacheFile, log: (k, v) => logs.push([k, v]) });
+  assert.equal(result.status, 'drift');
+  assert.deepEqual(result.missing.acp, ['artifact-missing']);
+  assert.equal(logs[0][0], 'native-contract-drift');
+});
+
+test('a probe:1 cache is never reused even when stat and signature match', async () => {
+  const { extensionPath, cacheFile } = fakeApp();
+  await checkNativeContract({ extensionPath, cacheFile });
+  const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+  fs.writeFileSync(cacheFile, JSON.stringify({ ...cache, probe: 1 }));
+  const result = await checkNativeContract({ extensionPath, cacheFile });
+  assert.notEqual(result.reused, true, 'an older probe version must force a real scan');
+  const rewritten = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+  assert.equal(rewritten.probe, PROBE_VERSION);
 });
