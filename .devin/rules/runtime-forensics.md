@@ -79,3 +79,10 @@ backend `sourceId` 只覆盖 backend require 闭包；宿主侧改动（`activat
 读法：从当前窗口 output channel 的 `host-build` 事件取 `pid` + `instanceId` + `recordFile`，对照同 pid 进程的启动/`activatedAt` 时间，再读该条指定记录——**不要**按目录全局最新排序挑（可能选到另一窗口的记录）。**撤回旧判据**：单看 `writtenAt` 与 vsix mtime 先后**不充分**——它只是磁盘快照（`kind: 'disk-source-snapshot'`），证明的是激活时磁盘上是哪份代码，不等于已加载模块的绝对证明。旧的单例 `host-build.json` 是遗留用户文件，不作清理，也不得再当验收判据。
 
 它是**诊断用**身份：不参与 backend 重启判定，也不得混入 `SOURCE_FILES`。
+
+## LS/ACP 注入的边界（2026-10-26 出厂产物核对）
+
+- **`http.request` 的补丁是扩展宿主级共享，不是「每个扩展一份」**：扩展宿主只拦截 `vscode`（外加 `open`/`opn` 与 ripgrep 别名），`http` 走 Node 内置的进程级缓存，因此 `ls-injection` 的包装对**所有**扩展生效。`vscode.windsurfLanguageServer` 是 per-extension 对象（每扩展一份 `_apiFactory` 结果），所以 `setPort`/`setChildLanguageServerInfo` 的包装精确，`http.request` 的不精确。后果：兜底心跳探针可能被后装的第三方包装遮蔽（`status.httpHook === 'shadowed'`，一次性 `ls-http-hook-shadowed` 事件），主路径（`setPort` 重发桥端口）不受影响。**不要把「只影响原生扩展」当作改写 `http` 的前提。**
+- **本地 connector 的 transport-down 状态是 `reconnectingMaxDelay`**：基类 `transportDownStatus()` 对本地恒返回它（进程退出与握手失败都走），只有 `RemoteAcpConnector` 才覆写成 `disconnected`；真实状态集合为 `connecting|connected|reconnecting|reconnectingMaxDelay|disconnected|disabled`，**没有 `disposed`**。插件只挂本地 connector，终态匹配漏掉 `reconnectingMaxDelay` 会让 agent 崩溃后的定时器与会话状态不回收。
+- **ACP 注入只能覆盖「安装之后」的注册**：`createAcpRegistry` 包的是 `api.registerConnection`，既有 connector 在扩展宿主私有的 `_connectors` Map 里、外部无法枚举。激活顺序不利时三层全部静默失效（面板停在 `waiting`），因此注册表在首个 layer 装上后 30 s 内没有任何 attach 时记一次 `acp-attach-missing`。
+- **UI 侧不持久化 worktree LS 端口**：`_saveWorktreeLsGroupInfo` 只存 `parentWorkspaceUri`/`worktreeUri`/`creationTimestamp`，这是桥端口（每次会话随机）不会写进跨窗口状态的**当前**原因。若该字段集合将来加入 `port`，恢复路径会连到已死的桥端口——改 `setChildLanguageServerInfo` 附近代码前先核这条。

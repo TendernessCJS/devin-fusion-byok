@@ -30,6 +30,7 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   通道的实际入口）、Fast Context 的 `GetDevstralStream`（`src/fast-context/remote-client.cjs`）。这些接口不稳定，改动附近代码时按「可能失败」处理，
   不要在失败路径上伪装成功。
 - **实测依据与排障判据已分卷到 `runtime-forensics.md`**：`authenticate._meta` 与 env 的凭据优先级、`agentEnv` 只覆盖主 agent、注入是否生效的判据、catalog 两跳与日志归属、连接池残渣、桥的 gzip 体积都在那一卷。**改注入或排查「改了没生效」前必读**；两条禁令仍留在本卷：**不要用 `meta.api_key` 替代 env 注入**，**不要把某一时刻的 `lsof` 计数当作架构常量**。
+- **LS/ACP 注入的三条边界**：`http.request` 补丁是宿主级共享（只有 `windsurfLanguageServer` 是 per-extension）、ACP 只钩未来注册、本地 connector 的终态是 `reconnectingMaxDelay`——判据见 `runtime-forensics.md`。
 - **`src/protocol/` 是多关注点的混合体，不要按目录名或文件名推断职责**（8 个文件，2026-10-18 拆分后核对）：① 协议转换 —— `native-chat-codec.cjs`（**Devin 侧**：解析
   `exa.chat_pb` 原生请求 + 造出站 ACP chunk）、`inference.cjs`（**三协议统一入口**：`serveChat` + `processor` 的流编排/有界降级/推理状态通道衔接；
   **不是 Responses 专用**）；它的内部职责已按协议语义拆开：`provider-request.cjs`（格式判定/端点/请求体构造，**OpenAI Chat 的请求体在这里**）、
