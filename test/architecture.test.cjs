@@ -370,18 +370,22 @@ const sharedWriterFiles = () => [
   ...fs.readdirSync(path.join(srcRoot, 'activation')).filter(name => name.endsWith('.cjs'))
     .map(name => path.join(srcRoot, 'activation', name)),
 ];
-// Assignments and in-place mutations are both writes: `shared.x =` and
+// Assignments and in-place mutations are both writes: `shared.x =`, compound
+// and logical assignments, `++`/`--`, `delete shared.x`, and
 // `shared.x.push(...)`/`shared.x.set(...)` etc. move state all the same.
 const WRITE_PATTERN = (holder, slot) => new RegExp(
-  String.raw`${holder}\.(${slot})\s*(?:\?\?=|\|\|=|=)(?!=)` +
+  String.raw`(?:delete\s+|\+\+\s*|--\s*)${holder}\.(${slot})` +
+  String.raw`|${holder}\.(${slot})\s*(?:\+\+|--)` +
+  String.raw`|${holder}\.(${slot})\s*(?:\?\?=|\|\|=|&&=|\*\*=|\+=|-=|\*=|\/=|%=|=)(?!=)` +
   String.raw`|${holder}\.(${slot})\.(?:set|delete|clear|push|add|splice)\s*\(`, 'g');
+const writtenSlot = match => match.slice(1).find(value => value !== undefined);
 const writeViolations = (holder, multiWriter, readFile = fs.readFileSync) => {
   const writers = new Map();
   const pattern = WRITE_PATTERN(holder, '[A-Za-z][A-Za-z0-9]*');
   for (const file of sharedWriterFiles()) {
     const label = path.relative(srcRoot, file).split(path.sep).join('/');
     for (const match of readFile(file, 'utf8').matchAll(pattern)) {
-      const slot = match[1] || match[2];
+      const slot = writtenSlot(match);
       if (!writers.has(slot)) writers.set(slot, new Set());
       writers.get(slot).add(label);
     }
@@ -409,11 +413,9 @@ const storeWriterViolations = (readFile = fs.readFileSync) => {
   for (const [store, owners] of Object.entries(STORE_OWNER)) {
     for (const file of sharedWriterFiles()) {
       const label = path.relative(srcRoot, file).split(path.sep).join('/');
-      const pattern = new RegExp(
-        String.raw`stores\.${store}\.([A-Za-z][A-Za-z0-9]*)\s*(?:\?\?=|\|\|=|=)(?!=)` +
-        String.raw`|stores\.${store}\.([A-Za-z][A-Za-z0-9]*)\.(?:set|delete|clear|push|add|splice)\s*\(`, 'g');
+      const pattern = WRITE_PATTERN(String.raw`stores\.${store}`, '[A-Za-z][A-Za-z0-9]*');
       for (const match of readFile(file, 'utf8').matchAll(pattern)) {
-        if (!owners.includes(label)) violations.push(`${store}.${match[1] || match[2]} <- ${label}`);
+        if (!owners.includes(label)) violations.push(`${store}.${writtenSlot(match)} <- ${label}`);
       }
     }
   }
@@ -453,7 +455,7 @@ test('the store writer guard rejects an injected foreign writer', () => {
 // defaults it degrades to a silent no-op instead of an error.
 const installTimeCaptures = (readFile = fs.readFileSync) => {
   const source = readFile(path.join(srcRoot, 'activation', 'panel-install.cjs'), 'utf8');
-  return [...source.matchAll(/^\s*(selectFusion|refreshNativeModels):(?!\s*\w+\s*=>|\s*\([^)]*\)\s*=>)/gm)].map(match => match[1]);
+  return [...source.matchAll(/\b(selectFusion|refreshNativeModels):(?!\s*\w+\s*=>|\s*\([^)]*\)\s*=>)/g)].map(match => match[1]);
 };
 
 test('panel installers resolve function slots at call time', () => {
@@ -463,4 +465,52 @@ test('panel installers resolve function slots at call time', () => {
 test('the call-time guard rejects an injected value capture', () => {
   const violations = installTimeCaptures(() => '  selectFusion: shared.saveFusionChoice,\n');
   assert.deepEqual(violations, ['selectFusion'], 'a value capture must be reported');
+});
+
+const reverted = (from, to) => file => fs.readFileSync(file, 'utf8').replace(from, to);
+
+test('the call-time guard catches a refreshNativeModels value capture in real source', () => {
+  const violations = installTimeCaptures(reverted(
+    'refreshNativeModels: () => stores.nativeCatalog.refreshNativeModels()',
+    'refreshNativeModels: stores.nativeCatalog.refreshNativeModels'));
+  assert.deepEqual(violations, ['refreshNativeModels']);
+});
+
+test('the call-time guard catches a selectFusion value capture in real source', () => {
+  const violations = installTimeCaptures(reverted(
+    'selectFusion: uid => shared.saveFusionChoice(uid)',
+    'selectFusion: shared.saveFusionChoice'));
+  assert.deepEqual(violations, ['selectFusion']);
+});
+
+for (const snippet of ['stores.acpObservation.seq++;', 'stores.acpObservation.seq += 1;', 'delete stores.acpObservation.seq;']) {
+  test(`the store writer guard rejects '${snippet}'`, () => {
+    const target = path.join(srcRoot, 'activation', 'catalog-sync.cjs');
+    const violations = storeWriterViolations(file => path.resolve(file) === target
+      ? fs.readFileSync(file, 'utf8') + '\n' + snippet + '\n'
+      : fs.readFileSync(file, 'utf8'));
+    assert.ok(violations.includes('acpObservation.seq <- activation/catalog-sync.cjs'),
+      snippet + ' must be reported');
+  });
+}
+
+for (const snippet of ['shared.backendStatus++;', 'shared.backendStatus += 1;', 'delete shared.backendStatus;']) {
+  test(`the shared writer guard rejects '${snippet}'`, () => {
+    const target = path.join(srcRoot, 'activation', 'catalog-sync.cjs');
+    const violations = sharedWriterViolations(file => path.resolve(file) === target
+      ? fs.readFileSync(file, 'utf8') + '\n' + snippet + '\n'
+      : fs.readFileSync(file, 'utf8'));
+    assert.ok(violations.includes('backendStatus <- activation/catalog-sync.cjs, activation/commands.cjs, activation/enable.cjs'),
+      snippet + ' must be reported');
+  });
+}
+
+test('every activation store module stays a zero-dependency leaf', () => {
+  const graph = createSourceGraph();
+  for (const entry of filesUnder(path.join('activation', 'stores'))) {
+    assert.deepEqual(closureOf(graph, entry), [entry],
+      entry + ' must not require repository modules or vscode');
+    assert.deepEqual(graph.depsOf(path.join(srcRoot, entry), { tolerateDynamic: true }).deps, [],
+      entry + ' must not require anything, not even builtins');
+  }
 });
