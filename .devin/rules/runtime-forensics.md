@@ -61,15 +61,15 @@ description: "Apply when diagnosing why injection or catalog changes appear not 
 - 归属分组（2026-10-26 已按此落地）：`deps.stores.nativeCatalog` **22 槽**（owner `catalog-sync`）、`deps.stores.cacheSync` **3 槽**（owner `cache-sync`）、`deps.stores.acpObservation` **2 槽**（**owner 是 `enable`**，读者才是 `cache-sync`+`panel-install`——正因写者在外，它不能并进 cacheSync 私有状态）；仍在 `shared` 的 **14 槽**：`commands` 的 4 个函数槽、`panel-install` 5、`backendStatus` 1、continuation 2、`ensureEnabled`/`disablePromise` 2。
 - 测试伪造规模（拆分成本的主项）：只有 **2** 个测试文件实质构造 `shared`——`native-models-sync`（12 槽 / 690 行）与 `activation-sync`（3 槽 / 265 行）。
 - 失效判据分布：generation 绑定 6 处（`enable.cjs:64/91/93/99/114`、`catalog-sync.cjs:71`，其中 **4 处字面完全相同**）、generation 无关 8 处、abort 2 处；曾存在肯定/否定两种写法混用（`enable.cjs:120`）。
-- **`enable.cjs` 第 66–90 行之间没有失效检查**（读设置 → 存 receipt → `globalState.update`×2 → `settings.update`）：禁用发生在这些 `await` 期间时，写入仍会完成，下一处判据才发现。自愈依赖 teardown 按 receipt 还原，**但这条自愈没有测试断言**——做 `guarded()` 时先补这个测试再动控制流。
+- **历史判断已推翻**：曾认为「禁用发生在 enable 写入段的 `await` 期间时，写入仍会完成、teardown 会按 receipt 自愈还原」——75222e4 与后续收口已证明 receipt **不提供异步顺序**（恢复 snapshot 先取、在途写入后落，receipt 已被清空），现由 `managed-settings.cjs` 的 `critical`/`drain` 保证顺序，恢复**必须重读**设置与 receipt。
 - 本次审查的两处误判（已更正，别再重复）：① `catalog → runtime` **不是**层方向倒置，`port.cjs` 留在 `runtime/` 才能待在 backend 闭包内；② `goal/controller` 与 `auto-continue` **不是**「补丁 + 状态机」混排——前者本身就是 store/状态机（补丁在独立文件 `goal/continue-hook.cjs`），后者没有替换式补丁（走 `loadAcpApi`），它真实的混排是「错误文本匹配器 / 连接挂载 / 续跑状态机」三件事。
 
-## 运行中宿主是哪一份代码（host-build.json）
+## 宿主激活关联与磁盘源码快照（host-builds）
 
 backend `sourceId` 只覆盖 backend require 闭包；宿主侧改动（`activation/`、`panel/` 等）**不会**改变它，因此**不能**用它判断宿主代码新旧。
 
-宿主每次 `activate()` 会写 `<globalStorage>/host-build.json`：`{ id, files, version, extension, writtenAt }`。`id` 是对 `src/**/*.cjs` 的路径+内容 sha256（`node_modules`/`.git` 忽略），`files` 是参与哈希的文件数。
+宿主每次 `activate()` 会写一条**按激活实例**的记录 `<globalStorage>/host-builds/<pid>-<instanceId>.json`：`{ id, files, version, extension, writtenAt, pid, instanceId, activatedAt, kind: 'disk-source-snapshot', recordFile }`。`id` 是对 `src/**/*.cjs` 的路径+内容 sha256（`node_modules`/`.git` 忽略），`files` 是参与哈希的文件数。同 PID 多次激活各写各的、互不覆盖；`recordFile` 是相对 globalStorage 的路径，日志 `host-build` 事件同字段，可把记录关联到具体 output channel/进程。
 
-读法：`cat "$HOME/Library/Application Support/Devin/User/globalStorage/local.devin-fusion-byok/host-build.json"`。`writtenAt` 晚于 vsix 落盘时间 ⇒ 运行中的宿主已是新代码；早于 ⇒ 还需要重载窗口。
+读法：从当前窗口 output channel 的 `host-build` 事件取 `pid` + `instanceId` + `recordFile`，对照同 pid 进程的启动/`activatedAt` 时间，再读该条指定记录——**不要**按目录全局最新排序挑（可能选到另一窗口的记录）。**撤回旧判据**：单看 `writtenAt` 与 vsix mtime 先后**不充分**——它只是磁盘快照（`kind: 'disk-source-snapshot'`），证明的是激活时磁盘上是哪份代码，不等于已加载模块的绝对证明。旧的单例 `host-build.json` 是遗留用户文件，不作清理，也不得再当验收判据。
 
 它是**诊断用**身份：不参与 backend 重启判定，也不得混入 `SOURCE_FILES`。

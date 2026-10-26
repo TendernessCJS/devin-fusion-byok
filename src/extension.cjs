@@ -32,14 +32,16 @@ const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, rese
   activationGeneration: 0, reconcileHalted: true, activationDisposed: true };
 
 async function activate(context) {
+  const activatedAt = new Date().toISOString();
   lifecycle.activationDisposed = false;
   const output = vscode.window.createOutputChannel('Devin Fusion BYOK');
   context.subscriptions.push(output);
   const log = (event, data) => output.appendLine(JSON.stringify({ time: new Date().toISOString(), event, ...(data || {}) }));
   const root = context.globalStorageUri.fsPath, configFile = path.join(root, 'config.json');
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  const build = publishHostBuild({ root, extensionPath: context.extensionPath, version: context.extension?.packageJSON?.version });
-  log('host-build', build ? { id: build.id.slice(0, 12), files: build.files, version: build.version } : { unavailable: true });
+  const build = publishHostBuild({ root, extensionPath: context.extensionPath, version: context.extension?.packageJSON?.version, activatedAt });
+  log('host-build', build ? { id: build.id.slice(0, 12), files: build.files, version: build.version,
+    pid: build.pid, instanceId: build.instanceId, activatedAt: build.activatedAt, recordFile: build.recordFile, kind: build.kind } : { unavailable: true });
   if (!fs.existsSync(configFile)) updateConfig(configFile, doc => Object.assign(doc, defaultConfig()));
   try {
     readDoc(configFile);
