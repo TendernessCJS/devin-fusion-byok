@@ -514,3 +514,38 @@ test('every activation store module stays a zero-dependency leaf', () => {
       entry + ' must not require anything, not even builtins');
   }
 });
+
+test('the backend source hash never absorbs host-side activation modules', () => {
+  const files = require('../src/runtime/source-identity.cjs').deriveSourceFiles();
+  assert.ok(!files.some(file => file.split(path.sep).join('/').includes('activation/')),
+    'activation/ files are host-side; host-build.json tracks them separately');
+});
+
+test('host-identity.cjs requires no repository module', () => {
+  const graph = createSourceGraph();
+  assert.deepEqual(closureOf(graph, path.join('activation', 'host-identity.cjs')),
+    [path.join('activation', 'host-identity.cjs')],
+    'node builtins are allowed; repository modules would leak host paths into other closures');
+});
+
+// The ingest body limit must trip while collect() is still pulling the stream;
+// a bare collect(request) buffers up to the 64 MiB default before checking.
+const collectLimitViolations = source => {
+  const violations = [];
+  if (!/collect\(\s*request\s*,\s*MAX_BODY_BYTES\s*\)/.test(source)) violations.push('collect is not bounded by MAX_BODY_BYTES');
+  if (/collect\(\s*request\s*\)/.test(source)) violations.push('bare collect(request)');
+  return violations;
+};
+
+test('the native ingest body limit is enforced during collection', () => {
+  const source = fs.readFileSync(path.join(srcRoot, 'runtime', 'backend-control.cjs'), 'utf8');
+  assert.deepEqual(collectLimitViolations(source), [],
+    'the 4 MiB limit must apply while collecting, or up to 64 MiB is buffered first');
+});
+
+test('the collect limit guard rejects a reverted bare collect', () => {
+  const source = fs.readFileSync(path.join(srcRoot, 'runtime', 'backend-control.cjs'), 'utf8')
+    .replace('collect(request, MAX_BODY_BYTES)', 'collect(request)');
+  assert.ok(collectLimitViolations(source).length > 0,
+    'a bare collect(request) must be reported');
+});

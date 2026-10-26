@@ -22,6 +22,7 @@ const { createNativeCatalogState } = require('./activation/stores/native-catalog
 const { createCacheSyncState } = require('./activation/stores/cache-sync.cjs');
 const { createAcpObservationState } = require('./activation/stores/acp-observation.cjs');
 const { createManagedSettingsGate } = require('./activation/managed-settings.cjs');
+const { publishHostBuild } = require('./activation/host-identity.cjs');
 // Shared lifecycle state across activate/teardown/deactivate.
 const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
   cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
@@ -37,6 +38,8 @@ async function activate(context) {
   const log = (event, data) => output.appendLine(JSON.stringify({ time: new Date().toISOString(), event, ...(data || {}) }));
   const root = context.globalStorageUri.fsPath, configFile = path.join(root, 'config.json');
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const build = publishHostBuild({ root, extensionPath: context.extensionPath, version: context.extension?.packageJSON?.version });
+  log('host-build', build ? { id: build.id.slice(0, 12), files: build.files, version: build.version } : { unavailable: true });
   if (!fs.existsSync(configFile)) updateConfig(configFile, doc => Object.assign(doc, defaultConfig()));
   try {
     readDoc(configFile);
