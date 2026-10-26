@@ -507,7 +507,7 @@ for (const snippet of ['shared.backendStatus++;', 'shared.backendStatus += 1;', 
 
 test('every activation store module stays a zero-dependency leaf', () => {
   const graph = createSourceGraph();
-  for (const entry of filesUnder(path.join('activation', 'stores'))) {
+  for (const entry of [...filesUnder(path.join('activation', 'stores')), path.join('activation', 'managed-settings.cjs')]) {
     assert.deepEqual(closureOf(graph, entry), [entry],
       entry + ' must not require repository modules or vscode');
     assert.deepEqual(graph.depsOf(path.join(srcRoot, entry), { tolerateDynamic: true }).deps, [],
