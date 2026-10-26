@@ -84,7 +84,7 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
 
 ## 架构审查结论（2026-10-26 实测；耦合清单，不是待办清单）
 
-- **`shared` 是刻意的反单例容器，别改回模块级单例**（会跨 activate 串状态）。它的槽所有权由测试强制：每槽只允许一个写者，唯一多写者在 `test/architecture.test.cjs` 的 `SHARED_MULTI_WRITER` 白名单里，**新增写者必须改槽归属或显式进白名单**。收敛方向是按所有权拆成显式 store、跨 installer 走命名方法（槽数、读写点数与归属分组见 `runtime-forensics.md`）。已拆出 `deps.stores`（`nativeCatalog`/`cacheSync`/`acpObservation`）；`STORE_OWNER` 守卫把每个 store 限制为**单一 owner 写者**，且判定**同时识别赋值与方法变异**（`shared.x.push(...)` 也算写）。
+- **`shared` 是刻意的反单例容器，别改回模块级单例**（会跨 activate 串状态）。它的槽所有权由测试强制：每槽只允许一个写者，唯一多写者在 `test/architecture.test.cjs` 的 `SHARED_MULTI_WRITER` 白名单里，**新增写者必须改槽归属或显式进白名单**。收敛方向是按所有权拆成显式 store、跨 installer 走命名方法（槽数、读写点数与归属分组见 `runtime-forensics.md`）。已拆出 `deps.stores`（`nativeCatalog`/`cacheSync`/`acpObservation`/`panel`）；`STORE_OWNER` 守卫把每个 store 限制为**单一 owner 写者**，且判定**同时识别赋值与方法变异**（`shared.x.push(...)` 也算写）。
 - **激活失效判据是手工重复的**：`enable()` 里 `generation !== lifecycle.activationGeneration` 共 **5 处**（4 处在 `await` 之后、第 5 处是 publication 事件回调，且还要叠加 `lifecycle.publication !== publisher`）。**新增 `await` 必须补一次检查**，漏一处就会在“用户已禁用”之后把钩子装回去。
 - **`runtime/port.cjs` 留在 `runtime/` 是刻意的，别挪**：`backend.cjs` 自己 `require('./port.cjs')`，而 backend 闭包守卫禁止 `network` 目录、根文件只允许 `catalog.cjs` ⇒ 挪到 `network/` 或 `src/` 根会让两条守卫**同时**失败。看着像层方向倒置，实际是 `BACKEND_RUNTIME_ROOT` 白名单允许的设计（`catalog/build.cjs` 与 `config/config.cjs` 引它只为“单一地址来源”）。
 - **`test/architecture.test.cjs` 是架构的权威表述**：backend 闭包 allow/deny-list、`src/runtime/` 根目录 7 文件白名单、`network/`+`update/` 的依赖上限、`proxy-config` 叶子、文件级零环、动态 require 白名单——**改依赖关系前先读它**，比读散文式文档可靠。

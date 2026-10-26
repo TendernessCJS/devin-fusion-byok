@@ -407,6 +407,7 @@ const STORE_OWNER = {
   nativeCatalog: ['activation/catalog-sync.cjs'],
   cacheSync: ['activation/cache-sync.cjs'],
   acpObservation: ['activation/enable.cjs'],
+  panel: ['activation/panel-install.cjs'],
 };
 const storeWriterViolations = (readFile = fs.readFileSync) => {
   const violations = [];

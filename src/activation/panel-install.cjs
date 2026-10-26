@@ -4,30 +4,27 @@ const { spawn } = require('node:child_process');
 const { updateConfig, applyKeyDelta } = require('../config/store.cjs');
 const { live } = require('./liveness.cjs');
 const { createManager } = require('../panel/manager.cjs');
+const { statusTooltip } = require('../panel/status-text.cjs');
 const { safeError } = require('./errors.cjs');
 const { checkInjectionHealth } = require('../runtime/host/injection-health.cjs');
 const { PORT } = require('../runtime/port.cjs');
 
 function installPanel({ deps, shared, cacheSync, afterChange }) {
   const { lifecycle, config, configFile, vscode, context, log, catalog, stores } = deps;
-  shared.statusBar = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 20);
-  if (shared.statusBar) {
-    shared.statusBar.text = 'Fusion BYOK'; shared.statusBar.tooltip = '管理供应商、模型列表与 Fusion 组合';
-    shared.statusBar.command = 'devinFusionByok.openPanel'; shared.statusBar.show(); context.subscriptions.push(shared.statusBar);
+  stores.panel.statusBar = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 20);
+  if (stores.panel.statusBar) {
+    stores.panel.statusBar.text = 'Fusion BYOK'; stores.panel.statusBar.tooltip = '管理供应商、模型列表与 Fusion 组合';
+    stores.panel.statusBar.command = 'devinFusionByok.openPanel'; stores.panel.statusBar.show(); context.subscriptions.push(stores.panel.statusBar);
   }
-  shared.updateStatusBar = () => {
+  stores.panel.updateStatusBar = () => {
     try {
-      if (!shared.statusBar) return;
-      if (config().enabled === false) { shared.statusBar.tooltip = 'Fusion BYOK：已停用，点击打开面板启用'; return; }
-      if (!stores.nativeCatalog.nativeModels.size) {
-        shared.statusBar.tooltip = 'Fusion BYOK：还没收到官方模型——打开一次模型选择器后会自动同步，或点击打开面板手动刷新';
-        return;
-      }
-      if (stores.cacheSync.cliCacheReport?.errors?.length) {
-        shared.statusBar.tooltip = `Fusion BYOK：${stores.cacheSync.cliCacheReport.errors.length} 个 CLI 缓存文件写入失败，点击打开面板查看详情`;
-        return;
-      }
-      shared.statusBar.tooltip = `Fusion BYOK：运行中 · 已镜像 Fusion 组合 ${catalog().matrixUids?.size ?? 0} 条，点击打开面板`;
+      if (!stores.panel.statusBar) return;
+      stores.panel.statusBar.tooltip = statusTooltip({
+        enabled: config().enabled !== false,
+        nativeModelCount: stores.nativeCatalog.nativeModels.size,
+        cacheErrorCount: stores.cacheSync.cliCacheReport?.errors?.length ?? 0,
+        matrixCount: catalog().matrixUids?.size ?? 0,
+      });
     } catch {}
   };
   cacheSync.check();
@@ -42,7 +39,7 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     acpObserved: stores.acpObservation.seq,
     acpOwnModels: stores.acpObservation.ownModels,
   });
-  shared.manager = createManager({ read: config, write: (next, baseline) => updateConfig(configFile, doc => applyKeyDelta(doc, next, baseline)),
+  stores.panel.manager = createManager({ read: config, write: (next, baseline) => updateConfig(configFile, doc => applyKeyDelta(doc, next, baseline)),
     nativeModels: () => [...stores.nativeCatalog.nativeModels.values()], nativeAllowedUids: () => stores.nativeCatalog.nativeAllowedUids, refreshNativeModels: () => stores.nativeCatalog.refreshNativeModels(), nativeCatalogStatus: () => stores.nativeCatalog.nativeCatalogStatus,
     backendStatus: () => shared.backendStatus,
     autoContinueStatus: () => shared.autoContinue ? (shared.autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
@@ -56,7 +53,7 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
   const updater = require('../update.cjs').createUpdateHost({ vscode, context,
     proxy: () => config().updateProxy,
     onChange: () => shared.management?.publishUpdates?.() });
-  shared.management = require('../panel/controller.cjs').createPanelController({ vscode, context, manager: shared.manager, safeError, updater,
+  shared.management = require('../panel/controller.cjs').createPanelController({ vscode, context, manager: stores.panel.manager, safeError, updater,
     fastContext: require('../fast-context/config-ui.cjs').createFastContextHost({ vscode, context }),
     restartApp: () => { log('app-restart-requested'); return require('../runtime/host/app-restart.cjs').restartApp({ vscode, spawn, logFile: path.join(deps.root, 'restart.log'), userData: path.resolve(deps.root, '..', '..', '..') }); },
     reloadWindow: () => { log('window-reload-requested'); return vscode.commands.executeCommand('workbench.action.reloadWindow'); },
@@ -64,20 +61,20 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
   try {
     const native = vscode.extensions.getExtension('codeium.windsurf');
     if (native?.extensionPath && native.packageJSON?.main) {
-      shared.contextObserver = require('../runtime/host/context-observer.cjs').installContextObserver({
+      stores.panel.contextObserver = require('../runtime/host/context-observer.cjs').installContextObserver({
         nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main), isEnabled: () => live(lifecycle, config) });
-      context.subscriptions.push(shared.contextObserver);
+      context.subscriptions.push(stores.panel.contextObserver);
     }
     require('../panel/context-view.cjs').createContextUi({ vscode, context,
-      snapshot: () => shared.contextObserver?.snapshot() || [], catalog,
+      snapshot: () => stores.panel.contextObserver?.snapshot() || [], catalog,
       nativeLabels: () => new Map([...stores.nativeCatalog.nativeModels.values()].map(entry => [entry.uid, entry.label])),
-      focused: () => shared.contextObserver?.focused?.() || null,
+      focused: () => stores.panel.contextObserver?.focused?.() || null,
       isEnabled: () => live(lifecycle, config),
       readMonitor: () => require('../runtime/host/monitor-client.cjs').readMonitor({ root: deps.root }) });
   } catch { log('context-observer-unavailable'); }
   context.subscriptions.push(require('../runtime/host/context-diagnostics.cjs').createContextDiagnostics({
     root: deps.root, version: require('../../package.json').version,
-    readStatus: () => shared.contextObserver?.status(), snapshot: () => shared.contextObserver?.snapshot() || [], readHealth
+    readStatus: () => stores.panel.contextObserver?.status(), snapshot: () => stores.panel.contextObserver?.snapshot() || [], readHealth
   }));
   try {
     require('../panel/goal-view.cjs').createGoalUi({ vscode, context,

@@ -21,6 +21,7 @@ const { teardown } = require('./activation/teardown.cjs');
 const { createNativeCatalogState } = require('./activation/stores/native-catalog.cjs');
 const { createCacheSyncState } = require('./activation/stores/cache-sync.cjs');
 const { createAcpObservationState } = require('./activation/stores/acp-observation.cjs');
+const { createPanelState } = require('./activation/stores/panel.cjs');
 const { createManagedSettingsGate } = require('./activation/managed-settings.cjs');
 const { publishHostBuild } = require('./activation/host-identity.cjs');
 // Shared lifecycle state across activate/teardown/deactivate.
@@ -133,17 +134,16 @@ async function activate(context) {
     nativeCatalog: createNativeCatalogState(),
     cacheSync: createCacheSyncState(),
     acpObservation: createAcpObservationState(),
+    panel: createPanelState(),
   };
   const managedSettings = createManagedSettingsGate();
   const shared = {
     goalContinue: undefined, autoContinue: undefined,
-    management: undefined, manager: undefined,
+    management: undefined,
     backendStatus: 'stopped',
-    contextObserver: undefined,
     ensureEnabled: undefined, disablePromise: undefined,
     saveFusionChoice: undefined, reconcilePreference: undefined,
     disable: undefined, reconcileSelection: undefined,
-    statusBar: undefined, updateStatusBar: undefined,
   };
   installContinuation();
   const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...stores.nativeCatalog.nativeModels.values()], stores.nativeCatalog.nativeAllowedUids); };
@@ -169,7 +169,7 @@ async function activate(context) {
   const cacheSync = installCacheSync({ deps, shared, publish: () => shared.management?.publish() });
   installCatalogSync({ deps, shared, onChange: () => {
     const published = Promise.resolve(shared.management?.publish()).catch(() => {});
-    shared.updateStatusBar();
+    stores.panel.updateStatusBar?.();
     cacheSync.changed();
     return published;
   } });
