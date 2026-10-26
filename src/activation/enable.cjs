@@ -28,7 +28,7 @@ function loopbackExemption(vscode) {
 const { checkNativeContract } = require('./native-contract.cjs');
 
 function installEnable({ deps, shared }) {
-  const { lifecycle, config, vscode, context, log, catalog, nativeMain } = deps;
+  const { lifecycle, config, vscode, context, log, catalog, nativeMain, stores } = deps;
   let enableQueue = Promise.resolve();
   shared.ensureEnabled = () => {
     const operation = enableQueue.then(async () => {
@@ -95,8 +95,8 @@ function installEnable({ deps, shared }) {
     const native = vscode.extensions.getExtension('codeium.windsurf');
     if (!native) throw new Error('未找到 Devin 原生扩展');
     const injected = await installLsInjection({ nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main),
-      createBridge: (port, extra) => createLsBridge(port, { ...extra, getCatalog: catalog, log, onNativeModels: shared.observeNativeModels,
-        onAllowedUids: shared.observeAllowedUids }), log });
+      createBridge: (port, extra) => createLsBridge(port, { ...extra, getCatalog: catalog, log, onNativeModels: stores.nativeCatalog.observeNativeModels,
+        onAllowedUids: stores.nativeCatalog.observeAllowedUids }), log });
     if (superseded(lifecycle, config, generation) || lifecycle.activationDisposed) {
       try { await injected.dispose(); } catch {}
       return;
@@ -119,7 +119,7 @@ function installEnable({ deps, shared }) {
       lifecycle.authStatus?.dispose?.();
       lifecycle.authStatus = installAuthStatusInjection({ nativeMainPath: nativeMain, getCatalog: catalog, log,
         isEnabled: () => !superseded(lifecycle, config, generation) && !lifecycle.activationDisposed,
-        onNativeModels: entries => { try { shared.observeNativeModels?.(entries); } catch {} },
+        onNativeModels: entries => { try { stores.nativeCatalog.observeNativeModels?.(entries); } catch {} },
         onPublication: publish });
       // A foreign wrapper that won the method after our install leaves the hook
       // deaf — surface it as the same degraded state as a missing hook instead
@@ -133,9 +133,9 @@ function installEnable({ deps, shared }) {
       log('auth-status-injection-unavailable');
       publish({ phase: 'failed', code: 'hook-unavailable' });
     }
-    try { if (nativeMain) { lifecycle.acpObserver?.dispose?.(); lifecycle.acpObserver = installAcpObserver({ nativeMainPath: nativeMain, log, onModels: counts => { shared.acpObservationSeq++; shared.acpOwnModels = counts.ownModels; } }); } }
+    try { if (nativeMain) { lifecycle.acpObserver?.dispose?.(); lifecycle.acpObserver = installAcpObserver({ nativeMainPath: nativeMain, log, onModels: counts => { stores.acpObservation.seq++; stores.acpObservation.ownModels = counts.ownModels; } }); } }
     catch { log('acp-observer-error'); }
-    shared.startNativeSync();
+    stores.nativeCatalog.startNativeSync();
     log('activated', { nativeVersion: native.packageJSON.version, storage: deps.root });
     // Post-activation drift probe: async and unobserved by the flow; the
     // result is surfaced through `lifecycle.nativeContract` for the panel.

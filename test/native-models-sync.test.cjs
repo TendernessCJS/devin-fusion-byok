@@ -316,7 +316,8 @@ function syncFixture({ read = async () => ({ status: 'ready', models: [] }) } = 
     nativeAuthoritative: false,
   };
   let changes = 0;
-  module.exports.installCatalogSync({ deps: { lifecycle, config: () => ({}), log: (event, data) => logs.push({ event, data }), root: '/nonexistent' },
+  module.exports.installCatalogSync({ deps: { lifecycle, config: () => ({}), log: (event, data) => logs.push({ event, data }), root: '/nonexistent',
+    stores: { nativeCatalog: shared } },
     shared, onChange: () => { changes += 1; } });
   return { shared, logs, pushes, changes: () => changes };
 }

@@ -9,7 +9,7 @@ const { checkInjectionHealth } = require('../runtime/host/injection-health.cjs')
 const { PORT } = require('../runtime/port.cjs');
 
 function installPanel({ deps, shared, cacheSync, afterChange }) {
-  const { lifecycle, config, configFile, vscode, context, log, catalog } = deps;
+  const { lifecycle, config, configFile, vscode, context, log, catalog, stores } = deps;
   shared.statusBar = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 20);
   if (shared.statusBar) {
     shared.statusBar.text = 'Fusion BYOK'; shared.statusBar.tooltip = '管理供应商、模型列表与 Fusion 组合';
@@ -19,12 +19,12 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     try {
       if (!shared.statusBar) return;
       if (config().enabled === false) { shared.statusBar.tooltip = 'Fusion BYOK：已停用，点击打开面板启用'; return; }
-      if (!shared.nativeModels.size) {
+      if (!stores.nativeCatalog.nativeModels.size) {
         shared.statusBar.tooltip = 'Fusion BYOK：还没收到官方模型——打开一次模型选择器后会自动同步，或点击打开面板手动刷新';
         return;
       }
-      if (shared.cliCacheReport?.errors?.length) {
-        shared.statusBar.tooltip = `Fusion BYOK：${shared.cliCacheReport.errors.length} 个 CLI 缓存文件写入失败，点击打开面板查看详情`;
+      if (stores.cacheSync.cliCacheReport?.errors?.length) {
+        shared.statusBar.tooltip = `Fusion BYOK：${stores.cacheSync.cliCacheReport.errors.length} 个 CLI 缓存文件写入失败，点击打开面板查看详情`;
         return;
       }
       shared.statusBar.tooltip = `Fusion BYOK：运行中 · 已镜像 Fusion 组合 ${catalog().matrixUids?.size ?? 0} 条，点击打开面板`;
@@ -37,16 +37,16 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     bridgeState: lifecycle.connection?.status?.state,
     envValue: (() => { try { return vscode.workspace.getConfiguration('devin.acp').get('agentEnv')?.['devin-cli']?.WINDSURF_API_SERVER_URL ?? null; } catch { return null; } })(),
     expectedEnv: 'http://127.0.0.1:' + PORT,
-    cliCache: shared.cliCacheReport,
+    cliCache: stores.cacheSync.cliCacheReport,
     desktopCatalog: lifecycle.publication?.status()?.state,
-    acpObserved: shared.acpObservationSeq,
-    acpOwnModels: shared.acpOwnModels,
+    acpObserved: stores.acpObservation.seq,
+    acpOwnModels: stores.acpObservation.ownModels,
   });
   shared.manager = createManager({ read: config, write: (next, baseline) => updateConfig(configFile, doc => applyKeyDelta(doc, next, baseline)),
-    nativeModels: () => [...shared.nativeModels.values()], nativeAllowedUids: () => shared.nativeAllowedUids, refreshNativeModels: shared.refreshNativeModels, nativeCatalogStatus: () => shared.nativeCatalogStatus,
+    nativeModels: () => [...stores.nativeCatalog.nativeModels.values()], nativeAllowedUids: () => stores.nativeCatalog.nativeAllowedUids, refreshNativeModels: stores.nativeCatalog.refreshNativeModels, nativeCatalogStatus: () => stores.nativeCatalog.nativeCatalogStatus,
     backendStatus: () => shared.backendStatus,
     autoContinueStatus: () => shared.autoContinue ? (shared.autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
-    refreshCliCaches: () => cacheSync.refresh(), cliCacheStatus: () => shared.cliCacheReport,
+    refreshCliCaches: () => cacheSync.refresh(), cliCacheStatus: () => stores.cacheSync.cliCacheReport,
     refreshDesktopCatalog: async () => { lifecycle.publication?.changed({ force: true }); await shared.management?.publish(); },
     desktopCatalogStatus: () => lifecycle.publication?.status() || null,
     nativeContract: () => lifecycle.nativeContract || null,
@@ -70,7 +70,7 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     }
     require('../panel/context-view.cjs').createContextUi({ vscode, context,
       snapshot: () => shared.contextObserver?.snapshot() || [], catalog,
-      nativeLabels: () => new Map([...shared.nativeModels.values()].map(entry => [entry.uid, entry.label])),
+      nativeLabels: () => new Map([...stores.nativeCatalog.nativeModels.values()].map(entry => [entry.uid, entry.label])),
       focused: () => shared.contextObserver?.focused?.() || null,
       isEnabled: () => live(lifecycle, config),
       readMonitor: () => require('../runtime/host/monitor-client.cjs').readMonitor({ root: deps.root }) });

@@ -4,19 +4,19 @@ const { mergeNativeEntry, normalizeNativeEntry, normalizeAllowedUids } = require
 const { live, superseded } = require('./liveness.cjs');
 
 function installCatalogSync({ deps, shared, onChange }) {
-  const { lifecycle, config, log } = deps;
+  const { lifecycle, config, log, stores } = deps;
   const PUSH_INTERVAL_MS = 5 * 1000;
   const ALLOWED_UNRESTRICTED_STREAK = 3;
-  shared.nativeAllowedMode = 'restricted';
-  shared.nativeAllowedEmptyStreak = 0;
+  stores.nativeCatalog.nativeAllowedMode = 'restricted';
+  stores.nativeCatalog.nativeAllowedEmptyStreak = 0;
   // The push gate tracks what was actually accepted, not what was attempted:
-  // shared.nativeRevision increments whenever the local catalog or the allowed
+  // stores.nativeCatalog.nativeRevision increments whenever the local catalog or the allowed
   // uid set changes, and lastPushedRevision advances only after a push the
   // backend accepted. A failed or skipped attempt therefore retries on the
   // next refresh instead of silently pinning the revision it claimed.
-  const pushPayload = () => [...shared.nativeModels.values()].filter(entry => isUpstreamUid(entry?.uid));
+  const pushPayload = () => [...stores.nativeCatalog.nativeModels.values()].filter(entry => isUpstreamUid(entry?.uid));
   // This host's own observations, kept across refreshes. The published view
-  // (shared.nativeModels) is rebuilt from this pool plus the backend's copy on
+  // (stores.nativeCatalog.nativeModels) is rebuilt from this pool plus the backend's copy on
   // every refresh, so the view stays derived instead of becoming a second
   // store that can drift from the channel that produced it.
   const observed = new Map();
@@ -26,30 +26,30 @@ function installCatalogSync({ deps, shared, onChange }) {
   // which made that counter under-report.
   const commit = ({ bumpRevision }) => {
     if (lifecycle.activationDisposed) return Promise.resolve();
-    if (bumpRevision) { shared.nativeRevision += 1; lifecycle.publication?.changed(); }
-    if (shared.nativeModels.size !== shared.nativeSyncSize) { shared.nativeSyncSize = shared.nativeModels.size; log('native-sync', { count: shared.nativeSyncSize }); }
+    if (bumpRevision) { stores.nativeCatalog.nativeRevision += 1; lifecycle.publication?.changed(); }
+    if (stores.nativeCatalog.nativeModels.size !== stores.nativeCatalog.nativeSyncSize) { stores.nativeCatalog.nativeSyncSize = stores.nativeCatalog.nativeModels.size; log('native-sync', { count: stores.nativeCatalog.nativeSyncSize }); }
     const published = Promise.resolve(onChange?.()).catch(() => {});
-    shared.pushToBackend();
+    stores.nativeCatalog.pushToBackend();
     return published;
   };
-  shared.pushToBackend = () => {
-    if (!live(lifecycle, config) || shared.pushTimer !== undefined) return;
+  stores.nativeCatalog.pushToBackend = () => {
+    if (!live(lifecycle, config) || stores.nativeCatalog.pushTimer !== undefined) return;
     // Nothing to offer yet: an empty payload must not advance the pushed
     // revision, or the first useful observation will look unchanged.
     if (!pushPayload().length) return;
-    const forced = shared.nativePushStale === true;
-    if (!forced && !(shared.nativeRevision > shared.lastPushedRevision)) return;
-    const wait = Math.max(0, shared.lastPushAt + PUSH_INTERVAL_MS - Date.now());
-    shared.pushTimer = setTimeout(() => {
-      shared.pushTimer = undefined;
+    const forced = stores.nativeCatalog.nativePushStale === true;
+    if (!forced && !(stores.nativeCatalog.nativeRevision > stores.nativeCatalog.lastPushedRevision)) return;
+    const wait = Math.max(0, stores.nativeCatalog.lastPushAt + PUSH_INTERVAL_MS - Date.now());
+    stores.nativeCatalog.pushTimer = setTimeout(() => {
+      stores.nativeCatalog.pushTimer = undefined;
       if (!live(lifecycle, config)) return;
-      shared.lastPushAt = Date.now();
-      shared.nativePushStale = false;
-      const revision = shared.nativeRevision;
-      pushNativeModels({ root: deps.root, models: pushPayload(), allowedUids: [...shared.nativeAllowedUids], allowedMode: shared.nativeAllowedMode, revision })
+      stores.nativeCatalog.lastPushAt = Date.now();
+      stores.nativeCatalog.nativePushStale = false;
+      const revision = stores.nativeCatalog.nativeRevision;
+      pushNativeModels({ root: deps.root, models: pushPayload(), allowedUids: [...stores.nativeCatalog.nativeAllowedUids], allowedMode: stores.nativeCatalog.nativeAllowedMode, revision })
         .then(result => {
           if (result?.pushed) {
-            if (revision > shared.lastPushedRevision) shared.lastPushedRevision = revision;
+            if (revision > stores.nativeCatalog.lastPushedRevision) stores.nativeCatalog.lastPushedRevision = revision;
             if (result.revision !== undefined && result.revision !== revision) {
               log('native-push-revision-mismatch', { sent: revision, echoed: result.revision });
             }
@@ -58,59 +58,59 @@ function installCatalogSync({ deps, shared, onChange }) {
         })
         .catch(() => {});
     }, wait);
-    shared.pushTimer.unref?.();
+    stores.nativeCatalog.pushTimer.unref?.();
   };
-  shared.refreshNativeModels = () => {
+  stores.nativeCatalog.refreshNativeModels = () => {
     if (!live(lifecycle, config)) return Promise.resolve();
-    if (shared.syncPending) return shared.syncPending;
+    if (stores.nativeCatalog.syncPending) return stores.nativeCatalog.syncPending;
     const generation = lifecycle.activationGeneration;
-    const abort = new AbortController(); shared.syncAbort = abort;
-    shared.syncPending = (async () => {
+    const abort = new AbortController(); stores.nativeCatalog.syncAbort = abort;
+    stores.nativeCatalog.syncPending = (async () => {
       let result;
       try { result = await readNativeModels({ root: deps.root, signal: abort.signal }); }
       catch { result = { status: 'unavailable', models: [] }; }
       if (abort.signal.aborted || superseded(lifecycle, config, generation) || lifecycle.activationDisposed) return;
-      shared.nativeCatalogStatus = result.status;
+      stores.nativeCatalog.nativeCatalogStatus = result.status;
       // The first transition into an authoritative state must bump the
       // revision even when the models are identical: the activation-time cache
       // check ran additive-only before this point, and the owed retirement
       // has to be triggered exactly once when authority arrives.
       const authoritative = result.status === 'ready' || result.status === 'empty' || result.status === 'unsupported';
-      const authorityFlip = authoritative && shared.nativeAuthoritative !== true;
-      shared.nativeAuthoritative = authoritative;
+      const authorityFlip = authoritative && stores.nativeCatalog.nativeAuthoritative !== true;
+      stores.nativeCatalog.nativeAuthoritative = authoritative;
       // A failed read is not an empty catalog. Rebuilding from an unavailable
       // answer publishes 0 entries for as long as a backend swap takes
       // (measured 12s across a source-identity change), which the picker and
       // the status bar render as "no models". Only an authoritative answer
       // (ready/empty/unsupported) may replace the view; the entries at risk are
       // the backend-sourced ones, since locally observed ones are re-added below.
-      if (result.status === 'unavailable' && shared.nativeModels.size) {
-        log('native-refresh-retained', { status: result.status, count: shared.nativeModels.size });
+      if (result.status === 'unavailable' && stores.nativeCatalog.nativeModels.size) {
+        log('native-refresh-retained', { status: result.status, count: stores.nativeCatalog.nativeModels.size });
         await commit({ bumpRevision: authorityFlip });
         return;
       }
       // A refresh rebuilds the merged view from scratch, so the revision bump
       // needs a content comparison against the previous map — same
       // JSON.stringify yardstick observeNativeModels already uses.
-      const previousByUid = new Map([...shared.nativeModels].map(([uid, entry]) => [uid, JSON.stringify(entry)]));
-      shared.nativeModels.clear();
+      const previousByUid = new Map([...stores.nativeCatalog.nativeModels].map(([uid, entry]) => [uid, JSON.stringify(entry)]));
+      stores.nativeCatalog.nativeModels.clear();
       // Both channels observe the same upstream catalog from different sides —
       // the backend sees the CLI's traffic, this host sees the native
       // extension's — and their copies are not equally complete. Merge instead
       // of letting the last one win: a dimension-less copy makes every native
       // Sidekick unresolvable and the mirrored combinations vanish.
-      for (const entry of observed.values()) shared.nativeModels.set(entry.uid, entry);
+      for (const entry of observed.values()) stores.nativeCatalog.nativeModels.set(entry.uid, entry);
       // Uids this host observed itself are decided by the host copy: the
       // backend's older entry must not downgrade label/disabled. Backend-only
       // entries are adopted with the backend copy as incoming, so fields the
       // host never saw (kind/familyUid/sources) are still carried.
       for (const entry of result.models) {
-        const prior = shared.nativeModels.get(entry.uid);
-        shared.nativeModels.set(entry.uid, observed.has(entry.uid) ? mergeNativeEntry(entry, prior) : mergeNativeEntry(prior, entry));
+        const prior = stores.nativeCatalog.nativeModels.get(entry.uid);
+        stores.nativeCatalog.nativeModels.set(entry.uid, observed.has(entry.uid) ? mergeNativeEntry(entry, prior) : mergeNativeEntry(prior, entry));
       }
-      let changed = authorityFlip || shared.nativeModels.size !== previousByUid.size;
+      let changed = authorityFlip || stores.nativeCatalog.nativeModels.size !== previousByUid.size;
       if (!changed) {
-        for (const [uid, entry] of shared.nativeModels) {
+        for (const [uid, entry] of stores.nativeCatalog.nativeModels) {
           if (previousByUid.get(uid) !== JSON.stringify(entry)) { changed = true; break; }
         }
       }
@@ -122,43 +122,43 @@ function installCatalogSync({ deps, shared, onChange }) {
       if (Array.isArray(result.allowedUids)) {
         const echoMode = result.allowedMode === 'unrestricted' ? 'unrestricted' : 'restricted';
         const next = new Set(result.allowedUids);
-        const same = next.size === shared.nativeAllowedUids.size && ![...next].some(uid => !shared.nativeAllowedUids.has(uid));
-        if (shared.nativeAllowedObserved === true) {
+        const same = next.size === stores.nativeCatalog.nativeAllowedUids.size && ![...next].some(uid => !stores.nativeCatalog.nativeAllowedUids.has(uid));
+        if (stores.nativeCatalog.nativeAllowedObserved === true) {
           if (echoMode === 'restricted' && next.size === 0) {
             // Unrestricted hosts read an empty echo as agreement, not loss.
-            if (shared.nativeAllowedMode === 'restricted' && shared.nativeAllowedUids.size > 0 && shared.nativePushStale !== true) {
-              shared.nativePushStale = true;
-              log('native-allowed-backend-lost', { count: shared.nativeAllowedUids.size });
+            if (stores.nativeCatalog.nativeAllowedMode === 'restricted' && stores.nativeCatalog.nativeAllowedUids.size > 0 && stores.nativeCatalog.nativePushStale !== true) {
+              stores.nativeCatalog.nativePushStale = true;
+              log('native-allowed-backend-lost', { count: stores.nativeCatalog.nativeAllowedUids.size });
             }
-          } else shared.nativePushStale = false;
+          } else stores.nativeCatalog.nativePushStale = false;
           if (!same) {
-            if (shared.nativeAllowedDiverged !== true) {
-              shared.nativeAllowedDiverged = true;
-              log('native-allowed-diverged', { host: shared.nativeAllowedUids.size, backend: next.size });
+            if (stores.nativeCatalog.nativeAllowedDiverged !== true) {
+              stores.nativeCatalog.nativeAllowedDiverged = true;
+              log('native-allowed-diverged', { host: stores.nativeCatalog.nativeAllowedUids.size, backend: next.size });
             }
-          } else shared.nativeAllowedDiverged = false;
+          } else stores.nativeCatalog.nativeAllowedDiverged = false;
         } else if (echoMode === 'unrestricted') {
-          if (shared.nativeAllowedMode !== 'unrestricted' || shared.nativeAllowedUids.size) changed = true;
-          shared.nativeAllowedMode = 'unrestricted';
-          shared.nativeAllowedUids = new Set();
-          shared.nativeAllowedObserved = true;
+          if (stores.nativeCatalog.nativeAllowedMode !== 'unrestricted' || stores.nativeCatalog.nativeAllowedUids.size) changed = true;
+          stores.nativeCatalog.nativeAllowedMode = 'unrestricted';
+          stores.nativeCatalog.nativeAllowedUids = new Set();
+          stores.nativeCatalog.nativeAllowedObserved = true;
         } else if (next.size) {
-          if (!same) { shared.nativeAllowedUids = next; changed = true; }
-          shared.nativeAllowedObserved = true;
+          if (!same) { stores.nativeCatalog.nativeAllowedUids = next; changed = true; }
+          stores.nativeCatalog.nativeAllowedObserved = true;
         }
       }
       await commit({ bumpRevision: changed });
-    })().finally(() => { if (shared.syncAbort === abort) { shared.syncAbort = undefined; shared.syncPending = undefined; } });
-    return shared.syncPending;
+    })().finally(() => { if (stores.nativeCatalog.syncAbort === abort) { stores.nativeCatalog.syncAbort = undefined; stores.nativeCatalog.syncPending = undefined; } });
+    return stores.nativeCatalog.syncPending;
   };
-  shared.startNativeSync = () => {
+  stores.nativeCatalog.startNativeSync = () => {
     lifecycle.stopNativeSync?.();
-    lifecycle.stopNativeSync = () => { clearInterval(shared.syncTimer); shared.syncAbort?.abort(); shared.syncAbort = undefined; shared.syncPending = undefined;
-      if (shared.pushTimer !== undefined) { clearTimeout(shared.pushTimer); shared.pushTimer = undefined; } };
-    shared.syncTimer = setInterval(() => { void shared.refreshNativeModels(); }, 3000); shared.syncTimer.unref?.();
-    void shared.refreshNativeModels();
+    lifecycle.stopNativeSync = () => { clearInterval(stores.nativeCatalog.syncTimer); stores.nativeCatalog.syncAbort?.abort(); stores.nativeCatalog.syncAbort = undefined; stores.nativeCatalog.syncPending = undefined;
+      if (stores.nativeCatalog.pushTimer !== undefined) { clearTimeout(stores.nativeCatalog.pushTimer); stores.nativeCatalog.pushTimer = undefined; } };
+    stores.nativeCatalog.syncTimer = setInterval(() => { void stores.nativeCatalog.refreshNativeModels(); }, 3000); stores.nativeCatalog.syncTimer.unref?.();
+    void stores.nativeCatalog.refreshNativeModels();
   };
-  shared.observeAllowedUids = observation => {
+  stores.nativeCatalog.observeAllowedUids = observation => {
     if (!live(lifecycle, config)) return;
     if (observation?.kind === 'unrestricted') {
       // "Empty" is a weak signal (proto3 cannot tell absent from present-but-
@@ -166,41 +166,41 @@ function installCatalogSync({ deps, shared, onChange }) {
       // observation below restores in a single pass. A host that never saw a
       // restricted verdict ignores the streak entirely — the backend's
       // cold-start echo is its only way to learn it is unrestricted.
-      if (shared.nativeAllowedMode === 'unrestricted') return;
-      shared.nativeAllowedEmptyStreak += 1;
-      if (shared.nativeAllowedObserved !== true || shared.nativeAllowedEmptyStreak < ALLOWED_UNRESTRICTED_STREAK) return;
-      shared.nativeAllowedEmptyStreak = 0;
-      const cleared = shared.nativeAllowedUids.size;
-      shared.nativeAllowedUids = new Set();
-      shared.nativeAllowedMode = 'unrestricted';
-      shared.nativeAllowedObserved = true;
+      if (stores.nativeCatalog.nativeAllowedMode === 'unrestricted') return;
+      stores.nativeCatalog.nativeAllowedEmptyStreak += 1;
+      if (stores.nativeCatalog.nativeAllowedObserved !== true || stores.nativeCatalog.nativeAllowedEmptyStreak < ALLOWED_UNRESTRICTED_STREAK) return;
+      stores.nativeCatalog.nativeAllowedEmptyStreak = 0;
+      const cleared = stores.nativeCatalog.nativeAllowedUids.size;
+      stores.nativeCatalog.nativeAllowedUids = new Set();
+      stores.nativeCatalog.nativeAllowedMode = 'unrestricted';
+      stores.nativeCatalog.nativeAllowedObserved = true;
       log('native-allowed-cleared', { cleared });
       void commit({ bumpRevision: true });
       return;
     }
-    shared.nativeAllowedEmptyStreak = 0;
+    stores.nativeCatalog.nativeAllowedEmptyStreak = 0;
     const normalized = normalizeAllowedUids(observation?.uids || []);
     if (!normalized.length) return;
-    if (shared.nativeAllowedMode === 'unrestricted') shared.nativeAllowedMode = 'restricted';
-    if (normalized.length === shared.nativeAllowedUids.size && normalized.every(uid => shared.nativeAllowedUids.has(uid))) return;
-    shared.nativeAllowedUids = new Set(normalized);
-    shared.nativeAllowedObserved = true;
+    if (stores.nativeCatalog.nativeAllowedMode === 'unrestricted') stores.nativeCatalog.nativeAllowedMode = 'restricted';
+    if (normalized.length === stores.nativeCatalog.nativeAllowedUids.size && normalized.every(uid => stores.nativeCatalog.nativeAllowedUids.has(uid))) return;
+    stores.nativeCatalog.nativeAllowedUids = new Set(normalized);
+    stores.nativeCatalog.nativeAllowedObserved = true;
     void commit({ bumpRevision: true });
   };
-  shared.observeNativeModels = entries => {
+  stores.nativeCatalog.observeNativeModels = entries => {
     if (!Array.isArray(entries)) return;
     let changed = false;
     for (const entry of entries) {
       const next = normalizeNativeEntry(entry);
       if (!next) continue;
-      const previous = shared.nativeModels.get(next.uid);
+      const previous = stores.nativeCatalog.nativeModels.get(next.uid);
       const merged = mergeNativeEntry(previous, next);
       // Source authority registers on every valid observation — even one equal
       // to the current entry — so a later stale backend copy cannot win. Only
       // a real content change republishes or bumps the revision.
       observed.set(next.uid, merged);
       if (!previous || JSON.stringify(previous) !== JSON.stringify(merged)) {
-        shared.nativeModels.set(next.uid, merged); changed = true;
+        stores.nativeCatalog.nativeModels.set(next.uid, merged); changed = true;
       }
     }
     if (changed && !lifecycle.activationDisposed) try { void commit({ bumpRevision: true }); } catch {}

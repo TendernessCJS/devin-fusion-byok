@@ -18,6 +18,9 @@ const { installEnable } = require('./activation/enable.cjs');
 const { installCommands } = require('./activation/commands.cjs');
 const { installPanel } = require('./activation/panel-install.cjs');
 const { teardown } = require('./activation/teardown.cjs');
+const { createNativeCatalogState } = require('./activation/stores/native-catalog.cjs');
+const { createCacheSyncState } = require('./activation/stores/cache-sync.cjs');
+const { createAcpObservationState } = require('./activation/stores/acp-observation.cjs');
 // Shared lifecycle state across activate/teardown/deactivate.
 const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
   cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
@@ -120,30 +123,23 @@ async function activate(context) {
   // Shared slots: each installer assigns the ones it owns, while other
   // installer segments (and enable/teardown) read them — so the declarations
   // live in this activate scope, not inside any single installer.
+  const stores = {
+    nativeCatalog: createNativeCatalogState(),
+    cacheSync: createCacheSyncState(),
+    acpObservation: createAcpObservationState(),
+  };
   const shared = {
     goalContinue: undefined, autoContinue: undefined,
-    nativeModels: new Map(),
-    // Complete-set verdict from team settings: whichever observation arrived
-    // last decides which official uids the account may actually select.
-    nativeAllowedUids: new Set(),
-    nativeAllowedMode: 'restricted', nativeAllowedEmptyStreak: 0,
-    nativeAllowedObserved: false, nativeAllowedDiverged: false,
     management: undefined, manager: undefined,
-    nativeCatalogStatus: 'loading', nativeAuthoritative: false, backendStatus: 'stopped',
-    syncPending: undefined, syncAbort: undefined, syncTimer: undefined,
-    acpObservationSeq: 0, acpOwnModels: 0,
-    pushTimer: undefined, lastPushAt: 0, nativeRevision: 0, lastPushedRevision: 0,
-    nativeSyncSize: -1, cliCacheReport: null, contextObserver: undefined,
-    pushToBackend: undefined, refreshNativeModels: undefined,
-    startNativeSync: undefined, observeNativeModels: undefined, observeAllowedUids: undefined,
-    ensureEnabled: undefined,
+    backendStatus: 'stopped',
+    contextObserver: undefined,
+    ensureEnabled: undefined, disablePromise: undefined,
     saveFusionChoice: undefined, reconcilePreference: undefined,
     disable: undefined, reconcileSelection: undefined,
     statusBar: undefined, updateStatusBar: undefined,
-    pickerRefresh: undefined,
   };
   installContinuation();
-  const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...shared.nativeModels.values()], shared.nativeAllowedUids); };
+  const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...stores.nativeCatalog.nativeModels.values()], stores.nativeCatalog.nativeAllowedUids); };
   const pruneConfig = () => {
     try {
       if (updateConfig(configFile, current => pruneRetiredKeys(current)).changed) log('config-pruned');
@@ -155,7 +151,7 @@ async function activate(context) {
     if (safe.code === 'cancelled') return;
     log('error', { code: safe.code }); vscode.window.showErrorMessage('Fusion BYOK：' + safe.message);
   } };
-  const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run };
+  const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run, stores };
   lifecycle.log = log;
   lifecycle.nativeRefresh = () => vscode.commands.executeCommand('devin.refreshUserStatus');
   const createPublication = () => require('./activation/catalog-publication.cjs').createCatalogPublication({

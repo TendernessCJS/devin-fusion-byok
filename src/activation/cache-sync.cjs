@@ -4,8 +4,8 @@ const { defaultDir: cliCacheDir, refreshStaleCliCaches } = require('../runtime/h
 const { createPickerRefresh } = require('../runtime/host/picker-refresh.cjs');
 
 function installCacheSync({ deps, shared, publish }) {
-  const { config, vscode, context, log, catalog } = deps;
-  shared.pickerRefresh = createPickerRefresh({ log,
+  const { config, vscode, context, log, catalog, stores } = deps;
+  stores.cacheSync.pickerRefresh = createPickerRefresh({ log,
     // devin.reloadAcpConnections drops every ACP connection on execution —
     // users see "ACP connection closed" and a conversation-area reload, and a
     // window reload follows it by ~5-35s (observed 2026-10-14). The in-place
@@ -14,10 +14,10 @@ function installCacheSync({ deps, shared, publish }) {
     lightCommands: [],
     executeCommand: command => vscode.commands.executeCommand(command),
     readModels: () => catalog().models,
-    observe: () => shared.acpObservationSeq,
-    applied: token => shared.acpObservationSeq > token && shared.acpOwnModels > 0 });
-  shared.pickerRefresh.prime();
-  context.subscriptions.push(shared.pickerRefresh);
+    observe: () => stores.acpObservation.seq,
+    applied: token => stores.acpObservation.seq > token && stores.acpObservation.ownModels > 0 });
+  stores.cacheSync.pickerRefresh.prime();
+  context.subscriptions.push(stores.cacheSync.pickerRefresh);
   // The CLI intersects its picker with per-identity caches under
   // ~/.cache/devin/cli; a cache written before a config change keeps the old
   // uid digests and drops the affected entries. Only v6 is rebuilt after a
@@ -30,19 +30,19 @@ function installCacheSync({ deps, shared, publish }) {
   // additive-only and stored own entries can never be deleted early (measured
   // 2026-10-24: an activation-time check stripped all 150 combos from the cache
   // because installPanel runs before ensureEnabled starts the native sync).
-  const nativeAuthoritative = () => shared.nativeCatalogStatus !== 'loading' && shared.nativeCatalogStatus !== 'unavailable';
+  const nativeAuthoritative = () => stores.nativeCatalog.nativeCatalogStatus !== 'loading' && stores.nativeCatalog.nativeCatalogStatus !== 'unavailable';
   const check = ({ force = false } = {}) => {
     try {
-      if (config().enabled === false) return shared.cliCacheReport;
+      if (config().enabled === false) return stores.cacheSync.cliCacheReport;
       const retire = nativeAuthoritative();
-      if (!retire && !shared.cliCacheDeferred) {
-        shared.cliCacheDeferred = true;
-        log('cli-cache-deferred', { status: shared.nativeCatalogStatus });
-      } else if (retire) shared.cliCacheDeferred = false;
+      if (!retire && !stores.cacheSync.cliCacheDeferred) {
+        stores.cacheSync.cliCacheDeferred = true;
+        log('cli-cache-deferred', { status: stores.nativeCatalog.nativeCatalogStatus });
+      } else if (retire) stores.cacheSync.cliCacheDeferred = false;
       const current = catalog();
       const expectedUids = current.models.map(model => model.uid);
       const emittedFusionUids = new Set(Object.keys(current.fusions || {}));
-      const knownUids = new Set([...Object.keys(current.routes || {}), ...emittedFusionUids, ...shared.nativeModels.keys()]);
+      const knownUids = new Set([...Object.keys(current.routes || {}), ...emittedFusionUids, ...stores.nativeCatalog.nativeModels.keys()]);
       const excludedUids = role => {
         const set = new Set();
         for (const ref of Array.isArray(config().roleExclusions?.[role]) ? config().roleExclusions[role] : []) {
@@ -68,17 +68,17 @@ function installCacheSync({ deps, shared, publish }) {
       // the outcome is unchanged (only a manual, forced check always restamps).
       const summary = { checked: result.checked, refreshed: result.refreshed,
         skipped: result.skipped || [], errors: result.errors || [], coverage: result.coverage };
-      const previous = shared.cliCacheReport && JSON.stringify({ checked: shared.cliCacheReport.checked,
-        refreshed: shared.cliCacheReport.refreshed, skipped: shared.cliCacheReport.skipped,
-        errors: shared.cliCacheReport.errors, coverage: shared.cliCacheReport.coverage });
-      if (force || previous !== JSON.stringify(summary)) shared.cliCacheReport = { at: new Date().toISOString(), ...summary };
+      const previous = stores.cacheSync.cliCacheReport && JSON.stringify({ checked: stores.cacheSync.cliCacheReport.checked,
+        refreshed: stores.cacheSync.cliCacheReport.refreshed, skipped: stores.cacheSync.cliCacheReport.skipped,
+        errors: stores.cacheSync.cliCacheReport.errors, coverage: stores.cacheSync.cliCacheReport.coverage });
+      if (force || previous !== JSON.stringify(summary)) stores.cacheSync.cliCacheReport = { at: new Date().toISOString(), ...summary };
       if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed, force });
       for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });
       for (const error of result.errors || []) log('cli-cache-write-error', { name: error.name, code: error.code });
     } catch (error) { log('cli-cache-check-failed', { code: error?.code || 'unknown' }); }
-    return shared.cliCacheReport;
+    return stores.cacheSync.cliCacheReport;
   };
-  const changed = () => { shared.pickerRefresh?.changed?.(); check(); };
+  const changed = () => { stores.cacheSync.pickerRefresh?.changed?.(); check(); };
   // Manual counterpart of the automatic check: the panel button exists so a
   // user whose picker looks stale can force the rewrite now instead of waiting
   // for the next config change or native sync. It is forced because the

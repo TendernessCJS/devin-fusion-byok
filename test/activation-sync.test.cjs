@@ -33,6 +33,7 @@ function cacheSyncFixture(t, { refreshResult, picker, models = [{ uid: 'm1' }] }
     catalog: () => ({ models, fusions: {}, routes: {} }),
     vscode: { commands: { executeCommand: command => { executed.push(command); return Promise.resolve(); } } },
     context: { subscriptions: [] },
+    stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } },
   };
   const sync = loader.module.exports.installCacheSync({ deps, shared, publish: async () => { publishCalls.push(1); } });
   return { sync, shared, tracker, logs, calls, augOptions, publishCalls, executed, subscriptions: deps.context.subscriptions };
@@ -111,7 +112,8 @@ test('a failing cache probe logs and keeps the previous report', t => {
     deps: { log: (event, data) => logs.push({ event, data }), config: () => ({}),
       catalog: () => ({ models: [{ uid: 'm1' }], fusions: {}, routes: {} }),
       vscode: { commands: { executeCommand: () => Promise.resolve() } },
-      context: { subscriptions: [] } },
+      context: { subscriptions: [] },
+      stores: { nativeCatalog: f.shared, cacheSync: f.shared, acpObservation: { seq: 0, ownModels: 0 } } },
     shared: f.shared, publish: async () => {},
   });
   assert.equal(sync.check(), first);
