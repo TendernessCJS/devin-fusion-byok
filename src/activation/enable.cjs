@@ -105,7 +105,7 @@ function installEnable({ deps, shared }) {
     // catalog; the hook only reports what each native call actually carried.
     lifecycle.publication ??= require('./catalog-publication.cjs').createCatalogPublication({
       getCatalog: catalog, refreshUserStatus: lifecycle.nativeRefresh,
-      isCurrent: () => generation === lifecycle.activationGeneration && config().enabled !== false && !lifecycle.activationDisposed,
+      isCurrent: () => !lifecycle.activationDisposed && config().enabled !== false,
       log });
     // Pin the publisher this generation's events belong to: a previous
     // hook's late native settle must never confirm a newer coordinator.
