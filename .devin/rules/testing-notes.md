@@ -76,3 +76,11 @@ description: "Apply when writing or debugging tests — the installed-renderer s
 - `native-field-contract.test.cjs` 从 webapp assets 的 protobuf-es `newFieldList` 描述文本按字段号断言；
   只锁定实际读取的字段，新字段（ModelInfo f26、ChatMessagePrompt f22、ModelUsageStats f13、
   GetChatMessageRequest f28）只登记存在性。仅 assets 目录缺失可 skip，目录存在却没有 schema 锚点必须 fail。
+
+## 源码形状守卫的覆盖边界
+
+`architecture.test.cjs` 的写者守卫识别 `=`/`??=`/`||=`/`&&=`、复合赋值（`+=` 等）、`++`/`--`、`delete holder.slot`、方法变异（`set/delete/clear/push/add/splice`）。但它是**源码形状**判定、不是语义分析：`(x => x)()` 之类旁路不覆盖——注释与测试名都不得宣称「完全封闭」。
+
+- 反证必须对**真实源码文本做回退**（`reverted(from, to)` 整段替换后跑守卫），不要只喂人造行首样例——`installTimeCaptures` 曾因 `^` 行首锚定漏掉行内属性位置的真实捕获。
+- **前瞻与 `\s*` 的顺序是坑**：`:\s*(?!...)` 里 `\s*` 能回退到 0、让前瞻落在空格字符上，合法箭头包装会被误报；`\s*` 要收进前瞻内部。这个坑在本仓同一守卫上踩过两次。
+- 夹具陷阱：`extension-lifecycle.test.cjs` 的沙盒把 `src/activation/*` 的 `setTimeout` 换成 0ms 来实现快速重试；`managed-settings.cjs` 已**从该替换中排除**——否则 5 s drain 预算会塌成 0ms、drain 恒走超时分支，R1 用例会「因为错误的原因变绿」。新加依赖计时预算的 activation 模块时先核对 `shareGlobals` 的覆盖面。

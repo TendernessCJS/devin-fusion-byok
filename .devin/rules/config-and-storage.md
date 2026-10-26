@@ -56,3 +56,12 @@
 - 面板提交的 baseUrl 允许任意 host（含 localhost 与私网）——这是 BYOK 的设计意图（Ollama / 本地网关）。
 - 限制只到「scheme 必须 http/https、禁止内嵌凭据/查询串/片段、路径归一化」，**不阻止**向任意地址发带凭据请求；收紧前先想清它会让本地部署不可用。
 - `updateProxy` 是独立路径：凭据只出现在 CONNECT 头，面板只回显掩码。
+
+## 受管设置的写入/恢复串行边界
+
+`enable()` 里「保存 receipt → 两次 `globalState.update`（`savedEnv`/`managedEnv`）→ 条件 `agentEnv` 写入 → `reconcilePreference`」是**一个临界区**，由 `src/activation/managed-settings.cjs` 的 `critical()` 包住、同步登记在途 promise。
+
+- `disable()` 顺序：置 `enabled=false` → `drain()`（5 s 上限，超时记 `managed-settings-drain-timeout`）→ `teardown` → 恢复。恢复**必须重读**当前设置与 receipt——这是修复成立的机理：在途写入先落地，恢复再基于落地后的状态回滚。
+- drain 超时**仍照常恢复**，但跳过 `receipt.changes` 清空与 `savedEnv`/`managedEnv` 清除（`keepReceipt`），给下次恢复保留补偿依据。
+- **撤回旧判断**：「停用期间写入仍会完成、但 teardown 会按 receipt 还原」是错的——receipt 只提供回滚依据，**不提供异步顺序**；没有 drain 时恢复的 snapshot 先取、在途写入后落，受管值会残留且 receipt 已被清空。
+- 边界：这只保证**单窗口内**的顺序；跨窗口并发写同一 globalState 不在本机制范围内。
