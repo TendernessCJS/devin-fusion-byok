@@ -43,7 +43,7 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     acpOwnModels: stores.acpObservation.ownModels,
   });
   shared.manager = createManager({ read: config, write: (next, baseline) => updateConfig(configFile, doc => applyKeyDelta(doc, next, baseline)),
-    nativeModels: () => [...stores.nativeCatalog.nativeModels.values()], nativeAllowedUids: () => stores.nativeCatalog.nativeAllowedUids, refreshNativeModels: stores.nativeCatalog.refreshNativeModels, nativeCatalogStatus: () => stores.nativeCatalog.nativeCatalogStatus,
+    nativeModels: () => [...stores.nativeCatalog.nativeModels.values()], nativeAllowedUids: () => stores.nativeCatalog.nativeAllowedUids, refreshNativeModels: () => stores.nativeCatalog.refreshNativeModels(), nativeCatalogStatus: () => stores.nativeCatalog.nativeCatalogStatus,
     backendStatus: () => shared.backendStatus,
     autoContinueStatus: () => shared.autoContinue ? (shared.autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
     refreshCliCaches: () => cacheSync.refresh(), cliCacheStatus: () => stores.cacheSync.cliCacheReport,
@@ -51,7 +51,7 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     desktopCatalogStatus: () => lifecycle.publication?.status() || null,
     nativeContract: () => lifecycle.nativeContract || null,
     health: readHealth,
-    selectFusion: shared.saveFusionChoice,
+    selectFusion: uid => shared.saveFusionChoice(uid),
     afterChange });
   const updater = require('../update.cjs').createUpdateHost({ vscode, context,
     proxy: () => config().updateProxy,

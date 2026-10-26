@@ -447,3 +447,20 @@ test('the store writer guard rejects an injected foreign writer', () => {
   assert.ok(violations.includes('acpObservation.seq <- activation/catalog-sync.cjs'),
     'a write from a non-owning module must be reported');
 });
+
+// Installers must resolve shared function slots at call time. A value capture
+// pins whatever the slot held at install time, and because consumers declare
+// defaults it degrades to a silent no-op instead of an error.
+const installTimeCaptures = (readFile = fs.readFileSync) => {
+  const source = readFile(path.join(srcRoot, 'activation', 'panel-install.cjs'), 'utf8');
+  return [...source.matchAll(/^\s*(selectFusion|refreshNativeModels):(?!\s*\w+\s*=>|\s*\([^)]*\)\s*=>)/gm)].map(match => match[1]);
+};
+
+test('panel installers resolve function slots at call time', () => {
+  assert.deepEqual(installTimeCaptures(), [], 'pass a wrapper arrow function, not the slot value');
+});
+
+test('the call-time guard rejects an injected value capture', () => {
+  const violations = installTimeCaptures(() => '  selectFusion: shared.saveFusionChoice,\n');
+  assert.deepEqual(violations, ['selectFusion'], 'a value capture must be reported');
+});
