@@ -50,7 +50,9 @@ tail -c +<偏移> <bundle> | head -c 600
 
 ## 外部独立实现互证（dwgx/WindsurfAPI）
 
-另一份**独立逆向**落在同一组字段号上：`dwgx/WindsurfAPI`（本地克隆 `.refs/WindsurfAPI`，HEAD `b00b3b9`）是 CLI → `server.codeium.com` 的上游 Connect-RPC 代理，与我们客户端侧实现逆的是同一批 `exa.api_server_pb`/`exa.chat_pb` 消息。该仓没有 `.proto`，字段号写在手写的 `parseFields` 与注释里（`src/devin-connect-catalog.js` 顶部 `F_*` 常量）。
+另一份**独立逆向**落在同一组字段号上：`dwgx/WindsurfAPI`（本地克隆 `.refs/WindsurfAPI`，2026-10-26 更新至 HEAD `272429d3`，v3.141.592657）是 CLI → `server.codeium.com` 的上游 Connect-RPC 代理，与我们客户端侧实现逆的是同一批 `exa.api_server_pb`/`exa.chat_pb` 消息。该仓没有 `.proto`，字段号写在手写的 `parseFields` 与注释里（`src/devin-connect-catalog.js` 顶部 `F_*` 常量）。
+
+**锚点校验（2026-10-26）**：`git diff b00b3b9..HEAD -- src/devin-connect-catalog.js` 为空，`F_*` 常量仍为 14 个，该文件最后一次改动停在 `c90e30a8`（2026-10-22）。也就是说初版互证用的锚点 `b00b3b9` 虽然旧，但**被引用的文件内容未变，下表结论不受影响**；后续再同步 `.refs` 时按同一命令复核即可，不必重做对照。
 
 | 字段 | 我们（`src/catalog/codec.cjs`） | 对方 |
 | --- | --- | --- |
