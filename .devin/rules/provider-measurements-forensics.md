@@ -43,3 +43,19 @@ description: "provider-measurements 的实测依据——Proxy/DeepSeek 各面�
 ### Moonshot 三面样本（2026-10-25）
 
 - Anthropic **15/15** success/200/usageComplete（14 工具回合 + 1 纯文本）；Chat **3/3**（2 工具 + 1 纯文本）；Responses **7/7**（7 工具）。仅作样本计数，**不做性能排名**。
+
+## `tool-pair-*` 诊断词表（2026-10-26 新增，纯观测）
+
+五个探针在 `serveChat` **构造报文之前**运行，只回报、不改报文；`record` 自身已吞日志异常，探针外层再包一层，失败时记 `tool-pair-probe-failed`。
+
+| 事件 | 触发条件 | 作用域 |
+| --- | --- | --- |
+| `tool-pair-orphan` | `tool_result.tool_use_id` 在其**之前**的 assistant `tool_use` 里不存在 | 仅 anthropic |
+| `tool-pair-nonadjacent` | id 存在，但不在**紧前** assistant turn 里（中间隔了别的 turn） | 仅 anthropic |
+| `tool-pair-duplicate` | 同一 `tool_use_id` 第 2 次及以后出现 | 仅 anthropic |
+| `tool-result-not-first` | 含 `tool_result` 的合并后 user turn 里，它前面还有别的块 | 仅 anthropic |
+| `native-computer-use-tool` | 工具定义携带 `ChatToolDefinition#8`（只判 wire type 2 是否存在） | 任意格式 |
+
+**判定必须在 `buildTurns` 合并后的 turn 级做**，不能在原始 `request.messages` 上做：并行工具结果会合成同一个 user turn，逐条比「紧前一条消息」会把合法形态全判成 nonAdjacent。只有计数 > 0 才记，沉默即健康。
+
+**解读纪律**：零命中只代表**该窗口内未观测到**，不证明原生永不产生；命中也不等于请求失败过——`orphan` 在 Responses/Chat 是被容忍的，只有 anthropic 会 400，而**该 400 本轮未实测**（属 API 文档级已知约束）。

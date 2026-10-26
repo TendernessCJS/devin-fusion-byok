@@ -75,3 +75,31 @@ tail -c +<偏移> <bundle> | head -c 600
 - **方法论**：交叉验证要同时落到**对方的解析代码**和**本机 schema** 两侧；连续三例说明只读注释会引入假事实。本机取证见上文「怎么读权威字段号」——`newFieldList` 字面量是唯一权威，LS 二进制描述符只证存在性、不含字段号。
 - **反例**（附到「不要猜数值枚举」）：对方 `docs/HISTORY-LEDGER-2026-07-late.md`（~147 行）曾按 protobuf 变体名顺序猜「`StopReason 4 = max_turn_requests`」，被付费实测推翻（4 是付费层正常完成）——后果是完整付费响应被报成截断，按 length 续写的客户端会无限续写。
 - **交叉确认**：对方 `docs/DEVIN-CONNECT-CUTOVER.md`（~434 行）列的 stop reason 集合 `end_turn, max_tokens, max_turn_requests, refusal, cancelled` 与本仓 `src/runtime/host/auto-continue.cjs` 的处理集合一致。
+
+## REA 的 JS 语义图在本 artifact 上不可用（2026-10-26）
+
+`analyze_javascript_application` 对该 bundle 三连失败，**不要重复尝试**：
+
+| 输入 | 结果 |
+| --- | --- |
+| `out/vs/sessions/sessions.desktop.main.js` | 拒绝：只接受目录或 `.asar` |
+| `/Applications/Devin.app` | 内存预算耗尽，停在 `node_modules/react-dom/...development.js`，未触及 sessions |
+| `out/vs/sessions`（40 MB 单 bundle） | **解析阶段 worker 堆耗尽**：limit `1098907648 B`；`visited_ast_nodes 4479`、`skipped_javascript_files 1`、coverage `partial`、`retryable: false` |
+
+结论：证据只能停在**字节级静态观察**（`grep -abo` 取偏移 + `dd` 读窗口）。**不得**把 `partial` 语义图当作「不存在某逻辑」的证明。
+
+## 谁组装 prompt 历史：原生 CLI，不是 JS bundle
+
+- 客户端 bundle 里 `prompts.push(` **0 次**；`prompts:` 仅 5 处（URI scheme 表、MCP 服务器对象、MCP 提示缓存、publish 集合）；`chatMessagePrompts` 的实际构造点属 `exa.opensearch_clients_pb.KnowledgeBaseSearchRequest`（知识库检索），**与 agent 请求无关**。
+- 归属由既有实测决定（见 `runtime-forensics.md`）：backend 的客户端只有**扩展宿主**（只打自有端点）与 **`devin` CLI**，LS 不是客户端。
+
+⇒ `GetChatMessageRequest.prompts` 由**原生 `devin` CLI 二进制**组装。**「原生是否会送出孤儿 `tool_result`」在 JS bundle 里永远查不到**，静态路线的正确目标只剩 Rust CLI（投入过大）。该问题只能靠真实流量观测。
+
+## 客户端不改写历史（压缩的归属）
+
+`compaction` 在 sessions bundle 仅两处：`ClientModelConfig#26 compaction_thresholds`（目录字段）与 `cognition.ai/compaction` / `_cognition.ai/compaction` ext-notification（只设 UI 标记 `compacting`）。**客户端不裁剪历史**，压缩在服务端/agent 侧。
+
+## 两处已排除的假线索（别再挖）
+
+- `orphan` 在该 bundle 出现 33 次，全部无关：工作台文件「孤立」状态（`isOrphaned`/`setOrphaned`）与 Teams 集成「orphaned channels」。
+- `trimHistory` 是 toast 通知库的历史裁剪，不是对话历史。

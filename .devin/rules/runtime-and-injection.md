@@ -42,6 +42,7 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   `provider-request.cjs`）。Fast Context 的 `remote-client.cjs` 反向 import `src/protocol/wire.cjs`，两条路径别混。在 `protocol/` 内增删/改名文件时，除 `SOURCE_FILES` 外还要留意**不靠 `require` 的隐式引用**（按模块名打桩的
   字符串键、`readFileSync` 的路径、`AGENTS.md` 里按路径写的说明），这类漏改不报错、只静默失效——`test/source-identity.test.cjs` 现在会兜住
   `SOURCE_FILES` 那一半（现在校验推导出的哈希集合与 `backend.cjs` 的 require 闭包双向精确相等），但路径字符串与打桩键它管不到。
+- **配对/形状判断必须复用出站构造，不要另写一套**（2026-10-26）：`anthropic.cjs` 的 `buildTurns(request)` 是「neutral history → 合并后 turns」的**唯一**实现，`buildAnthropicBody` 与观测用的 `inspectToolPairing` 都复用它。为诊断另写一份合并逻辑会把并行工具结果判成「非相邻」——这是本区块唯一容易做错的地方。诊断**只读不写**：探针在 `buildRequestBody` 之前跑，不得改变报文；新增探针一律「计数 > 0 才记」并包 try/catch，避免每轮刷日志或让观测拖垮请求。
 - **扩展宿主编排层在 `src/activation/`**（自 725 行 `extension.cjs` 拆出）：`errors`（RuntimeError/`safeError` + 叶子 `models/discovery-error.cjs`）、`settings`（`globalSetting`）、`backend-handshake`
   （`ensureBackend` + 局部 `pause`/`compareVersion`）、`catalog-sync`（原生目录观测/推送）、`enable`
   （受管设置写入 + LS 注入 + startNativeSync）、`commands`（命令注册、Fusion 选择与 `disable` 恢复）、`panel-install`（状态栏/面板控制器）、`cache-sync`/`config-sync`（pickerRefresh、CLI 缓存检查、配置监听/afterChange）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`

@@ -65,6 +65,7 @@ trigger: model_decision
 | 19 | `phase` | string |
 
 （其余为 `message_id`/`source`/`num_tokens`/`safe_for_code_telemetry`/`prompt_cache_options`/`prompt_annotation_ranges`/`videos`/`documents`。）
+另有 **`22 generation_model_uid`**（2026-10-26，bundle `@27379900` 读出；本仓未消费）。
 
 ## 入站补充：`GetChatMessageRequest` 与 `ChatToolDefinition`
 
@@ -75,6 +76,10 @@ trigger: model_decision
   - `disable_parallel_tool_calls`：**只透传显式 `true`**，默认/未设置时不在 body 里写厂商字段，保持对老网关的兼容。
 - 实测（2026-10-16，真实端点）：`strict:false` 与省略 strict 两种写法在 DeepSeek `deepseek-flash`（responses）与 Moonshot `kimi-k2.6`（chat）上**都是 200**，参数键均为 `["source"]` 且无空串值（`{path, source}` 二选一 schema）。
 - `ChatToolDefinition` **字段 9/10/11 自定义工具**（2026-10-16 登记）：`{no:9,name:"is_custom_tool",kind:"scalar",T:8,opt:!0}`、`{no:10,name:"custom_tool_grammar",T:9,opt:!0}`、`{no:11,name:"custom_tool_grammar_syntax",T:9,opt:!0}`——**三者都带 `opt:!0`**（可选），与上面无 `opt` 的 `strict` 不同：`is_custom_tool` 是 optional bool，两字符串字段缺省为 `''`（JSON/proto 两侧归一为 `isCustomTool`/`customToolGrammar`/`customToolGrammarSyntax`，字符串缺席落 `''` 以保 parity）。出站：仅 `openai-responses` 且 `isCustomTool === true` → `{type:'custom',name,[description]}`；`grammar` 与 `syntax` **同时存在**且 syntax 恰为 `'lark'`/`'regex'` 时才附 `format:{type:'grammar',definition,syntax}`，否则无 `format`（官方 SDK 默认无约束文本，不猜默认值）；`anthropic` 无此类型，仍为 function 形态（tool_choice 保持 `{type:'tool',name}`）；`openai`（Chat）**上游 SDK 已支持** `{type:'custom',custom:{name}}`，但本仓仍按 function 声明与选择，刻意保持兼容面一致——要改必须同时改声明与选择，否则两者不自洽。**强制选择必须跟着工具类型走**：Responses 下命中 `isCustomTool === true` 的同名工具要发 `{type:'custom',name}`，发成 `{type:'function',name}` 与声明矛盾（2026-10-22 修正）。响应侧 `custom_tool_call` 的 `input` 是**原始字符串**（非 JSON），`response.custom_tool_call_input.delta`（`delta` 字段）/`.done`（`input` 字段）只按字符串校验、跳过 `JSON.parse`，原样进 ACP 工具块。
+
+- **`ChatToolDefinition` 完整字段表**（2026-10-26 实测，bundle `@27382651` 逐项读出）：`1 name`、`2 description`、`3 json_schema_string`、`5 attribution_field_names`、`6 server_name`、`7 read_only_hint(opt)`、`8 computer_use_config(opt)`、`9/10/11` 自定义工具、`12 strict`。
+  **没有 type 判别字段**——原生在协议上**无法**声明「服务端执行的工具类型」（如厂商内建 `web_search`）。因此任何「对 server-executed 工具类型返回 400」的守卫在本仓都是**死代码**，不要照搬外部代理实现。
+  本仓已用 `1/2/3/9/10/11/12`；`5/6/7` **无消费者**（Anthropic 与 OpenAI 都没有等价控制位）；`8` 只做**存在性探测**（归一为 `hasComputerUseConfig`，不解析内容、不透传出站）。
 
 ## ⚠️ 陷阱：`CompletionDelta` 是**另一个消息**，字段号整体错位
 
