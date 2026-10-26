@@ -64,11 +64,12 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 | 项 | 值 |
 | --- | --- |
 | **基线**（真正的 `git merge-base`；本 fork 从未 merge 过，2026-10-18 的 v0.4.0 是**手工结构映射移植**（`3d07548`），不产生 merge 提交，故基线仍停在此处） | `5bae0bf` —— 2026-10-04，`feat: add Fast Context MCP and panel tab in v0.3.42` |
-| **上次读取上游** | 2026-10-18 |
-| **`upstream/main` 当前位置（已移植，未 merge）** | `713836e` —— 提交信息 `feat: release v0.4.0 with external MCP switch and Goal switch`，2026-10-17 |
+| **上次读取上游** | 2026-10-26 |
+| **`upstream/main` 当前位置（未移植，未 merge）** | `cdc7d42` —— `fix: restore native model picker compatibility in v0.4.5`，2026-10-26（`git tag --points-at` 有 `v0.4.5`，已 fetch） |
+| **上一个已移植位点** | `713836e` —— `feat: release v0.4.0 with external MCP switch and Goal switch`，2026-10-17 |
 | **⚠️ 别把 `v0.4.0` 当上游 tag** | `git tag --points-at 713836e` 为**空**（上游该 tag 本地未 fetch）；本仓 `v0.4.0` 指向 `e1d609a`，是**本 fork 自己的发布提交**。`git show v0.4.0` 拿到的不是上游移植源 |
-| **基线以来 upstream 新增提交** | **2（均已移植）**：`58b324b`（web search / 页面读取 / 一键检查，v0.3.43）；`713836e`（v0.4.0：外部 MCP 开关、Goal 开关、稳定 launcher、页面读取、**宿主禁用时恢复自有设置**） |
-| 我们领先基线 | 246 个提交（2026-10-26 实测；每次移植都要重算：`git rev-list --count "$(git merge-base upstream/main HEAD)"..HEAD`） |
+| **基线以来 upstream 新增提交** | **3（2 已移植，1 读后决定不移植）**：`58b324b`（web search / 页面读取 / 一键检查，v0.3.43）；`713836e`（v0.4.0：外部 MCP 开关、Goal 开关、稳定 launcher、页面读取、**宿主禁用时恢复自有设置**）；`cdc7d42`（v0.4.5：原生 picker 兼容，见下条） |
+| 我们领先基线 | 279 个提交（2026-10-26 实测；每次移植都要重算：`git rev-list --count "$(git merge-base upstream/main HEAD)"..HEAD`） |
 
 **不要把「基线」改成 upstream 的新位置**（与旧版本这节的措辞不同，这是 2026-10-18 的修正）：基线一旦上移，`git log 5bae0bf..upstream/main` 就再也列不出这两个**已移植但未 merge**的提交，追踪证据随之消失。只更新「上次读取」与「当前位置」两格。
 
@@ -80,6 +81,18 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 - **刻意保留的 fork 差异，不要被上游覆盖**：版本号（自管）、`repository` 字段、面板 tab 顺序、`postState` 队列与 `reloadWindow`、DOM 助手前缀（`byId(x,'fc-')`）。
 - **边界**：Goal 与对外 MCP 属**上游拥有**代码，本机不做 e2e 验收（见 `testing-notes.md`）；「仓库测试全绿」不等于「本机验过」。
 
+**`cdc7d42`（v0.4.5）的移植状态：读后整体移植、再按用户决定整体回退 → 净移植 0（2026-10-26）**
+
+上游这一版含六块：C 家族/effort 折叠、A picker 首页策展（`homeModels`）、B 原生置顶/最近读写（`ExtensionServerService` 的 `windsurf.state.*`）、D `host-catalog` 改写 UserStatus、F `native-models` 重试与 `installed-renderer` 匹配加固、E backend 代理环境。
+
+- 结构性冲突不可 merge（`merge-tree` 19 处冲突，含本 fork 已拆分的文件被上游删除/改写）→ 按「结构映射规则」重写，C+A+B 曾全部落地并通过 1523 测试。
+- **A/B 由用户判定不需要**（picker 首页与置顶/最近列表；用户直接搜模型名），已整体回退；`homeModels` 配置键随之消失，无死键。
+- **C 回退的理由是「没有消费者」**：`modelChoices` 只喂面板 `modelCount`/`variantCount`，而 `src/` 没有任何视图读这两个字段；面板可见的「42 / 56 个系列 · 内部 14」来自官方目录的 `nativeFamilies`（**本来就是家族粒度**），与 C 无关。留它只多一个 backend 模块、多一次 `sourceId` 变化导致的重启。
+- D/F/E 从未取：D 本 fork `auth-status.cjs` 已更严（多一层输出侧自证）；F 已有 `retry.cjs` 与更严的双通道 renderer 匹配；E 按用户选择不纳入。
+- 这轮改动**未提交、无分支**，只存在于 `/tmp` 备份（会被系统清理）。将来若要重做，按结构映射重新实现，别去找旧分支。
+
+**下次看到 upstream 动 picker/首页/原生列表时的判据**：先确认「有没有人消费这份新数据」再动手——面板能显示的家族数已在 `nativeFamilies` 里，重复做投影只会增加 backend 闭包与重启次数。
+
 看上游有没有值得参考的新改动：
 
 ```bash
@@ -87,7 +100,7 @@ git fetch upstream && git log --oneline 5bae0bf..upstream/main   # 新增提交
 git diff --stat 5bae0bf upstream/main                           # 改了哪些文件
 ```
 
-同步（或仅阅读）之后，只更新上表的**上次读取**与**当前位置**两格（`git rev-parse --short upstream/main`），并刷新「新增提交」与「领先」两个计数；**基线一格不动**（理由见上）。
+同步（或仅阅读）之后，只更新上表的**上次读取**、**当前位置**、**上一个已移植位点**（仅当这次真的移植了）三格（`git rev-parse --short upstream/main`），并刷新「新增提交」与「领先」两个计数；**基线一格不动**（理由见上）。
 
 ### 按需重算差异（不存清单）
 
