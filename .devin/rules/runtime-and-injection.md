@@ -48,7 +48,7 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   （受管设置写入 + LS 注入 + startNativeSync）、`commands`（命令注册、Fusion 选择与 `disable` 恢复）、`panel-install`（状态栏/面板控制器）、`cache-sync`/`config-sync`（pickerRefresh、CLI 缓存检查、配置监听/afterChange）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`
   被测试与 `package.json` 依赖**。这些文件在扩展宿主运行、**不能进 backend 的 require 闭包**（否则宿主代码被算进重启哈希）。
   拆分时的硬约束：共享可变槽必须放进显式传递的 `shared` 对象，**不得**改成模块级单例（跨 activate 串状态）；
-  `enableQueue`/`reconcileQueue` 这类序列化队列留在各自工厂闭包内；`generation`/abort 判据一处都不能少（`enable()` 里有 4 处）。
+  `enableQueue`/`reconcileQueue` 这类序列化队列留在各自工厂闭包内；`generation`/abort 判据一处都不能少（`enable()` 里现有 5 处，明细见下条「激活失效判据」）。
   改激活流程前先确认入口：全仓 **5 个入口**中 3 个（`fast-context/server.cjs`、`goal/report.cjs`、`lifecycle/uninstall.cjs`）
   从 `extension.cjs` 的 require 图走不到（清单见 `retired-and-deadends.md`）。
 - **`src/runtime/` 按「谁运行」分区，判据是路径不是文件名**：根目录只留 backend 进程与两侧共享的 7 个模块（`backend.cjs`、`backend-control.cjs`、`bridge.cjs`、`contract.cjs`、`native-cache.cjs`、`port.cjs`、`source-identity.cjs`），**只在扩展宿主运行的模块一律放 `src/runtime/host/`**。`test/architecture.test.cjs` 按三层判据强制：`src/runtime/` 内部用根目录 7 文件白名单（fail-closed），宿主模块一律进 `host/`；`src/` 顶层用目录级 deny-list（`BACKEND_FORBIDDEN_DIRS`）；**混合目录只能在 `BACKEND_FORBIDDEN_FILES` 按文件名排除**——目前只有 `models/`（`capabilities`/`native-entry` 在 backend 闭包内、`discovery*.cjs` 是宿主专用，目录级规则表达不了）。另有顶层 allow-list 守卫：新宿主侧顶层目录必须显式加进允许集合。放错方向的代价是把「只在宿主生效」的代码算进重启哈希（并让宿主模块被当 backend 代码改动）。
@@ -80,3 +80,11 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
 - **流式 RPC 不接受 120s body 空闲超时**：`/exa.<pkg>.<Name>Service/Stream*` 与 `.../HandleStreaming*` 是长连接推送，事件间隔按分钟计（实测 120s 空闲判据每约 102s 误杀一次
   `StreamCascade*ReactiveUpdates`）。这类路径的 body 计时器只用 30 分钟兜底（`bridge.cjs` 的 `STREAMING_RPC`/`STREAMING_IDLE_LIMIT`，上限防 socket 泄漏）；
   `connect`/`headers` 计时器**不变**——不把「上游不可达」拖成永久挂起。改 `forward` 时不得退回对推送流施加普通 idle 超时，也不得放宽前两个阶段的快速失败。
+
+## 架构审查结论（2026-10-26 实测；耦合清单，不是待办清单）
+
+- **`shared` 是刻意的反单例容器，但它的“形状”是已知耦合**：`extension.cjs` 只声明 18 个键，实际有 **66 个写入点 / 226 个访问点 / 跨 7 个文件**；`catalog-sync.cjs` 单文件触及 **22** 个键；installer 之间**互相写对方的键**（`enable` 写 `backendStatus`、`panel-install` 读它；`catalog-sync` 把 `pushToBackend`/`observeNativeModels` 当函数塞进去供别人调用）。**安装顺序因此成为正确性的一部分**，而这层时序只存在于调用顺序里。处置方向是**按所有权收敛成显式 store**（native 模型 / backend 状态 / publisher）、跨 installer 走命名方法；**不要**为了“拆干净”把它改回模块级单例——那会跨 activate 串状态（见上条硬约束）。
+- **激活失效判据是手工重复的**：`enable()` 里 `generation !== lifecycle.activationGeneration` 共 **5 处**（4 处在 `await` 之后、第 5 处是 publication 事件回调，且还要叠加 `lifecycle.publication !== publisher`）。**新增 `await` 必须补一次检查**，漏一处就会在“用户已禁用”之后把钩子装回去。
+- **`runtime/port.cjs` 留在 `runtime/` 是刻意的，别挪走**：`backend.cjs` 自己 `require('./port.cjs')`，而 backend 闭包守卫把 `network` 列为禁止目录、根文件只允许 `catalog.cjs` ⇒ 挪到 `network/` 或 `src/` 根会让两条守卫**同时**失败。`catalog/build.cjs` 与 `config/config.cjs` 引它只为实现“单一地址来源”，这正是 `BACKEND_RUNTIME_ROOT` 白名单显式允许的形状——**看着像层方向倒置，实际是设计**（2026-10-26 审查时曾误判为缺陷，已按 `test/architecture.test.cjs` 更正）。
+- **`test/architecture.test.cjs` 是架构的权威表述**：backend 闭包 allow/deny-list、`src/runtime/` 根目录 7 文件白名单、`network/`+`update/` 的依赖上限、`proxy-config` 叶子、文件级零环、动态 require 白名单——**改依赖关系前先读它**，比读散文式文档可靠。
+- **publication 的 `isCurrent` 不得带 generation 判断**（2026-10-26 修正）：`extension.cjs` 与 `activation/enable.cjs` 原本各写一套谓词，后者多一个 `generation === lifecycle.activationGeneration`。生产路径上 `extension.cjs` 先建好协调器（`:164`）再 `installEnable`（`:172`），所以那一套**只有测试走得到**；而它对「跨 enable/disable 复用同一个协调器」的设计是**错的**——generation 一推进就会在 `catalog-publication.cjs:136/173` 把它判成 `inactive`。generation 的钉住位置在 `enable.cjs` 的 `publish()` 包装里（同时比 generation 与 publisher 身份），**不要挪回 `isCurrent`**。
