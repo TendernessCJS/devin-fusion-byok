@@ -79,3 +79,11 @@ Lead = `kimi-k3.1-pro`（`apiFormat: anthropic`），Sidekick = 原生 `swe-2-me
 - **压缩边界是空白**：客户端 `runtime.log` 里压缩事件为 **0**，而压缩在服务端（见 `acp-protocol-fields-forensics.md`「客户端不改写历史」）⇒「没观测到」既不能证明压缩没发生、也不能证明发生了。
 - **Sidekick 不在观测面**：原生 `swe-2-medium` 走服务端、不经过 BYOK 上游，进不了 `runtime.log`；Lead 的 23 次**不能**记作 Sidekick 的回合。
 - **探针按 `apiFormat` 门控**：`tool-pair-*` 只在 `anthropic` 分支运行。DeepSeek provider 是 `openai-responses` ⇒ 选它作 Lead 时探针**不运行**（休眠，不是故障）；`native-computer-use-tool` 是例外（任意格式都记，实测该窗口仍为 0，即普通编码会话的原生工具不带 `#8`）。
+
+## state-envelope 回放未命中的原因码
+
+`state-envelope-replay-failed` 是**回退**不是错误：`replayVerdict` 非 `match` 时静默改用常规投影，请求照常发起，所以「全 200」与「有未命中」可以并存。
+
+理由码闭集，判定按下列顺序取**第一个失败点**：`item`（信封 item 类型或 message part 非 `output_text`）→ `text`（拼接文本不等）→ `count`（function_call 与 toolCall 数量不等）→ `id` / `name` / `arguments`（逐项不等，arguments 走 canonicalize 后比较）。
+
+2026-10-26 06:02Z 实测：一次约 1 小时的复杂任务里 74/86 次请求带 `mismatch:1`，集中 28 分钟后自行恢复；同一窗口缓存命中率 98.7%，高于其前 95.9% 与其后 95.0%，首字中位 7.9 s 与前后 7.3 s / 6.8 s 同量级——**未观测到代价**。相关性只到这里：首次未命中前 39 ms 出现整份日志中唯一一条 `tool-name-unknown`（`name: apply_patch`，未声明工具名）。**机制未证实**——载荷丢失的具体判定分支当时无法区分，本轮原因码正是为解决这一点加的。不得据此宣称 DeepSeek 侧行为变化或我方回归。

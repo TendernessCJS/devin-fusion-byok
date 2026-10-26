@@ -328,7 +328,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
 
   try {
     const { url, chat, anthropic } = endpoint(provider);
-    const replay = { replayed: 0, bytes: 0, items: 0, mismatch: 0, unparsable: 0, oversize: 0 };
+    const replay = { replayed: 0, bytes: 0, items: 0, mismatch: 0, unparsable: 0, oversize: 0, reasons: {} };
     const cacheBreakpoints = cacheSupport ? Boolean(cacheSupport.enabledFor(provider)) : false;
     // Observation-only probes; a probe failure must never reach the request.
     try {
@@ -344,10 +344,10 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     } catch { record({ event: 'tool-pair-probe-failed', model: route.model }); }
     let body = buildRequestBody(request, route, provider, stat => {
       if (stat.outcome === 'replayed') { replay.replayed += 1; replay.bytes = Math.max(replay.bytes, stat.bytes); replay.items = Math.max(replay.items, stat.items || 0); }
-      else if (stat.outcome in replay) replay[stat.outcome] += 1;
+      else if (stat.outcome in replay) { replay[stat.outcome] += 1; if (stat.reason) replay.reasons[stat.reason] = (replay.reasons[stat.reason] || 0) + 1; }
     }, { cacheBreakpoints });
     if (replay.replayed) record({ event: 'state-envelope-replayed', model: route.model, bytes: replay.bytes, bucket: sizeBucket(replay.bytes), items: replay.items });
-    if (replay.mismatch + replay.unparsable + replay.oversize > 0) record({ event: 'state-envelope-replay-failed', model: route.model, mismatch: replay.mismatch, unparsable: replay.unparsable, oversize: replay.oversize });
+    if (replay.mismatch + replay.unparsable + replay.oversize > 0) record({ event: 'state-envelope-replay-failed', model: route.model, mismatch: replay.mismatch, unparsable: replay.unparsable, oversize: replay.oversize, ...(replay.mismatch ? { reasons: replay.reasons } : {}) });
     // Pre-flight: a turn with no non-whitespace text, no attachment and no
     // tool-call/tool-result content must fail before any upstream request —
     // the native side does not guard this path.

@@ -1,7 +1,7 @@
 'use strict';
 
 const { isAnthropicFormat, buildAnthropicBody } = require('./anthropic.cjs');
-const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, replayMatches } = require('./state-envelope.cjs');
+const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, replayVerdict } = require('./state-envelope.cjs');
 
 function isChatFormat(format = '') { return /chat[-_\/]?completions|^(?:chat|openai)$/.test(format); }
 const STANDARD_CHAT_FINISH = new Set(['stop', 'length', 'tool_calls', 'content_filter', 'function_call']);
@@ -89,12 +89,15 @@ function buildRequestBody(request, route, provider, onState = () => {}, options 
         if (bytes <= MAX_STATE_BYTES) {
           try { state = JSON.parse(Buffer.from(message.signature.slice(STATE_PREFIX.length), 'base64url').toString('utf8')); } catch {}
         }
+        const verdict = bytes > MAX_STATE_BYTES || !state || state.scope !== stateScope(provider, route) ||
+          !Array.isArray(state.items) || !state.items.length ? null : replayVerdict(state, message);
         const outcome = bytes > MAX_STATE_BYTES ? 'oversize'
           : !state ? 'unparsable'
           : state.scope !== stateScope(provider, route) ? 'scope'
           : (!Array.isArray(state.items) || !state.items.length) ? 'invalid'
-          : replayMatches(state, message) ? 'replayed' : 'mismatch';
-        onState(outcome === 'replayed' ? { outcome, bytes, items: state.items.length } : { outcome, bytes });
+          : verdict === 'match' ? 'replayed' : 'mismatch';
+        onState(outcome === 'replayed' ? { outcome, bytes, items: state.items.length }
+          : outcome === 'mismatch' ? { outcome, bytes, reason: verdict } : { outcome, bytes });
         if (outcome === 'replayed') {
           messages.push(...state.items);
           continue;

@@ -1447,8 +1447,63 @@ test('a content-drifted envelope reports a replay failure', async t => {
   assert.equal(failed[0].mismatch, 1);
   assert.equal(failed[0].unparsable, 0);
   assert.equal(failed[0].oversize, 0);
+  assert.deepEqual(failed[0].reasons, { text: 1 });
   assert.equal(logs.filter(entry => entry.event === 'state-envelope-replayed').length, 0);
   assert.equal(fixture.bodies.at(-1).input.filter(item => item?.type === 'reasoning').length, 0, 'content drift still disables replay');
+});
+
+test('a tool-name drift reports the mismatch reason and still disables replay', async t => {
+  const provider = { id: 'p1', apiFormat: 'openai-responses' };
+  const fixture = await upstreamFixture(t, [
+    event({ type: 'response.output_item.added', output_index: 0, item: REASONING_ITEM }),
+    event({ type: 'response.output_item.done', output_index: 0, item: REASONING_ITEM }),
+    event({ type: 'response.output_item.added', output_index: 1, item: MESSAGE_ITEM }),
+    event({ type: 'response.output_item.done', output_index: 1, item: MESSAGE_ITEM }),
+    event({ type: 'response.output_item.added', output_index: 2, item: CALL_ITEM }),
+    event({ type: 'response.output_item.done', output_index: 2, item: CALL_ITEM }),
+    event({ type: 'response.completed', response: { status: 'completed', output: [REASONING_ITEM, MESSAGE_ITEM, CALL_ITEM] } }),
+  ]);
+  const first = await stateSession(t, provider, Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]), fixture);
+  const envelope = decodeSignature(first.messages).sigs[0];
+  const logs = [];
+  await stateSession(t, provider, Buffer.concat([
+    s(21, 'local-model'), nativeMessage(1, 'user'),
+    nativeMessage(2, 'done', [m(6, Buffer.concat([s(1, 'c9'), s(2, 'apply_patch'), s(3, '{"cmd":"ls"}')])), s(12, envelope)]),
+    nativeMessage(1, 'again'),
+  ]), fixture, logs);
+  const failed = logs.filter(entry => entry.event === 'state-envelope-replay-failed');
+  assert.equal(failed.length, 1);
+  assert.deepEqual(failed[0].reasons, { name: 1 });
+  assert.equal(fixture.bodies.at(-1).input.filter(item => item?.type === 'reasoning').length, 0,
+    'the drifted verdict disables replay, so no reasoning item reaches the wire');
+});
+
+test('replayVerdict names the first failing check and stays equivalent to replayMatches', () => {
+  const { replayVerdict, replayMatches } = require('../src/protocol/state-envelope.cjs');
+  const state = items => ({ items });
+  const msg = (content, toolCalls = []) => ({ content, toolCalls });
+  const call = (id, name, arguments_) => ({ id, name, arguments: arguments_ });
+  const twoCalls = state([REASONING_ITEM, MESSAGE_ITEM, CALL_ITEM, { ...CALL_ITEM, call_id: 'c10' }]);
+  const cases = [
+    ['match', state([REASONING_ITEM, MESSAGE_ITEM, CALL_ITEM]), msg('done', [call('c9', 'shell', '{"cmd":"ls"}')])],
+    ['match', state([REASONING_ITEM, MESSAGE_ITEM, { ...CALL_ITEM, arguments: '{"a":1,"b":2}' }]),
+      msg('done', [call('c9', 'shell', '{"b":2,"a":1}')])],
+    ['item', state([REASONING_ITEM, MESSAGE_ITEM, { type: 'mystery' }]), msg('done')],
+    ['item', state([{ type: 'message', role: 'assistant', content: [{ type: 'refusal', text: 'x' }] }]), msg('x')],
+    ['text', state([REASONING_ITEM, MESSAGE_ITEM, CALL_ITEM]), msg('other', [call('c9', 'shell', '{"cmd":"ls"}')])],
+    ['count', twoCalls, msg('done', [call('c9', 'shell', '{"cmd":"ls"}')])],
+    ['id', state([REASONING_ITEM, MESSAGE_ITEM, CALL_ITEM]), msg('done', [call('zz', 'shell', '{"cmd":"ls"}')])],
+    ['name', state([REASONING_ITEM, MESSAGE_ITEM, CALL_ITEM]), msg('done', [call('c9', 'apply_patch', '{"cmd":"ls"}')])],
+    ['arguments', state([REASONING_ITEM, MESSAGE_ITEM, CALL_ITEM]), msg('done', [call('c9', 'shell', '{"cmd":"pwd"}')])],
+  ];
+  const CLOSED = ['match', 'item', 'text', 'count', 'id', 'name', 'arguments'];
+  for (const [expected, envelopeState, message] of cases) {
+    const verdict = replayVerdict(envelopeState, message);
+    assert.equal(verdict, expected);
+    assert.ok(CLOSED.includes(verdict), verdict + ' must stay inside the reason code set');
+    assert.equal(replayMatches(envelopeState, message), verdict === 'match',
+      'replayMatches must stay a thin wrapper over the verdict');
+  }
 });
 
 test('chat-error logs the shape of a top-level error frame without leaking content', async t => {

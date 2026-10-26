@@ -23,27 +23,32 @@ function sameArguments(left, right) {
   try { return JSON.stringify(canonicalize(JSON.parse(left))) === JSON.stringify(canonicalize(JSON.parse(right))); }
   catch { return false; }
 }
-// Replays a stored Responses output sequence only when it still describes this
-// assistant turn byte-for-byte; every mismatch silently falls back to the
-// regular projection.
-function replayMatches(state, message) {
+// Ordered verdict: the first failing check wins, so the reason names the check
+// that actually disabled replay. 'match' is the only value that enables it.
+function replayVerdict(state, message) {
   let text = '';
   const tools = [];
   for (const item of state.items) {
     if (item?.type === 'message') for (const part of item.content || []) {
       if (part?.type === 'output_text' && typeof part.text === 'string') text += part.text;
-      else return false;
+      else return 'item';
     } else if (item?.type === 'function_call') tools.push({ id: item.call_id, name: item.name, arguments: item.arguments });
-    else if (item?.type !== 'reasoning') return false;
+    else if (item?.type !== 'reasoning') return 'item';
   }
-  if (text !== message.content) return false;
+  if (text !== message.content) return 'text';
   const calls = message.toolCalls || [];
-  if (tools.length !== calls.length) return false;
+  if (tools.length !== calls.length) return 'count';
   for (const [index, tool] of tools.entries()) {
-    if (tool.id !== calls[index].id || tool.name !== calls[index].name || !sameArguments(tool.arguments, calls[index].arguments)) return false;
+    if (tool.id !== calls[index].id) return 'id';
+    if (tool.name !== calls[index].name) return 'name';
+    if (!sameArguments(tool.arguments, calls[index].arguments)) return 'arguments';
   }
-  return true;
+  return 'match';
 }
+// Replays a stored Responses output sequence only when it still describes this
+// assistant turn byte-for-byte; every mismatch silently falls back to the
+// regular projection.
+const replayMatches = (state, message) => replayVerdict(state, message) === 'match';
 function validStateItem(item) {
   if (!item || typeof item !== 'object') return false;
   if (item.type === 'reasoning') return typeof item.encrypted_content === 'string' && item.encrypted_content !== '' && Array.isArray(item.summary);
@@ -54,4 +59,4 @@ function validStateItem(item) {
   return false;
 }
 
-module.exports = { STATE_PREFIX, MAX_STATE_BYTES, stateScope, canonicalize, sameArguments, replayMatches, validStateItem, sizeBucket };
+module.exports = { STATE_PREFIX, MAX_STATE_BYTES, stateScope, canonicalize, sameArguments, replayMatches, replayVerdict, validStateItem, sizeBucket };
