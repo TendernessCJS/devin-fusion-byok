@@ -359,3 +359,45 @@ test('a new file dropped into network/ is guarded by the same ceiling', () => {
   assert.ok(violations.includes(path.join('network', 'extra.cjs') + ' -> ' + path.join('update', 'download.cjs')),
     'a new network/ file reaching update/ must be reported');
 });
+
+// `shared` is the activation-wide service locator: installers publish slots
+// that other installers read through late binding. A slot with two writers
+// makes one installer's state another's to overwrite and silently widens the
+// object every test has to fake, so the writer map is pinned here.
+const SHARED_MULTI_WRITER = { backendStatus: ['activation/commands.cjs', 'activation/enable.cjs'] };
+const sharedWriterFiles = () => [
+  path.join(srcRoot, 'extension.cjs'),
+  ...fs.readdirSync(path.join(srcRoot, 'activation')).filter(name => name.endsWith('.cjs'))
+    .map(name => path.join(srcRoot, 'activation', name)),
+];
+const sharedWriterViolations = (readFile = fs.readFileSync) => {
+  const writers = new Map();
+  for (const file of sharedWriterFiles()) {
+    const label = path.relative(srcRoot, file).split(path.sep).join('/');
+    for (const match of readFile(file, 'utf8').matchAll(/shared\.([A-Za-z][A-Za-z0-9]*)\s*(?:\?\?=|\|\|=|=)(?!=)/g)) {
+      if (!writers.has(match[1])) writers.set(match[1], new Set());
+      writers.get(match[1]).add(label);
+    }
+  }
+  const violations = [];
+  for (const [slot, set] of writers) {
+    const actual = [...set].sort(), allowed = SHARED_MULTI_WRITER[slot];
+    if (!allowed) { if (actual.length > 1) violations.push(slot + ' <- ' + actual.join(', ')); continue; }
+    if (actual.join(',') !== [...allowed].sort().join(',')) violations.push(slot + ' <- ' + actual.join(', '));
+  }
+  return violations;
+};
+
+test('every shared activation slot has exactly one writer module', () => {
+  assert.deepEqual(sharedWriterViolations(), [],
+    'a new writer must either move to the slot owner or join SHARED_MULTI_WRITER explicitly');
+});
+
+test('the shared writer guard rejects an injected second writer', () => {
+  const target = path.join(srcRoot, 'activation', 'enable.cjs');
+  const violations = sharedWriterViolations(file => path.resolve(file) === target
+    ? fs.readFileSync(file, 'utf8') + '\nshared.pickerRefresh = () => {};\n'
+    : fs.readFileSync(file, 'utf8'));
+  assert.ok(violations.includes('pickerRefresh <- activation/cache-sync.cjs, activation/enable.cjs'),
+    'a second writer must be reported with both module labels');
+});
