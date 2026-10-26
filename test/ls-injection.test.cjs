@@ -340,3 +340,24 @@ test('unavailable or frozen native API fails without leaving a request hook inst
   assert.equal(f.http.request, f.request);
   assert.equal(f.api.setPort, f.setPort);
 });
+
+test('status.httpHook reports installed, then shadowed, then released', async () => {
+  const f = fixture();
+  const handle = await f.install();
+  assert.equal(handle.status.httpHook, 'installed');
+  f.http.request = () => ({});
+  assert.equal(handle.status.httpHook, 'shadowed');
+  await handle.dispose();
+  assert.equal(handle.status.httpHook, 'released');
+});
+
+test('a third-party wrapper over http.request is reported once', async () => {
+  const f = fixture();
+  const handle = await f.install();
+  const ours = f.http.request;
+  f.http.request = function (...args) { return ours.apply(this, args); };
+  f.api.setPort(4567);
+  f.api.setPort(4567);
+  assert.equal(f.logs.filter(line => line === 'ls-http-hook-shadowed').length, 1);
+  await handle.dispose();
+});

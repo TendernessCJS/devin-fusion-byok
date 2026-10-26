@@ -127,6 +127,15 @@ test('v2 acknowledgement is not completion; cancellation, failures, disable and 
   f.connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 'a', update: update() } });
   f.disable(); assert.equal(f.handle.snapshot().length, 0); f.handle.dispose();
 });
+test('a local transport-down status clears context state like a disconnect', async () => {
+  const f = fixture(1);
+  f.connector.sendRequest({ method: 'session/prompt', params: { sessionId: 'down' } }); await tick();
+  assert.equal(f.handle.snapshot().length, 1);
+  f.connector.setStatus('reconnectingMaxDelay');
+  assert.equal(f.handle.snapshot().length, 0);
+  assert.equal(f.handle.status().connections, 0);
+  f.handle.dispose();
+});
 test('foreign connectors untouched and multiple connections with same session fail closed', () => {
   const f = fixture();
   const foreign = { ...f.connector, agentId: 'other', sendRequest() {} }, saved = foreign.sendRequest;

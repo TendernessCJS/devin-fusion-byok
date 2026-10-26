@@ -59,9 +59,15 @@ async function installLsInjection({ nativeMainPath, createBridge, log = () => {}
   if (typeof nativeMainPath !== 'string' || typeof createBridge !== 'function') {
     throw new TypeError('nativeMainPath and createBridge are required');
   }
-  // VS Code creates a separate `http` copy and API object for each extension.
-  // Requiring from the native entry's path reuses its live objects without
-  // executing or rewriting the native extension bundle.
+  // The extension host gives every extension its own `vscode` API object, so
+  // this must require from the native entry's path to reach the object the
+  // native extension actually calls — without executing or rewriting its
+  // bundle. `http` is the opposite: the host intercepts only `vscode`, so this
+  // is Node's single shared builtin and the patch below applies to every
+  // extension in this host process. That is accepted because the wrapper only
+  // reads addressing fields for one loopback POST path and passes every other
+  // call straight through; the cost of a third-party wrapper layered on top is
+  // a deaf heartbeat fallback (see `httpHook`), never a broken request.
   const nativeRequire = createRequire(nativeMainPath);
   const http = nativeRequire('http');
   const api = nativeRequire('vscode').windsurfLanguageServer;
@@ -100,9 +106,19 @@ async function installLsInjection({ nativeMainPath, createBridge, log = () => {}
   const childPorts = new Set();
   const proxyPorts = new Set();
   const closed = new WeakSet();
+  let shadowReported = false;
 
   function report(message) {
     try { log(message); } catch (_) { /* Diagnostics cannot break native RPCs. */ }
+  }
+
+  // `http.request` is host-wide (see above), so another extension can wrap over
+  // ours; the heartbeat fallback then goes deaf while the setPort path still
+  // works. Report the transition once instead of waiting for a silent stall.
+  function noteHook() {
+    if (disposed || shadowReported || http.request === request) return;
+    shadowReported = true;
+    report('ls-http-hook-shadowed');
   }
 
   async function close(bridge) {
@@ -240,6 +256,7 @@ async function installLsInjection({ nativeMainPath, createBridge, log = () => {}
   }
 
   function setPort(...args) {
+    noteHook();
     const port = portNumber(args[0]);
     const nativePort = port && !proxyPorts.has(port);
     const entry = nativePort ? bridges.get(port) : null;
@@ -265,6 +282,7 @@ async function installLsInjection({ nativeMainPath, createBridge, log = () => {}
   }
 
   function setChildLanguageServerInfo(...args) {
+    noteHook();
     const info = args[0];
     const port = info && typeof info === 'object' ? portNumber(info.port) : null;
     const nativePort = port && !proxyPorts.has(port);
@@ -293,7 +311,8 @@ async function installLsInjection({ nativeMainPath, createBridge, log = () => {}
 
   const handle = {
     get status() {
-      return Object.freeze({ state, originalPort, proxyPort: bridges.get(originalPort)?.bridgePort ?? null,
+      return Object.freeze({ state, httpHook: disposed ? 'released' : http.request === request ? 'installed' : 'shadowed',
+        originalPort, proxyPort: bridges.get(originalPort)?.bridgePort ?? null,
         pending: pendingCount, bridges: bridges.size });
     },
     dispose() {

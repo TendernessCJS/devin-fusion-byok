@@ -208,3 +208,30 @@ test('inspect reports layer priority, activity and connector counts', () => {
     { id: 'acp-observer', priority: 30, connectors: 0, attached: true },
   ]);
 });
+
+test('missing attach after the grace window is reported once', () => {
+  const f = fixture();
+  const logs = [];
+  let probe;
+  const scheduler = { setTimeout(fn, ms) { probe = { fn, ms }; return { unref() {} }; } };
+  const registry = createAcpRegistry(f.api, {
+    log: (event, data) => logs.push({ event, data }), scheduler });
+  registry.addLayer({ id: 'silent', priority: 5, attach() { return null; }, detach() {} });
+  assert.equal(probe.ms, 30000);
+  probe.fn();
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].event, 'acp-attach-missing');
+  assert.equal(logs[0].data.graceMs, 30000);
+});
+
+test('a connector attached before the probe fires does not report, even after it detaches', () => {
+  const f = fixture();
+  const logs = [];
+  let probe;
+  const scheduler = { setTimeout(fn, ms) { probe = { fn, ms }; return { unref() {} }; } };
+  createAcpRegistry(f.api, { log: (event, data) => logs.push({ event, data }), scheduler });
+  f.layer('goal-continue', 20);
+  f.api.registerConnection(f.connector).dispose();
+  probe.fn();
+  assert.equal(logs.filter(entry => entry.event === 'acp-attach-missing').length, 0);
+});

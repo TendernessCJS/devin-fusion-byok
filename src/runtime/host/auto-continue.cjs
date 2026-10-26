@@ -2,7 +2,7 @@
 
 const { createHash, randomUUID } = require('node:crypto');
 const { createRequire } = require('node:module');
-const { loadAcpApi, restoreMember, createAcpRegistry } = require('./acp-hook.cjs');
+const { loadAcpApi, restoreMember, createAcpRegistry, isTerminalStatus } = require('./acp-hook.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.auto-continue.v1');
 const ATTACHED = Symbol.for('devin-fusion-byok.auto-continue.attached');
@@ -715,7 +715,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
 
     if (originalSetStatus) {
       entry.setStatusWrapper = function (status, ...rest) {
-        if (['disconnected', 'disabled', 'disposed'].includes(String(status).toLowerCase())) {
+        if (isTerminalStatus(status)) {
           cancelSessionTimer();
           for (const timer of entry.timers.values()) clearTimer(timer);
           entry.timers.clear();

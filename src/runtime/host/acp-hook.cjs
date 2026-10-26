@@ -36,7 +36,18 @@ function restoreMember(target, key, wrapper, descriptor) {
 const REGISTRY = Symbol.for('devin-fusion-byok.acp-registry.v1');
 const REGISTRIES = new WeakMap();
 
-function createAcpRegistry(api, { log } = {}) {
+// Connector status values observed in the shipped client: connecting, connected,
+// reconnecting, reconnectingMaxDelay, disconnected, disabled. A LOCAL agent's
+// transport-down status is always `reconnectingMaxDelay` (process exit and
+// handshake failure both use it); only the remote connector reports
+// `disconnected`. We attach to local connectors only, so both must count as
+// terminal, and `disposed` stays as a defensive extra that no shipped path sets.
+const TERMINAL_STATUS = new Set(['disconnected', 'disabled', 'disposed', 'reconnectingmaxdelay']);
+function isTerminalStatus(status) {
+  return TERMINAL_STATUS.has(String(status).toLowerCase());
+}
+
+function createAcpRegistry(api, { log, scheduler, attachGraceMs = 30000 } = {}) {
   const existing = api[REGISTRY] || REGISTRIES.get(api);
   // Later installers may carry the logger even when an earlier one created
   // the registry (goal/auto install before the observer in production).
@@ -47,8 +58,12 @@ function createAcpRegistry(api, { log } = {}) {
   const attachments = new Map();
   let wrapped = false;
   let shadowReported = false;
+  let probeArmed = false;
+  let everAttached = false;
   let registrationDescriptor = null;
   let originalRegister = null;
+  const setTimer = typeof scheduler?.setTimeout === 'function' ? scheduler.setTimeout
+    : (typeof setTimeout === 'function' ? setTimeout : null);
 
   function sortedLayers() {
     return [...layers.values()].sort((a, b) => a.priority - b.priority);
@@ -115,6 +130,7 @@ function createAcpRegistry(api, { log } = {}) {
     }
     let stack = attachments.get(connector);
     if (attached.length) {
+      everAttached = true;
       if (!stack) { stack = []; attachments.set(connector, stack); }
       stack.push(...attached);
     }
@@ -150,6 +166,23 @@ function createAcpRegistry(api, { log } = {}) {
     wrapped = true;
   }
 
+  // We can only wrap registrations that happen after install; connectors that
+  // were registered earlier live in a private map we cannot enumerate. If none
+  // ever attaches within the grace window after the first layer installs, all
+  // layers are silently dead — report once so the stall is diagnosable. A
+  // connector that attached and later detached still counts as a live hook.
+  function armAttachProbe() {
+    if (probeArmed || !setTimer) return;
+    probeArmed = true;
+    const timer = setTimer(() => {
+      if (everAttached || layers.size === 0) return;
+      for (const logger of loggers) {
+        try { logger('acp-attach-missing', { graceMs: attachGraceMs }); } catch {}
+      }
+    }, attachGraceMs);
+    timer?.unref?.();
+  }
+
   const registry = {
     addLogger(logger) {
       if (typeof logger === 'function') loggers.add(logger);
@@ -162,6 +195,7 @@ function createAcpRegistry(api, { log } = {}) {
       const layer = { id, priority, attach, detach, active: true, connectors: new Set() };
       layers.set(id, layer);
       ensureWrapped();
+      armAttachProbe();
       let removed = false;
       return {
         remove() {
@@ -199,4 +233,4 @@ function createAcpRegistry(api, { log } = {}) {
   return registry;
 }
 
-module.exports = { loadAcpApi, restoreMember, createAcpRegistry };
+module.exports = { loadAcpApi, restoreMember, createAcpRegistry, isTerminalStatus };

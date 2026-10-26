@@ -1274,3 +1274,43 @@ test('integration: serveChat simulated ACP adapter end-to-end failure then succe
   assert.equal(scheduler.pendingCount(), 0);
   assert.equal(attempt, 2);
 });
+
+test('reconnectingMaxDelay from a local connector reclaims pending retries', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+  const statuses = [];
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') return Promise.resolve({ stopReason: 'end_turn' });
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {},
+    setStatus(status) { statuses.push(status); }
+  };
+  f.api.registerConnection(connector);
+
+  connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-down', prompt: [{ type: 'text', text: 'hi' }] }
+  }).catch(() => {});
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-down',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Provider returned HTTP 429.' } }
+    }
+  });
+  await new Promise(r => setImmediate(r));
+  assert.equal(handle.status().pendingTimers, 1);
+  assert.equal(handle.status().activeSessions, 1);
+
+  connector.setStatus('reconnectingMaxDelay');
+  assert.equal(handle.status().pendingTimers, 0);
+  assert.equal(handle.status().activeSessions, 0);
+});

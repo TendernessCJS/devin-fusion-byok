@@ -1,7 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { createRequire } = require('node:module');
-const { loadAcpApi, restoreMember, createAcpRegistry } = require('../runtime/host/acp-hook.cjs');
+const { loadAcpApi, restoreMember, createAcpRegistry, isTerminalStatus } = require('../runtime/host/acp-hook.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.goal-continue.v1');
 const ATTACHED = Symbol.for('devin-fusion-byok.goal-continue.attached');
@@ -450,7 +450,7 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
 
     if (originalSetStatus) {
       entry.setStatusWrapper = function (status, ...rest) {
-        if (['disconnected', 'disabled', 'disposed'].includes(String(status).toLowerCase())) {
+        if (isTerminalStatus(status)) {
           for (const sessionId of [...entry.sessions]) {
             sessions.release(sessionId, connector);
             sessions.observe(sessionId, 'unknown');

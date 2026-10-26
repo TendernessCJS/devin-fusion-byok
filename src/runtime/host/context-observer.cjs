@@ -1,6 +1,6 @@
 'use strict';
 const { createContextState, usageRejectionReason, USAGE_REJECTIONS } = require('./context-state.cjs');
-const { loadAcpApi, restoreMember, createAcpRegistry } = require('./acp-hook.cjs');
+const { loadAcpApi, restoreMember, createAcpRegistry, isTerminalStatus } = require('./acp-hook.cjs');
 const KEY = Symbol.for('devin-fusion-byok.context-observer.v1');
 function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
   const api = loadAcpApi(nativeMainPath, 'ACP unavailable');
@@ -79,7 +79,7 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
       });
       if (typeof connector.setStatus === 'function') wrap('setStatus', fn => function (status, ...rest) {
         const result = Reflect.apply(fn, this, [status, ...rest]);
-        if (['disconnected', 'disabled', 'disposed'].includes(status)) detach();
+        if (isTerminalStatus(status)) detach();
         return result;
       });
       connections.set(connector, { ...entry, detach });
