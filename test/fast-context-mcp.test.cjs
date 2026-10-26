@@ -9,14 +9,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { writeEnabled } = require('../src/fast-context/state.cjs');
 const { startServer, safeError, parseArgs } = require('../src/fast-context/server.cjs');
-function harness(t, runSearch) {
+function harness(t, runSearch, createWeb) {
   const input = new PassThrough(), output = new PassThrough(), messages = [];
   output.on('data', chunk => { for (const line of chunk.toString().trim().split('\n')) messages.push(JSON.parse(line)); });
-  const server = startServer({ root: '/fixture', input, output, runSearch, isEnabled: () => true });
+  const server = startServer({ root: '/fixture', input, output, runSearch, createWeb, isEnabled: () => true });
   t.after(() => { server.close(); input.destroy(); output.destroy(); });
   const send = (method, params, id) => input.write(JSON.stringify({ jsonrpc: '2.0', ...(id === undefined ? {} : { id }), method, params }) + '\n');
   send('initialize', { protocolVersion: '2025-11-25' }, 1);
-  return { input, messages, send };
+  return { input, messages, send, server };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 test('MCP handshake, list, status, validation and safe errors', async t => {
@@ -133,4 +133,56 @@ test('MCP lists nothing and refuses calls while the user switch is off', async t
   await settle();
   assert.equal(messages.find(m => m.id === 4).result.tools.length, 4);
   assert.equal(searches, 1);
+});
+
+const hangingWeb = (signals = []) => () => ({
+  search: ({ signal }) => { signals.push(signal); return new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+  }); },
+  read: ({ signal }) => { signals.push(signal); return new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+  }); },
+});
+
+test('a matching requestId aborts an in-flight web request', async t => {
+  const signals = [];
+  const h = harness(t, async () => ({}), hangingWeb(signals));
+  h.send('tools/call', { name: 'web_search', arguments: { query: 'x' } }, 2);
+  await settle(); await settle();
+  assert.equal(signals.length, 1);
+  h.send('notifications/cancelled', { requestId: 2 });
+  await settle();
+  assert.equal(signals[0].aborted, true);
+  assert.equal(h.messages.find(m => m.id === 2).result.content[0].text, 'cancelled_or_timeout');
+});
+
+test('server close aborts every in-flight web request', async t => {
+  const signals = [];
+  const h = harness(t, async () => ({}), hangingWeb(signals));
+  h.send('tools/call', { name: 'web_search', arguments: { query: 'x' } }, 2);
+  h.send('tools/call', { name: 'web_read_url', arguments: { url: 'https://example.com/page' } }, 3);
+  await settle(); await settle();
+  assert.equal(signals.length, 2);
+  h.server.close();
+  assert.equal(signals.every(signal => signal.aborted), true);
+});
+
+test('a non-matching requestId leaves in-flight web requests running', async t => {
+  const signals = [];
+  const h = harness(t, async () => ({}), hangingWeb(signals));
+  h.send('tools/call', { name: 'web_search', arguments: { query: 'x' } }, 2);
+  await settle(); await settle();
+  h.send('notifications/cancelled', { requestId: 99 });
+  await settle();
+  assert.equal(signals[0].aborted, false);
+});
+
+test('web calls beyond the concurrency cap fail fast with web_busy', async t => {
+  const h = harness(t, async () => ({}), hangingWeb());
+  for (let id = 2; id <= 6; id++) h.send('tools/call', { name: 'web_search', arguments: { query: 'q' + id } }, id);
+  await settle(); await settle();
+  const overflow = h.messages.find(m => m.id === 6);
+  assert.equal(overflow.result.isError, true);
+  assert.match(overflow.result.content[0].text, /^web_busy/);
+  assert.equal(h.messages.filter(m => m.id >= 2 && m.id <= 5 && m.result.isError).length, 0);
 });

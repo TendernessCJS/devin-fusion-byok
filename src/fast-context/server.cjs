@@ -33,20 +33,22 @@ const WEB_TOOLS = new Set(['web_search', 'web_read_url']);
 // Name used before 0.3.43; still accepted so existing harness prompts keep working.
 const ALIASES = { fast_context_search: 'code_search' };
 const NETWORK_TIMEOUT_MS = 60000;
+const MAX_WEB_CONCURRENT = 4;
 const DISABLED_TEXT = 'mcp_disabled: the external MCP is turned off. Ask the user to enable it in Devin: Fusion BYOK control panel > 对外提供 MCP.';
 function safeError(error, signal) {
   const code = signal?.aborted ? 'cancelled_or_timeout' : error?.name === 'TimeoutError' ? 'deadline_exceeded' : String(error?.message || '');
-  const allowed = /^(credentials_unavailable|unauthenticated|permission_denied|resource_exhausted|fast_context_disabled|upstream_http_\d{3}|upstream_error|unavailable|deadline_exceeded|invalid_arguments|invalid_model_response|search_budget_exhausted|invalid_stream|incomplete_stream|response_too_large|request_too_large|cancelled_or_timeout|ripgrep_unavailable|search_command_failed|insecure_tls_configuration|web_search_disabled|unsupported_content_type|blocked_address|too_many_redirects)$/;
+  const allowed = /^(credentials_unavailable|unauthenticated|permission_denied|resource_exhausted|fast_context_disabled|upstream_http_\d{3}|upstream_error|unavailable|deadline_exceeded|invalid_arguments|invalid_model_response|search_budget_exhausted|invalid_stream|incomplete_stream|response_too_large|request_too_large|cancelled_or_timeout|web_busy|ripgrep_unavailable|search_command_failed|insecure_tls_configuration|web_search_disabled|unsupported_content_type|blocked_address|too_many_redirects)$/;
   return allowed.test(code) ? code : 'fast_context_failed';
 }
 function startServer({ root, rg, exclude = [], input = process.stdin, output = process.stdout, runSearch = search,
   createWeb = () => createWebClient({ key: require('./auth.cjs').readKey() }), isEnabled = () => readEnabled() } = {}) {
-  let initialized = false, closed = false, busy, buffer = '';
+  let initialized = false, closed = false, busy, buffer = '', webActive = 0;
+  const active = new Map();
   const decoder = new StringDecoder('utf8');
   const send = value => { if (!closed) output.write(JSON.stringify(value) + '\n'); };
   const reply = (id, result) => send({ jsonrpc: '2.0', id, result });
   const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
-  const close = () => { closed = true; busy?.abort.abort(); };
+  const close = () => { closed = true; for (const controller of active.values()) controller.abort(); };
   async function receive(message) {
     if (!message || Array.isArray(message) || message.jsonrpc !== '2.0' || typeof message.method !== 'string' ||
         (Object.hasOwn(message, 'id') && typeof message.id !== 'string' && !Number.isSafeInteger(message.id))) {
@@ -54,7 +56,7 @@ function startServer({ root, rg, exclude = [], input = process.stdin, output = p
     }
     const { id, method, params = {} } = message;
     if (id === undefined) {
-      if (method === 'notifications/cancelled' && busy?.id === params?.requestId) busy.abort.abort();
+      if (method === 'notifications/cancelled') active.get(params?.requestId)?.abort();
       return;
     }
     if (!params || typeof params !== 'object' || Array.isArray(params)) { fail(id, -32602, 'Invalid params'); return; }
@@ -88,8 +90,10 @@ function startServer({ root, rg, exclude = [], input = process.stdin, output = p
     // The single-flight limit protects the bounded code index only; web calls are
     // independent network requests and may run alongside it.
     if (!web && busy) { reply(id, { isError: true, content: [{ type: 'text', text: 'search_busy: retry after the current search finishes.' }] }); return; }
+    if (web && webActive >= MAX_WEB_CONCURRENT) { reply(id, { isError: true, content: [{ type: 'text', text: 'web_busy: retry after a web request finishes.' }] }); return; }
     const abort = new AbortController();
-    if (!web) busy = { id, abort };
+    active.set(id, abort);
+    if (!web) busy = { id, abort }; else webActive++;
     const timer = setTimeout(() => abort.abort(), web ? NETWORK_TIMEOUT_MS : 120000);
     try {
       const token = params._meta?.progressToken;
@@ -104,7 +108,7 @@ function startServer({ root, rg, exclude = [], input = process.stdin, output = p
       reply(id, { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result });
     } catch (error) {
       reply(id, { isError: true, content: [{ type: 'text', text: safeError(error, abort.signal) }] });
-    } finally { clearTimeout(timer); if (!web) busy = undefined; }
+    } finally { clearTimeout(timer); active.delete(id); if (!web) busy = undefined; else webActive--; }
   }
   input.on('data', chunk => {
     buffer += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
