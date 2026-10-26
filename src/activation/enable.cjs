@@ -9,7 +9,7 @@ const { installAuthStatusInjection } = require('../runtime/host/auth-status.cjs'
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
 const { globalSetting } = require('./settings.cjs');
-const { safeError } = require('./errors.cjs');
+const { safeError, RuntimeError } = require('./errors.cjs');
 
 // A configured http.proxy routes this window, so the managed CLI env must exempt
 // loopback or devin-cli cannot reach the local backend or the LS bridge. Read
@@ -28,7 +28,7 @@ function loopbackExemption(vscode) {
 const { checkNativeContract } = require('./native-contract.cjs');
 
 function installEnable({ deps, shared }) {
-  const { lifecycle, config, vscode, context, log, catalog, nativeMain, stores } = deps;
+  const { lifecycle, config, vscode, context, log, catalog, nativeMain, stores, managedSettings } = deps;
   let enableQueue = Promise.resolve();
   shared.ensureEnabled = () => {
     const operation = enableQueue.then(async () => {
@@ -44,6 +44,7 @@ function installEnable({ deps, shared }) {
     return operation;
   };
   async function enable() {
+    managedSettings.open();
     const generation = ++lifecycle.activationGeneration;
     lifecycle.runtimeWaitAbort?.abort();
     const waiting = new AbortController(); lifecycle.runtimeWaitAbort = waiting;
@@ -84,13 +85,22 @@ function installEnable({ deps, shared }) {
         ? saved[key] == null ? { exists: false } : { exists: true, value: saved[key] } : undefined;
       remember(receipt, ['devin.acp.agentEnv', 'devin-cli', key], current, value, legacy);
     }
-    // Commit recovery information before changing the user's settings.
-    saveReceipt(receipt);
-    await context.globalState.update('savedEnv', saved);
-    await context.globalState.update('managedEnv', desired);
-    if (Object.keys(managed).some(k => !(k in desired)) || Object.entries(desired).some(([k, v]) => previous[k] !== v)) await settings.update('agentEnv', { ...existing, 'devin-cli': { ...previous, ...desired } }, vscode.ConfigurationTarget.Global);
-    if (superseded(lifecycle, config, generation)) return;
-    await shared.reconcilePreference();
+    // Commit recovery information before changing the user's settings. The
+    // whole write leg is one critical section: a disable that lands mid-write
+    // drains it before restoring, and one already draining cancels it.
+    try {
+      await managedSettings.critical(async () => {
+        saveReceipt(receipt);
+        await context.globalState.update('savedEnv', saved);
+        await context.globalState.update('managedEnv', desired);
+        if (Object.keys(managed).some(k => !(k in desired)) || Object.entries(desired).some(([k, v]) => previous[k] !== v)) await settings.update('agentEnv', { ...existing, 'devin-cli': { ...previous, ...desired } }, vscode.ConfigurationTarget.Global);
+        if (superseded(lifecycle, config, generation)) return;
+        await shared.reconcilePreference();
+      });
+    } catch (error) {
+      if (error?.code === 'cancelled') throw new RuntimeError('cancelled');
+      throw error;
+    }
     if (superseded(lifecycle, config, generation)) return;
     const native = vscode.extensions.getExtension('codeium.windsurf');
     if (!native) throw new Error('未找到 Devin 原生扩展');

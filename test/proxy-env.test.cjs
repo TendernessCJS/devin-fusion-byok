@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createSandboxLoader } = require('./helpers/sandbox.cjs');
+const { createManagedSettingsGate } = require('../src/activation/managed-settings.cjs');
 
 const filename = path.resolve(__dirname, '../src/activation/enable.cjs');
 const PORT = 39842;
@@ -65,7 +66,8 @@ function fixture(t, options = {}) {
   };
   const deps = { lifecycle, config, configFile, vscode, context, log: () => {},
     catalog: () => ({ models: [] }), nativeMain: '/native/main.js', root, extensionPath,
-    stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } } };
+    stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } },
+    managedSettings: createManagedSettingsGate() };
 
   // enable.cjs derives the managed env from runtime/port.cjs now, which loads
   // for real here (a leaf module with the same 39842 constant).

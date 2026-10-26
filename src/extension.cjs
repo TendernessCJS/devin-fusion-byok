@@ -21,6 +21,7 @@ const { teardown } = require('./activation/teardown.cjs');
 const { createNativeCatalogState } = require('./activation/stores/native-catalog.cjs');
 const { createCacheSyncState } = require('./activation/stores/cache-sync.cjs');
 const { createAcpObservationState } = require('./activation/stores/acp-observation.cjs');
+const { createManagedSettingsGate } = require('./activation/managed-settings.cjs');
 // Shared lifecycle state across activate/teardown/deactivate.
 const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
   cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
@@ -128,6 +129,7 @@ async function activate(context) {
     cacheSync: createCacheSyncState(),
     acpObservation: createAcpObservationState(),
   };
+  const managedSettings = createManagedSettingsGate();
   const shared = {
     goalContinue: undefined, autoContinue: undefined,
     management: undefined, manager: undefined,
@@ -151,7 +153,7 @@ async function activate(context) {
     if (safe.code === 'cancelled') return;
     log('error', { code: safe.code }); vscode.window.showErrorMessage('Fusion BYOK：' + safe.message);
   } };
-  const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run, stores };
+  const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run, stores, managedSettings };
   lifecycle.log = log;
   lifecycle.nativeRefresh = () => vscode.commands.executeCommand('devin.refreshUserStatus');
   const createPublication = () => require('./activation/catalog-publication.cjs').createCatalogPublication({

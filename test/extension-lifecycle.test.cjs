@@ -34,10 +34,18 @@ function fixture(t, initial = {}) {
     dispose() { authDisposed += 1; },
     status: { state: 'observing', calls: 0, rewrites: 0 },
   };
+  const updateGates = { settings: new Map(), state: new Map() };
+  const makeGate = (map, key) => { let mark, release;
+    const started = new Promise(resolve => { mark = resolve; }), promise = new Promise(resolve => { release = resolve; });
+    map.set(key, { mark, promise });
+    return { started, release }; };
+  const consumeGate = (map, key) => { const gate = map.get(key); map.delete(key); return gate; };
   const settings = {
     inspect: key => ({ globalValue: globals[key] }),
     get: () => { throw new Error('Merged workspace settings must not be copied into global settings'); },
-    update: async (key, value) => { assert.ok(fs.existsSync(path.join(root, RECEIPT))); globals[key] = value; updates.push(key); },
+    update: async (key, value) => { assert.ok(fs.existsSync(path.join(root, RECEIPT)));
+      const gate = consumeGate(updateGates.settings, key); if (gate) { gate.mark(); await gate.promise; }
+      globals[key] = value; updates.push(key); },
   };
   const vscode = {
     ConfigurationTarget: { Global: 1 },
@@ -110,13 +118,20 @@ function fixture(t, initial = {}) {
   const loader = createSandboxLoader({ filename, overrides, globals: {
     AbortController, AbortSignal, setInterval, clearInterval, setTimeout: (fn, _ms) => setTimeout(fn, 0), clearTimeout,
     fetch: (...args) => fetchImpl(...args),
-  }, shareGlobals: file => file.includes(path.sep + 'src' + path.sep + 'activation' + path.sep) });
+    // The managed-settings gate keeps a real drain budget: under the zero-delay
+    // shim above its 5s bound collapses to 0ms, so drain always reports a
+    // timeout and the tests would pass for the wrong reason.
+  }, shareGlobals: file => file.includes(path.sep + 'src' + path.sep + 'activation' + path.sep) &&
+    !file.endsWith('managed-settings.cjs') });
   const module = loader.module;
   // Realm boundaries break instanceof inside the sandboxed module, so the
   // matrix uid set must be built with the sandbox realm's Set constructor.
   const vmSet = vm.runInContext('Set', loader.context);
   const context = { globalStorageUri: { fsPath: root }, extensionPath, subscriptions: [],
-    globalState: { get: (key, fallback) => state.has(key) ? state.get(key) : fallback, update: async (key, value) => value === undefined ? state.delete(key) : state.set(key, value) } };
+    globalState: { get: (key, fallback) => state.has(key) ? state.get(key) : fallback,
+      update: async (key, value) => { const gate = consumeGate(updateGates.state, key);
+        if (gate) { gate.mark(); await gate.promise; }
+        return value === undefined ? state.delete(key) : state.set(key, value); } } };
   t.after(async () => { await module.exports.deactivate(); context.subscriptions.forEach(value => value.dispose()); loader.assertStubsUsed('extension-lifecycle'); });
   return { ...module.exports, context, root, configFile, globals, state, commands, logs, notices, watchers, updates, bridges,
     preferenceListeners, managerOptions: () => managerOptions, spawns, autoContinueOptions: () => autoContinueOptions,
@@ -127,6 +142,8 @@ function fixture(t, initial = {}) {
     setMatrixUids: uids => { matrixUids = new vmSet(uids); },
     setCatalogModels: models => { extraCatalogModels = models; },
     gateInjection: () => { let release; injectionGate = new Promise(resolve => { release = resolve; }); return release; },
+    gateSettingsUpdate: key => makeGate(updateGates.settings, key),
+    gateGlobalStateUpdate: key => makeGate(updateGates.state, key),
     setWarningResult: value => { warningResult = value; },
     firePreference: (key = 'devin.acp.agentPreferences') => Promise.all(preferenceListeners.map(fn => fn({ affectsConfiguration: name => name === key }))),
     cacheChecks: () => cacheChecks,
@@ -1001,4 +1018,46 @@ test('an event from the previous generation hook cannot move the new publisher',
   assert.equal(f.authOptions().length, before, 'the stale handle emits into a pinned closure');
   // The new generation's hook remains the live one: its events alone decide.
   assert.equal(f.authDisposed(), 1);
+});
+test('disable waits for an in-flight managed settings write before restoring', async t => {
+  const f = fixture(t);
+  await f.activate(f.context); await f.settle();
+  await f.commands.get('devinFusionByok.disable')();
+  const gate = f.gateSettingsUpdate('agentEnv');
+  f.managerOptions().write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: true });
+  const enabling = f.managerOptions().afterChange('setEnabled').catch(() => {});
+  await gate.started;
+  const disabling = f.commands.get('devinFusionByok.disable')();
+  const early = await Promise.race([
+    disabling.then(() => 'done'),
+    f.settle(10).then(() => 'pending'),
+  ]);
+  assert.equal(early, 'pending', 'disable must wait for the in-flight managed write');
+  gate.release();
+  await Promise.allSettled([enabling, disabling]);
+  await f.settle();
+  assert.ok(!Object.hasOwn(f.globals.agentEnv['devin-cli'], 'WINDSURF_API_SERVER_URL'));
+  assert.equal(f.globals.agentEnv['devin-cli'].KEEP, 'user-value');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT))).changes.length, 0);
+});
+test('disable waits through the globalState leg of a managed settings write', async t => {
+  const f = fixture(t);
+  await f.activate(f.context); await f.settle();
+  await f.commands.get('devinFusionByok.disable')();
+  const gate = f.gateGlobalStateUpdate('savedEnv');
+  f.managerOptions().write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: true });
+  const enabling = f.managerOptions().afterChange('setEnabled').catch(() => {});
+  await gate.started;
+  const disabling = f.commands.get('devinFusionByok.disable')();
+  const early = await Promise.race([
+    disabling.then(() => 'done'),
+    f.settle(10).then(() => 'pending'),
+  ]);
+  assert.equal(early, 'pending', 'disable must wait for the in-flight managed write');
+  gate.release();
+  await Promise.allSettled([enabling, disabling]);
+  await f.settle();
+  assert.ok(!Object.hasOwn(f.globals.agentEnv['devin-cli'], 'WINDSURF_API_SERVER_URL'));
+  assert.equal(f.globals.agentEnv['devin-cli'].KEEP, 'user-value');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT))).changes.length, 0);
 });

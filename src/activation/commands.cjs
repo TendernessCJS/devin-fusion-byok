@@ -6,7 +6,7 @@ const { teardown } = require('./teardown.cjs');
 const { isHostDisabled } = require('../lifecycle/host-disabled.cjs');
 
 function installCommands({ deps, shared }) {
-  const { lifecycle, config, configFile, vscode, context, log, catalog, run } = deps;
+  const { lifecycle, config, configFile, vscode, context, log, catalog, run, managedSettings } = deps;
   const refresh = async () => {
     shared.management.open();
     vscode.window.showInformationMessage('请选择供应商，点击「导入模型」，勾选要导入的模型后确认。');
@@ -72,7 +72,7 @@ function installCommands({ deps, shared }) {
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.status', () => { log('status', { runtime: lifecycle.connection?.status, models: config().providers.map(p => ({ name: p.name, models: p.models.length })) }); deps.output.show(true); }));
   // Restores only the settings values this extension wrote and the user has not
   // changed since, using the receipt. Does not touch the plugin's own enabled flag.
-  const restoreOwnedSettings = async () => {
+  const restoreOwnedSettings = async ({ keepReceipt = false } = {}) => {
     const settings = vscode.workspace.getConfiguration('devin.acp');
     const snapshot = { 'devin.acp.agentEnv': globalSetting(settings, 'agentEnv'), 'devin.acp.agentPreferences': globalSetting(settings, 'agentPreferences') };
     const receipt = readReceipt(deps.root, context.extensionPath);
@@ -90,9 +90,13 @@ function installCommands({ deps, shared }) {
     for (const key of ['agentEnv', 'agentPreferences']) if (JSON.stringify(snapshot['devin.acp.' + key]) !== JSON.stringify(restored.value['devin.acp.' + key])) {
       await settings.update(key, restored.value['devin.acp.' + key], vscode.ConfigurationTarget.Global);
     }
-    receipt.changes = []; saveReceipt(receipt);
-    await context.globalState.update('savedEnv', undefined);
-    await context.globalState.update('managedEnv', undefined);
+    // A drain timeout leaves an enable write possibly still in flight; keep the
+    // receipt and saved originals so a later restore still has the evidence.
+    if (!keepReceipt) {
+      receipt.changes = []; saveReceipt(receipt);
+      await context.globalState.update('savedEnv', undefined);
+      await context.globalState.update('managedEnv', undefined);
+    }
   };
   // Every disable path (panel switch, disable command, external enabled=false
   // edit) serializes through the same in-flight promise so a config watcher
@@ -103,11 +107,13 @@ function installCommands({ deps, shared }) {
       try { lifecycle.goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); }
       shared.backendStatus = 'stopped';
       updateConfig(configFile, current => { if (current.enabled === false) return false; current.enabled = false; return true; });
+      const drained = await managedSettings.drain();
+      if (!drained) log('managed-settings-drain-timeout');
       // Owned settings restore must run even when the LS bridge dispose threw —
       // a broken bridge can never orphan the user's environment values.
       let verdict;
       try { verdict = await teardown(lifecycle, { restore: true }); }
-      finally { await restoreOwnedSettings(); }
+      finally { await restoreOwnedSettings({ keepReceipt: drained === false }); }
       vscode.window.showInformationMessage(verdict?.ok
         ? 'Fusion BYOK 已停用，原生连接已恢复。'
         : 'Fusion BYOK 已停用，连接设置已恢复；桌面模型目录恢复尚未确认。');
@@ -123,7 +129,8 @@ function installCommands({ deps, shared }) {
   // deactivate() only reaches `lifecycle`, so the hook lives on that slot.
   lifecycle.restoreOnHostDisable = async () => {
     if (!isHostDisabled({ storageRoot: deps.root })) return;
-    await restoreOwnedSettings();
+    const drained = await managedSettings.drain();
+    await restoreOwnedSettings({ keepReceipt: drained === false });
     log('host-disabled-settings-restored');
   };
   context.subscriptions.push(vscode.commands.registerCommand('devinFusionByok.disable', run(shared.disable)));
