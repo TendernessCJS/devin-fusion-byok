@@ -60,7 +60,10 @@ function toolInput(args) {
   } catch { return {}; }
 }
 
-function buildAnthropicBody(request, route, provider, options = {}) {
+// Neutral history -> merged Anthropic turns. Kept as a separate function so the
+// pairing probe below can inspect exactly what the wire body would contain —
+// running it on raw request.messages would misjudge parallel tool results.
+function buildTurns(request) {
   const system = request.systemPrompt ? [request.systemPrompt] : [];
   const messages = [];
   const push = (role, blocks) => {
@@ -91,6 +94,41 @@ function buildAnthropicBody(request, route, provider, options = {}) {
       push('user', textBlocks(message));
     }
   }
+  return { system, messages };
+}
+
+// Read-only audit of the merged turns: whether every tool_result can find its
+// tool_use. The native side assembles this history, so whether Anthropic's
+// pairing invariants hold can only be observed, not asserted statically.
+function inspectToolPairing(request) {
+  const counts = { orphan: 0, nonAdjacent: 0, duplicate: 0, notFirst: 0 };
+  const idsSoFar = new Set();
+  const resultIds = new Set();
+  let lastAssistantIds = new Set();
+  for (const turn of buildTurns(request).messages) {
+    if (turn.role === 'assistant') {
+      lastAssistantIds = new Set();
+      for (const block of turn.content) {
+        if (block.type === 'tool_use' && block.id) { idsSoFar.add(block.id); lastAssistantIds.add(block.id); }
+      }
+      continue;
+    }
+    if (turn.content.findIndex(block => block.type === 'tool_result') > 0) counts.notFirst++;
+    for (const block of turn.content) {
+      if (block.type !== 'tool_result') continue;
+      if (!idsSoFar.has(block.tool_use_id)) counts.orphan++;
+      else if (!lastAssistantIds.has(block.tool_use_id)) counts.nonAdjacent++;
+      if (resultIds.has(block.tool_use_id)) counts.duplicate++;
+      else resultIds.add(block.tool_use_id);
+    }
+    // Only the immediately preceding assistant turn counts as adjacent.
+    lastAssistantIds = new Set();
+  }
+  return counts;
+}
+
+function buildAnthropicBody(request, route, provider, options = {}) {
+  const { system, messages } = buildTurns(request);
   const requested = request.maxTokens ?? route.maxOutputTokens ?? route.maxTokens ?? provider.maxOutputTokens ?? provider.maxTokens;
   const maxTokens = Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, MAX_OUTPUT_TOKENS) : DEFAULT_OUTPUT_TOKENS;
   const body = { model: route.model, max_tokens: maxTokens, messages, stream: true };
@@ -226,4 +264,4 @@ function createAnthropicAdapter() {
   };
 }
 
-module.exports = { ANTHROPIC_VERSION, isAnthropicFormat, anthropicHeaders, buildAnthropicBody, stripCacheControl, createAnthropicAdapter };
+module.exports = { ANTHROPIC_VERSION, isAnthropicFormat, anthropicHeaders, buildAnthropicBody, buildTurns, inspectToolPairing, stripCacheControl, createAnthropicAdapter };

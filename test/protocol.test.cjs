@@ -9,6 +9,7 @@ const { createHash } = require('node:crypto');
 const wire = require('../src/protocol/wire.cjs');
 const { parseChat, toolChunk } = require('../src/protocol/native-chat-codec.cjs');
 const { serveChat, buildRequestBody } = require('../src/protocol/inference.cjs');
+const { inspectToolPairing } = require('../src/protocol/anthropic.cjs');
 const { s, v, m, str, num, fields } = wire;
 
 function nativeMessage(source, text, extra = []) {
@@ -1931,4 +1932,99 @@ test('a plain-text stop finish logs no tool-claim-mismatch', async t => {
     }, { logs });
   assert.equal(logs.filter(e => e.event === 'tool-claim-mismatch').length, 0);
   assert.equal(unpack(body).messages.map(m => str(m, 3)).join(''), 'plain text');
+});
+
+test('buildAnthropicBody emits identical bodies for parallel tools, thinking and breakpoints', () => {
+  const provider = { apiFormat: 'anthropic' };
+  const parallel = buildRequestBody({ systemPrompt: 'sys', messages: [
+    { role: 'user', content: 'run them' },
+    { role: 'assistant', content: 'calling', toolCalls: [
+      { id: 'c1', name: 't', arguments: '{"a":1}' }, { id: 'c2', name: 't', arguments: '{}' }, { id: 'c3', name: 'u', arguments: '{}' }] },
+    { role: 'tool', content: 'r1', toolCallId: 'c1' }, { role: 'tool', content: 'r2', toolCallId: 'c2' }, { role: 'tool', content: 'r3', toolCallId: 'c3' },
+    { role: 'user', content: 'next' }], tools: [] }, { model: 'claude-x' }, provider);
+  assert.deepEqual(parallel.messages, [
+    { role: 'user', content: [{ type: 'text', text: 'run them' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'calling' },
+      { type: 'tool_use', id: 'c1', name: 't', input: { a: 1 } },
+      { type: 'tool_use', id: 'c2', name: 't', input: {} },
+      { type: 'tool_use', id: 'c3', name: 'u', input: {} }] },
+    { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'c1', content: 'r1' },
+      { type: 'tool_result', tool_use_id: 'c2', content: 'r2' },
+      { type: 'tool_result', tool_use_id: 'c3', content: 'r3' },
+      { type: 'text', text: 'next' }] }]);
+  assert.equal(parallel.system, 'sys');
+  assert.equal(parallel.max_tokens, 64000);
+  assert.equal(parallel.stream, true);
+
+  const thinking = buildRequestBody({ systemPrompt: '', messages: [
+    { role: 'user', content: 'q' },
+    { role: 'assistant', content: 'done', thinking: 'pondered', signature: 'sig-abc' },
+    { role: 'user', content: 'z' }], tools: [] }, { model: 'claude-x' }, provider);
+  assert.deepEqual(thinking.messages[1], { role: 'assistant', content: [
+    { type: 'thinking', thinking: 'pondered', signature: 'sig-abc' },
+    { type: 'text', text: 'done' }] });
+
+  const marked = buildRequestBody({ systemPrompt: '', promptCacheKey: 'k', messages: [
+    { role: 'user', content: 'q' }, { role: 'assistant', content: 'a' }, { role: 'user', content: 'z' }], tools: [] },
+    { model: 'claude-x' }, provider, () => {}, { cacheBreakpoints: true });
+  assert.deepEqual(marked.messages[1].content[0], { type: 'text', text: 'a', cache_control: { type: 'ephemeral' } });
+  assert.equal(JSON.stringify(marked.messages[2]).includes('cache_control'), false);
+});
+
+test('inspectToolPairing counts orphan, nonAdjacent, duplicate and notFirst shapes', () => {
+  const req = messages => ({ systemPrompt: '', messages, tools: [] });
+  assert.deepEqual(inspectToolPairing(req([
+    { role: 'user', content: 'q' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 't', arguments: '{}' }] },
+    { role: 'tool', content: 'r', toolCallId: 'c1' },
+    { role: 'user', content: 'next' }])), { orphan: 0, nonAdjacent: 0, duplicate: 0, notFirst: 0 });
+  assert.deepEqual(inspectToolPairing(req([
+    { role: 'user', content: 'q' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 't', arguments: '{}' }] },
+    { role: 'tool', content: 'r', toolCallId: 'c1' },
+    { role: 'tool', content: 'r', toolCallId: 'ghost' }])), { orphan: 1, nonAdjacent: 0, duplicate: 0, notFirst: 0 });
+  assert.deepEqual(inspectToolPairing(req([
+    { role: 'user', content: 'q' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 't', arguments: '{}' }, { id: 'c2', name: 't', arguments: '{}' }] },
+    { role: 'tool', content: 'r', toolCallId: 'c1' },
+    { role: 'assistant', content: 'more' },
+    { role: 'tool', content: 'r', toolCallId: 'c2' }])), { orphan: 0, nonAdjacent: 1, duplicate: 0, notFirst: 0 });
+  assert.deepEqual(inspectToolPairing(req([
+    { role: 'user', content: 'q' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 't', arguments: '{}' }] },
+    { role: 'tool', content: 'r', toolCallId: 'c1' },
+    { role: 'tool', content: 'r', toolCallId: 'c1' }])), { orphan: 0, nonAdjacent: 0, duplicate: 1, notFirst: 0 });
+  assert.deepEqual(inspectToolPairing(req([
+    { role: 'user', content: 'q' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 't', arguments: '{}' }] },
+    { role: 'user', content: 'aside' },
+    { role: 'tool', content: 'r', toolCallId: 'c1' }])), { orphan: 0, nonAdjacent: 0, duplicate: 0, notFirst: 1 });
+});
+
+test('three parallel tool results in one merged turn are adjacent, not nonAdjacent', () => {
+  const pairing = inspectToolPairing({ systemPrompt: '', messages: [
+    { role: 'user', content: 'q' },
+    { role: 'assistant', content: '', toolCalls: [
+      { id: 'c1', name: 't', arguments: '{}' }, { id: 'c2', name: 't', arguments: '{}' }, { id: 'c3', name: 't', arguments: '{}' }] },
+    { role: 'tool', content: 'r1', toolCallId: 'c1' },
+    { role: 'tool', content: 'r2', toolCallId: 'c2' },
+    { role: 'tool', content: 'r3', toolCallId: 'c3' },
+    { role: 'user', content: 'done' }], tools: [] });
+  assert.deepEqual(pairing, { orphan: 0, nonAdjacent: 0, duplicate: 0, notFirst: 0 });
+});
+
+test('computer_use_config field 8 is detected without changing the outbound body', () => {
+  const plain = parseChat(Buffer.concat([
+    s(21, 'u'), nativeMessage(1, 'hi'),
+    m(10, Buffer.concat([s(1, 'x'), s(2, 'd'), s(3, '{}')]))]));
+  const configured = parseChat(Buffer.concat([
+    s(21, 'u'), nativeMessage(1, 'hi'),
+    m(10, Buffer.concat([s(1, 'x'), s(2, 'd'), s(3, '{}'), s(8, 'computer-use-blob')]))]));
+  assert.equal(plain.tools[0].hasComputerUseConfig, false);
+  assert.equal(configured.tools[0].hasComputerUseConfig, true);
+  for (const apiFormat of ['openai', 'openai-responses', 'anthropic']) {
+    assert.deepEqual(buildRequestBody(configured, { model: 'm' }, { apiFormat }),
+      buildRequestBody(plain, { model: 'm' }, { apiFormat }), apiFormat);
+  }
 });

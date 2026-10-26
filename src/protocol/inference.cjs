@@ -10,7 +10,7 @@ const { randomUUID } = require('node:crypto');
 const { frame } = require('./wire.cjs');
 const { textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk } = require('./native-chat-codec.cjs');
 const { createTracker } = require('./tracker.cjs');
-const { anthropicHeaders, createAnthropicAdapter, stripCacheControl } = require('./anthropic.cjs');
+const { anthropicHeaders, createAnthropicAdapter, stripCacheControl, inspectToolPairing } = require('./anthropic.cjs');
 const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem, sizeBucket } = require('./state-envelope.cjs');
 const { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody } = require('./provider-request.cjs');
 const { readErrorDetail, parseEvent, events, usageSnapshot } = require('./provider-events.cjs');
@@ -330,6 +330,18 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     const { url, chat, anthropic } = endpoint(provider);
     const replay = { replayed: 0, bytes: 0, items: 0, mismatch: 0, unparsable: 0, oversize: 0 };
     const cacheBreakpoints = cacheSupport ? Boolean(cacheSupport.enabledFor(provider)) : false;
+    // Observation-only probes; a probe failure must never reach the request.
+    try {
+      const computerUse = (request.tools || []).filter(tool => tool.hasComputerUseConfig === true).length;
+      if (computerUse) record({ event: 'native-computer-use-tool', model: route.model, count: computerUse });
+      if (anthropic) {
+        const pairing = inspectToolPairing(request);
+        if (pairing.orphan) record({ event: 'tool-pair-orphan', model: route.model, count: pairing.orphan });
+        if (pairing.nonAdjacent) record({ event: 'tool-pair-nonadjacent', model: route.model, count: pairing.nonAdjacent });
+        if (pairing.duplicate) record({ event: 'tool-pair-duplicate', model: route.model, count: pairing.duplicate });
+        if (pairing.notFirst) record({ event: 'tool-result-not-first', model: route.model, count: pairing.notFirst });
+      }
+    } catch { record({ event: 'tool-pair-probe-failed', model: route.model }); }
     let body = buildRequestBody(request, route, provider, stat => {
       if (stat.outcome === 'replayed') { replay.replayed += 1; replay.bytes = Math.max(replay.bytes, stat.bytes); replay.items = Math.max(replay.items, stat.items || 0); }
       else if (stat.outcome in replay) replay[stat.outcome] += 1;
