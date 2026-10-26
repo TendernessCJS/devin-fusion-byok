@@ -1,6 +1,7 @@
 'use strict';
 const { readNativeModels, pushNativeModels, isUpstreamUid } = require('../runtime/host/native-models.cjs');
 const { mergeNativeEntry, normalizeNativeEntry, normalizeAllowedUids } = require('../models/native-entry.cjs');
+const { live, superseded } = require('./liveness.cjs');
 
 function installCatalogSync({ deps, shared, onChange }) {
   const { lifecycle, config, log } = deps;
@@ -32,7 +33,7 @@ function installCatalogSync({ deps, shared, onChange }) {
     return published;
   };
   shared.pushToBackend = () => {
-    if (lifecycle.activationDisposed || config().enabled === false || shared.pushTimer !== undefined) return;
+    if (!live(lifecycle, config) || shared.pushTimer !== undefined) return;
     // Nothing to offer yet: an empty payload must not advance the pushed
     // revision, or the first useful observation will look unchanged.
     if (!pushPayload().length) return;
@@ -41,7 +42,7 @@ function installCatalogSync({ deps, shared, onChange }) {
     const wait = Math.max(0, shared.lastPushAt + PUSH_INTERVAL_MS - Date.now());
     shared.pushTimer = setTimeout(() => {
       shared.pushTimer = undefined;
-      if (lifecycle.activationDisposed || config().enabled === false) return;
+      if (!live(lifecycle, config)) return;
       shared.lastPushAt = Date.now();
       shared.nativePushStale = false;
       const revision = shared.nativeRevision;
@@ -60,7 +61,7 @@ function installCatalogSync({ deps, shared, onChange }) {
     shared.pushTimer.unref?.();
   };
   shared.refreshNativeModels = () => {
-    if (lifecycle.activationDisposed || config().enabled === false) return Promise.resolve();
+    if (!live(lifecycle, config)) return Promise.resolve();
     if (shared.syncPending) return shared.syncPending;
     const generation = lifecycle.activationGeneration;
     const abort = new AbortController(); shared.syncAbort = abort;
@@ -68,7 +69,7 @@ function installCatalogSync({ deps, shared, onChange }) {
       let result;
       try { result = await readNativeModels({ root: deps.root, signal: abort.signal }); }
       catch { result = { status: 'unavailable', models: [] }; }
-      if (abort.signal.aborted || generation !== lifecycle.activationGeneration || lifecycle.activationDisposed || config().enabled === false) return;
+      if (abort.signal.aborted || superseded(lifecycle, config, generation) || lifecycle.activationDisposed) return;
       shared.nativeCatalogStatus = result.status;
       // The first transition into an authoritative state must bump the
       // revision even when the models are identical: the activation-time cache
@@ -158,7 +159,7 @@ function installCatalogSync({ deps, shared, onChange }) {
     void shared.refreshNativeModels();
   };
   shared.observeAllowedUids = observation => {
-    if (lifecycle.activationDisposed || config().enabled === false) return;
+    if (!live(lifecycle, config)) return;
     if (observation?.kind === 'unrestricted') {
       // "Empty" is a weak signal (proto3 cannot tell absent from present-but-
       // empty), so flipping to unrestricted requires a streak; a restricted

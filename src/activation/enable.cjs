@@ -1,6 +1,7 @@
 'use strict';
 const path = require('node:path');
 const { readReceipt, remember, saveReceipt, valueAt } = require('../lifecycle/owned-settings.cjs');
+const { live, superseded } = require('./liveness.cjs');
 const { installLsInjection } = require('../runtime/host/ls-injection.cjs');
 const { createLsBridge } = require('../runtime/bridge.cjs');
 const { installAcpObserver } = require('../runtime/host/acp-observer.cjs');
@@ -36,7 +37,7 @@ function installEnable({ deps, shared }) {
       // finally block would strip again underneath.
       const disabling = shared.disablePromise;
       if (disabling) { try { await disabling; } catch {} }
-      if (lifecycle.activationDisposed || config().enabled === false || lifecycle.connection) return;
+      if (!live(lifecycle, config) || lifecycle.connection) return;
       return enable();
     });
     enableQueue = operation.catch(() => {});
@@ -61,7 +62,7 @@ function installEnable({ deps, shared }) {
     upgrade.then(() => { shared.backendStatus = 'running'; void shared.management?.publish()?.catch(() => {}); },
       error => { const code = safeError(error).code; if (code !== 'cancelled') { shared.backendStatus = code; void shared.management?.publish()?.catch(() => {}); } });
     await Promise.race([upgrade, compatibleReady]);
-    if (generation !== lifecycle.activationGeneration || config().enabled === false) return;
+    if (superseded(lifecycle, config, generation)) return;
     lifecycle.reconcileHalted = false;
     const settings = vscode.workspace.getConfiguration('devin.acp');
     const existing = globalSetting(settings, 'agentEnv');
@@ -88,15 +89,15 @@ function installEnable({ deps, shared }) {
     await context.globalState.update('savedEnv', saved);
     await context.globalState.update('managedEnv', desired);
     if (Object.keys(managed).some(k => !(k in desired)) || Object.entries(desired).some(([k, v]) => previous[k] !== v)) await settings.update('agentEnv', { ...existing, 'devin-cli': { ...previous, ...desired } }, vscode.ConfigurationTarget.Global);
-    if (generation !== lifecycle.activationGeneration || config().enabled === false) return;
+    if (superseded(lifecycle, config, generation)) return;
     await shared.reconcilePreference();
-    if (generation !== lifecycle.activationGeneration || config().enabled === false) return;
+    if (superseded(lifecycle, config, generation)) return;
     const native = vscode.extensions.getExtension('codeium.windsurf');
     if (!native) throw new Error('未找到 Devin 原生扩展');
     const injected = await installLsInjection({ nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main),
       createBridge: (port, extra) => createLsBridge(port, { ...extra, getCatalog: catalog, log, onNativeModels: shared.observeNativeModels,
         onAllowedUids: shared.observeAllowedUids }), log });
-    if (generation !== lifecycle.activationGeneration || config().enabled === false || lifecycle.activationDisposed) {
+    if (superseded(lifecycle, config, generation) || lifecycle.activationDisposed) {
       try { await injected.dispose(); } catch {}
       return;
     }
@@ -105,7 +106,7 @@ function installEnable({ deps, shared }) {
     // catalog; the hook only reports what each native call actually carried.
     lifecycle.publication ??= require('./catalog-publication.cjs').createCatalogPublication({
       getCatalog: catalog, refreshUserStatus: lifecycle.nativeRefresh,
-      isCurrent: () => !lifecycle.activationDisposed && config().enabled !== false,
+      isCurrent: () => live(lifecycle, config),
       log });
     // Pin the publisher this generation's events belong to: a previous
     // hook's late native settle must never confirm a newer coordinator.
@@ -117,7 +118,7 @@ function installEnable({ deps, shared }) {
     try {
       lifecycle.authStatus?.dispose?.();
       lifecycle.authStatus = installAuthStatusInjection({ nativeMainPath: nativeMain, getCatalog: catalog, log,
-        isEnabled: () => generation === lifecycle.activationGeneration && config().enabled !== false && !lifecycle.activationDisposed,
+        isEnabled: () => !superseded(lifecycle, config, generation) && !lifecycle.activationDisposed,
         onNativeModels: entries => { try { shared.observeNativeModels?.(entries); } catch {} },
         onPublication: publish });
       // A foreign wrapper that won the method after our install leaves the hook

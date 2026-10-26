@@ -2,6 +2,7 @@
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { updateConfig, applyKeyDelta } = require('../config/store.cjs');
+const { live } = require('./liveness.cjs');
 const { createManager } = require('../panel/manager.cjs');
 const { safeError } = require('./errors.cjs');
 const { checkInjectionHealth } = require('../runtime/host/injection-health.cjs');
@@ -64,14 +65,14 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     const native = vscode.extensions.getExtension('codeium.windsurf');
     if (native?.extensionPath && native.packageJSON?.main) {
       shared.contextObserver = require('../runtime/host/context-observer.cjs').installContextObserver({
-        nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main), isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false });
+        nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main), isEnabled: () => live(lifecycle, config) });
       context.subscriptions.push(shared.contextObserver);
     }
     require('../panel/context-view.cjs').createContextUi({ vscode, context,
       snapshot: () => shared.contextObserver?.snapshot() || [], catalog,
       nativeLabels: () => new Map([...shared.nativeModels.values()].map(entry => [entry.uid, entry.label])),
       focused: () => shared.contextObserver?.focused?.() || null,
-      isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false,
+      isEnabled: () => live(lifecycle, config),
       readMonitor: () => require('../runtime/host/monitor-client.cjs').readMonitor({ root: deps.root }) });
   } catch { log('context-observer-unavailable'); }
   context.subscriptions.push(require('../runtime/host/context-diagnostics.cjs').createContextDiagnostics({
@@ -91,7 +92,7 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
         accept: payload => lifecycle.goalController.accept(payload),
         archive: payload => lifecycle.goalController.archive(payload)
       },
-      isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false,
+      isEnabled: () => live(lifecycle, config),
       isTrusted: () => vscode.workspace.isTrusted !== false,
       safeError });
   } catch { log('goal-ui-unavailable'); }

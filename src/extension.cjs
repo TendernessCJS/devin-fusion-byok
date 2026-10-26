@@ -10,6 +10,7 @@ const { installGoalContinue } = require('./goal/continue-hook.cjs');
 const { createGoalController } = require('./goal/controller.cjs');
 const { ensureBackend } = require('./activation/backend-handshake.cjs');
 const { safeError } = require('./activation/errors.cjs');
+const { live } = require('./activation/liveness.cjs');
 const { installCatalogSync } = require('./activation/catalog-sync.cjs');
 const { installCacheSync } = require('./activation/cache-sync.cjs');
 const { createConfigSync } = require('./activation/config-sync.cjs');
@@ -64,7 +65,7 @@ async function activate(context) {
         // Goal mode is opt-in: /goal is neither advertised nor intercepted until the user turns it on.
         shared.goalContinue = installGoalContinue({
           nativeMainPath: nativeMain,
-          isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false && config().goalEnabled === true
+          isEnabled: () => live(lifecycle, config) && config().goalEnabled === true
         });
         shared.autoContinue = installAutoContinue({
           nativeMainPath: nativeMain,
@@ -99,7 +100,7 @@ async function activate(context) {
               return shared.goalContinue.setGoalOwned(sessionId, owned);
             }
           },
-          isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false && config().goalEnabled === true,
+          isEnabled: () => live(lifecycle, config) && config().goalEnabled === true,
           isTrusted: () => vscode.workspace.isTrusted !== false,
           reportCliPath: path.join(context.extensionPath, 'src/goal/report.cjs'),
           log
@@ -159,7 +160,7 @@ async function activate(context) {
   lifecycle.nativeRefresh = () => vscode.commands.executeCommand('devin.refreshUserStatus');
   const createPublication = () => require('./activation/catalog-publication.cjs').createCatalogPublication({
     getCatalog: catalog, refreshUserStatus: lifecycle.nativeRefresh,
-    isCurrent: () => !lifecycle.activationDisposed && config().enabled !== false,
+    isCurrent: () => live(lifecycle, config),
     log });
   lifecycle.publication = createPublication();
   const cacheSync = installCacheSync({ deps, shared, publish: () => shared.management?.publish() });
