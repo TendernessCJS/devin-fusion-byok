@@ -53,3 +53,13 @@ description: "Apply when diagnosing why injection or catalog changes appear not 
 - **回合提前结束用 `acp-turn` 判定**：`session/prompt` settle 记 `{stopReason, ok, code, durationMs}`（只枚举/布尔/耗时，
   不记正文/sessionId/metadata）。CLI 自己的 devin-cli.log 只有 span、没有 stopReason；`session/prompt` 385ms 被关且
   `turn_stats` 紧跟 close 的实测场景里，`acp-turn.stopReason` 是区分 `max_turn_requests`/`end_turn`/`cancelled` 的唯一通道。
+
+## 激活层耦合度量（2026-10-26 架构审查）
+
+- **`shared` 槽共 41 个**（`extension.cjs` 只声明 18 个，其余由各 installer 赋值）：**66 个写入点 / 226 个访问点 / 跨 7 个文件**；`catalog-sync.cjs` 单文件触及 **22** 个槽。
+- **只有 1 个槽被 ≥2 个文件写**：`backendStatus`（`commands` + `enable`）。其余 40 个都是单写者 ⇒「installer 互写对方的键」只在这一点成立，耦合的真实形态是**晚期绑定的 service locator**（读点全在回调内，install 阶段不取值），所以安装顺序并不像最初判断的那样脆弱。
+- 归属分组：`catalog-sync` 19 / `cache-sync` 5 / `commands` 5+3 函数槽 / `panel-install` 5 / `backendStatus` 1 / continuation 2。
+- 测试伪造规模（拆分成本的主项）：只有 **2** 个测试文件实质构造 `shared`——`native-models-sync`（12 槽 / 690 行）与 `activation-sync`（3 槽 / 265 行）。
+- 失效判据分布：generation 绑定 6 处（`enable.cjs:64/91/93/99/114`、`catalog-sync.cjs:71`，其中 **4 处字面完全相同**）、generation 无关 8 处、abort 2 处；曾存在肯定/否定两种写法混用（`enable.cjs:120`）。
+- **`enable.cjs` 第 66–90 行之间没有失效检查**（读设置 → 存 receipt → `globalState.update`×2 → `settings.update`）：禁用发生在这些 `await` 期间时，写入仍会完成，下一处判据才发现。自愈依赖 teardown 按 receipt 还原，**但这条自愈没有测试断言**——做 `guarded()` 时先补这个测试再动控制流。
+- 本次审查的两处误判（已更正，别再重复）：① `catalog → runtime` **不是**层方向倒置，`port.cjs` 留在 `runtime/` 才能待在 backend 闭包内；② `goal/controller` 与 `auto-continue` **不是**「补丁 + 状态机」混排——前者本身就是 store/状态机（补丁在独立文件 `goal/continue-hook.cjs`），后者没有替换式补丁（走 `loadAcpApi`），它真实的混排是「错误文本匹配器 / 连接挂载 / 续跑状态机」三件事。
