@@ -59,3 +59,23 @@ description: "provider-measurements 的实测依据——Proxy/DeepSeek 各面�
 **判定必须在 `buildTurns` 合并后的 turn 级做**，不能在原始 `request.messages` 上做：并行工具结果会合成同一个 user turn，逐条比「紧前一条消息」会把合法形态全判成 nonAdjacent。只有计数 > 0 才记，沉默即健康。
 
 **解读纪律**：零命中只代表**该窗口内未观测到**，不证明原生永不产生；命中也不等于请求失败过——`orphan` 在 Responses/Chat 是被容忍的，只有 anthropic 会 400，而**该 400 本轮未实测**（属 API 文档级已知约束）。
+
+### 真机窗口实测（2026-10-26，0.5.6）
+
+Lead = `kimi-k3.1-pro`（`apiFormat: anthropic`），Sidekick = 原生 `swe-2-medium`。
+
+| 项 | 结果 |
+| --- | --- |
+| 窗口内 Kimi 完成 | **23**（22 带工具 + 1 纯文本），**全部 HTTP 200** |
+| 四个 `tool-pair-*` / `tool-result-not-first` | **0** |
+| `tool-pair-probe-failed` | **0** |
+| `upstream-retry` / `provider-degraded` / `chat-error` | **0** |
+| 随包 0.5.6 形状自检（6 例，含并行三工具） | 健康形态全 0、**并行不误判**、四类异常各自命中 |
+
+**计数窗口必须按版本切**：全量日志里 Kimi 完成共 55 次，但只有 **23 次**落在 `ready version 0.5.6` 之后——探针是 0.5.6 才有的，前 32 次在 0.5.5 上，算进来只会把分母灌水。
+
+**三条未覆盖的边界**（不得写成「已验证」）：
+
+- **压缩边界是空白**：客户端 `runtime.log` 里压缩事件为 **0**，而压缩在服务端（见 `acp-protocol-fields-forensics.md`「客户端不改写历史」）⇒「没观测到」既不能证明压缩没发生、也不能证明发生了。
+- **Sidekick 不在观测面**：原生 `swe-2-medium` 走服务端、不经过 BYOK 上游，进不了 `runtime.log`；Lead 的 23 次**不能**记作 Sidekick 的回合。
+- **探针按 `apiFormat` 门控**：`tool-pair-*` 只在 `anthropic` 分支运行。DeepSeek provider 是 `openai-responses` ⇒ 选它作 Lead 时探针**不运行**（休眠，不是故障）；`native-computer-use-tool` 是例外（任意格式都记，实测该窗口仍为 0，即普通编码会话的原生工具不带 `#8`）。

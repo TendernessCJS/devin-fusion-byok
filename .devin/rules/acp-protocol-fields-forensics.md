@@ -88,6 +88,17 @@ tail -c +<偏移> <bundle> | head -c 600
 
 结论：证据只能停在**字节级静态观察**（`grep -abo` 取偏移 + `dd` 读窗口）。**不得**把 `partial` 语义图当作「不存在某逻辑」的证明。
 
+### 复测：单文件 + 4 GiB 仍然失败（同日，Code 模式）
+
+| 输入 | 结果 |
+| --- | --- |
+| `out/vs/sessions` + `source_paths:["sessions.desktop.main.js"]` + `max_heap_mb:4096` + `detail:summary` | **仍在解析期堆耗尽**：`javascript_analysis_worker_heap_limit_bytes 4320133120`、`parsed_javascript_files 0`、`skipped_javascript_files 1`、semantic/application coverage `partial` |
+
+⇒ **不是「分析范围过大」这一单因素**，提高 `max_heap_mb` 不是有效重试方向，别再把「加大内存」当解法。
+根 digest 两次一致（`4d07c15a…f9f2c`），确认分析的是同一份 Devin 产物；目录摘要 `examined 2 / total 7`（`source_paths` 只选 1 个文件，另 2 个被排除在分析范围外）。
+
+**取证纪律**：retained Evidence 只在**同一 MCP 会话内**有效，`close_binary` 或会话重启后按旧 `evidence_id` 取会得 `evidence_integrity_mismatch`（`reason: missing`）。所以取证后要立刻 `export_evidence_bundle` 到文件，否则手里只剩一个读不到的 ID——上一轮就是只留了 ID 没导出。
+
 ## 谁组装 prompt 历史：原生 CLI，不是 JS bundle
 
 - 客户端 bundle 里 `prompts.push(` **0 次**；`prompts:` 仅 5 处（URI scheme 表、MCP 服务器对象、MCP 提示缓存、publish 集合）；`chatMessagePrompts` 的实际构造点属 `exa.opensearch_clients_pb.KnowledgeBaseSearchRequest`（知识库检索），**与 agent 请求无关**。
