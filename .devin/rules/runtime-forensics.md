@@ -50,6 +50,12 @@ description: "Apply when diagnosing why injection or catalog changes appear not 
   截断成 `Devin\x20`，按名字匹配会全部落空或全命中），`WebKit/Chromium` 侧真正持有 socket 的是 network service 进程而非渲染进程本体。
 - **桥已保留传输层 gzip（2026-10-19）**：旧版解压后明文回写曾放大约 28.8×；修复后实测 `47,222 B → 73,935 B`（1.566×，新增目录条目的真实开销）。不得把旧测量当现状，也不得通过放宽改写降低体积；逐消息压缩仍按原逻辑展平。
 
+- **`close-timeout` 是关闭方式分类，不是错误计数（2026-10-26 实测校正）**：它由**即将退场**的 backend 写进 `runtime.log`，只标记「第三段
+  `server.close()` 等连接没在预算内结束，已 `closeAllConnections()` 强断」。全仓无任何读取者，面板不展示，不影响流程走向。判读：无该事件 = 优雅关闭
+  （实测交班 2.2 s：宿主 ready → 新 backend ready）；有该事件 = 强制收尾，交班约 5.1 s（旧实现三段共用 5 s）或约 1.1 s（`socketCloseTimeoutMs` 拆出后）。
+  交接期间**新请求会拿到 503**（`draining` 在网关入口直接拒收），且新 backend 要等旧进程退出才拉起，所以这段是真实不可用窗口，不是「后台无感换血」。
+  历史 4 次触发都紧贴一次新 `ready`（间隔 82–259 ms），但有一次落在新 `ready` 之后 5 s，说明日志是多进程交织，**不能只按相邻两行推顺序**。
+  事件现在带 `connections`（超时瞬间、强断前的连接数采样），用于区分「1 条空闲连接」与「多条卡死」。
 - **回合提前结束用 `acp-turn` 判定**：`session/prompt` settle 记 `{stopReason, ok, code, durationMs}`（只枚举/布尔/耗时，
   不记正文/sessionId/metadata）。CLI 自己的 devin-cli.log 只有 span、没有 stopReason；`session/prompt` 385ms 被关且
   `turn_stats` 紧跟 close 的实测场景里，`acp-turn.stopReason` 是区分 `max_turn_requests`/`end_turn`/`cancelled` 的唯一通道。

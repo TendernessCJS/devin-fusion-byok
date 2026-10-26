@@ -22,12 +22,18 @@ const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
 // an older backend simply sees no flag and skips pushing instead of erroring.
 const NATIVE_MODELS_INGEST = 1;
 const MAX_INGEST_ENTRIES = 5000;
-// Upper bound for each shutdown wait (in-flight requests, monitor flush, socket
-// closure). Generous enough that ordinary drains finish first, short enough that
-// a stuck one cannot turn SIGTERM into a no-op.
+// Upper bound for the shutdown waits that overlap real work (in-flight requests,
+// monitor flush). Generous enough that ordinary drains finish first, short enough
+// that a stuck one cannot turn SIGTERM into a no-op.
 const DRAIN_TIMEOUT_MS = 5000;
+// Closing the listening socket only waits for connections to fall away: no
+// request work overlaps it (`draining` already refuses new ones), so it gets a
+// much shorter bound. Sharing the drain budget kept a lingering socket from
+// costing a full five seconds of refused requests on every runtime handover.
+const SOCKET_CLOSE_TIMEOUT_MS = 1000;
 
-async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs = DRAIN_TIMEOUT_MS }) {
+async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs = DRAIN_TIMEOUT_MS,
+  socketCloseTimeoutMs = SOCKET_CLOSE_TIMEOUT_MS }) {
   const identity = runtimeIdentity(root);
   const instanceId = crypto.randomUUID();
   const controlToken = crypto.randomBytes(32).toString('hex');
@@ -309,21 +315,30 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
         } catch { /* Another runtime may already own the control file. */ }
       };
       // `server.close()` waits for every connection to end, so a lingering
-      // keep-alive or stream keeps the port bound and `stopped` pending. Bound
-      // it, then force the rest closed: an idle-only sweep is not enough, and
-      // the process must always reach `stopped` so its exit path runs.
+      // keep-alive or half-written request keeps the port bound and `stopped`
+      // pending. Bound it, then force the rest closed: an idle-only sweep is not
+      // enough, and the process must always reach `stopped` so its exit path runs.
+      // Sampled before the sweep so the event says how much was still attached.
+      const attached = () => new Promise(resolve => {
+        let settled = false, timer;
+        const finish = value => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); };
+        timer = setTimeout(() => finish(null), 100);
+        timer.unref?.();
+        try { server.getConnections((error, count) => finish(error ? null : count)); } catch { finish(null); }
+      });
       const closed = await new Promise(resolve => {
         let timer;
         server.close(() => { clearTimeout(timer); releaseControlFile(); resolve(true); });
         server.closeIdleConnections?.();
-        timer = setTimeout(() => {
+        timer = setTimeout(async () => {
+          const connections = await attached();
           server.closeAllConnections?.();
           releaseControlFile();
-          resolve(false);
-        }, drainTimeoutMs);
+          resolve(connections === null ? {} : { connections });
+        }, socketCloseTimeoutMs);
         timer.unref?.();
       });
-      if (!closed) log('close-timeout');
+      if (closed !== true) log('close-timeout', closed);
       resolveStopped();
     })();
     return closing;

@@ -11,6 +11,7 @@ const { collect } = require('../src/runtime/bridge.cjs');
 const { buildCatalog, augmentCatalog } = require('../src/catalog.cjs');
 const wire = require('../src/protocol/wire.cjs');
 const http = require('node:http');
+const net = require('node:net');
 const API = '/exa.api_server_pb.ApiServerService/';
 
 test('same-version Anthropic adapter changes invalidate the runtime source identity', () => {
@@ -658,6 +659,52 @@ test('close resolves promptly when nothing is in flight', async t => {
   await f.backend.stopped;
 });
 
+// `server.close()` only waits for connections to fall away; no request work
+// overlaps it because `draining` already refuses new ones. Before this had its
+// own budget it shared the drain timeout, so every runtime handover that caught
+// one lingering socket burned five seconds of 503s.
+async function lingeringFixture(t, { drainTimeoutMs = 5000, socketCloseTimeoutMs = 80 } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-linger-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  const logs = [];
+  const backend = await actualBackend.startBackend({ root, port: 0, log: (event, data) => logs.push([event, data]),
+    drainTimeoutMs, socketCloseTimeoutMs });
+  // A half-written request line is neither idle nor a counted request: the
+  // idle sweep skips it and the drain never sees it, exactly like the sockets
+  // that made production shutdowns time out.
+  const socket = net.connect(backend.port, '127.0.0.1');
+  t.after(() => { socket.destroy(); fs.rmSync(root, { recursive: true, force: true }); });
+  await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
+  socket.write('POST /exa.test.SomeService/Do HTTP/1.1\r\nHost: 127.0.0.1\r\n');
+  for (let i = 0; i < 100; i++) await new Promise(resolve => setImmediate(resolve));
+  return { root, backend, logs, socket };
+}
+
+test('a lingering socket is force-closed on the socket budget, not the drain budget', async t => {
+  const f = await lingeringFixture(t);
+  const started = Date.now();
+  const outcome = await Promise.race([f.backend.close().then(() => 'closed'),
+    new Promise(resolve => setTimeout(() => resolve('hung'), 2000))]);
+  const elapsed = Date.now() - started;
+  assert.equal(outcome, 'closed', 'a lingering connection still reaches stopped');
+  assert.ok(elapsed < 1000, `the socket budget must not inherit the drain budget (waited ${elapsed}ms)`);
+  assert.ok(!f.logs.some(([event]) => event === 'drain-timeout'), 'the half-written request was never counted as in flight');
+  const entry = f.logs.find(([event]) => event === 'close-timeout');
+  assert.ok(entry, 'the forced close is reported');
+  assert.equal(typeof entry[1]?.connections, 'number', 'the event says how many connections were attached');
+  assert.ok(entry[1].connections >= 1, 'the lingering socket is counted before the sweep');
+  await f.backend.stopped;
+});
+
+test('the socket budget does not change an otherwise clean close', async t => {
+  const f = await lingeringFixture(t, { socketCloseTimeoutMs: 5000 });
+  f.socket.destroy();
+  for (let i = 0; i < 100; i++) await new Promise(resolve => setImmediate(resolve));
+  await f.backend.close();
+  assert.ok(!f.logs.some(([event]) => event === 'close-timeout'), 'no forced close without a lingering connection');
+  await f.backend.stopped;
+});
+
 test('a stuck monitor flush cannot block shutdown either', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-monitor-stuck-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
@@ -756,7 +803,9 @@ test('close is bounded: an abandoned in-flight request hits drain-timeout and st
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, drainTimeoutMs: 20, log: (...event) => logs.push(event) });
+  // Both budgets pinned: this test is about the drain stage being bounded, not
+  // about how long closing the listening socket may take.
+  const backend = await module.exports.startBackend({ root, port: 0, drainTimeoutMs: 20, socketCloseTimeoutMs: 20, log: (...event) => logs.push(event) });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = 'http://127.0.0.1:' + backend.port;
   const rpc = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
