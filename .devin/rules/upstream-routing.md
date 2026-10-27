@@ -14,10 +14,11 @@ backend 转发非拦截 RPC 时，目标 origin **不是常量**，而是跟随�
 - `/health` 用 `upstreamProtocol: 1` 声明能力位；旧 backend 无此字段，宿主跳过而不是报错。
 - 推送前宿主校验：health 的 `service`/`rootId` 与 `rootIdentity(root)` 一致、`instanceId` 存在，控制文件
   `rootId`/`instanceId`/`sourceId` 三项与 health 一致，令牌为 64-hex。任一不符记 `identity`。
-- origin 校验（`resolveUpstreamOrigin`）：只接受 `https:`；`http:` 仅限回环 host（`localhost`/`127.0.0.1`/`::1`）；
+- origin 校验（`resolveUpstreamOrigin`，实现 `src/runtime/upstream-origin.cjs`，**激活侧解析与 backend 共用同一份**）：
+  只接受 `https:`；`http:` 仅限回环 host（`localhost`/`127.0.0.1`/`::1`）；
   拒 userinfo、query、hash、畸形 URL、backend 自身回环端口；保留路径前缀并去尾斜杠。
 - **状态按 backend 实例隔离**（`startBackend()` 内的闭包变量）：放到模块级会让同进程两个实例共享一个推送值。
-- 唯一写入点是 `activation/enable.cjs`：激活后触发一次 + 订阅上述四个键（`codeium.apiServerUrl`/`devin.portalUrl`/`windsurf.portalUrl`/`windsurf.serviceUrl`），每次触发跑收敛窗口并以代际取消旧窗口，同 `(origin, source)` 去重不发；别在别处重复写。
+- 唯一写入点是 `activation/enable.cjs`：激活后触发一次 + 订阅这四个键（`codeium.apiServerUrl`/`devin.portalUrl`/`windsurf.portalUrl`/`windsurf.serviceUrl`），每次触发跑收敛窗口并以代际取消旧窗口，同 `(origin, source)` 去重不发；别在别处重复写。
 
 ## 观测落点（最容易判错的一节）
 
