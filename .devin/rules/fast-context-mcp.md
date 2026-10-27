@@ -14,3 +14,6 @@
 - **请求生命周期**：两类工具调用都登记进 `active: Map<id, AbortController>`（code_search 的单飞槽 `busy` 语义不变）；`notifications/cancelled` 按 `requestId` 精确 abort、不匹配的不影响其他请求；`close()` abort 全部在途条目；结束（成功/失败/超时）即删除登记。
 - **网页并发**：`MAX_WEB_CONCURRENT = 4`，超限立即 `isError`（`web_busy:` 前缀，对齐 `search_busy:` 文案）——它**不**挤占 code_search 的单飞槽；`web_busy` 已进 `safeError` 白名单。
 - **策略等待可中断**：`policy()` 的缓存不变（仍 `session ||=`），但 search/read 用 `abortable(policy(), callSignal)` 等待——调用期 signal 只断等待、**不进缓存 key**，底层 `checkPolicy` 继续用构造期 signal，一次取消不毒化缓存。
+- **版本串 `1.9544.35` 是第三方快照**：来自上游 `fast-context-mcp`（文件头 MIT 出处），在 Devin 五产物中
+  出现 0 次——**不是** Devin 契约、升级不漂移、无法静态验证，别当契约字段去「校验/同步」。要跟着 Devin
+  走的是同处的 `1.48.2`（与产物内 `codeiumVersion:"1.48.2"` 一致）。

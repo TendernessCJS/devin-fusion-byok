@@ -144,3 +144,17 @@ AssignModelRequest: 1 metadata,2 model_router_uid,3 cascade_id,5 chat_message_pr
 ModelAssignment: 1 assignment_jwt,2 model_uid,3 harness_uids
 ```
 注：`ClientModelSort.groups` 的内层类型在 schema 里是 minified 引用、无独立 `typeName`，组内字段（f1 name / f2 label）无法描述符断言，仍靠 fixture。
+
+### REA 的原生面与语义图预算（2026-10-27）
+
+- **原生面整体不可用**：`search_strings` 返回 `capability_unavailable`——本机无任何受支持的原生分析
+  provider（Ghidra 未配且无 Java、Hopper 未装、IDA/Kuna 未配）；`find_xrefs_to_name` 返回
+  `target_unavailable`（JS 分析产出是证据快照而非活符号库）。⇒ CLI/LS 原生二进制层面（如 `ModelInfo.f18`
+  是否被 LS 消费）静态路线**无解**，只能靠真实流量实验。
+- **JS 语义图对 `extension.js` 是 partial**：`analyze_javascript_application`（scope `dist/extension.js`）
+  读到 7,010,370 B / 1,751,118 AST 节点 / 1,085 模块 / 3,587 findings / 0 parse failure，但 coverage
+  `application=partial`、`semantic=partial(truncated)`，unknowns：`dynamic-call 79,318`、
+  `ambiguous-target 142,708`、`dynamic-property 18,203`。⇒ 此图**不能当「不存在某调用」的证明**；
+  断言「零调用点」只能靠字面量穷尽扫描 + 运行期收据（`AssignArenaModel` 结论即此二法）。
+- **交叉验证一条**：REA `open_binary` 给出的 desktop bundle `sha256` 第三段与本仓探针
+  `native-contract.json` 的 `signature` 第三段一致——两边看的是同一份文件；日后可复用这条确认产物身份。
