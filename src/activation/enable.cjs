@@ -6,6 +6,7 @@ const { installLsInjection } = require('../runtime/host/ls-injection.cjs');
 const { createLsBridge } = require('../runtime/bridge.cjs');
 const { installAcpObserver } = require('../runtime/host/acp-observer.cjs');
 const { installAuthStatusInjection } = require('../runtime/host/auth-status.cjs');
+const { pushUpstream } = require('../runtime/host/upstream.cjs');
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
 const { globalSetting } = require('./settings.cjs');
@@ -26,6 +27,25 @@ function loopbackExemption(vscode) {
 }
 
 const { checkNativeContract } = require('./native-contract.cjs');
+
+// The backend's forward target follows the native `codeium.apiServerUrl`
+// setting (default https://server.codeium.com → null = reset). Only the URL
+// crosses; credentials never do. This is the single writer — auth-status must
+// not push the same value through its own path.
+function readApiServerUrl(vscode) {
+  let value;
+  try { value = vscode.workspace.getConfiguration('codeium')?.get?.('apiServerUrl'); } catch { return null; }
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+async function pushConfiguredUpstream({ root, vscode, log }) {
+  try {
+    const result = await pushUpstream({ root, origin: readApiServerUrl(vscode) });
+    // Success is logged too: a silent success makes "did the push happen?"
+    // unanswerable from the log. Only the custom flag is recorded — never the host.
+    if (result.ok) log('upstream-push', { ok: true, custom: result.custom === true });
+    else log('upstream-push', { ok: false, reason: result.reason });
+  } catch { log('upstream-push', { ok: false, reason: 'unavailable' }); }
+}
 
 function installEnable({ deps, shared }) {
   const { lifecycle, config, vscode, context, log, catalog, nativeMain, stores, managedSettings } = deps;
@@ -114,6 +134,18 @@ function installEnable({ deps, shared }) {
       return;
     }
     lifecycle.connection = injected;
+    // Backend is ready now: align its forward target with the configured
+    // apiServerUrl, and keep it aligned on later setting changes. The
+    // subscription is registered once per extension context, not per enable.
+    void pushConfiguredUpstream({ root: deps.root, vscode, log });
+    if (!lifecycle.upstreamSubscription) {
+      lifecycle.upstreamSubscription = vscode.workspace.onDidChangeConfiguration?.(event => {
+        if (typeof event?.affectsConfiguration === 'function' && !event.affectsConfiguration('codeium.apiServerUrl')) return;
+        if (!live(lifecycle, config)) return;
+        return pushConfiguredUpstream({ root: deps.root, vscode, log });
+      });
+      if (lifecycle.upstreamSubscription) context.subscriptions.push(lifecycle.upstreamSubscription);
+    }
     // The publication coordinator owns every refresh of the stored desktop
     // catalog; the hook only reports what each native call actually carried.
     lifecycle.publication ??= require('./catalog-publication.cjs').createCatalogPublication({

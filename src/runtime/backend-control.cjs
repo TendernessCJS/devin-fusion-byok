@@ -3,9 +3,11 @@ const crypto = require('node:crypto');
 const { collect } = require('./bridge.cjs');
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
+const MAX_UPSTREAM_BODY_BYTES = 4 * 1024;
 
 function createRuntimeControl({ identity, instanceId, controlToken, managementProtocol, nativeModelsProtocol, nativeModelsIngest, monitorProtocol,
-  getActiveRequests, getDraining, setDraining, monitor, getNativeModels, getAllowedUids, getAllowedMode, ingest, onAllowedUids, close }) {
+  getActiveRequests, getDraining, setDraining, monitor, getNativeModels, getAllowedUids, getAllowedMode, ingest, onAllowedUids, close,
+  upstreamProtocol, resolveUpstream, setUpstream }) {
   const authorized = request => {
     const provided = typeof request.headers.authorization === 'string' ? request.headers.authorization : '';
     const expected = 'Bearer ' + controlToken;
@@ -17,7 +19,7 @@ function createRuntimeControl({ identity, instanceId, controlToken, managementPr
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       response.end(JSON.stringify({ ...identity, pid: process.pid, instanceId, managementProtocol, nativeModelsProtocol,
-        nativeModelsIngest, monitorProtocol, activeRequests: getActiveRequests(), draining: getDraining() }));
+        nativeModelsIngest, monitorProtocol, upstreamProtocol, activeRequests: getActiveRequests(), draining: getDraining() }));
       return true;
     }
     if (request.method === 'GET' && request.url === '/_runtime/monitor') {
@@ -64,6 +66,23 @@ function createRuntimeControl({ identity, instanceId, controlToken, managementPr
         if (response.destroyed) return;
         response.writeHead(400, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ instanceId, error: 'invalid_payload' }));
+      });
+      return true;
+    }
+    if (request.method === 'POST' && request.url === '/_runtime/upstream') {
+      if (!authorized(request)) { response.writeHead(403); response.end(); return true; }
+      collect(request, MAX_UPSTREAM_BODY_BYTES).then(body => {
+        const payload = JSON.parse(body.toString('utf8'));
+        let resolved;
+        try { resolved = resolveUpstream(payload?.origin); }
+        catch { throw Object.assign(new TypeError('invalid_origin'), { code: 'invalid_origin' }); }
+        const custom = setUpstream(resolved);
+        response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        response.end(JSON.stringify({ instanceId, custom }));
+      }).catch(error => {
+        if (response.destroyed) return;
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ instanceId, error: error?.code === 'invalid_origin' ? 'invalid_origin' : 'invalid_payload' }));
       });
       return true;
     }

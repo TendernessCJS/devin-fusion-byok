@@ -851,3 +851,119 @@ test('an oversized native-models push is refused without changing served state',
   const after = await (await fetch(endpoint, { headers: { authorization: 'Bearer ' + f.control().token } })).json();
   assert.deepEqual(after, before, 'a refused ingest must not modify served state');
 });
+
+test('resolveUpstreamOrigin normalizes valid origins and rejects every unsafe shape', () => {
+  const resolve = actualBackend.resolveUpstreamOrigin;
+  assert.equal(resolve('https://server-beta.codeium.com'), 'https://server-beta.codeium.com');
+  assert.equal(resolve('https://h/p/'), 'https://h/p', 'a path prefix keeps its path and drops trailing slashes');
+  assert.equal(resolve('http://127.0.0.1:1234'), 'http://127.0.0.1:1234', 'loopback http is allowed');
+  assert.equal(resolve(null), null, 'null resets to the default upstream');
+  assert.equal(resolve(undefined), null, 'an absent value resets to the default upstream');
+  for (const value of ['ftp://example.com', 'http://example.com', 'https://user:pw@example.com',
+    'https://example.com/x?y=1', 'https://example.com/x#y', '', 42, 'https://',
+    'http://127.0.0.1:' + actualBackend.PORT, 'x'.repeat(2049)]) {
+    assert.throws(() => resolve(value), /invalid_origin/, `rejected: ${String(value).slice(0, 60)}`);
+  }
+});
+
+test('upstream control authenticates, validates, caps the body and reports custom state', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.health()).upstreamProtocol, 1);
+  const endpoint = f.base + '/_runtime/upstream';
+  const post = body => fetch(endpoint, { method: 'POST',
+    headers: { authorization: 'Bearer ' + f.control().token, 'content-type': 'application/json' }, body });
+  assert.equal((await fetch(endpoint, { method: 'POST', body: '{}' })).status, 403);
+  const invalid = await post(JSON.stringify({ origin: 'http://example.com' }));
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error, 'invalid_origin');
+  const oversized = await post(JSON.stringify({ origin: null, pad: 'x'.repeat(5 * 1024) }));
+  assert.equal(oversized.status, 400);
+  assert.equal((await oversized.json()).error, 'invalid_payload');
+  const applied = await (await post(JSON.stringify({ origin: 'http://127.0.0.1:54321' }))).json();
+  assert.equal(applied.custom, true);
+  await fetch(f.base + API + 'GetUserStatus', { method: 'POST', body: 'native' });
+  assert.equal(f.forwarded.at(-1).target, 'http://127.0.0.1:54321' + API + 'GetUserStatus');
+  const reset = await (await post(JSON.stringify({ origin: null }))).json();
+  assert.equal(reset.custom, false);
+  await fetch(f.base + API + 'GetUserStatus', { method: 'POST', body: 'native' });
+  assert.equal(f.forwarded.at(-1).target, 'https://server.codeium.com' + API + 'GetUserStatus');
+  const upstreamLogs = f.logs.filter(([event]) => event === 'upstream-origin').map(([, fields]) => fields.custom);
+  assert.deepEqual(upstreamLogs, [true, false]);
+  assert.ok(!JSON.stringify(f.logs).includes('54321'), 'the pushed host string never reaches the log');
+});
+
+test('a pushed upstream origin receives forwarded RPCs and never the control token', async t => {
+  const seen = [];
+  const upstream = http.createServer((req, res) => {
+    seen.push({ url: req.url, authorization: req.headers.authorization });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"clientModelConfigs":[]}');
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { upstream.close(resolve); upstream.closeAllConnections(); }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-upstream-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const backend = await actualBackend.startBackend({ root, port: 0 });
+  t.after(() => backend.close());
+  const base = 'http://127.0.0.1:' + backend.port;
+  const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
+  const origin = 'http://127.0.0.1:' + upstream.address().port;
+  const pushed = await pushUpstream({ root, origin, port: backend.port });
+  assert.deepEqual(pushed, { ok: true, custom: true });
+  const rpc = API + 'GetUserStatus';
+  const response = await fetch(base + rpc, { method: 'POST', body: 'native' });
+  assert.equal(response.status, 200);
+  assert.ok(seen.some(entry => entry.url === rpc), 'the forwarded RPC reached the configured upstream');
+  const reset = await pushUpstream({ root, origin: null, port: backend.port });
+  assert.deepEqual(reset, { ok: true, custom: false });
+});
+
+test('pushUpstream refuses a foreign runtime without sending anything', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-upstream-id-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const backend = await actualBackend.startBackend({ root, port: 0 });
+  t.after(() => backend.close());
+  const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
+  let posts = 0;
+  const counting = (url, options) => { if (options?.method === 'POST') posts += 1; return fetch(url, options); };
+  const wrong = await pushUpstream({ root: root + '-wrong', origin: 'http://127.0.0.1:1', port: backend.port, request: counting });
+  assert.deepEqual(wrong, { ok: false, reason: 'identity' });
+  assert.equal(posts, 0, 'an identity mismatch never issues the push');
+});
+
+test('a pushed upstream origin is scoped to its own backend instance', async t => {
+  // Two backends sharing one module instance: a push to A must not retarget B.
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  const forwarded = [];
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout,
+    require(name) {
+      if (name === './bridge.cjs') return { collect, async forward(req, res, target) {
+        forwarded.push(target.href);
+        res.writeHead(200, { 'content-type': 'text/plain' }); res.end('official');
+      } };
+      return realRequire(name);
+    },
+  }, { filename });
+  const roots = ['a', 'b'].map(tag => fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-scope-' + tag + '-')));
+  for (const root of roots) fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  const a = await module.exports.startBackend({ root: roots[0], port: 0 });
+  const b = await module.exports.startBackend({ root: roots[1], port: 0 });
+  t.after(async () => {
+    await Promise.all([a.close(), b.close()]);
+    for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+  });
+  const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
+  const pushed = await pushUpstream({ root: roots[0], origin: 'http://127.0.0.1:54321', port: a.port });
+  assert.deepEqual(pushed, { ok: true, custom: true });
+  const rpc = API + 'GetUserStatus';
+  await fetch('http://127.0.0.1:' + a.port + rpc, { method: 'POST', body: 'native' });
+  await fetch('http://127.0.0.1:' + b.port + rpc, { method: 'POST', body: 'native' });
+  assert.equal(forwarded.at(-2), 'http://127.0.0.1:54321' + rpc, 'A forwards to its pushed origin');
+  assert.equal(forwarded.at(-1), 'https://server.codeium.com' + rpc, 'B keeps the default origin');
+});

@@ -17,6 +17,27 @@ const { PORT } = require('./port.cjs');
 const { VERSION, MANAGEMENT_PROTOCOL, controlFile } = require('./contract.cjs');
 const { runtimeIdentity } = require('./source-identity.cjs');
 const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
+// The upstream every non-intercepted RPC forwards to. The default mirrors the
+// native `codeium.apiServerUrl` default; a configured value is pushed by the
+// host over POST /_runtime/upstream. Memory only — never persisted, and the
+// host pushes again after every backend restart.
+const DEFAULT_UPSTREAM = 'https://server.codeium.com';
+// Normalizes a configured apiServerUrl, or returns null for "reset to
+// default". Throws TypeError('invalid_origin') on anything else. Loopback is
+// the only http: exception, and the backend's own address is rejected so a
+// misconfigured origin cannot turn forwarding into a loop.
+function resolveUpstreamOrigin(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string' || !value.length || value.length > 2048) throw new TypeError('invalid_origin');
+  let url;
+  try { url = new URL(value); } catch { throw new TypeError('invalid_origin'); }
+  const loopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) throw new TypeError('invalid_origin');
+  if (url.username || url.password) throw new TypeError('invalid_origin');
+  if (url.search || url.hash) throw new TypeError('invalid_origin');
+  if (url.host === '127.0.0.1:' + PORT || url.host === 'localhost:' + PORT) throw new TypeError('invalid_origin');
+  return url.origin + url.pathname.replace(/\/+$/, '');
+}
 // Capability flag for POST /_runtime/native-models. Kept separate from
 // nativeModelsProtocol so the read contract stays unchanged: a host talking to
 // an older backend simply sees no flag and skips pushing instead of erroring.
@@ -37,6 +58,9 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
   const identity = runtimeIdentity(root);
   const instanceId = crypto.randomUUID();
   const controlToken = crypto.randomBytes(32).toString('hex');
+  // Per runtime, not module-scoped: two backends in one process (tests, a dev
+  // instance) must not share a pushed origin.
+  let upstreamOrigin = DEFAULT_UPSTREAM;
   let monitor;
   try {
     const { createMonitor } = require('../monitor/store.cjs');
@@ -223,11 +247,21 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     getActiveRequests: () => activeRequests, getDraining: () => draining, setDraining: value => { draining = value; },
     monitor, getNativeModels: () => [...observedNatives.values()], getAllowedUids: () => [...allowedUids].sort(), getAllowedMode: () => allowedMode,
     ingest, onAllowedUids, close,
+    upstreamProtocol: 1,
+    resolveUpstream: resolveUpstreamOrigin,
+    setUpstream: resolved => {
+      upstreamOrigin = resolved ?? DEFAULT_UPSTREAM;
+      // Only the boolean reaches the log: the origin string can carry a
+      // tenant host name, which is exactly what must never be recorded.
+      const custom = upstreamOrigin !== DEFAULT_UPSTREAM;
+      log('upstream-origin', { custom });
+      return custom;
+    },
   });
   const handle = async (request, response) => {
     const incoming = new URL(request.url, 'https://server.codeium.com');
     const rpc = incoming.pathname;
-    const target = new URL(rpc + incoming.search, 'https://server.codeium.com');
+    const target = new URL(upstreamOrigin + rpc + incoming.search);
     // Forwarded traffic shares the process log; the client port lets each event
     // be traced back to the connecting process afterwards (lsof -i TCP:<port>).
     const forwardLog = (event, fields) => log(event, { ...fields, peerPort: request.socket?.remotePort });
@@ -364,4 +398,4 @@ if (require.main === module) {
     log('startup-error', { code: 'startup_failed' }); process.exit(1);
   });
 }
-module.exports = { startBackend, runtimeIdentity, controlFile, PORT, VERSION, MANAGEMENT_PROTOCOL };
+module.exports = { startBackend, runtimeIdentity, controlFile, PORT, VERSION, MANAGEMENT_PROTOCOL, DEFAULT_UPSTREAM, resolveUpstreamOrigin };

@@ -67,6 +67,9 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   `architecture` 测试红（source-identity 派生只跟随 require 图），且会把「只在宿主生效」的代码误当 backend 代码改动。输出确定性约束见 `monitor-and-panel.md`。
 - `AssignModel` 本地应答不含 `assignment_jwt`（官方 `ModelAssignment` 响应带该字段）。当前 CLI（3000.10.48 实测）不校验；若未来版本强制校验，
   本地指派整体失效——届时改为转发上游或显式降级，不得伪造成功。
+- **backend 转发目标可配**：`handle()` 的上游跟随原生 `codeium.apiServerUrl`（默认 `https://server.codeium.com`），宿主经
+  `POST /_runtime/upstream`（bearer + `upstreamProtocol` 能力位）推送——只传 URL 不传凭据、仅内存、回环自指被拒；
+  唯一写入点是 `enable.cjs`，不要在 `auth-status` 重复写。
 - 修改行为时不要放宽现有安全校验（Origin 一律 403、控制令牌 `timingSafeEqual`、webview 只用 `createElement`/`textContent` 不用
   `innerHTML`、CSP nonce）。
 
