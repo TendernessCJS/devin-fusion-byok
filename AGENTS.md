@@ -32,7 +32,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
   **`agent-decidable`**（按模型判断注入，**不保证加载**）。所以「漏读会安静地做错」的知识不能靠「放在哪个文件」保证送达，
   索引必须给出**何时必读**——这也是上面「为什么不把约束留在本文件里」的同一组实测约束逼出来的结论。
 
-**体积纪律**：每卷必须 < 16,384 字节，超限部分静默丢弃。`test/rule-budget.test.cjs`（`npm test` 的一部分）会硬拦超限卷与「新卷没进本索引」，所以别在这里维护体积快照——它必然过期，判据以测试为准。接近上限时**先拆卷再加内容**：把「实测依据/排障判据」移成 `<主题>-forensics.md`，契约卷留一条指向与禁令（`runtime-and-injection.md` ↔ `runtime-forensics.md` 是范例）。拆卷是**逐字搬运 + 不加新论断**，只补指针句。拆卷后**必须**跑 `node scripts/rule-split-check.cjs <拆卷前commit> <旧卷> [新卷…]`——退出码非 0 即有 bullet 丢失，不得提交；刻意重写的 bullet 用 `--allow=<归一化 key 子串>` 豁免并在提交信息里说明。事故依据：2026-10-27 拆 `runtime-and-injection.md` 漏做此核对，丢了 4 条约束（安全校验禁令、`assignment_jwt` 契约、backend 转发目标、`injection-health` 宿主约束），`npm test` 与 rule-budget 全绿却无人报警。
+**体积纪律**：每卷必须 < 16,384 字节，超限部分静默丢弃。`test/rule-budget.test.cjs`（`npm test` 的一部分）会硬拦超限卷与「新卷没进本索引」，所以别在这里维护体积快照——它必然过期，判据以测试为准。接近上限时**先拆卷再加内容**：把「实测依据/排障判据」移成 `<主题>-forensics.md`，契约卷留一条指向与禁令（`runtime-and-injection.md` ↔ `runtime-forensics.md` 是范例）。拆卷是**逐字搬运 + 不加新论断**，只补指针句。拆卷后**必须**跑 `node scripts/rule-split-check.cjs <拆卷前commit> <旧卷> [新卷…]`——退出码非 0 即有 bullet 丢失，不得提交；刻意重写的 bullet 用 `--allow=<归一化 key 子串>` 豁免并在提交信息里说明。该脚本同时拦「整条丢失」与「bullet 还在但内容缩水 >20%」，两类豁免语法相同。事故依据：2026-10-27 拆 `runtime-and-injection.md` 漏做此核对，丢了 4 条约束（安全校验禁令、`assignment_jwt` 契约、backend 转发目标、`injection-health` 宿主约束），`npm test` 与 rule-budget 全绿却无人报警。
 
 **行为锚定卷**（改代码前按需读）
 
