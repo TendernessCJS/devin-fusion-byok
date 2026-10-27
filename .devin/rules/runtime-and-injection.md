@@ -31,6 +31,13 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
 - **LS/ACP 注入的三条边界**：`http.request` 补丁是宿主级共享（只有 `windsurfLanguageServer` 是 per-extension）、ACP 只钩未来注册、本地 connector 的终态是 `reconnectingMaxDelay`——判据见 `runtime-forensics.md`。
 - 模块归属/`src/runtime` 分区/门面/架构守卫的完整表述见 `architecture-boundaries.md`（含 `protocol/` 九文件与 `activation/` 十六模块的职责清单）。
 - **配对/形状判断必须复用出站构造，不要另写一套**（2026-10-26）：`anthropic.cjs` 的 `buildTurns(request)` 是「neutral history → 合并后 turns」的**唯一**实现，`buildAnthropicBody` 与观测用的 `inspectToolPairing` 都复用它。为诊断另写一份合并逻辑会把并行工具结果判成「非相邻」——这是本区块唯一容易做错的地方。诊断**只读不写**：探针在 `buildRequestBody` 之前跑，不得改变报文；新增探针一律「计数 > 0 才记」并包 try/catch，避免每轮刷日志或让观测拖垮请求。
+- `AssignModel` 本地应答不含 `assignment_jwt`（官方 `ModelAssignment` 响应带该字段）。CLI **3000.11.228** 实测仍不校验（本地应答不带 jwt，指派与推理均正常；3000.10.48 起一直如此）；若未来版本强制校验，
+  本地指派整体失效——届时改为转发上游或显式降级，不得伪造成功。
+- **backend 转发目标由宿主推送**（**不**读 `codeium.apiServerUrl`——派生量，见 `upstream-routing.md`）：宿主经
+  `POST /_runtime/upstream`（bearer + `upstreamProtocol`）推送派生链结果（LS `--api_server_url` → portal → 默认，
+  `effective-origin.cjs`）；只传 URL、仅内存、拒自指；写入点只在 `enable.cjs`。
+- 修改行为时不要放宽现有安全校验（Origin 一律 403、控制令牌 `timingSafeEqual`、webview 只用 `createElement`/`textContent` 不用
+  `innerHTML`、CSP nonce）。
 - **backend 的 ingest 必须拒绝我方 uid**（`/^(?:fusion-)?dfbyok-/`）：宿主的读取端把「被提供的 dfbyok uid」当作非法目录并直接抛
   `native_catalog_invalid`，一旦 backend 存了我方条目，**宿主的每一次 refresh 都会失败**。`pushNativeModels` 与 `isUpstreamUid`
   共用同一个谓词，避免两侧漂移。

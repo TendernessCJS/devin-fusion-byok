@@ -43,5 +43,9 @@ description: "Apply when changing module ownership, the src/runtime partition, p
   | `src/proxy.cjs` | 无 | 有测试保证**生产模块不得 require 它** |
 
   新加门面前先确认它属于哪一类，别让「兼容门面」被生产代码依赖。
+- **`src/runtime/host/injection-health.cjs` 是宿主侧模块、不得被 backend require**：只有 `activation/panel-install.cjs` require 它，结果经共享槽以
+  `readHealth()` 回调传给 `runtime/host/context-diagnostics.cjs` 与 `panel/manager.cjs`（backend 里没有任何 require）。让 backend require 它会让
+  `architecture` 测试红（source-identity 派生只跟随 require 图），且会把「只在宿主生效」的代码误当 backend 代码改动。输出确定性约束见 `monitor-and-panel.md`。
+
 
 - **`test/architecture.test.cjs` 是架构的权威表述**：backend 闭包 allow/deny-list、`src/runtime/` 根目录 8 文件白名单、`network/`+`update/` 的依赖上限、`proxy-config` 叶子、文件级零环、动态 require 白名单——**改依赖关系前先读它**，比读散文式文档可靠。
