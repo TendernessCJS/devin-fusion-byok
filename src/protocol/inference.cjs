@@ -286,6 +286,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
   };
   let status = 0;
   let classifiedCode = 'upstream_network';
+  const connectAttempts = [];
   const record = event => { try { log(event); } catch { /* Diagnostics cannot fail a model request. */ } };
   const frames = [];
   let lastEvent = null;
@@ -320,9 +321,16 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     ? Math.min(timeouts.firstResponseMs, 2147483647) : 120000;
   const idleLimit = Number.isSafeInteger(timeouts?.idleMs) && timeouts.idleMs > 0
     ? Math.min(timeouts.idleMs, 2147483647) : 120000;
-  const retryBudget = Number.isSafeInteger(timeouts?.retryPauseMs) && timeouts.retryPauseMs >= 0
+  const retryBase = Number.isSafeInteger(timeouts?.retryPauseMs) && timeouts.retryPauseMs >= 0
     ? Math.min(timeouts.retryPauseMs, 5000) : RETRY_PAUSE_MS;
-  const retryPauseMs = () => retryBudget ? Math.round(retryBudget / 2 + Math.random() * retryBudget / 2) : 0;
+  const retryDeadlineMs = Number.isSafeInteger(timeouts?.retryDeadlineMs) && timeouts.retryDeadlineMs >= 0
+    ? Math.min(timeouts.retryDeadlineMs, 600000) : 120000;
+  // The pause doubles per retry ordinal (1, 2, 3) and keeps the same jitter
+  // shape: a draw from the upper half of the ordinal's budget.
+  const retryPauseMs = ordinal => {
+    const budget = Math.min(retryBase * 2 ** (ordinal - 1), 5000);
+    return budget ? Math.round(budget / 2 + Math.random() * budget / 2) : 0;
+  };
 
   let activeTimer = null;
   const clearTimer = () => { if (activeTimer) { clearTimeout(activeTimer); activeTimer = null; } };
@@ -388,11 +396,15 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
         signal: upstreamController.signal
       });
     };
-    // A connection-layer failure before the first byte is retried exactly
-    // once after a bounded, abortable pause. The zero-output gate only proves
-    // no billable output reached the client; it cannot prove the provider
-    // never received the request, so it bounds duplication risk rather than
-    // guaranteeing the provider was never charged.
+    // A connection-layer failure before the first byte is retried up to three
+    // times after bounded, abortable pauses that double per retry. The
+    // zero-output gate only proves no billable output reached the client; it
+    // cannot prove the provider never received the request, so it bounds
+    // duplication risk rather than guaranteeing the provider was never charged.
+    // A retried send still rides the pooled socket — `connection: close` cannot
+    // force a fresh connection through fetch — so consecutive failures on the
+    // same peer can still exhaust the budget.
+    const MAX_CONNECT_ATTEMPTS = 4;
     const RETRYABLE_CODES = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT']);
     const connectFailure = err => RETRYABLE_CODES.has(err?.cause?.code || err?.code);
     const pause = ms => new Promise(resolve => {
@@ -400,17 +412,26 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       const timer = setTimeout(done, ms);
       upstreamController.signal.addEventListener('abort', done, { once: true });
     });
+    const connectStartedAt = Date.now();
     let upstream;
-    try {
-      upstream = await send(body);
-    } catch (error) {
-      if (!connectFailure(error) || upstreamController.signal.aborted || signal?.aborted || res.headersSent) throw error;
-      const waitMs = retryPauseMs();
-      record({ event: 'upstream-retry', model: route.model, attempt: 1, transport: transportDetail(error), pauseMs: waitMs });
-      await pause(waitMs);
-      if (upstreamController.signal.aborted || signal?.aborted) throw error;
-      upstream = await send(body);
-      record({ event: 'upstream-retry-recovered', model: route.model, attempt: 1 });
+    for (let attempt = 1; ; attempt++) {
+      const attemptStartedAt = Date.now();
+      try {
+        upstream = await send(body);
+        if (attempt > 1) record({ event: 'upstream-retry-recovered', model: route.model, attempt: attempt - 1, attempts: attempt });
+        break;
+      } catch (error) {
+        const elapsedMs = Date.now() - attemptStartedAt;
+        connectAttempts.push({ attempt, elapsedMs, code: enumValue(error?.cause?.code) || enumValue(error?.code) });
+        const retryable = connectFailure(error)
+          && !upstreamController.signal.aborted && !signal?.aborted && !res.headersSent;
+        if (!retryable || attempt >= MAX_CONNECT_ATTEMPTS || retryDeadlineMs === 0) throw error;
+        const waitMs = retryPauseMs(attempt);
+        if (Date.now() - connectStartedAt + waitMs > retryDeadlineMs) throw error;
+        record({ event: 'upstream-retry', model: route.model, attempt, transport: transportDetail(error), pauseMs: waitMs, elapsedMs, bytes: Buffer.byteLength(JSON.stringify(body)) });
+        await pause(waitMs);
+        if (upstreamController.signal.aborted || signal?.aborted) throw error;
+      }
     }
     // Thinking-mode providers (DeepSeek, Moonshot) answer a forced/required
     // tool_choice with HTTP 400 — "Thinking mode does not support this
@@ -611,7 +632,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     }
     outcomeCode = classifiedCode;
     const transport = transportDetail(err);
-    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}), ...(transport ? { transport } : {}), ...failureShape() });
+    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}), ...(transport ? { transport } : {}), ...(connectAttempts.length > 1 ? { attempts: connectAttempts } : {}), ...failureShape() });
     return { status, error: true, code: classifiedCode, requestId: id };
   } finally {
     try { onMetrics(metrics.finish(outcome, status, outcomeCode)); } catch {}

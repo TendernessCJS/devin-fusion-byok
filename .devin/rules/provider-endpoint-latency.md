@@ -71,13 +71,26 @@ DeepSeek Anthropic provider 的 4816 条记录中有 8 条非 success；当时�
 （零字节输出即断）：ECONNRESET 3、UND_ERR_SOCKET 3、EPIPE 3、UND_ERR_CONNECT_TIMEOUT 2、upstream_timeout(AbortError) 1；
 同轮上下文内紧接的后续请求多数直接成功。宿主→本地 backend 已有 `withConnectionRetry` 覆盖同类失败，供应商侧此前没有。
 
-`src/protocol/inference.cjs` 在第一次 `send(body)` rejection 上做一次有界重试，判据：
+`src/protocol/inference.cjs` 对 `send(body)` rejection 做最多 **3 次重试 / 4 次尝试**（`MAX_CONNECT_ATTEMPTS = 4`），判据：
 
 - 仅连接层中断可重试：`err?.cause?.code || err?.code` ∈ `{UND_ERR_SOCKET, ECONNRESET, EPIPE, UND_ERR_CONNECT_TIMEOUT}`；
   不碰消息文本、HTTP 状态、DNS/TLS、AbortError。
 - 前置：客户端与 upstream signal 均未 abort、尚未向客户端写字节（`res.headersSent`）。
-- 预算 600ms，实际等待取 50%–100% 的随机抖动（`timeouts.retryPauseMs` 可注入，`0` 供测试、上限 5000ms 夹取），可被 `upstreamController.signal` 立即打断；打断则抛原错误。
-- 重试前记 `upstream-retry`（`transport` 枚举 + `pauseMs`）；重试的那次 `send` 成功即记 `upstream-retry-recovered`（与随后读流是否失败无关）；两次都失败仍记原 `chat-error`。
-- 实测依据：2026-10-26 13:08–13:29Z 21 分钟窗口内 9 次 `upstream-retry`、6 次救回、3 次两连败（`UND_ERR_SOCKET`/`ECONNRESET`/`EPIPE`，`status:0`）；同期基线约 0.47 次/小时，故抖动窗口内密度约 70 倍——「固定偏移会重复撞同一段抖动」与「需要 recovered 事件来度量」的依据。
+- 退避以 `retryPauseMs`（默认 600ms，可注入、上限 5000ms 夹取）为基数按 2 的幂放大，仍取预算 50%–100% 的随机抖动：
+  三次等待区间依次 300–600 / 600–1200 / 1200–2400ms；`retryPauseMs: 0` 时全部为 0（零等待仍重试）。
+- 总预算 `retryDeadlineMs`（默认 120s，可注入、上限 600s 夹取）：从第一次 `send` 起累计，
+  「已耗时 + 下一次等待」超预算即停止并抛原错误；`retryDeadlineMs: 0` 表示完全不重试。
+  每个 attempt 独立 120s 首响预算（各自 `armTimer`）。
+- 每次失败记 `upstream-retry`（`attempt`、`transport` 枚举、`pauseMs`、该次 `elapsedMs`、请求体 `bytes`；
+  `bytes` 是 `JSON.stringify(body)` 的字节数——fetch 不暴露字节级上传进度，上传进度不可得）；
+  重试的 `send` 成功记 `upstream-retry-recovered`（`attempt` = 成功那次的重试序号、`attempts` = 总尝试数，
+  与随后读流是否失败无关）；第 4 次失败不再记 retry，全部失败仍记原 `chat-error`。
+- `chat-error` 在多于一次尝试时新增 `attempts[]`（每条 `attempt`/`elapsedMs`/枚举化 `code`）；
+  `transport` 报**最后一次**失败 attempt 的 transport。
+- 实测依据：2026-10-26 13:08–13:29Z 21 分钟窗口内 9 次 `upstream-retry`、6 次救回、3 次两连败（`UND_ERR_SOCKET`/`ECONNRESET`/`EPIPE`，`status:0`）；同期基线约 0.47 次/小时，故抖动窗口内密度约 70 倍——「固定偏移会重复撞同一段抖动」与「需要 recovered 事件来度量」的依据；后续线上日志显示单次重试仍会在一段持续抖动内耗尽，遂扩到 3 次。
+- **「重试走新连接」在当前传输层做不到**（2026-10-27 实测，Node 24）：`fetch(url, { headers: { connection: 'close' } })`
+  不能强制新连接（undici 仍复用池中 socket，端口级实测复用）；全局 `fetch` 下 `require('undici')` 为
+  `MODULE_NOT_FOUND`，拿不到 `Agent`。彻底消除「同一 peer 复用」需换 `node:https`——未做，属单独决策。
 - **禁止在已有输出后重试**：读流阶段（reader.read()/SSE/`upstream_stream_error`）与 HTTP 非 2xx 一律不重试；
-  「0 字节客户端输出」只是本插件允许重试的边界，不证明供应商未接收或执行请求，不能保证不重复计费。
+  「0 字节客户端输出」只是本插件允许重试的边界，不证明供应商未接收或执行请求，不能保证不重复计费——
+  重试上限扩到 3 次后重复计费窗口相应变大，同一轮最多可能重复提交 4 次。

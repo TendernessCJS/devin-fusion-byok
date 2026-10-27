@@ -1711,9 +1711,9 @@ test('prompt_cache_key reaches the provider body only when set', () => {
   assert.equal(buildRequestBody(proto, { model: 'm' }, { apiFormat: 'responses' }).prompt_cache_key, 'proto-key');
 });
 
-// A connection-layer failure before the first byte gets exactly one bounded
-// retry; anything later (stream read, HTTP status, timeout abort) does not.
-async function bridgeWithInjectedFailure(t, makeError, { timeouts } = {}) {
+// A connection-layer failure before the first byte gets bounded retries;
+// anything later (stream read, HTTP status, timeout abort) does not.
+async function bridgeWithInjectedFailure(t, makeError, { timeouts, failures = 1 } = {}) {
   const requests = [], logs = [], metrics = [];
   const upstream = await server(async (req, res) => {
     const chunks = [];
@@ -1723,11 +1723,11 @@ async function bridgeWithInjectedFailure(t, makeError, { timeouts } = {}) {
     res.end(event({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'retried-ok' }] }] } }));
   }, t);
   const realFetch = globalThis.fetch;
-  let fired = true;
+  let remainingFailures = failures;
   // Only the provider request may fail — the test's own client fetch to the
   // proxy shares the same global fetch and must pass through untouched.
   globalThis.fetch = (url, init) => {
-    if (fired && String(url).startsWith(upstream.url)) { fired = false; return Promise.reject(makeError()); }
+    if (remainingFailures > 0 && String(url).startsWith(upstream.url)) { remainingFailures--; return Promise.reject(makeError()); }
     return realFetch(url, init);
   };
   t.after(() => { globalThis.fetch = realFetch; });
@@ -1760,14 +1760,46 @@ test('a first-byte connection failure is retried once and completes normally', a
 });
 
 test('a zero retryPauseMs still retries and still records recovery', async t => {
-  const app = await bridgeWithInjectedFailure(t, () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_SOCKET' } }), { timeouts: { retryPauseMs: 0 } });
+  const requests = [], logs = [], metrics = [];
+  const upstream = await server((req, res) => {
+    requests.push(1);
+    if (requests.length < 4) { req.socket.destroy(); return; }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(event({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'retried-ok' }] }] } }));
+  }, t);
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(nativeRequest()), route: { model: 'test-model', uid: 'local-cpa-lead' },
+      provider: { baseUrl: `${upstream.url}/v1`, apiKey: 'fake-provider-secret', apiFormat: 'openai-responses' },
+      res, log: e => logs.push(e), timeouts: { retryPauseMs: 0 }, onMetrics: m => metrics.push(m) });
+  }, t);
+  const result = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'retried-ok');
+  assert.equal(requests.length, 4, 'three zero-wait retries still reach the provider');
+  const retries = logs.filter(entry => entry.event === 'upstream-retry');
+  assert.equal(retries.length, 3);
+  assert.ok(retries.every(entry => entry.pauseMs === 0), 'a zero base stays zero through the doubling');
+  const recovered = logs.filter(entry => entry.event === 'upstream-retry-recovered');
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0].attempt, 3);
+  assert.equal(recovered[0].attempts, 4);
+  assert.equal(logs.find(entry => entry.event === 'chat-error'), undefined);
+  assert.equal(metrics.length, 1, 'usage is settled exactly once');
+});
+
+test('a failure that recovers on the third attempt is logged as recovered on attempt 2', async t => {
+  const app = await bridgeWithInjectedFailure(t, () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_SOCKET' } }), { failures: 2, timeouts: { retryPauseMs: 0 } });
   const result = unpack(Buffer.from(await (await fetch(app.proxy.url)).arrayBuffer()));
   assert.equal(result.messages.map(message => str(message, 3)).join(''), 'retried-ok');
+  assert.equal(app.requests.length, 1, 'the provider only saw the successful send');
   const retries = app.logs.filter(entry => entry.event === 'upstream-retry');
-  assert.equal(retries.length, 1);
-  assert.equal(retries[0].pauseMs, 0);
-  assert.equal(app.logs.filter(entry => entry.event === 'upstream-retry-recovered').length, 1);
+  assert.equal(retries.length, 2);
+  assert.deepEqual(retries.map(entry => entry.attempt), [1, 2]);
+  const recovered = app.logs.filter(entry => entry.event === 'upstream-retry-recovered');
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0].attempt, 2);
+  assert.equal(recovered[0].attempts, 3);
   assert.equal(app.logs.find(entry => entry.event === 'chat-error'), undefined);
+  assert.equal(app.metrics.length, 1, 'usage is settled exactly once');
 });
 
 for (const code of ['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT']) {
@@ -1821,22 +1853,58 @@ test('a disconnect during stream read is never retried', async t => {
   assert.ok(logs.some(entry => entry.event === 'chat-error' && entry.code === 'upstream_stream_error'));
 });
 
-test('two consecutive connection failures yield exactly one retry and the same classification', async t => {
+async function alwaysFailingBridge(t, { timeouts, metrics = [] } = {}) {
   const requests = [], logs = [];
   const upstream = await server(req => { requests.push(1); req.socket.destroy(); }, t);
   const proxy = await server((req, res) => {
     serveChat({ request: parseChat(nativeRequest()), route: { model: 'test-model', uid: 'x' },
-      provider: { baseUrl: `${upstream.url}/v1`, apiFormat: 'openai-responses' }, res, log: event => logs.push(event) });
+      provider: { baseUrl: `${upstream.url}/v1`, apiFormat: 'openai-responses' }, res, log: event => logs.push(event),
+      ...(timeouts ? { timeouts } : {}), onMetrics: m => metrics.push(m) });
   }, t);
   await fetch(proxy.url);
-  assert.equal(requests.length, 2, 'one retried send, no more');
+  return { requests, logs, metrics };
+}
+
+test('repeated connection failures exhaust three retries and report every attempt', async t => {
+  const { requests, logs, metrics } = await alwaysFailingBridge(t, { timeouts: { retryPauseMs: 0 } });
+  assert.equal(requests.length, 4, 'the first send plus three bounded retries');
   const retries = logs.filter(entry => entry.event === 'upstream-retry');
-  assert.equal(retries.length, 1);
+  assert.equal(retries.length, 3, 'the fourth failure earns no retry event');
+  assert.deepEqual(retries.map(entry => entry.attempt), [1, 2, 3]);
+  for (const entry of retries) {
+    assert.ok(Number.isInteger(entry.elapsedMs) && entry.elapsedMs >= 0, `elapsedMs is an integer: ${entry.elapsedMs}`);
+    assert.ok(Number.isInteger(entry.bytes) && entry.bytes > 0, `bytes carries the request body size: ${entry.bytes}`);
+  }
   const errorLog = logs.find(entry => entry.event === 'chat-error');
   assert.equal(errorLog.code, 'upstream_network');
-  assert.equal(errorLog.transport, retries[0].transport, 'the reported transport enum is unchanged by retrying');
+  assert.equal(errorLog.attempts.length, 4);
+  assert.deepEqual(errorLog.attempts.map(entry => entry.attempt), [1, 2, 3, 4]);
+  assert.equal(errorLog.transport, retries.at(-1).transport, 'transport reports the last failed attempt');
   assert.equal(logs.find(entry => entry.event === 'upstream-retry-recovered'), undefined,
-    'a doubly-failed retry records no recovery');
+    'an exhausted retry budget records no recovery');
+  assert.equal(metrics.length, 1, 'usage is settled exactly once');
+});
+
+test('retry backoff doubles from the same jittered base', async t => {
+  const { logs, metrics } = await alwaysFailingBridge(t, { timeouts: { retryPauseMs: 600 } });
+  const retries = logs.filter(entry => entry.event === 'upstream-retry');
+  assert.equal(retries.length, 3);
+  const ranges = [[300, 600], [600, 1200], [1200, 2400]];
+  retries.forEach((entry, index) => {
+    const [low, high] = ranges[index];
+    assert.ok(entry.pauseMs >= low && entry.pauseMs <= high,
+      `attempt ${index + 1} pauseMs ${entry.pauseMs} within [${low}, ${high}]`);
+  });
+  assert.equal(metrics.length, 1, 'usage is settled exactly once');
+});
+
+test('retryDeadlineMs 0 disables connection retries', async t => {
+  const { requests, logs, metrics } = await alwaysFailingBridge(t, { timeouts: { retryPauseMs: 0, retryDeadlineMs: 0 } });
+  assert.equal(requests.length, 1, 'a zero deadline sends exactly once');
+  assert.equal(logs.find(entry => entry.event === 'upstream-retry'), undefined);
+  const errorLog = logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_network');
+  assert.equal(metrics.length, 1, 'usage is settled exactly once');
 });
 
 async function direct(t, request, upstreamHandler, { apiFormat = 'openai', logs = [] } = {}) {
