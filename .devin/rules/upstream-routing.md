@@ -43,10 +43,19 @@ backend 转发非拦截 RPC 时，目标 origin **不是常量**，而是跟随�
   全在 `windsurf.*`/`devin.*` 下），所以没有设置界面——而且它们是**派生量**：配置 getter 对 `codeium.*`
   命名空间直接短路到登录响应/portal 派生/部署默认，**用户手写 settings.json 被静默忽略**（2026-10-27 11:04
   实测：手填 `inferenceApiServerUrl` 指向 stub，重载后 LS 参数仍是默认推理地址，stub 零请求）。
-- 真实取值链（`src/activation/effective-origin.cjs`，与原生同序）：① **最新 LS 进程的 `--api_server_url`
+- 真实取值链（`src/activation/effective-origin.cjs`，与原生同序）：① **LS 进程的 `--api_server_url`
   启动参数**（`source:'ls-arg'`，登录响应/portal/默认三者其一已被原生折算进去）；② portal 派生
-  `windsurf.portalUrl`/`devin.portalUrl` → `${portal}/_route/api_server`（`source:'portal'`）；③ 部署默认
-  （`source:'default'`，推 `null` 复位）。`source` 枚举进日志与收据，origin 永不落盘。
+  `devin.portalUrl`/`windsurf.portalUrl` → `${portal}/_route/api_server`（`source:'portal'`）；
+  `windsurf.serviceUrl` 是遗留键、原生只在迁移时读一次，作末位兜底；③ 部署默认（`source:'default'`，
+  推 `null` 复位）。`source` 枚举进日志与收据，origin 永不落盘。portal 由官方 `devin.setPortalUrl`
+  命令写入（InputBox → `windsurf.portalUrl` + `devin.portalUrl`）。
+- **LS 行匹配按可执行路径**，不是裸子串：正则 `/\/language_server_[A-Za-z0-9_]+(\s|$)/` 定位可执行位，
+  只在其后查 flag——命令行中段提到二进制名的行（`ps | grep` 自匹配陷阱，2026-10-27 实测中招）必须忽略。
+  候选按 pid 降序逐个过 `resolveUpstreamOrigin`，首个合法者胜。
+- **收敛窗口** `resolveEffectiveOriginWhenAvailable`：激活比 LS 早约 1 秒（实测 11:19:07 推送 → 11:19:08
+  LS 才启动），首解析常落在 `default`；故按 0/2/5/10s 追加最多 3 次重解析，拿到非 `default` 立即停，
+  `shouldContinue`（宿主停用或更新的触发到达）为假即止。**去重**：同一代激活里 `(origin, source)`
+  与上次成功推送相同 → 不发 POST、不记日志；origin 变了才推。
 - 本机实测：`settings.json` 无任何 `codeium.*`，LS 拿到默认 `--api_server_url` 与
   `--inference_api_server_url`，故推送 `null`、`custom:false`——SaaS 账号下该能力空跑。
 - `codeium.inferenceApiServerUrl` **未接**：企业/EU 模式下它与 API 地址同值，只有部署派生不同值才会分离。

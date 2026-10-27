@@ -8,7 +8,7 @@ const { installAcpObserver } = require('../runtime/host/acp-observer.cjs');
 const { installAuthStatusInjection } = require('../runtime/host/auth-status.cjs');
 const { pushUpstream } = require('../runtime/host/upstream.cjs');
 const { recordUnknownCatalog } = require('../runtime/host/observations.cjs');
-const { resolveEffectiveOrigin } = require('./effective-origin.cjs');
+const { resolveEffectiveOriginWhenAvailable } = require('./effective-origin.cjs');
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
 const { globalSetting } = require('./settings.cjs');
@@ -34,10 +34,17 @@ const { checkNativeContract } = require('./native-contract.cjs');
 // the same way the native config derives `codeium.apiServerUrl` (LS arg →
 // portal → default). Only the URL crosses; credentials never do. This is the
 // single writer — auth-status must not push the same value through its own path.
-async function pushConfiguredUpstream({ root, vscode, log }) {
+// The resolution window converges late (the LS spawns ~1s after activation),
+// so triggers are generation-guarded and successful pushes are deduplicated:
+// a repeat trigger that resolves to the same (origin, source) sends no POST.
+async function pushConfiguredUpstream({ root, vscode, log, lifecycle, shouldContinue = () => true }) {
   try {
-    const effective = await resolveEffectiveOrigin({ vscode });
+    const effective = await resolveEffectiveOriginWhenAvailable({ vscode, shouldContinue });
+    // The dedupe key lives in memory only — compared, never logged or written.
+    const key = `${lifecycle?.activationGeneration}${effective.origin ?? ''}${effective.source}`;
+    if (lifecycle && lifecycle.upstreamPushedKey === key) return;
     const result = await pushUpstream({ root, origin: effective.origin, source: effective.source });
+    if (result.ok && lifecycle) lifecycle.upstreamPushedKey = key;
     // Success is logged too: a silent success makes "did the push happen?"
     // unanswerable from the log. Only flags and enums are recorded — never the host.
     if (result.ok) log('upstream-push', { ok: true, custom: result.custom === true, source: effective.source });
@@ -136,13 +143,19 @@ function installEnable({ deps, shared }) {
     // Backend is ready now: align its forward target with the effective
     // upstream origin, and keep it aligned on later setting changes. The
     // subscription is registered once per extension context, not per enable.
-    void pushConfiguredUpstream({ root: deps.root, vscode, log });
+    const triggerPush = () => {
+      // A newer trigger supersedes any in-flight resolution window.
+      const generation = (lifecycle.upstreamPushGeneration = (lifecycle.upstreamPushGeneration || 0) + 1);
+      return pushConfiguredUpstream({ root: deps.root, vscode, log, lifecycle,
+        shouldContinue: () => live(lifecycle, config) && lifecycle.upstreamPushGeneration === generation });
+    };
+    void triggerPush();
     if (!lifecycle.upstreamSubscription) {
       lifecycle.upstreamSubscription = vscode.workspace.onDidChangeConfiguration?.(event => {
         const sources = ['codeium.apiServerUrl', 'devin.portalUrl', 'windsurf.portalUrl', 'windsurf.serviceUrl'];
         if (typeof event?.affectsConfiguration === 'function' && !sources.some(s => event.affectsConfiguration(s))) return;
         if (!live(lifecycle, config)) return;
-        return pushConfiguredUpstream({ root: deps.root, vscode, log });
+        return triggerPush();
       });
       if (lifecycle.upstreamSubscription) context.subscriptions.push(lifecycle.upstreamSubscription);
     }

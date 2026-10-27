@@ -84,7 +84,7 @@ function fixture(t, options = {}) {
       pushes.push({ root: pushedRoot, origin, source });
       return options.result || { ok: true, custom: origin != null };
     } },
-    './effective-origin.cjs': { resolveEffectiveOrigin: async () => effective.current },
+    './effective-origin.cjs': { resolveEffectiveOriginWhenAvailable: async () => effective.current },
     '../runtime/host/ls-injection.cjs': { installLsInjection: async () => ({ dispose: async () => {} }) },
     '../runtime/bridge.cjs': { createLsBridge: async () => ({ port: 4567, close() {} }) },
     '../runtime/host/acp-observer.cjs': { installAcpObserver: () => ({ dispose() {} }) },
@@ -145,4 +145,19 @@ test('a later configuration change re-pushes the re-resolved effective origin', 
   await f.handlers[0]({ affectsConfiguration: () => false });
   await f.settle();
   assert.equal(f.pushes.length, 2);
+});
+
+test('a repeated trigger resolving to the same origin sends no second POST', async t => {
+  const f = fixture(t, { effective: { origin: 'https://custom.example.com', source: 'ls-arg' } });
+  await f.shared.ensureEnabled();
+  await f.settle();
+  assert.equal(f.pushes.length, 1);
+  await f.handlers[0]({ affectsConfiguration: section => section === 'windsurf.portalUrl' });
+  await f.settle();
+  assert.equal(f.pushes.length, 1, 'the same (origin, source) is deduplicated — no POST, no log');
+  assert.equal(f.pushLogs().length, 1);
+  f.effective.current = { origin: 'https://other.example.com', source: 'ls-arg' };
+  await f.handlers[0]({ affectsConfiguration: section => section === 'windsurf.portalUrl' });
+  await f.settle();
+  assert.equal(f.pushes.length, 2, 'a changed origin always pushes');
 });
