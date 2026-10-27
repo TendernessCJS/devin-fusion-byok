@@ -14,6 +14,11 @@ function countOwn(value, depth = 0) {
   return 0;
 }
 const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server_pb\.ApiServerService|seat_management_pb\.SeatManagementService)\/(?:GetUserStatus|GetCliModelConfigs|GetCascadeModelConfigs|GetCommandModelConfigs)(?:ForSite)?$|^\/exa\.seat_management_pb\.SeatManagementService\/GetCliTeamSettings$/;
+// Catalog-like RPCs the whitelist does not know still forward untouched — but
+// each method name is reported once per bridge so an upgrade that adds a model
+// surface shows up in the persisted record instead of silently dropping BYOK.
+const RPC_PATH = /^\/exa\.[a-z_]+\.[A-Za-z]+Service\/[A-Za-z]+$/;
+const CATALOG_LIKE = /(?:Model|Models|ModelConfig|ModelConfigs|Catalog)/;
 // Server-push RPCs (all long-lived pushes are Stream*/HandleStreaming*) sit
 // idle between events by design, so the 120s body idle budget would kill them
 // mid-stream. They get a 30-minute floor instead; connect/headers stay fast.
@@ -149,6 +154,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
 }
 async function createLsBridge(originalPort, options) {
   const onActivity = options?.onActivity;
+  const reported = new Set();
   const server = http.createServer((request, response) => {
     try { onActivity?.(); } catch {}
     if (request.method === 'OPTIONS') {
@@ -160,6 +166,14 @@ async function createLsBridge(originalPort, options) {
     // this per-window LS bridge into a proxy for another host.
     if (!request.url?.startsWith('/') || request.url.startsWith('//')) {
       response.writeHead(400); response.end(); return;
+    }
+    const rpc = request.url.split('?')[0];
+    if (RPC_PATH.test(rpc) && !CATALOG.test(rpc)) {
+      const method = rpc.split('/').pop();
+      if (CATALOG_LIKE.test(method) && !reported.has(method)) {
+        reported.add(method);
+        try { options?.onUnknownCatalog?.(method); } catch {}
+      }
     }
     forward(request, response, new URL('http://127.0.0.1:' + originalPort + request.url), options);
   });

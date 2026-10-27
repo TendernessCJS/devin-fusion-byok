@@ -7,6 +7,7 @@ const { createLsBridge } = require('../runtime/bridge.cjs');
 const { installAcpObserver } = require('../runtime/host/acp-observer.cjs');
 const { installAuthStatusInjection } = require('../runtime/host/auth-status.cjs');
 const { pushUpstream } = require('../runtime/host/upstream.cjs');
+const { recordUnknownCatalog } = require('../runtime/host/observations.cjs');
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
 const { globalSetting } = require('./settings.cjs');
@@ -128,7 +129,8 @@ function installEnable({ deps, shared }) {
     if (!native) throw new Error('未找到 Devin 原生扩展');
     const injected = await installLsInjection({ nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main),
       createBridge: (port, extra) => createLsBridge(port, { ...extra, getCatalog: catalog, log, onNativeModels: stores.nativeCatalog.observeNativeModels,
-        onAllowedUids: stores.nativeCatalog.observeAllowedUids }), log });
+        onAllowedUids: stores.nativeCatalog.observeAllowedUids,
+        onUnknownCatalog: method => { log('catalog-rpc-unknown', { rpc: method }); recordUnknownCatalog(deps.root, method); } }), log });
     if (superseded(lifecycle, config, generation) || lifecycle.activationDisposed) {
       try { await injected.dispose(); } catch {}
       return;

@@ -95,6 +95,25 @@ test('a ForSite catalog response is augmented exactly like the base RPC', async 
   assert.equal(json.clientModelConfigs.at(-1).modelUid, 'official');
 });
 
+test('unknown catalog-shaped RPCs report once per method, known traffic stays quiet', async t => {
+  const reports = [];
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, onUnknownCatalog: method => reports.push(method) });
+  t.after(() => bridge.close());
+  const api = '/exa.api_server_pb.ApiServerService/';
+  await request(bridge.port, api + 'GetModelProviders');
+  await request(bridge.port, api + 'GetModelProviders');
+  assert.deepEqual(reports, ['GetModelProviders'], 'an unknown catalog-like method reports exactly once');
+  await request(bridge.port, api + 'GetChatMessage');
+  assert.deepEqual(reports, ['GetModelProviders'], 'an unrelated RPC reports nothing');
+  await request(bridge.port, api + 'GetCliModelConfigs');
+  assert.deepEqual(reports, ['GetModelProviders'], 'a known catalog RPC reports nothing');
+});
+
 test('catalog augmentation of an uncompressed upstream stays plain', async t => {
   const original = { clientModelConfigs: [{ modelUid: 'official', label: 'Official' }] };
   const native = await listen((req, res) => {

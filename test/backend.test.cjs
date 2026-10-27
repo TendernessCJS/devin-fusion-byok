@@ -1056,3 +1056,16 @@ test('exhausted connection retries record the transport code', async t => {
   assert.deepEqual({ ok: receipt.ok, reason: receipt.reason, code: receipt.code },
     { ok: false, reason: 'unavailable', code: 'ECONNREFUSED' });
 });
+
+test('an AssignModel body with unknown top-level fields is observed, never rejected', async t => {
+  const f = await fixture(t);
+  const post = body => fetch(f.base + API + 'AssignModel', { method: 'POST',
+    headers: { 'content-type': 'application/proto' }, body });
+  await post(Buffer.concat([wire.m(2, wire.s(1, 'some-uid')), wire.m(9, wire.s(1, 'x'))]));
+  const events = f.logs.filter(([event]) => event === 'assignment-request-unknown');
+  assert.equal(events.length, 1, 'an out-of-contract field is reported exactly once');
+  assert.deepEqual(events[0][1].fields, [9], 'only the unknown field number is recorded');
+  await post(Buffer.concat([wire.m(2, wire.s(1, 'some-uid')), wire.m(6, wire.s(1, 'other-uid'))]));
+  assert.equal(f.logs.filter(([event]) => event === 'assignment-request-unknown').length, 1,
+    'a conforming f2/f6 request reports nothing');
+});

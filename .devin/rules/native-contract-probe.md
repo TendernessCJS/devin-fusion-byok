@@ -19,3 +19,5 @@
 - **报告脚本**：`node scripts/native-contract-report.cjs [--json]` 输出五产物 sha256 与标记命中快照，发布前留档 diff。只读。
 - **已知边界**：只覆盖字符串级契约——字段号语义、行为、消息形状变化查不出来。
 - **缓存键** = `stat`/`signature` + `PROBE_VERSION`：**改标记表或探针语义必须 +1**，否则旧判定被复用、新标记永不扫描。实测依据：0.5.1→0.5.2 真机缓存缺 `authStore` 键（0.5.1 写入），证明旧 `ok` 被复用、`GetUserJwt`/`GetWebSearchResults` 未被扫描。
+- **运行期未知目录 RPC 侦测**：`bridge.cjs` 对「RPC 形状 + 方法名含 `Model|ModelConfig|Catalog` + 不匹配 `CATALOG` 正则」的请求记一次 `catalog-rpc-unknown`，按方法名去重后落到 globalStorage `catalog-unknown.json`（`{at, rpc}`，上限 50，只记方法名）。理由：桥的方法名是硬编码白名单，Devin 新增一个携带目录的 RPC 不会报错，只会让 picker 里 BYOK 条目**安静地少一部分**。这份收据是升级后唯一能自查「有没有新目录面冒出来」的落点——**不得**据它自动降级或自动放行。
+- **`assignment_jwt` 是 INFORMATIONAL 标记**（cli+ls）：官方 `ModelAssignment` 带该字段，我们的本地应答刻意不带（CLI 3000.10.48 不校验）。标记消失说明契约变了，届时本地指派可能被校验失败——这是提前量，**不是**要求我们伪造 jwt。

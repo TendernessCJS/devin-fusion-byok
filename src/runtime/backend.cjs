@@ -274,6 +274,18 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
       const format = wire.decode(body, request.headers);
       const current = config(), catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedMode === 'unrestricted' ? null : allowedUids);
       if (rpc.endsWith('/AssignModel')) {
+        // The request contract is exactly f2 (model_router_uid) and f6
+        // (fusion_lead_router_uid) — anything else means the client started
+        // sending intent we never modeled. Observation only: field numbers or
+        // key names, never values, and never a rejection.
+        const unknownAssignFields = () => {
+          try {
+            if (format.json) return Object.keys(format.data).filter(key => !['modelRouterUid', 'model_router_uid', 'fusionLeadRouterUid', 'fusion_lead_router_uid'].includes(key));
+            return wire.parseFields(format.data).map(field => field.number).filter(number => number !== 2 && number !== 6);
+          } catch { return []; }
+        };
+        const unknown = unknownAssignFields();
+        if (unknown.length) log('assignment-request-unknown', { fields: unknown });
         const resolved = resolveAssignment(format.data, format, catalog, lockedFusion);
         if (resolved) {
           const output = wire.encode(resolved, { ...format, gzip: false, compressed: false });
