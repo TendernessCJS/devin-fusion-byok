@@ -85,12 +85,14 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   同主题 `codeium.inferenceApiServerUrl` 已定案不接，见 `upstream-routing.md`「原生设置的两个键」。
 - **服务注册表枚举已盘点（2026-10-27 重跑，别再造表）**：目录形方法（`Model/Models/ModelConfig/Catalog`）
   在 `extension.js` 553 法中占 19、`sessions.desktop.main.js` 450 法中占 19（集合完全相同）、
-  `workbench.desktop.main.js` 155 法中占 4。未建模的 13 个：`AssignArenaModel`（arena 指派，客户端零调用点，
+  `workbench.desktop.main.js` 155 法中占 4。**这 19 个里桥拦截 6 个**（三个目录 RPC 及其 `ForSite` 变体），
+  `AssignModel` 走指派面，`GetModelStatuses` 预登记为 `KNOWN_UNCHANGED`；剩下**未建模的 11 个**：
+  `AssignArenaModel`（arena 指派，客户端零调用点，
   `arenaMode` 31 处但真实指派走 `AssignModel`）；外部模型注册 6 个（`CreateExternalModels`/`UpdateExternalModels`/
   `UpdateExternalModelsGroup`/`DeleteExternalModels`/`GetExternalModel`/`GetExternalModelsGroup`，已死，见上条）；
   AI Gateway 2 个（`GetAiGatewayModelPrices`/`GetModelProviders`，反方向）；`GetStreamingModelAPITextCompletion`/
   `RecordChatModelNodeRun` 与目录无关。运行期语义两条（**设计，不是遗漏**）：`*ForSite` 三个由桥 `CATALOG`
-  正则覆盖、不算未知；`KNOWN_UNCHANGED` 只预登记 `GetModelStatuses`，上列 13 个**刻意不登记**——真被调用
+  正则覆盖、不算未知；`KNOWN_UNCHANGED` 只预登记 `GetModelStatuses`，上列 11 个**刻意不登记**——真被调用
   会进 `catalog-unknown.json`，那正是「新面启用」的信号，不要为「收据干净」加白名单。
 - **strings 层不可解两项**：`max_turn_requests` 数值上限、CLI 实际读哪份缓存身份——都需结构分析（Ghidra + JDK，本机未装）。兜底：「按枚举处理 + 请求数纪律」与「面板双身份自有计数」。
 - **方法论**：可疑字符串按「读者 / schema 注册 / 真实赋值」三步定性，不要直接推成能力位。
