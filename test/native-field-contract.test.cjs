@@ -73,6 +73,31 @@ test('newer fields are registered without being relied on', { skip: !source }, (
   assert.equal(chatResponse.get(30)?.name, 'model_change');
 });
 
+test('the field numbers the chat codec reads and writes match the installed schema', { skip: !source }, () => {
+  // These field numbers are hand-coded in src/protocol/native-chat-codec.cjs
+  // (request parsing, response framing, usage accounting). Until now they had
+  // only self-referential fixture coverage: a Devin upgrade that renumbers any
+  // of them would leave every test green while decoding garbage.
+  const CODEC_FIELDS = {
+    'exa.api_server_pb.GetChatMessageRequest': { 2: 'prompt', 3: 'chat_message_prompts', 6: 'internal_chat_model', 10: 'tools', 11: 'disable_parallel_tool_calls', 12: 'tool_choice', 21: 'chat_model_uid', 27: 'prompt_cache_key' },
+    'exa.chat_pb.ChatMessagePrompt': { 1: 'message_id', 2: 'source', 3: 'prompt', 6: 'tool_calls', 7: 'tool_call_id', 9: 'tool_result_is_error', 10: 'images', 11: 'thinking', 12: 'signature', 20: 'videos', 21: 'documents' },
+    'exa.chat_pb.ChatToolDefinition': { 1: 'name', 2: 'description', 3: 'json_schema_string', 8: 'computer_use_config', 9: 'is_custom_tool', 10: 'custom_tool_grammar', 11: 'custom_tool_grammar_syntax', 12: 'strict' },
+    'exa.chat_pb.ChatToolChoice': { 1: 'option_name', 2: 'tool_name' },
+    'exa.codeium_common_pb.ChatToolCall': { 1: 'id', 2: 'name', 3: 'arguments_json', 6: 'is_custom_tool_call' },
+    'exa.codeium_common_pb.ImageData': { 1: 'base64_data', 2: 'mime_type', 3: 'caption' },
+    'exa.codeium_common_pb.VideoData': { 1: 'base64_data', 2: 'mime_type', 3: 'url' },
+    'exa.codeium_common_pb.DocumentData': { 1: 'base64_data', 2: 'mime_type', 3: 'filename', 4: 'url' },
+    'exa.codeium_common_pb.ModelUsageStats': { 2: 'input_tokens', 3: 'output_tokens', 4: 'cache_write_tokens', 5: 'cache_read_tokens', 7: 'message_id', 9: 'model_uid' },
+    'exa.api_server_pb.GetChatMessageResponse': { 1: 'message_id', 2: 'timestamp', 3: 'delta_text', 5: 'stop_reason', 6: 'delta_tool_calls', 7: 'usage', 9: 'delta_thinking', 10: 'delta_signature', 11: 'thinking_redacted', 23: 'actual_model_uid' },
+  };
+  for (const [type, expected] of Object.entries(CODEC_FIELDS)) {
+    const fields = descriptor(type);
+    for (const [no, name] of Object.entries(expected)) {
+      assert.equal(fields.get(Number(no))?.name, name, `${type}.f${no}`);
+    }
+  }
+});
+
 test('mutation proof: a dropped field number makes the contract fail', { skip: !source }, () => {
   // Removing the f33 descriptor from a copy must flip the same parse to absent.
   const hit = source.match(/typeName=`exa\.codeium_common_pb\.UserStatus`;static fields=[^=]+\.newFieldList\(\(\)=>\[([\s\S]*?)\]\)/);

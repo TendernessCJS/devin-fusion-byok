@@ -9,8 +9,11 @@ function rpcShape(rpc) {
   try { if (value.includes('://')) value = new URL(value).pathname; } catch { return null; }
   value = value.split('?')[0];
   const method = value.slice(value.lastIndexOf('/') + 1);
-  if (method === 'GetUserStatus') return { status: true, field: 1, sorts: true, source: OBSERVE_SOURCE[method] };
-  if (['GetCliModelConfigs', 'GetCascadeModelConfigs', 'GetCommandModelConfigs'].includes(method)) return { status: false, sorts: method === 'GetCascadeModelConfigs', source: OBSERVE_SOURCE[method] };
+  // The LS also routes ForSite variants of the same RPCs; their payloads share
+  // the base method's shape, so they observe and augment identically.
+  const base = method.replace(/ForSite$/, '');
+  if (base === 'GetUserStatus') return { status: true, field: 1, sorts: true, source: OBSERVE_SOURCE[base] };
+  if (['GetCliModelConfigs', 'GetCascadeModelConfigs', 'GetCommandModelConfigs'].includes(base)) return { status: false, sorts: base === 'GetCascadeModelConfigs', source: OBSERVE_SOURCE[base] };
   return null;
 }
 

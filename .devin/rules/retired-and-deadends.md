@@ -71,5 +71,12 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
 
 - **`cognition.ai/modelsFile` / `cognition.ai/clientProvidedModels` 不是注入通道**：客户端侧只有读者；扫 1887 个 bundle 后零真实赋值（命中全是 zod `optional().default(!1)`/`nullish()` 注册）；CLI/LS 也没有 `client_provided_models`/`models_file` 类线缆字段名。
 - **`GetClientModelConfigs` / `*ForSite` 无真实调用**：LS 里有这些 RPC 名（`GetCascadeModelConfigsForSite` 103 次等），但运行日志 3 条命中全是 `session_manager` 记录的**我们自己的 grep 命令**（自我匹配陷阱）；真实目录 RPC 只有 `GetUserStatus`/`GetCliTeamSettings`/`GetCliModelConfigs`。
+- **外部模型注册已死，别评估「注册进官方目录」**：`CreateExternalModels`/`UpdateExternalModels`/`DeleteExternalModels`/`GetExternalModels*`
+  在 shipped 客户端零调用点（`extension.js` 里 `total == 服务表定义数`，devin CLI 二进制 0 次），LS 内含弃用串
+  `external models feature has been deprecated and is no longer supported`。AI Gateway 是反方向（企业把自己的软件接到 Cognition
+  托管模型），不能替代目录注入。
+- **BYOK 覆盖边界**：`GetDevstralStream`（自动补全/apply 路径）与 `GetAccountManagedPlugins` 不在覆盖范围；
+  `GetCascadeModelConfigs`/`GetCommandModelConfigs` 在本机运行时从未触发（实测 catalog 事件只有
+  GetUserStatus/GetCliTeamSettings/GetCliModelConfigs 三种）——`*ForSite` 变体同理（LS 有 route 串才加了防御性形状，不代表本地会打）。
 - **strings 层不可解两项**：`max_turn_requests` 数值上限、CLI 实际读哪份缓存身份——都需结构分析（Ghidra + JDK，本机未装）。兜底：「按枚举处理 + 请求数纪律」与「面板双身份自有计数」。
 - **方法论**：可疑字符串按「读者 / schema 注册 / 真实赋值」三步定性，不要直接推成能力位。

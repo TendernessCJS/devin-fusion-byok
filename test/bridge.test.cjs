@@ -66,6 +66,35 @@ test('catalog augmentation preserves upstream gzip and re-compresses the rewritt
   assert.equal(json.clientModelConfigs.length, 1 + catalog.models.length);
 });
 
+test('ForSite catalog RPCs resolve to the same payload shape as their base method', () => {
+  const { rpcShape } = require('../src/catalog/payload.cjs');
+  for (const [service, method] of [
+    ['/exa.api_server_pb.ApiServerService/', 'GetCliModelConfigs'],
+    ['/exa.api_server_pb.ApiServerService/', 'GetCascadeModelConfigs'],
+    ['/exa.api_server_pb.ApiServerService/', 'GetCommandModelConfigs'],
+    ['/exa.language_server_pb.LanguageServerService/', 'GetCliModelConfigs'],
+    ['/exa.seat_management_pb.SeatManagementService/', 'GetUserStatus'],
+  ]) {
+    assert.deepEqual(rpcShape(service + method + 'ForSite'), rpcShape(service + method), method + 'ForSite');
+  }
+});
+
+test('a ForSite catalog response is augmented exactly like the base RPC', async t => {
+  const original = { clientModelConfigs: [{ modelUid: 'official', label: 'Official' }] };
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(original));
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog });
+  t.after(() => bridge.close());
+  const response = await request(bridge.port, LS + 'GetCliModelConfigsForSite');
+  assert.equal(response.status, 200);
+  const json = JSON.parse(response.body);
+  assert.equal(json.clientModelConfigs.length, 1 + catalog.models.length);
+  assert.equal(json.clientModelConfigs.at(-1).modelUid, 'official');
+});
+
 test('catalog augmentation of an uncompressed upstream stays plain', async t => {
   const original = { clientModelConfigs: [{ modelUid: 'official', label: 'Official' }] };
   const native = await listen((req, res) => {

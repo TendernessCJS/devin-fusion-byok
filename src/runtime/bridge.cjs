@@ -13,7 +13,7 @@ function countOwn(value, depth = 0) {
   if (value && typeof value === 'object') return Object.values(value).reduce((n, v) => n + countOwn(v, depth + 1), 0);
   return 0;
 }
-const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server_pb\.ApiServerService|seat_management_pb\.SeatManagementService)\/(?:GetUserStatus|GetCliModelConfigs|GetCascadeModelConfigs|GetCommandModelConfigs)$|^\/exa\.seat_management_pb\.SeatManagementService\/GetCliTeamSettings$/;
+const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server_pb\.ApiServerService|seat_management_pb\.SeatManagementService)\/(?:GetUserStatus|GetCliModelConfigs|GetCascadeModelConfigs|GetCommandModelConfigs)(?:ForSite)?$|^\/exa\.seat_management_pb\.SeatManagementService\/GetCliTeamSettings$/;
 // Server-push RPCs (all long-lived pushes are Stream*/HandleStreaming*) sit
 // idle between events by design, so the 120s body idle budget would kill them
 // mid-stream. They get a 30-minute floor instead; connect/headers stay fast.
