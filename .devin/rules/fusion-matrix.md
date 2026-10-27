@@ -11,7 +11,7 @@ description: "Apply when changing Fusion matrix emission, Lead/Sidekick eligibil
   `fusionMatrix` 开关与其 OFF 分支已随具名预设一起删除——那条分支只会 emit 预设，留着就是个永不产出的死配置）。官方 Fusion 卡片的维度候选来自「同 family 条目的自声明维度」，
   所以每个 Lead 值下必须有多条不同 Sidekick/Effort 条目（全交叉积），否则下拉被锁死；`fusion-<lead>-fast-sidekick-<side>` 形式的 `-fast` uid
   显式拒绝（BYOK 无 fast 能力，不得伪装降级）。条目一律 `familyUid: 'fusion'` + `isModelRouter` + `displayOption 3`，harness 用
-  `inferenceServerUrl` —— **该值自 2026-10-19 起由 `src/runtime/port.cjs` 的 `BACKEND_URL` 派生**（不读配置、不持久化；`build.cjs` 的缺省回落也是它）。不要改回读 `config.inferenceServerUrl`：那份持久副本已由 `pruneRetiredKeys` 清理，读它只会拿到 `undefined`，再叠上"硬编码官方地址"的旧回落就会把 BYOK/Fusion 推理静默打向官方服务。
+  `inferenceServerUrl` —— **该值自 2026-10-19 起由 `src/runtime/port.cjs` 的 `BACKEND_URL` 派生**（注意：此处指后端推理地址派生值，**不是** `ModelInfo.f18`）（不读配置、不持久化；`build.cjs` 的缺省回落也是它）。不要改回读 `config.inferenceServerUrl`：那份持久副本已由 `pruneRetiredKeys` 清理，读它只会拿到 `undefined`，再叠上"硬编码官方地址"的旧回落就会把 BYOK/Fusion 推理静默打向官方服务。
   **`Fast Mode` 与 `Recommended Sidekick` 两个信息性维度必须照官方线形态发射**：前者只带 `controlType: 2`、后者只带 `name`，都不写
   `order`（`encodeFamily` 因此只在声明了字段时才写，不再用 `order || 0` 兜底）。picker（`nil`）按 `order` 去重维度值、
   并**丢弃值数 < 2 的维度**：我们若写 `order: 0`，就会与官方的「无 order」分成两个桶——`Fast Mode` 从官方的 2 个选项涨到 3 个，`Recommended Sidekick`

@@ -79,7 +79,7 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   并留下 `diverged` 日志，直到宿主自己观测到。这是为避免「旧副本覆盖新事实」，**不要**在后继改动里悄悄恢复
   「最后到达者赢」。
 
-## CLI 缓存世代与 coverage（Devin 3.11.216 / CLI 3000.11.216 实测后新增）
+## CLI 缓存世代与 coverage（Devin 3.11.216 / CLI 3000.11.216 实测后新增；3.11.228 复核仍 `model_configs_v6`）
 
 - `model_configs_v6.<16hex>.bin` 是当前 CLI 版本在写的格式；**可写性按内容判定，代际号只用于展示**——
   `model_configs*`（含无后缀=v1）一律是候选：信封+载荷校验通过即 supported（任意 `_vN` 可写，
