@@ -27,7 +27,7 @@ const BACKEND_FORBIDDEN_FILES = [
 ];
 const BACKEND_RUNTIME_ROOT = [
   'backend.cjs', 'backend-control.cjs', 'bridge.cjs', 'contract.cjs',
-  'native-cache.cjs', 'port.cjs', 'source-identity.cjs',
+  'native-cache.cjs', 'port.cjs', 'source-identity.cjs', 'upstream-origin.cjs',
 ];
 function backendViolations(graph) {
   const violations = [];

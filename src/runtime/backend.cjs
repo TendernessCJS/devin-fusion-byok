@@ -14,6 +14,7 @@ const { createRuntimeControl } = require('./backend-control.cjs');
 const { normalizeNativeEntry, loadNativeCache, saveNativeCache, normalizeAllowedUids } = require('./native-cache.cjs');
 const { mergeNativeEntry } = require('../models/native-entry.cjs');
 const { PORT } = require('./port.cjs');
+const { DEFAULT_UPSTREAM, resolveUpstreamOrigin } = require('./upstream-origin.cjs');
 const { VERSION, MANAGEMENT_PROTOCOL, controlFile } = require('./contract.cjs');
 const { runtimeIdentity } = require('./source-identity.cjs');
 const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
@@ -25,27 +26,8 @@ const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
 const KNOWN_ASSIGN_FIELDS = new Set([1, 2, 3, 5, 6]);
 const KNOWN_ASSIGN_KEYS = new Set(['metadata', 'modelRouterUid', 'model_router_uid', 'cascadeId', 'cascade_id',
   'chatMessagePrompt', 'chat_message_prompt', 'fusionLeadRouterUid', 'fusion_lead_router_uid']);
-// The upstream every non-intercepted RPC forwards to. The default mirrors the
-// native `codeium.apiServerUrl` default; a configured value is pushed by the
-// host over POST /_runtime/upstream. Memory only — never persisted, and the
-// host pushes again after every backend restart.
-const DEFAULT_UPSTREAM = 'https://server.codeium.com';
-// Normalizes a configured apiServerUrl, or returns null for "reset to
-// default". Throws TypeError('invalid_origin') on anything else. Loopback is
-// the only http: exception, and the backend's own address is rejected so a
-// misconfigured origin cannot turn forwarding into a loop.
-function resolveUpstreamOrigin(value) {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== 'string' || !value.length || value.length > 2048) throw new TypeError('invalid_origin');
-  let url;
-  try { url = new URL(value); } catch { throw new TypeError('invalid_origin'); }
-  const loopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) throw new TypeError('invalid_origin');
-  if (url.username || url.password) throw new TypeError('invalid_origin');
-  if (url.search || url.hash) throw new TypeError('invalid_origin');
-  if (url.host === '127.0.0.1:' + PORT || url.host === 'localhost:' + PORT) throw new TypeError('invalid_origin');
-  return url.origin + url.pathname.replace(/\/+$/, '');
-}
+// Upstream origin validation lives in ./upstream-origin.cjs so the host-side
+// resolver (activation/effective-origin.cjs) shares the exact same rules.
 // Capability flag for POST /_runtime/native-models. Kept separate from
 // nativeModelsProtocol so the read contract stays unchanged: a host talking to
 // an older backend simply sees no flag and skips pushing instead of erroring.

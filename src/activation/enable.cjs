@@ -8,6 +8,7 @@ const { installAcpObserver } = require('../runtime/host/acp-observer.cjs');
 const { installAuthStatusInjection } = require('../runtime/host/auth-status.cjs');
 const { pushUpstream } = require('../runtime/host/upstream.cjs');
 const { recordUnknownCatalog } = require('../runtime/host/observations.cjs');
+const { resolveEffectiveOrigin } = require('./effective-origin.cjs');
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
 const { globalSetting } = require('./settings.cjs');
@@ -29,22 +30,18 @@ function loopbackExemption(vscode) {
 
 const { checkNativeContract } = require('./native-contract.cjs');
 
-// The backend's forward target follows the native `codeium.apiServerUrl`
-// setting (default https://server.codeium.com → null = reset). Only the URL
-// crosses; credentials never do. This is the single writer — auth-status must
-// not push the same value through its own path.
-function readApiServerUrl(vscode) {
-  let value;
-  try { value = vscode.workspace.getConfiguration('codeium')?.get?.('apiServerUrl'); } catch { return null; }
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
+// The backend's forward target follows the effective upstream origin, resolved
+// the same way the native config derives `codeium.apiServerUrl` (LS arg →
+// portal → default). Only the URL crosses; credentials never do. This is the
+// single writer — auth-status must not push the same value through its own path.
 async function pushConfiguredUpstream({ root, vscode, log }) {
   try {
-    const result = await pushUpstream({ root, origin: readApiServerUrl(vscode) });
+    const effective = await resolveEffectiveOrigin({ vscode });
+    const result = await pushUpstream({ root, origin: effective.origin, source: effective.source });
     // Success is logged too: a silent success makes "did the push happen?"
-    // unanswerable from the log. Only the custom flag is recorded — never the host.
-    if (result.ok) log('upstream-push', { ok: true, custom: result.custom === true });
-    else log('upstream-push', { ok: false, reason: result.reason, ...(result.code ? { code: result.code } : {}), ...(result.detail ? { detail: result.detail } : {}) });
+    // unanswerable from the log. Only flags and enums are recorded — never the host.
+    if (result.ok) log('upstream-push', { ok: true, custom: result.custom === true, source: effective.source });
+    else log('upstream-push', { ok: false, reason: result.reason, source: effective.source, ...(result.code ? { code: result.code } : {}), ...(result.detail ? { detail: result.detail } : {}) });
   } catch { log('upstream-push', { ok: false, reason: 'unavailable' }); }
 }
 
@@ -136,13 +133,14 @@ function installEnable({ deps, shared }) {
       return;
     }
     lifecycle.connection = injected;
-    // Backend is ready now: align its forward target with the configured
-    // apiServerUrl, and keep it aligned on later setting changes. The
+    // Backend is ready now: align its forward target with the effective
+    // upstream origin, and keep it aligned on later setting changes. The
     // subscription is registered once per extension context, not per enable.
     void pushConfiguredUpstream({ root: deps.root, vscode, log });
     if (!lifecycle.upstreamSubscription) {
       lifecycle.upstreamSubscription = vscode.workspace.onDidChangeConfiguration?.(event => {
-        if (typeof event?.affectsConfiguration === 'function' && !event.affectsConfiguration('codeium.apiServerUrl')) return;
+        const sources = ['codeium.apiServerUrl', 'devin.portalUrl', 'windsurf.portalUrl', 'windsurf.serviceUrl'];
+        if (typeof event?.affectsConfiguration === 'function' && !sources.some(s => event.affectsConfiguration(s))) return;
         if (!live(lifecycle, config)) return;
         return pushConfiguredUpstream({ root: deps.root, vscode, log });
       });

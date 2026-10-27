@@ -78,11 +78,13 @@ function fixture(t, options = {}) {
     stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } },
     managedSettings: createManagedSettingsGate() };
 
+  const effective = { current: options.effective || { origin: null, source: 'default' } };
   const loader = createSandboxLoader({ filename, overrides: {
-    '../runtime/host/upstream.cjs': { pushUpstream: async ({ root: pushedRoot, origin }) => {
-      pushes.push({ root: pushedRoot, origin });
+    '../runtime/host/upstream.cjs': { pushUpstream: async ({ root: pushedRoot, origin, source }) => {
+      pushes.push({ root: pushedRoot, origin, source });
       return options.result || { ok: true, custom: origin != null };
     } },
+    './effective-origin.cjs': { resolveEffectiveOrigin: async () => effective.current },
     '../runtime/host/ls-injection.cjs': { installLsInjection: async () => ({ dispose: async () => {} }) },
     '../runtime/bridge.cjs': { createLsBridge: async () => ({ port: 4567, close() {} }) },
     '../runtime/host/acp-observer.cjs': { installAcpObserver: () => ({ dispose() {} }) },
@@ -93,17 +95,17 @@ function fixture(t, options = {}) {
   } });
   loader.module.exports.installEnable({ deps, shared });
   t.after(() => loader.assertStubsUsed('upstream-push-log'));
-  return { root, pushes, logs, handlers, lifecycle, codeium, shared, settle,
+  return { root, pushes, logs, handlers, lifecycle, codeium, shared, settle, effective,
     pushLogs: () => logs.filter(entry => entry.event === 'upstream-push') };
 }
 
-test('a configured apiServerUrl is pushed and logged with only the custom flag', async t => {
-  const f = fixture(t, { apiServerUrl: 'https://custom.example.com/api' });
+test('the effective LS-arg origin is pushed while a hand-written apiServerUrl is ignored', async t => {
+  const f = fixture(t, { apiServerUrl: 'https://ignored.example.com', effective: { origin: 'https://custom.example.com/api', source: 'ls-arg' } });
   await f.shared.ensureEnabled();
   await f.settle();
-  assert.deepEqual(f.pushes, [{ root: f.root, origin: 'https://custom.example.com/api' }]);
+  assert.deepEqual(f.pushes, [{ root: f.root, origin: 'https://custom.example.com/api', source: 'ls-arg' }]);
   // deepEqual on the whole payload also pins "no host, no origin, no token".
-  assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: true, custom: true } }]);
+  assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: true, custom: true, source: 'ls-arg' } }]);
 });
 
 test('an unset apiServerUrl pushes null (backend keeps its default upstream)', async t => {
@@ -112,30 +114,30 @@ test('an unset apiServerUrl pushes null (backend keeps its default upstream)', a
   await f.settle();
   assert.equal(f.pushes.length, 1);
   assert.equal(f.pushes[0].origin, null);
-  assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: true, custom: false } }]);
+  assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: true, custom: false, source: 'default' } }]);
 });
 
 test('a skipped push is logged with its reason', async t => {
-  const f = fixture(t, { apiServerUrl: 'https://custom.example.com', result: { ok: false, reason: 'unsupported' } });
+  const f = fixture(t, { effective: { origin: 'https://custom.example.com', source: 'portal' }, result: { ok: false, reason: 'unsupported' } });
   await f.shared.ensureEnabled();
   await f.settle();
-  assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: false, reason: 'unsupported' } }]);
+  assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: false, reason: 'unsupported', source: 'portal' } }]);
 });
 
 test('a failed push logs its detail enum when the backend reports one', async t => {
-  const f = fixture(t, { apiServerUrl: 'https://custom.example.com', result: { ok: false, reason: 'identity', detail: 'source' } });
+  const f = fixture(t, { effective: { origin: 'https://custom.example.com', source: 'ls-arg' }, result: { ok: false, reason: 'identity', detail: 'source' } });
   await f.shared.ensureEnabled();
   await f.settle();
-  assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: false, reason: 'identity', detail: 'source' } }]);
+  assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: false, reason: 'identity', detail: 'source', source: 'ls-arg' } }]);
 });
 
-test('a later apiServerUrl change re-pushes once the subscription fires', async t => {
+test('a later configuration change re-pushes the re-resolved effective origin', async t => {
   const f = fixture(t, {});
   await f.shared.ensureEnabled();
   await f.settle();
   assert.equal(f.pushes.length, 1);
   assert.equal(f.handlers.length, 1);
-  f.codeium.apiServerUrl = 'https://custom.example.com';
+  f.effective.current = { origin: 'https://custom.example.com', source: 'portal' };
   await f.handlers[0]({ affectsConfiguration: section => section === 'codeium.apiServerUrl' });
   await f.settle();
   assert.deepEqual(f.pushes.map(entry => entry.origin), [null, 'https://custom.example.com']);

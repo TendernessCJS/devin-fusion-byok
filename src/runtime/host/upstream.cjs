@@ -106,7 +106,11 @@ async function pushUpstream(options) {
   }
   // `retriable` is internal control flow only — it must never reach the log or
   // the receipt, so strip it explicitly rather than relying on the shape.
-  if (result) delete result.retriable;
+  if (result) {
+    delete result.retriable;
+    // `source` is a caller-supplied enum (ls-arg/portal/default), safe to keep.
+    if (typeof options?.source === 'string') result.source = options.source;
+  }
   // The host's own log line goes to the extension output channel, which is never
   // persisted, so a later reader cannot tell whether a push happened at all.
   // Record the outcome in a receipt next to the control file: same payload rules

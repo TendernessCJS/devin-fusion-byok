@@ -980,20 +980,24 @@ test('pushUpstream records an origin-free receipt for success and failure', asyn
   const receipt = () => JSON.parse(fs.readFileSync(receiptFile, 'utf8'));
 
   const origin = 'http://127.0.0.1:54321';
-  const pushed = await pushUpstream({ root, origin, port: backend.port });
+  const pushed = await pushUpstream({ root, origin, port: backend.port, source: 'ls-arg' });
   assert.equal(pushed.ok, true);
   const success = receipt();
   assert.match(success.at, /^\d{4}-\d{2}-\d{2}T/, 'receipt timestamp is ISO');
+  assert.deepEqual(Object.keys(success).sort(), ['at', 'custom', 'ok', 'source']);
   assert.equal(success.ok, true);
   assert.equal(success.custom, true);
+  assert.equal(success.source, 'ls-arg');
   assert.ok(!fs.readFileSync(receiptFile, 'utf8').includes(origin), 'the receipt never carries the pushed origin');
 
   const wrongRoot = root + '-wrong';
   fs.mkdirSync(wrongRoot, { recursive: true });
-  const wrong = await pushUpstream({ root: wrongRoot, origin, port: backend.port });
+  const wrong = await pushUpstream({ root: wrongRoot, origin, port: backend.port, source: 'default' });
   assert.equal(wrong.ok, false);
   const failure = JSON.parse(fs.readFileSync(path.join(wrongRoot, 'upstream-push.json'), 'utf8'));
   assert.match(failure.at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(failure.source, 'default');
+  assert.equal('retriable' in failure, false, 'internal control flow never reaches the receipt');
   assert.deepEqual({ ok: failure.ok, reason: failure.reason }, { ok: false, reason: 'identity' });
   fs.rmSync(wrongRoot, { recursive: true, force: true });
 });
