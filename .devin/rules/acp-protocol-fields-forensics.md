@@ -116,3 +116,12 @@ tail -c +<偏移> <bundle> | head -c 600
 
 - `orphan` 在该 bundle 出现 33 次，全部无关：工作台文件「孤立」状态（`isOrphaned`/`setOrphaned`）与 Teams 集成「orphaned channels」。
 - `trimHistory` 是 toast 通知库的历史裁剪，不是对话历史。
+
+## 3.11.228 读出的三条消息字段（REA 2026-10-27）
+
+读法：在 `extensions/windsurf/dist/extension.js` 里搜 `typeName="exa.api_server_pb.AssignModelRequest"`，紧跟的 `newFieldList` 就是权威字段号（`ModelStatusInfo` 同理，在 `codeium_common_pb`）。
+
+- `exa.api_server_pb.AssignModelRequest`：`1 metadata`、`2 model_router_uid`、`3 cascade_id`、`5 chat_message_prompt`、`6 fusion_lead_router_uid`
+- `exa.api_server_pb.ModelAssignment`：`1 assignment_jwt`、`2 model_uid`、`3 harness_uids`(repeated)。本地应答只发 2、3，故意不发 1。
+- `exa.codeium_common_pb.ModelStatusInfo`：`1 model`(enum)、`2 message`、`3 status`(enum `ModelStatus`：`UNSPECIFIED=0`、`INFO=1`、`WARNING=2`)、`4 model_uid`
+- `exa.language_server_pb.GetModelStatusesRequest{1 metadata}` / `GetModelStatusesResponse{1 model_status_infos repeated}`：调用点在 `out/vs/sessions/sessions.desktop.main.js`（Agent Window 会话面板，60s 节流 `useMemo`）。`status` 三态 + message 是**提示徽标通道不是可用性白名单**，BYOK uid 缺席无功能影响，桥原样转发不改写。

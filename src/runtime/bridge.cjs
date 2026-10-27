@@ -19,6 +19,11 @@ const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server
 // surface shows up in the persisted record instead of silently dropping BYOK.
 const RPC_PATH = /^\/exa\.[a-z_]+\.[A-Za-z]+Service\/[A-Za-z]+$/;
 const CATALOG_LIKE = /(?:Model|Models|ModelConfig|ModelConfigs|Catalog)/;
+// Reviewed catalog-like RPCs that forward untouched by decision, not by
+// omission: GetModelStatuses returns ModelStatusInfo badge hints
+// (UNSPECIFIED/INFO/WARNING + message), not an availability allowlist, so a
+// missing BYOK uid has no functional effect and nothing is reported.
+const KNOWN_UNCHANGED = new Set(['GetModelStatuses']);
 // Server-push RPCs (all long-lived pushes are Stream*/HandleStreaming*) sit
 // idle between events by design, so the 120s body idle budget would kill them
 // mid-stream. They get a 30-minute floor instead; connect/headers stay fast.
@@ -170,7 +175,7 @@ async function createLsBridge(originalPort, options) {
     const rpc = request.url.split('?')[0];
     if (RPC_PATH.test(rpc) && !CATALOG.test(rpc)) {
       const method = rpc.split('/').pop();
-      if (CATALOG_LIKE.test(method) && !reported.has(method)) {
+      if (CATALOG_LIKE.test(method) && !KNOWN_UNCHANGED.has(method) && !reported.has(method)) {
         reported.add(method);
         try { options?.onUnknownCatalog?.(method); } catch {}
       }

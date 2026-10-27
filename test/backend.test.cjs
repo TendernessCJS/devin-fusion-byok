@@ -1069,3 +1069,32 @@ test('an AssignModel body with unknown top-level fields is observed, never rejec
   assert.equal(f.logs.filter(([event]) => event === 'assignment-request-unknown').length, 1,
     'a conforming f2/f6 request reports nothing');
 });
+
+test('the AssignModel field table matches 3.11.228 and only out-of-table fields report', async t => {
+  const f = await fixture(t);
+  const unknown = () => f.logs.filter(([event]) => event === 'assignment-request-unknown').length;
+  const postProto = body => fetch(f.base + API + 'AssignModel', { method: 'POST',
+    headers: { 'content-type': 'application/proto' }, body });
+  // The verified AssignModelRequest table: f1 metadata, f2 model_router_uid,
+  // f3 cascade_id, f5 chat_message_prompt, f6 fusion_lead_router_uid.
+  await postProto(Buffer.concat([wire.m(1, wire.s(1, 'm')), wire.m(2, wire.s(1, 'u')), wire.m(3, wire.s(1, 'c')),
+    wire.m(5, wire.s(1, 'p')), wire.m(6, wire.s(1, 'fl'))]));
+  assert.equal(unknown(), 0, 'a fully populated 3.11.228 request reports nothing');
+  await postProto(wire.m(4, wire.s(1, 'x')));
+  await postProto(wire.m(7, wire.s(1, 'x')));
+  const events = f.logs.filter(([event]) => event === 'assignment-request-unknown');
+  assert.equal(events.length, 2);
+  // `fields` arrays are built inside the vm realm; spread re-owns them so the
+  // deepStrictEqual against test-realm literals is meaningful.
+  assert.deepEqual([...events[0][1].fields], [4]);
+  assert.deepEqual([...events[1][1].fields], [7]);
+  const postJson = body => fetch(f.base + API + 'AssignModel', { method: 'POST',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  await postJson({ metadata: {}, modelRouterUid: 'u', cascadeId: 'c', fusionLeadRouterUid: 'fl' });
+  assert.equal(f.logs.filter(([event]) => event === 'assignment-request-unknown').length, 2,
+    'the JSON spelling of known fields reports nothing');
+  await postJson({ assignmentJwt: 'x' });
+  const last = f.logs.filter(([event]) => event === 'assignment-request-unknown').at(-1);
+  assert.deepEqual([...last[1].fields], ['assignmentJwt'],
+    'a response-only field showing up in a request is exactly the drift signal');
+});

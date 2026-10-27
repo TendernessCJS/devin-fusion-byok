@@ -95,3 +95,10 @@ models 必须非空（空 payload 不推），POST 的模式校验在 ingest 之
   新的非空、合法目录提交不含我方条目；注销/畸形/超时/未排空/有残余均不得判恢复成功，不回放、不登出。
   连接设置恢复与目录恢复分别报告；目录未确认不得展示无条件恢复成功。LS 清理失败也不能跳过 owned-settings 恢复。
   面板「刷新模型目录」只走 `publication.changed({force:true})`，不复用会断 ACP 的旧 picker 刷新。
+
+## `GetModelStatuses` 结论（3.11.228 取证）
+
+调用点是 Agent Window 会话面板（`out/vs/sessions/sessions.desktop.main.js`，60s 节流）；
+`ModelStatusInfo.status` 只有 UNSPECIFIED/INFO/WARNING 三态 + message——**是提示徽标不是可用性白名单**。
+因此桥**不改写响应**（已列入 `KNOWN_UNCHANGED`，不报未知目录 RPC）、缺我方 uid 无功能影响。
+若哪天出现 `MODEL_STATUS_UNAVAILABLE` 之类的第四态，先取证再决定是否合成条目。

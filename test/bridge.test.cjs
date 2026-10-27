@@ -112,6 +112,24 @@ test('unknown catalog-shaped RPCs report once per method, known traffic stays qu
   assert.deepEqual(reports, ['GetModelProviders'], 'an unrelated RPC reports nothing');
   await request(bridge.port, api + 'GetCliModelConfigs');
   assert.deepEqual(reports, ['GetModelProviders'], 'a known catalog RPC reports nothing');
+  await request(bridge.port, api + 'GetModelStatuses');
+  assert.deepEqual(reports, ['GetModelProviders'], 'a reviewed pass-through RPC reports nothing');
+});
+
+test('GetModelStatuses forwards untouched through the bridge', async t => {
+  const upstream = { modelStatusInfos: [{ modelUid: 'official', status: 2, message: 'warn' }] };
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(upstream));
+  });
+  t.after(() => native.close());
+  const reports = [];
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, onUnknownCatalog: method => reports.push(method) });
+  t.after(() => bridge.close());
+  const response = await request(bridge.port, '/exa.language_server_pb.LanguageServerService/GetModelStatuses');
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.body), upstream, 'the badge list passes through byte-identical');
+  assert.deepEqual(reports, [], 'a KNOWN_UNCHANGED method never reports');
 });
 
 test('catalog augmentation of an uncompressed upstream stays plain', async t => {

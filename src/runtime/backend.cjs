@@ -17,6 +17,14 @@ const { PORT } = require('./port.cjs');
 const { VERSION, MANAGEMENT_PROTOCOL, controlFile } = require('./contract.cjs');
 const { runtimeIdentity } = require('./source-identity.cjs');
 const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
+// The AssignModelRequest field table, verified against the 3.11.228 descriptor:
+// f1 metadata, f2 model_router_uid, f3 cascade_id, f5 chat_message_prompt,
+// f6 fusion_lead_router_uid. `assignment_jwt` is deliberately absent — it is a
+// ModelAssignment *response* field, so seeing it in a request is the real drift
+// signal (the client starting to demand a token we never mint).
+const KNOWN_ASSIGN_FIELDS = new Set([1, 2, 3, 5, 6]);
+const KNOWN_ASSIGN_KEYS = new Set(['metadata', 'modelRouterUid', 'model_router_uid', 'cascadeId', 'cascade_id',
+  'chatMessagePrompt', 'chat_message_prompt', 'fusionLeadRouterUid', 'fusion_lead_router_uid']);
 // The upstream every non-intercepted RPC forwards to. The default mirrors the
 // native `codeium.apiServerUrl` default; a configured value is pushed by the
 // host over POST /_runtime/upstream. Memory only — never persisted, and the
@@ -274,14 +282,13 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
       const format = wire.decode(body, request.headers);
       const current = config(), catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedMode === 'unrestricted' ? null : allowedUids);
       if (rpc.endsWith('/AssignModel')) {
-        // The request contract is exactly f2 (model_router_uid) and f6
-        // (fusion_lead_router_uid) — anything else means the client started
-        // sending intent we never modeled. Observation only: field numbers or
-        // key names, never values, and never a rejection.
+        // Anything outside the AssignModelRequest table above means the client
+        // started sending intent we never modeled. Observation only: field
+        // numbers or key names, never values, and never a rejection.
         const unknownAssignFields = () => {
           try {
-            if (format.json) return Object.keys(format.data).filter(key => !['modelRouterUid', 'model_router_uid', 'fusionLeadRouterUid', 'fusion_lead_router_uid'].includes(key));
-            return wire.parseFields(format.data).map(field => field.number).filter(number => number !== 2 && number !== 6);
+            if (format.json) return Object.keys(format.data).filter(key => !KNOWN_ASSIGN_KEYS.has(key));
+            return wire.parseFields(format.data).map(field => field.number).filter(number => !KNOWN_ASSIGN_FIELDS.has(number));
           } catch { return []; }
         };
         const unknown = unknownAssignFields();
