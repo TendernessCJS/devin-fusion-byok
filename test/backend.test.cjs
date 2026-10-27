@@ -967,3 +967,92 @@ test('a pushed upstream origin is scoped to its own backend instance', async t =
   assert.equal(forwarded.at(-2), 'http://127.0.0.1:54321' + rpc, 'A forwards to its pushed origin');
   assert.equal(forwarded.at(-1), 'https://server.codeium.com' + rpc, 'B keeps the default origin');
 });
+
+test('pushUpstream records an origin-free receipt for success and failure', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-receipt-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const backend = await actualBackend.startBackend({ root, port: 0 });
+  t.after(() => backend.close());
+  const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
+  const receiptFile = path.join(root, 'upstream-push.json');
+  const receipt = () => JSON.parse(fs.readFileSync(receiptFile, 'utf8'));
+
+  const origin = 'http://127.0.0.1:54321';
+  const pushed = await pushUpstream({ root, origin, port: backend.port });
+  assert.equal(pushed.ok, true);
+  const success = receipt();
+  assert.match(success.at, /^\d{4}-\d{2}-\d{2}T/, 'receipt timestamp is ISO');
+  assert.equal(success.ok, true);
+  assert.equal(success.custom, true);
+  assert.ok(!fs.readFileSync(receiptFile, 'utf8').includes(origin), 'the receipt never carries the pushed origin');
+
+  const wrongRoot = root + '-wrong';
+  fs.mkdirSync(wrongRoot, { recursive: true });
+  const wrong = await pushUpstream({ root: wrongRoot, origin, port: backend.port });
+  assert.equal(wrong.ok, false);
+  const failure = JSON.parse(fs.readFileSync(path.join(wrongRoot, 'upstream-push.json'), 'utf8'));
+  assert.match(failure.at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual({ ok: failure.ok, reason: failure.reason }, { ok: false, reason: 'identity' });
+  fs.rmSync(wrongRoot, { recursive: true, force: true });
+});
+
+test('connection failures are retried and the push still lands', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-push-retry-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const backend = await actualBackend.startBackend({ root, port: 0 });
+  t.after(() => backend.close());
+  const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
+  let calls = 0;
+  const flaky = (url, options) => {
+    calls += 1;
+    if (calls <= 2) return Promise.reject(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }));
+    return fetch(url, options);
+  };
+  const origin = 'http://127.0.0.1:54321';
+  const pushed = await pushUpstream({ root, origin, port: backend.port, request: flaky });
+  assert.equal(pushed.ok, true);
+  assert.equal(pushed.custom, true);
+  const receipt = JSON.parse(fs.readFileSync(path.join(root, 'upstream-push.json'), 'utf8'));
+  assert.match(receipt.at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(receipt.ok, true);
+  assert.equal(receipt.custom, true);
+  assert.ok(!fs.readFileSync(path.join(root, 'upstream-push.json'), 'utf8').includes(origin));
+});
+
+test('a non-connection failure is not retried and is recorded with its code-free reason', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-push-fail-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const backend = await actualBackend.startBackend({ root, port: 0 });
+  t.after(() => backend.close());
+  const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
+  let calls = 0;
+  const boom = () => { calls += 1; return Promise.reject(new Error('boom')); };
+  const result = await pushUpstream({ root, origin: 'http://127.0.0.1:54321', port: backend.port, request: boom });
+  assert.equal(calls, 1, 'a plain error is not a retryable connection failure');
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'unavailable');
+  const receipt = JSON.parse(fs.readFileSync(path.join(root, 'upstream-push.json'), 'utf8'));
+  assert.deepEqual({ ok: receipt.ok, reason: receipt.reason, code: receipt.code },
+    { ok: false, reason: 'unavailable', code: undefined });
+});
+
+test('exhausted connection retries record the transport code', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-push-exhaust-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const backend = await actualBackend.startBackend({ root, port: 0 });
+  t.after(() => backend.close());
+  const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
+  let calls = 0;
+  const refused = () => { calls += 1; return Promise.reject(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } })); };
+  const result = await pushUpstream({ root, origin: 'http://127.0.0.1:54321', port: backend.port, request: refused });
+  assert.equal(calls, 4, 'the first attempt plus three bounded retries');
+  assert.deepEqual({ ok: result.ok, reason: result.reason, code: result.code },
+    { ok: false, reason: 'unavailable', code: 'ECONNREFUSED' });
+  const receipt = JSON.parse(fs.readFileSync(path.join(root, 'upstream-push.json'), 'utf8'));
+  assert.deepEqual({ ok: receipt.ok, reason: receipt.reason, code: receipt.code },
+    { ok: false, reason: 'unavailable', code: 'ECONNREFUSED' });
+});

@@ -87,9 +87,3 @@ backend `sourceId` 只覆盖 backend require 闭包；宿主侧改动（`activat
 - **ACP 注入只能覆盖「安装之后」的注册**：`createAcpRegistry` 包的是 `api.registerConnection`，既有 connector 在扩展宿主私有的 `_connectors` Map 里、外部无法枚举。激活顺序不利时三层全部静默失效（面板停在 `waiting`），因此注册表在首个 layer 装上后 30 s 内没有任何 attach 时记一次 `acp-attach-missing`。
 - **UI 侧不持久化 worktree LS 端口**：`_saveWorktreeLsGroupInfo` 只存 `parentWorkspaceUri`/`worktreeUri`/`creationTimestamp`，这是桥端口（每次会话随机）不会写进跨窗口状态的**当前**原因。若该字段集合将来加入 `port`，恢复路径会连到已死的桥端口——改 `setChildLanguageServerInfo` 附近代码前先核这条。
 
-## 上游转发目标（2026-10-27 实测）
-
-- `upstream-push` 是判断「推送有没有发生」的唯一事件，成败都记：成功 `{ok:true,custom}`、失败 `{ok:false,reason}`；**payload 不含 host**，别为排障加。
-- `custom` = 「与默认上游不同」，不是「设成功了」：推默认值或 `null` 都得 `false`。`reason`：`unsupported`=旧 backend（`/health.upstreamProtocol !== 1`）、`identity`=health 与控制文件不一致、`invalid`=origin 被拒、`unavailable`=连不上或 4 s 超时。
-- 核对顺序：`/health` 的 `upstreamProtocol: 1` 与 `instanceId`/`sourceId` 同 `runtime-control.json` 一致，才说明控制通道可用。
-- 本机（2026-10-27）：`settings.json` 无 `codeium.*`，LS 用默认 `--api_server_url https://server.codeium.com`、`--inference_api_server_url https://inference.codeium.com`，故推 `null`、`custom:false`——SaaS 账号下该能力空跑。
