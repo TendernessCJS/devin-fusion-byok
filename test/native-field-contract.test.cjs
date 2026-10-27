@@ -47,14 +47,31 @@ test('the fields this plugin reads keep their numbers and kinds in the installed
   assert.equal(userStatus.get(33)?.kind, 'message', 'UserStatus.f33 carries cascade_model_config_data');
   const config = descriptor('exa.codeium_common_pb.ClientModelConfig');
   assert.equal(config.get(22)?.kind, 'scalar', 'ClientModelConfig.f22 is the model uid');
-  const info = descriptor('exa.codeium_common_pb.ModelInfo');
-  for (const [no, kind] of [[4, 'scalar'], [18, 'scalar'], [20, 'scalar'], [22, 'enum'], [23, 'scalar'], [25, 'scalar']]) {
-    assert.equal(info.get(no)?.kind, kind, `ModelInfo.f${no} keeps kind ${kind}`);
+});
+
+test('the catalog and assignment field numbers match the installed schema', { skip: !source }, () => {
+  // Field names verified against the 3.11.228 installed descriptors; the
+  // catalog write/read paths in src/catalog/*.cjs and the AssignModelRequest
+  // table in src/runtime/backend.cjs hand-code every one of these numbers.
+  const CATALOG_FIELDS = {
+    'exa.codeium_common_pb.ClientModelConfig': { 1: 'label', 4: 'disabled', 5: 'supports_images', 10: 'provider', 18: 'max_tokens', 22: 'model_uid', 23: 'model_info', 30: 'model_family_metadata' },
+    'exa.codeium_common_pb.ModelInfo': { 3: 'model_type', 4: 'max_tokens', 6: 'model_features', 13: 'max_output_tokens', 17: 'model_uid', 18: 'inference_server_url', 20: 'harness_uids', 22: 'display_option', 23: 'model_family_uid', 25: 'is_model_router' },
+    'exa.codeium_common_pb.ModelFeatures': { 8: 'zero_shot_capable', 11: 'supports_images', 12: 'supports_tool_calls', 15: 'supports_thinking', 21: 'supports_parallel_tool_calls' },
+    'exa.codeium_common_pb.ModelFamilyMetadata': { 1: 'model_family_label', 2: 'entries', 3: 'is_default_model_in_family' },
+    'exa.codeium_common_pb.ModelFamilyMetadataEntry': { 1: 'key', 2: 'value' },
+    'exa.codeium_common_pb.ModelFamilyMetadataValue': { 1: 'order', 2: 'name', 3: 'control_type' },
+    'exa.codeium_common_pb.ClientModelSort': { 1: 'name', 2: 'groups', 3: 'display_metric' },
+    'exa.codeium_common_pb.CascadeModelConfigData': { 1: 'client_model_configs', 2: 'client_model_sorts', 3: 'default_override_model_config' },
+    'exa.codeium_common_pb.ModelStatusInfo': { 1: 'model', 2: 'message', 3: 'status', 4: 'model_uid' },
+    'exa.api_server_pb.AssignModelRequest': { 1: 'metadata', 2: 'model_router_uid', 3: 'cascade_id', 5: 'chat_message_prompt', 6: 'fusion_lead_router_uid' },
+    'exa.api_server_pb.ModelAssignment': { 1: 'assignment_jwt', 2: 'model_uid', 3: 'harness_uids' },
+  };
+  for (const [type, expected] of Object.entries(CATALOG_FIELDS)) {
+    const fields = descriptor(type);
+    for (const [no, name] of Object.entries(expected)) {
+      assert.equal(fields.get(Number(no))?.name, name, `${type}.f${no}`);
+    }
   }
-  const assignment = descriptor('exa.api_server_pb.ModelAssignment');
-  for (const no of [1, 2, 3]) assert.ok(assignment.has(no), `ModelAssignment.f${no}`);
-  const assignRequest = descriptor('exa.api_server_pb.AssignModelRequest');
-  for (const no of [2, 6]) assert.ok(assignRequest.has(no), `AssignModelRequest.f${no}`);
 });
 
 test('newer fields are registered without being relied on', { skip: !source }, () => {

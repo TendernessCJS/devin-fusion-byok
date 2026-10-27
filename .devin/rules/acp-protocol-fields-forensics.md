@@ -125,3 +125,22 @@ tail -c +<偏移> <bundle> | head -c 600
 - `exa.api_server_pb.ModelAssignment`：`1 assignment_jwt`、`2 model_uid`、`3 harness_uids`(repeated)。本地应答只发 2、3，故意不发 1。
 - `exa.codeium_common_pb.ModelStatusInfo`：`1 model`(enum)、`2 message`、`3 status`(enum `ModelStatus`：`UNSPECIFIED=0`、`INFO=1`、`WARNING=2`)、`4 model_uid`
 - `exa.language_server_pb.GetModelStatusesRequest{1 metadata}` / `GetModelStatusesResponse{1 model_status_infos repeated}`：调用点在 `out/vs/sessions/sessions.desktop.main.js`（Agent Window 会话面板，60s 节流 `useMemo`）。`status` 三态 + message 是**提示徽标通道不是可用性白名单**，BYOK uid 缺席无功能影响，桥原样转发不改写。
+
+## 3.11.228 目录面字段表（REA 2026-10-27）
+
+读法同前（assets 里搜 `typeName=\`<类型>\``，紧跟的 `newFieldList`）。强断言在 `test/native-field-contract.test.cjs` 的 `CATALOG_FIELDS`；**本次升级目录面未漂移**（逐条一致）。
+
+```
+ClientModelConfig: 1 label,4 disabled,5 supports_images,10 provider,18 max_tokens,22 model_uid,23 model_info,30 model_family_metadata
+ModelInfo: 3 model_type,4 max_tokens,6 model_features,13 max_output_tokens,17 model_uid,18 inference_server_url,20 harness_uids,22 display_option,23 model_family_uid,25 is_model_router
+ModelFeatures: 8 zero_shot_capable,11 supports_images,12 supports_tool_calls,15 supports_thinking,21 supports_parallel_tool_calls
+ModelFamilyMetadata: 1 model_family_label,2 entries,3 is_default_model_in_family
+ModelFamilyMetadataEntry: 1 key,2 value
+ModelFamilyMetadataValue: 1 order,2 name,3 control_type
+ClientModelSort: 1 name,2 groups,3 display_metric
+CascadeModelConfigData: 1 client_model_configs,2 client_model_sorts,3 default_override_model_config
+ModelStatusInfo: 1 model,2 message,3 status,4 model_uid
+AssignModelRequest: 1 metadata,2 model_router_uid,3 cascade_id,5 chat_message_prompt,6 fusion_lead_router_uid
+ModelAssignment: 1 assignment_jwt,2 model_uid,3 harness_uids
+```
+注：`ClientModelSort.groups` 的内层类型在 schema 里是 minified 引用、无独立 `typeName`，组内字段（f1 name / f2 label）无法描述符断言，仍靠 fixture。
