@@ -78,5 +78,10 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
 - **BYOK 覆盖边界**：`GetDevstralStream`（自动补全/apply 路径）与 `GetAccountManagedPlugins` 不在覆盖范围；
   `GetCascadeModelConfigs`/`GetCommandModelConfigs` 在本机运行时从未触发（实测 catalog 事件只有
   GetUserStatus/GetCliTeamSettings/GetCliModelConfigs 三种）——`*ForSite` 变体同理（LS 有 route 串才加了防御性形状，不代表本地会打）。
+- **`ModelInfo.f18 inference_server_url` 在 JS 层零消费者**：对四个已安装 bundle 做「定义 vs 读取」
+  分离扫描（`inferenceServerUrl`/`inference_server_url`），命中数 1+1 / 1+1 / 4+4 / 3+3 全部是
+  protobuf-es 生成字段初始化与描述符，读取点 0；LS 原生是否消费未证（需 Ghidra+JDK）。因此**不要把它
+  当推理路由杠杆**、不要再设计 stub 实验；厂商升级后重查的判据是**读取点计数**而非字符串出现次数。
+  同主题 `codeium.inferenceApiServerUrl` 已定案不接，见 `upstream-routing.md`「原生设置的两个键」。
 - **strings 层不可解两项**：`max_turn_requests` 数值上限、CLI 实际读哪份缓存身份——都需结构分析（Ghidra + JDK，本机未装）。兜底：「按枚举处理 + 请求数纪律」与「面板双身份自有计数」。
 - **方法论**：可疑字符串按「读者 / schema 注册 / 真实赋值」三步定性，不要直接推成能力位。

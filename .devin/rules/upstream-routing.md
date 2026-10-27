@@ -58,7 +58,13 @@ backend 转发非拦截 RPC 时，目标 origin **不是常量**，而是跟随�
   与上次成功推送相同 → 不发 POST、不记日志；origin 变了才推。
 - 本机实测：`settings.json` 无任何 `codeium.*`，LS 拿到默认 `--api_server_url` 与
   `--inference_api_server_url`，故推送 `null`、`custom:false`——SaaS 账号下该能力空跑。
-- `codeium.inferenceApiServerUrl` **未接**：企业/EU 模式下它与 API 地址同值，只有部署派生不同值才会分离。
+- `codeium.inferenceApiServerUrl` **已定案不接**（设计决定，不是待办）：它与 `apiServerUrl` 同为派生量——
+  无贡献键、无 UI 入口、手写 settings 被 `getConfig` 短路静默忽略（见上面 11:04 实测）；LS 自带
+  `--inference_api_server_url`，插件没有任何合法写入面。企业/EU 模式下它与 API 地址同值，只有部署
+  派生不同值才会分离——届时若要跟随，来源应是 LS 的推理参数而非该设置键。
+- **生产验证（收敛窗口已生效）**：2026-10-27 11:55 重载，LS 于 11:55:04 启动，持久收据最终为
+  `{ok:true, custom:false, source:'ls-arg'}`（at=03:55:09.115Z）——激活首解析落 `default`（早期收据被
+  覆盖），约 2s 后收敛到 `ls-arg`。窗口在生产链路生效，勿改回单次解析。
 
 ## 激活期推送的两种失败形态（2026-10-27 实证）
 
