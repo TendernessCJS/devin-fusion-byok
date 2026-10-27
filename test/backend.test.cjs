@@ -926,10 +926,11 @@ test('pushUpstream refuses a foreign runtime without sending anything', async t 
   const backend = await actualBackend.startBackend({ root, port: 0 });
   t.after(() => backend.close());
   const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
-  let posts = 0;
-  const counting = (url, options) => { if (options?.method === 'POST') posts += 1; return fetch(url, options); };
+  let calls = 0, posts = 0;
+  const counting = (url, options) => { calls += 1; if (options?.method === 'POST') posts += 1; return fetch(url, options); };
   const wrong = await pushUpstream({ root: root + '-wrong', origin: 'http://127.0.0.1:1', port: backend.port, request: counting });
-  assert.deepEqual(wrong, { ok: false, reason: 'identity' });
+  assert.deepEqual(wrong, { ok: false, reason: 'identity', detail: 'root' });
+  assert.equal(calls, 1, 'a real identity mismatch is not retried');
   assert.equal(posts, 0, 'an identity mismatch never issues the push');
 });
 
@@ -1097,4 +1098,86 @@ test('the AssignModel field table matches 3.11.228 and only out-of-table fields 
   const last = f.logs.filter(([event]) => event === 'assignment-request-unknown').at(-1);
   assert.deepEqual([...last[1].fields], ['assignmentJwt'],
     'a response-only field showing up in a request is exactly the drift signal');
+});
+
+test('a stale-instance health answer during handover is retried until identities agree', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-push-stale-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const backend = await actualBackend.startBackend({ root, port: 0 });
+  t.after(() => backend.close());
+  const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
+  const realHealth = await (await fetch('http://127.0.0.1:' + backend.port + '/health')).json();
+  let healthCalls = 0;
+  const staleThenReal = (url, init) => {
+    if (url.endsWith('/health')) {
+      healthCalls += 1;
+      // First answer pretends a pooled socket served the previous instance:
+      // every health field is real except the instance the control file knows.
+      if (healthCalls === 1) {
+        return Promise.resolve({ ok: true, json: async () => ({ ...realHealth, instanceId: 'previous-instance' }) });
+      }
+    }
+    return fetch(url, init);
+  };
+  const pushed = await pushUpstream({ root, origin: null, port: backend.port, request: staleThenReal });
+  assert.deepEqual(pushed, { ok: true, custom: false });
+  assert.equal(healthCalls, 2, 'the retriable identity mismatch earns one more health read');
+  const receipt = JSON.parse(fs.readFileSync(path.join(root, 'upstream-push.json'), 'utf8'));
+  assert.match(receipt.at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(receipt.ok, true);
+  assert.equal(receipt.custom, false);
+  assert.ok(!('retriable' in receipt), 'internal control flow never reaches the receipt');
+});
+
+test('the default control transport opens an independent connection per attempt', async t => {
+  const { httpFetch } = require('../src/runtime/host/upstream.cjs');
+  const remotePorts = [];
+  const server = http.createServer((req, res) => res.end('{}'));
+  server.on('connection', socket => remotePorts.push(socket.remotePort));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
+  const url = 'http://127.0.0.1:' + server.address().port + '/health';
+  const first = await httpFetch(url);
+  const second = await httpFetch(url);
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(remotePorts.length, 2, 'agent:false gives each request its own socket');
+  assert.notEqual(remotePorts[0], remotePorts[1], 'no connection is ever reused');
+});
+
+test('a retriable identity failure lands in the receipt with its detail enum', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-push-detail-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const backend = await actualBackend.startBackend({ root, port: 0 });
+  t.after(() => backend.close());
+  const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
+  const realHealth = await (await fetch('http://127.0.0.1:' + backend.port + '/health')).json();
+  // The control file and the health answer disagree on sourceId — exactly the
+  // handover window this detail exists to distinguish.
+  const foreignSource = (url, init) => url.endsWith('/health')
+    ? Promise.resolve({ ok: true, json: async () => ({ ...realHealth, sourceId: '0'.repeat(64) }) })
+    : fetch(url, init);
+  const result = await pushUpstream({ root, origin: null, port: backend.port, request: foreignSource });
+  assert.deepEqual({ ok: result.ok, reason: result.reason, detail: result.detail, retriable: result.retriable },
+    { ok: false, reason: 'identity', detail: 'source', retriable: undefined },
+    'a retriable mismatch exhausts the pauses and strips the control-flow flag');
+  const receipt = JSON.parse(fs.readFileSync(path.join(root, 'upstream-push.json'), 'utf8'));
+  assert.deepEqual(Object.keys(receipt).sort(), ['at', 'detail', 'ok', 'reason'], 'receipt keys stay enumerable');
+  assert.equal(receipt.detail, 'source');
+  assert.equal(receipt.reason, 'identity');
+  assert.ok(!('retriable' in receipt));
+});
+
+test('an already-aborted signal rejects httpFetch instead of crashing the host', async () => {
+  const { httpFetch } = require('../src/runtime/host/upstream.cjs');
+  const { isConnectionFailure } = require('../src/runtime/host/retry.cjs');
+  // Deactivation can hand an aborted signal to a push that has not connected
+  // yet. Destroying the request before any 'error' listener existed would emit
+  // an unhandled error event and take the extension host down with it.
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(httpFetch('http://127.0.0.1:9/health', { signal: controller.signal }),
+    error => isConnectionFailure(error), 'an aborted control request is a connection-layer failure');
 });

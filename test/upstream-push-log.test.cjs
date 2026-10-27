@@ -122,6 +122,13 @@ test('a skipped push is logged with its reason', async t => {
   assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: false, reason: 'unsupported' } }]);
 });
 
+test('a failed push logs its detail enum when the backend reports one', async t => {
+  const f = fixture(t, { apiServerUrl: 'https://custom.example.com', result: { ok: false, reason: 'identity', detail: 'source' } });
+  await f.shared.ensureEnabled();
+  await f.settle();
+  assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: false, reason: 'identity', detail: 'source' } }]);
+});
+
 test('a later apiServerUrl change re-pushes once the subscription fires', async t => {
   const f = fixture(t, {});
   await f.shared.ensureEnabled();

@@ -46,3 +46,18 @@ backend 转发非拦截 RPC 时，目标 origin **不是常量**，而是跟随�
 - 本机实测：`settings.json` 无任何 `codeium.*`，LS 拿到默认 `--api_server_url https://server.codeium.com` 与
   `--inference_api_server_url https://inference.codeium.com`，故推送 `null`、`custom:false`——SaaS 账号下该能力空跑。
 - `codeium.inferenceApiServerUrl` **未接**：企业/EU 模式下它与 API 地址同值，只有手填成不同值才会分离。
+
+## 激活期推送的两种失败形态（2026-10-27 实证）
+
+- **(a) 死 socket → 连接层抛错**：池里的 keep-alive socket 已死，`fetch` 抛 `ECONNRESET`/`UND_ERR_SOCKET` 等，
+  走 `isConnectionFailure` 重试。
+- **(b) 池里的活 socket 递回旧实例的 200 → `identity`**：socket 还活着但连着**旧 backend**，它应答的 `/health`
+  instanceId 是旧的，磁盘上的 `runtime-control.json` 已被新实例改写。实证收据：
+  `{"at":"2026-10-27T02:09:24.863Z","ok":false,"reason":"identity"}`，同一秒新 backend 已 `ready` 而旧实例
+  0.8s 后才退出。**该次具体卡在哪个比对项仍未定论**——当时的收据没有粒度，下次复现看 `detail`。
+- **实测推翻**：`connection: 'close'` **不能**关掉 undici 的连接复用（Node 24 实测同端口两连击仍复用），
+  不要再用这个头做防复用手段。控制面传送层改为 `httpFetch`（`node:http` + `agent: false`），
+  每次尝试独立 TCP 连接，把「旧实例回包」压缩成真时间窗竞态。
+- identity 按 `detail` 分级（稳定枚举，可进日志与收据）：不可重试 `service`/`root`（真部署不符，1 次即失败）；
+  可重试 `control`/`instance`/`source`/`token`/`post-instance`（竞态可疑，进同一 100/250/500ms 预算共 4 次）。
+  `retriable` 只作内部控制流，绝不进日志或收据。

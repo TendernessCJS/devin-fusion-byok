@@ -44,7 +44,7 @@ async function pushConfiguredUpstream({ root, vscode, log }) {
     // Success is logged too: a silent success makes "did the push happen?"
     // unanswerable from the log. Only the custom flag is recorded — never the host.
     if (result.ok) log('upstream-push', { ok: true, custom: result.custom === true });
-    else log('upstream-push', { ok: false, reason: result.reason, ...(result.code ? { code: result.code } : {}) });
+    else log('upstream-push', { ok: false, reason: result.reason, ...(result.code ? { code: result.code } : {}), ...(result.detail ? { detail: result.detail } : {}) });
   } catch { log('upstream-push', { ok: false, reason: 'unavailable' }); }
 }
 
