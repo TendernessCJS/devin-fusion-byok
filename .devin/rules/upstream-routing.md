@@ -17,17 +17,18 @@ backend 转发非拦截 RPC 时，目标 origin **不是常量**，而是跟随�
 - origin 校验（`resolveUpstreamOrigin`）：只接受 `https:`；`http:` 仅限回环 host（`localhost`/`127.0.0.1`/`::1`）；
   拒 userinfo、query、hash、畸形 URL、backend 自身回环端口；保留路径前缀并去尾斜杠。
 - **状态按 backend 实例隔离**（`startBackend()` 内的闭包变量）：放到模块级会让同进程两个实例共享一个推送值。
-- 唯一写入点是 `activation/enable.cjs`：激活后推一次 + 订阅 `codeium.apiServerUrl` 变更，别在别处重复写。
+- 唯一写入点是 `activation/enable.cjs`：激活后触发一次 + 订阅上述四个键（`codeium.apiServerUrl`/`devin.portalUrl`/`windsurf.portalUrl`/`windsurf.serviceUrl`），每次触发跑收敛窗口并以代际取消旧窗口，同 `(origin, source)` 去重不发；别在别处重复写。
 
 ## 观测落点（最容易判错的一节）
 
 | 事件 | 落点 | 说明 |
 | --- | --- | --- |
-| `upstream-push` | 扩展 **output channel「Devin Fusion BYOK」** | 宿主侧，成功 `{ok:true,custom}`、失败 `{ok:false,reason}`；channel **不落盘** |
+| `upstream-push` | 扩展 **output channel「Devin Fusion BYOK」** | 宿主侧，成功 `{ok:true,custom,source}`、失败 `{ok:false,reason,source,code?,detail?}`；channel **不落盘** |
 | `upstream-origin` | backend `runtime.log` | 只有 backend **真的收到**推送才写，`{custom}` |
-| `upstream-push.json` | `<globalStorage>/upstream-push.json` | 宿主侧收据 `{at, ok, custom|reason}`，事后可判 |
+| `upstream-push.json` | `<globalStorage>/upstream-push.json` | 宿主侧收据 `{at, ok, custom|reason, source, code?, detail?}`，事后可判 |
 
 - **payload 一律不含 host/origin**（租户域名不得进日志），别为排障加。
+- 去重命中时**不写日志也不写收据**——「没有新收据」不等于没触发，判活看触发侧的 generation 语义。
 - 「`runtime.log` 里没有 `upstream-origin`」只说明推送**没到达 backend**，不说明没尝试过——看 `upstream-push.json`。
 - `custom` = 「与默认上游不同」，不是「设成功了」：推默认值或 `null` 都记 `false`。
 - `reason`：`unavailable`=连不上或 4 s 超时、`identity`=身份或控制文件不符、`unsupported`=旧 backend、
