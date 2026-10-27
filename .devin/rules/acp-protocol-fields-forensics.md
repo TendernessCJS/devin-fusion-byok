@@ -65,7 +65,7 @@ tail -c +<偏移> <bundle> | head -c 600
 | `#23` ModelInfo 及内层 `#23` | `m(23, …)`，内层作家族标识 | `F_MODEL_INFO = 23`，内层 `F_ALIAS = 23` |
 | 出站 chunk | `3` text / `5` stop_reason / `6` tool calls / `7` usage / `9` thinking / `10` signature | 「answer text in response field **#3**」，测试用 `writeVarintField(5, …)` 表示 stop_reason |
 
-- **使用结论**：再质疑这些字段号先看这张表——两份独立实现同时错的概率远低于单方读数错误；但**这不是新证据源**，表外字段、以及与本机读数冲突的任何断言，一律以本机 REA 为准。
+- **使用结论**：再质疑这些字段号先看这张表——两份独立实现同时错的概率远低于单方读数错误；但**这不是新证据源**，表外字段、以及与本机读数冲突的任何断言，一律以本机 REA 为准（本机 REA 的可用手法只剩字节级扫描，MCP 语义面不可用，见下节「REA 的原生面与语义图预算」）。
 
 ### 冲突时以本机 REA 为准
 
@@ -145,16 +145,24 @@ ModelAssignment: 1 assignment_jwt,2 model_uid,3 harness_uids
 ```
 注：`ClientModelSort.groups` 的内层类型在 schema 里是 minified 引用、无独立 `typeName`，组内字段（f1 name / f2 label）无法描述符断言，仍靠 fixture。
 
-### REA 的原生面与语义图预算（2026-10-27）
+### REA 的原生面与语义图预算（2026-10-28 复测）
 
-- **原生面整体不可用**：`search_strings` 返回 `capability_unavailable`——本机无任何受支持的原生分析
-  provider（Ghidra 未配且无 Java、Hopper 未装、IDA/Kuna 未配）；`find_xrefs_to_name` 返回
-  `target_unavailable`（JS 分析产出是证据快照而非活符号库）。⇒ CLI/LS 原生二进制层面（如 `ModelInfo.f18`
-  是否被 LS 消费）静态路线**无解**，只能靠真实流量实验。
-- **JS 语义图对 `extension.js` 是 partial**：`analyze_javascript_application`（scope `dist/extension.js`）
-  读到 7,010,370 B / 1,751,118 AST 节点 / 1,085 模块 / 3,587 findings / 0 parse failure，但 coverage
-  `application=partial`、`semantic=partial(truncated)`，unknowns：`dynamic-call 79,318`、
-  `ambiguous-target 142,708`、`dynamic-property 18,203`。⇒ 此图**不能当「不存在某调用」的证明**；
-  断言「零调用点」只能靠字面量穷尽扫描 + 运行期收据（`AssignArenaModel` 结论即此二法）。
-- **交叉验证一条**：REA `open_binary` 给出的 desktop bundle `sha256` 第三段与本仓探针
-  `native-contract.json` 的 `signature` 第三段一致——两边看的是同一份文件；日后可复用这条确认产物身份。
+- **原生面整体不可用**，错误码是 `provider_unavailable`（旧的 `capability_unavailable` 记录已过期）：候选
+  `ghidra/hopper/ida/kuna` 全被拒，Ghidra 一项的 `java_probe_failure` 显示**本机没有 Java 运行时**（`java` 退出 1）
+  ⇒ 只装 Ghidra 不够，还要 JDK。`binary_overview`（仅读 Mach-O 元数据）走同一 provider 选择器，**同样不可用**——元数据不是绕道。
+- **`search_strings` 不是 JS 检索工具**：它只按原生 provider 选路，对本仓 JS bundle 一样返回 `provider_unavailable`。
+  查 bundle 字面量只能用 `grep -abo` 取偏移 + `dd` 读窗口。
+- **`find_xrefs_to_name` 仍是 `target_unavailable`**：JS 分析产出是证据快照，不是活符号库。
+- **另两处能力缺口（此前未记）**：`recover_javascript_sources` 需要 `REA_WAKARU_COMMAND` 指向
+  **Wakaru ^1.13.0 Linux x64**，macOS 无解；`analyze_web_bundle` 需要活浏览器 `cdp_endpoint` + `target_id`，
+  **对磁盘产物不适用**。
+- **`analyze_javascript_application` 只收目录或 `.asar`**（单文件报 `unsupported_target`）。本轮以
+  `extensions/windsurf` + `source_paths:["dist/extension.js"]` 复测：`analysis_status:"interrupted"`、
+  `analysis_failure.code:"resource_constraint"`、`retryable:false`，worker `old_space 1024 MB` /
+  `heap 1098907648 B` / `timeout 300000 ms`，stderr 是真实 V8 `Ineffective mark-compacts near heap limit`。
+  ⇒ 上一轮记的「partial(truncated) / 1,085 模块 / unknowns 79,318·142,708·18,203」**本轮不可复现**，
+  降级为历史一次性观测：不得当基线，更不得当「不存在某调用」的证明；只指向 `dist` 目录时只出 9 节点
+  partial 图（无 app 结构），同样不可用。
+- **交叉验证一条**：REA `open_binary` 的 `sha256` 与本仓探针 `native-contract.json` 的 `signature` 逐段对应
+  （顺序 `cli:ls:desktop:chat:acp`；2026-10-28 复核 ls=第 2 段 `9d9fad2b…`、acp=第 5 段 `fa7fbaba…`），
+  可复用确认「两边看的是同一份产物」。

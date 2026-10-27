@@ -80,7 +80,8 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   GetUserStatus/GetCliTeamSettings/GetCliModelConfigs 三种）——`*ForSite` 变体同理（LS 有 route 串才加了防御性形状，不代表本地会打）。
 - **`ModelInfo.f18 inference_server_url` 在 JS 层零消费者**：对四个已安装 bundle 做「定义 vs 读取」
   分离扫描（`inferenceServerUrl`/`inference_server_url`），命中数 1+1 / 1+1 / 4+4 / 3+3 全部是
-  protobuf-es 生成字段初始化与描述符，读取点 0；LS 原生是否消费未证（需 Ghidra+JDK）。因此**不要把它
+  protobuf-es 生成字段初始化与描述符，读取点 0；LS 原生是否消费未证（需 Ghidra+JDK；REA 语义图路线在本机
+  已不可用——`extension.js` 分析 OOM 中断，见 `acp-protocol-fields-forensics.md`）。因此**不要把它
   当推理路由杠杆**、不要再设计 stub 实验；厂商升级后重查的判据是**读取点计数**而非字符串出现次数。
   同主题 `codeium.inferenceApiServerUrl` 已定案不接，见 `upstream-routing.md`「原生设置的两个键」。
 - **服务注册表枚举已盘点（2026-10-27 重跑，别再造表）**：目录形方法（`Model/Models/ModelConfig/Catalog`）
