@@ -34,7 +34,12 @@ function matchesTerminalBlocker(text) {
 const ERROR_ATTEMPT_LIMIT = 5;
 const ERROR_WINDOW_MS = 10 * 60 * 1000;
 const PLAN_ATTEMPT_LIMIT = 10;
-const PLAN_CONTINUABLE = new Set(['end_turn', 'max_tokens', 'max_turn_requests']);
+// Only objective truncation continues: `max_turn_requests` is the per-prompt
+// request budget (native shows "send another message to continue") and
+// `max_tokens` is output cut at the provider limit. `end_turn` is a normal
+// finish — continuing it would override the model's own decision on evidence
+// the model writes itself.
+const CONTINUABLE_STOP = new Set(['max_tokens', 'max_turn_requests']);
 
 const RESET_METHODS = new Set([
   'session/cancel',
@@ -362,11 +367,13 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const hasPendingPlan = checkHasPendingPlan(turn);
           const isBlocked = matchesTerminalBlocker(turn.tail);
           const shouldRetryPlan = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true &&
-            hasPendingPlan && PLAN_CONTINUABLE.has(res.stopReason);
+            CONTINUABLE_STOP.has(res.stopReason);
 
           // hasPlanProgress consumes its snapshot — keep the original lazy call:
           // it only runs when the error branch did not, exactly like the old else-if.
-          const planRetry = !shouldRetryError && shouldRetryPlan && hasPlanProgress(turn);
+          // A plan that exists but did not move is the one thing that turns a
+          // truncation into a spin, so progress is required only then.
+          const planRetry = !shouldRetryError && shouldRetryPlan && (!hasPendingPlan || hasPlanProgress(turn));
           emitEvaluated(turn, sessionId, 'resolve', res.stopReason,
             shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop', null);
           if (shouldRetryError) {
@@ -448,7 +455,9 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
       const normalized = [];
       for (const e of entries) {
         if (!e || typeof e !== 'object' || typeof e.content !== 'string') return null;
-        // Native treats a missing status as pending and knows only three status values.
+        // Native requires `status` (pending|in_progress|completed) plus a
+        // `priority` field; the missing-status fallback below is our lenient
+        // default, not native behaviour.
         const status = e.status == null ? 'pending' : e.status;
         if (status !== 'pending' && status !== 'in_progress' && status !== 'completed') {
           return null;
@@ -461,6 +470,11 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
       return { invalid: false, pendingCount: pending, signature };
     }
 
+    // Native keeps a single current plan: every `plan`/`plan_update(items)`
+    // marks the previous one stale, non-`items` updates produce no plan record,
+    // and `plan_removed` is a no-op in the projection. We mirror that — at most
+    // one plan lives in `turn.plans`; `planUpdates` still counts raw events for
+    // diagnostics.
     function processPlanUpdate(turn, update, sessionId) {
       if (!turn || !update) return;
       turn.planUpdates = (turn.planUpdates || 0) + 1;
@@ -468,28 +482,20 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
 
       if (update.sessionUpdate === 'plan') {
         const state = validatePlanEntries(update.entries);
+        turn.plans.clear();
         turn.plans.set('__default__', state || { invalid: true, pendingCount: 0 });
       } else if (update.sessionUpdate === 'plan_update') {
         const plan = update.plan;
         const planId = plan?.planId;
-        if (typeof planId !== 'string' || !planId || planId.length > 256) {
-          turn.plans.clear();
-        } else {
-          if (turn.plans.size >= 100 && !turn.plans.has(planId)) {
-            turn.plans.clear();
-          } else if (plan?.type !== 'items') {
-            turn.plans.set(planId, { invalid: true, pendingCount: 0 });
-          } else {
-            const state = validatePlanEntries(plan.entries);
-            turn.plans.set(planId, state || { invalid: true, pendingCount: 0 });
-          }
-        }
+        if (typeof planId !== 'string' || !planId || planId.length > 256) return;
+        turn.plans.clear();
+        if (plan?.type !== 'items') return;
+        const state = validatePlanEntries(plan.entries);
+        turn.plans.set(planId, state || { invalid: true, pendingCount: 0 });
       } else if (update.sessionUpdate === 'plan_removed') {
         const planId = update.planId;
         if (typeof planId === 'string' && planId && planId.length <= 256) {
           turn.plans.delete(planId);
-        } else {
-          turn.plans.clear();
         }
       }
 
@@ -572,10 +578,12 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             const isBlocked = matchesTerminalBlocker(turn.tail);
             const shouldRetryError = !turn.retryDisallowed && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && isError;
             const hasPendingPlan = checkHasPendingPlan(turn);
-            const allowedPlanReason = PLAN_CONTINUABLE.has(update.stopReason);
-            const shouldRetryPlan = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true && hasPendingPlan && allowedPlanReason;
+            const allowedPlanReason = CONTINUABLE_STOP.has(update.stopReason);
+            const shouldRetryPlan = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true && allowedPlanReason;
 
-            const planRetry = !shouldRetryError && shouldRetryPlan && hasPlanProgress(turn);
+            // Same lazy contract as the resolve branch: progress is checked
+            // only when a pending plan exists and the error chain lost.
+            const planRetry = !shouldRetryError && shouldRetryPlan && (!hasPendingPlan || hasPlanProgress(turn));
             emitEvaluated(turn, sessionId, 'idle', update.stopReason,
               shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop', null);
             if (shouldRetryError) {

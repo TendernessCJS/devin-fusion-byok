@@ -24,7 +24,9 @@ test('plan tracking v1/v2: pending->pending->completed sends exactly 2 continues
     sendRequest(req) {
       if (req.method === 'session/prompt') {
         promptCount++;
-        return Promise.resolve({ stopReason: 'end_turn' });
+        // The first two turns hit the turn budget (the continue trigger); the
+        // final turn finishes normally — `end_turn` never continues.
+        return Promise.resolve({ stopReason: promptCount <= 2 ? 'max_turn_requests' : 'end_turn' });
       }
       return Promise.resolve({});
     },
@@ -153,7 +155,7 @@ test('plan completion while timer is pending cancels continuation and resolves v
     sendRequest(req) {
       if (req.method === 'session/prompt') {
         promptCount++;
-        return Promise.resolve({ stopReason: 'end_turn' });
+        return Promise.resolve({ stopReason: 'max_turn_requests' });
       }
       return Promise.resolve({});
     },
@@ -193,7 +195,7 @@ test('plan completion while timer is pending cancels continuation and resolves v
 
   assert.equal(scheduler.pendingCount(), 0);
   const res = await p;
-  assert.equal(res.stopReason, 'end_turn');
+  assert.equal(res.stopReason, 'max_turn_requests');
   scheduler.advance(10000);
   assert.equal(promptCount, 1);
 });
@@ -214,7 +216,7 @@ test('incoming permission request disallows retry and clears pending timer', { t
     location: { kind: 'local' },
     protocolVersion: 1,
     sendRequest(req) {
-      return Promise.resolve({ stopReason: 'end_turn' });
+      return Promise.resolve({ stopReason: 'max_turn_requests' });
     },
     forwardClientRequest() {}
   };
@@ -246,7 +248,7 @@ test('incoming permission request disallows retry and clears pending timer', { t
 
   assert.equal(scheduler.pendingCount(), 0);
   const res = await p;
-  assert.equal(res.stopReason, 'end_turn');
+  assert.equal(res.stopReason, 'max_turn_requests');
 });
 
 test('transient HTTP 429 retries whereas 401 does not', { timeout: 1000 }, async t => {
@@ -445,7 +447,7 @@ test('legacy ext/method _session/elicitation and finishedOutcome cancel pending 
     location: { kind: 'local' },
     protocolVersion: 1,
     sendRequest(req) {
-      return Promise.resolve({ stopReason: 'end_turn' });
+      return Promise.resolve({ stopReason: 'max_turn_requests' });
     },
     forwardClientRequest() {}
   };
@@ -480,7 +482,7 @@ test('legacy ext/method _session/elicitation and finishedOutcome cancel pending 
 
   assert.equal(scheduler.pendingCount(), 0);
   const res = await p;
-  assert.equal(res.stopReason, 'end_turn');
+  assert.equal(res.stopReason, 'max_turn_requests');
 });
 
 for (const protocolVersion of [1, 2]) {
@@ -493,18 +495,18 @@ for (const protocolVersion of [1, 2]) {
       ];
       const p = f.prompt();
       f.plan(pending, variant === 'new-plan-id' ? 'old' : undefined);
-      await f.finish(variant === 'error-recovery');
+      await f.finish(variant === 'error-recovery', 'max_turn_requests');
       assert.equal(f.scheduler.pendingCount(), 1);
       f.scheduler.advance(2000);
       assert.equal(f.calls.length, 2);
       if (variant === 'identical') f.plan(pending);
       if (variant === 'reordered') f.plan([...pending].reverse());
       if (variant === 'new-plan-id') f.plan(pending, 'new');
-      await f.finish();
+      await f.finish(false, 'max_turn_requests');
       assert.equal(f.scheduler.pendingCount(), 0);
       assert.equal(f.handle.status().activeSessions, 0);
       const result = await p;
-      if (protocolVersion === 1) assert.equal(result.stopReason, 'end_turn');
+      if (protocolVersion === 1) assert.equal(result.stopReason, 'max_turn_requests');
       const stopped = f.logs.filter(log => log.event === 'auto-continue-stopped');
       assert.equal(stopped.length, 1);
       assert.equal(stopped[0].data.reason, 'plan-no-progress');
@@ -516,7 +518,7 @@ for (const protocolVersion of [1, 2]) {
 
       const next = f.prompt();
       f.plan(pending);
-      await f.finish();
+      await f.finish(false, 'max_turn_requests');
       assert.equal(f.scheduler.pendingCount(), 1);
       f.scheduler.advance(2000);
       assert.equal(f.calls.length, 4);
@@ -532,14 +534,14 @@ for (const protocolVersion of [1, 2]) {
     const f = planProgressFixture(t, protocolVersion);
     const p = f.prompt();
     f.plan([{ content: 'Work', status: 'pending' }]);
-    await f.finish();
+    await f.finish(false, 'max_turn_requests');
     f.scheduler.advance(2000);
     f.plan([{ content: 'Work', status: 'in_progress' }]);
-    await f.finish();
+    await f.finish(false, 'max_turn_requests');
     assert.equal(f.scheduler.pendingCount(), 1);
     f.scheduler.advance(4000);
     f.plan([{ content: 'Verify work', status: 'in_progress' }]);
-    await f.finish();
+    await f.finish(false, 'max_turn_requests');
     assert.equal(f.scheduler.pendingCount(), 1);
     f.scheduler.advance(8000);
     f.plan([{ content: 'Verify work', status: 'completed' }]);
@@ -561,7 +563,7 @@ for (const protocolVersion of [1, 2]) {
     assert.equal(f.scheduler.pendingCount(), 1);
     assert.equal(f.logs.some(log => log.event === 'auto-continue-stopped'), false);
     f.scheduler.advance(4000);
-    await f.finish();
+    await f.finish(false, 'max_turn_requests');
     assert.equal(f.scheduler.pendingCount(), 0);
     await p;
     assert.equal(f.calls.length, 3);
@@ -733,7 +735,7 @@ test('the plan retry chain stops at PLAN_ATTEMPT_LIMIT', { timeout: 2000 }, asyn
   const connector = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
     sendRequest(req) {
-      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'end_turn' }); }
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
       return Promise.resolve({});
     },
     forwardClientRequest() {}
@@ -918,7 +920,7 @@ test('entries without status count as pending', { timeout: 1000 }, async t => {
   const f = planProgressFixture(t, 1);
   f.prompt();
   f.plan([{ content: 'a' }, { content: 'b' }]);
-  await f.finish();
+  await f.finish(false, 'max_turn_requests');
   const events = f.logs.filter(l => l.event === 'auto-continue-evaluated');
   assert.equal(events.length, 1);
   assert.equal(events[0].data.pendingItems, 2);
@@ -944,16 +946,236 @@ test('an explicit pending status produces the same signature as a missing one', 
   const f = planProgressFixture(t, 1);
   const p = f.prompt();
   f.plan([{ content: 'a' }]);
-  await f.finish();
+  await f.finish(false, 'max_turn_requests');
   assert.equal(f.scheduler.pendingCount(), 1);
   f.scheduler.advance(2000);
   assert.equal(f.calls.length, 2);
   f.plan([{ content: 'a', status: 'pending' }]);
-  await f.finish();
+  await f.finish(false, 'max_turn_requests');
   const result = await p;
-  assert.equal(result.stopReason, 'end_turn');
+  assert.equal(result.stopReason, 'max_turn_requests');
   assert.equal(f.scheduler.pendingCount(), 0);
   const stopped = f.logs.filter(l => l.event === 'auto-continue-stopped');
   assert.equal(stopped.length, 1);
   assert.equal(stopped[0].data.reason, 'plan-no-progress');
 });
+
+test('max_turn_requests without a plan continues once', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-mtr-noplan', prompt: [{ type: 'text', text: 'do' }] } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1, 'a plan-less turn-limit stop still schedules a continue');
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(evaluated.length, 1);
+  assert.equal(evaluated[0].data.decision, 'plan-retry');
+  assert.equal(evaluated[0].data.hasPendingPlan, false);
+  assert.equal(evaluated[0].data.planUpdates, 0);
+});
+
+test('a plan-less turn-limit stop obeys the attempt budget', { timeout: 2000 }, async t => {
+  const { PLAN_ATTEMPT_LIMIT } = require('../src/runtime/host/auto-continue.cjs');
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-mtr-cap', prompt: [{ type: 'text', text: 't' }] } });
+  for (let round = 0; round <= PLAN_ATTEMPT_LIMIT + 4; round++) {
+    await new Promise(r => setImmediate(r));
+    scheduler.advance(30000);
+    await new Promise(r => setImmediate(r));
+  }
+  const stops = f.logs.filter(l => l.event === 'auto-continue-stopped');
+  assert.ok(stops.some(s => s.data.reason === 'plan-attempt-limit'), 'stopped with plan-attempt-limit');
+  assert.ok(promptCount <= 1 + PLAN_ATTEMPT_LIMIT, `no prompt beyond the cap, got ${promptCount}`);
+});
+
+test('end_turn without a plan does not continue', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'end_turn' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-end-noplan', prompt: [{ type: 'text', text: 'do' }] } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 0, 'end_turn without a plan is a normal finish');
+  scheduler.advance(2000);
+  assert.equal(promptCount, 1);
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(evaluated.length, 1);
+  assert.equal(evaluated[0].data.decision, 'stop');
+});
+
+test('v2 idle with max_turn_requests and no plan schedules one continue', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 2,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ acknowledgment: true }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-v2-mtr-noplan', prompt: [{ type: 'text', text: 'task' }] } });
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-v2-mtr-noplan',
+    update: { sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' } } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1);
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+});
+
+test('max_turn_requests without a plan does not continue when untilPlanComplete is off', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: false }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-mtr-noplan-off', prompt: [{ type: 'text', text: 'do' }] } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 0);
+  assert.equal(promptCount, 1);
+});
+
+test('max_tokens without a plan continues once', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_tokens' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-mt-noplan', prompt: [{ type: 'text', text: 'do' }] } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1, 'a plan-less max_tokens stop still schedules a continue');
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(evaluated.length, 1);
+  assert.equal(evaluated[0].data.decision, 'plan-retry');
+  assert.equal(evaluated[0].data.hasPendingPlan, false);
+});
+
+test('end_turn with a pending plan does not continue', { timeout: 1000 }, async t => {
+  const f = planProgressFixture(t, 1);
+  const p = f.prompt();
+  f.plan([{ content: 'Step 1', status: 'pending' }]);
+  await f.finish();
+  assert.equal(f.scheduler.pendingCount(), 0, 'end_turn is a normal finish even with pending plan entries');
+  f.scheduler.advance(2000);
+  assert.equal(f.calls.length, 1);
+  const result = await p;
+  assert.equal(result.stopReason, 'end_turn');
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(evaluated.length, 1);
+  assert.equal(evaluated[0].data.decision, 'stop');
+  assert.equal(evaluated[0].data.hasPendingPlan, true);
+});
+
+test('a new plan replaces the previous one instead of accumulating', { timeout: 1000 }, async t => {
+  const f = planProgressFixture(t, 1);
+  f.prompt();
+  f.plan([{ content: 'a', status: 'pending' }]);
+  f.update({ sessionUpdate: 'plan_update', plan: { type: 'items', planId: 'p2', entries: [{ content: 'b', status: 'completed' }] } });
+  await f.finish(false, 'max_turn_requests');
+  // The truncation contract still schedules the continue — the single-current
+  // semantics show up in the evaluated payload: the stale pending entry from
+  // the replaced plan must NOT leak into hasPendingPlan.
+  assert.equal(f.scheduler.pendingCount(), 1, 'a plan-less truncation still continues once');
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(evaluated.length, 1);
+  assert.equal(evaluated[0].data.decision, 'plan-retry');
+  assert.equal(evaluated[0].data.hasPendingPlan, false);
+});
+
+test('removing the current plan cancels pending eligibility', { timeout: 1000 }, async t => {
+  const f = planProgressFixture(t, 1);
+  f.prompt();
+  f.update({ sessionUpdate: 'plan_update', plan: { type: 'items', planId: 'p1', entries: [{ content: 'a', status: 'pending' }] } });
+  f.update({ sessionUpdate: 'plan_removed', planId: 'p1' });
+  await f.finish(false, 'max_turn_requests');
+  assert.equal(f.scheduler.pendingCount(), 1, 'a plan-less truncation still continues once');
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(evaluated.length, 1);
+  assert.equal(evaluated[0].data.decision, 'plan-retry');
+  assert.equal(evaluated[0].data.hasPendingPlan, false);
+});
+

@@ -310,7 +310,9 @@ test('switching to plan continuation resets the consecutive error budget', { tim
     sendRequest(req) {
       if (req.method === 'session/prompt') {
         promptCount++;
-        return Promise.resolve({ stopReason: 'end_turn' });
+        // Truncation is what lets the plan chain continue; the 429 text keeps
+        // claiming the error chain first, so both budgets stay exercised.
+        return Promise.resolve({ stopReason: 'max_turn_requests' });
       }
       return Promise.resolve({});
     },
@@ -358,7 +360,7 @@ test('switching to plan continuation resets the consecutive error budget', { tim
   assert.equal(stops.length, 1);
   assert.equal(stops[0].reason, 'error-attempt-limit');
   assert.equal(stops[0].attempts, 5);
-  assert.equal((await promptPromise).stopReason, 'end_turn');
+  assert.equal((await promptPromise).stopReason, 'max_turn_requests');
 });
 
 test('an onStopped callback that starts a fresh prompt is not deleted by the stop', async t => {

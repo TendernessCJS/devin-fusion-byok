@@ -51,8 +51,8 @@ function createSettingsView(ui) {
       setting('服务商出错时自动重试', '临时错误打断回复时自动发送 continue。按量计费的服务商可能多扣费。',
         switchInput(state().autoContinueOnProviderError === true, '服务商出错时自动重试',
           value => run(() => request('setAutoContinue', { enabled: value })), off())),
-      setting('待办没做完时自动继续', '会话里还有未完成的 Plan 时自动推进，随时可以手动停止。',
-        switchInput(state().autoContinueUntilPlanComplete === true, '待办没做完时自动继续',
+      setting('被截断时自动继续', '模型输出被截断（max_tokens）或单轮请求预算用尽（max_turn_requests）时自动推进；若还有未完成的 Plan，则要求它确有进展。随时可以手动停止。',
+        switchInput(state().autoContinueUntilPlanComplete === true, '被截断时自动继续',
           value => run(() => request('setAutoContinueUntilPlanComplete', { enabled: value })), off())),
       status ? element('p', { class: 'warn list-note', text: status }) : null));
   }

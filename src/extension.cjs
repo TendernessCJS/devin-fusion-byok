@@ -87,7 +87,7 @@ async function activate(context) {
           isSessionSuppressed: sessionId => lifecycle.goalController ? lifecycle.goalController.ownsSession(sessionId) : false,
           onStopped: data => {
             if (data?.reason === 'plan-attempt-limit') {
-              return vscode.window.showWarningMessage('已自动继续 10 次仍未完成待办，已停止自动继续。请检查后手动继续对话。');
+              return vscode.window.showWarningMessage('已自动继续 10 次仍未结束，已停止自动继续。请检查后手动继续对话。');
             }
             return vscode.window.showWarningMessage('服务商持续返回错误，已停止自动继续（上限为 5 次或 10 分钟）。请检查服务商状态后手动继续对话。');
           },

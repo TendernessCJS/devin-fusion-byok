@@ -109,7 +109,7 @@ function planProgressFixture(t, protocolVersion) {
     method: 'session/update', params: { sessionId, update: value }
   });
   return {
-    ...f, scheduler, handle, calls,
+    ...f, scheduler, handle, calls, update,
     prompt: () => connector.sendRequest({
       method: 'session/prompt', params: { sessionId, prompt: [{ type: 'text', text: 'task' }] }
     }),
@@ -117,13 +117,13 @@ function planProgressFixture(t, protocolVersion) {
       update(planId ? { sessionUpdate: 'plan_update', plan: { type: 'items', planId, entries } } :
         { sessionUpdate: 'plan', entries });
     },
-    async finish(error = false) {
+    async finish(error = false, stopReason = 'end_turn') {
       const text = error ? 'Provider response could not be completed.' : 'Task finished; waiting for user confirmation.';
       update(protocolVersion === 2 ? {
         sessionUpdate: 'agent_message', messageId: `response-${calls.length}`, content: [{ type: 'text', text }]
       } : { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
-      if (protocolVersion === 2) update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'end_turn' });
-      else resolvers.shift()({ stopReason: 'end_turn' });
+      if (protocolVersion === 2) update({ sessionUpdate: 'state_update', state: 'idle', stopReason });
+      else resolvers.shift()({ stopReason });
       await new Promise(resolve => setImmediate(resolve));
     }
   };
