@@ -717,3 +717,106 @@ test('v2 idle with cancelled never continues even with a pending plan', { timeou
   assert.equal(scheduler.pendingCount(), 0);
   assert.equal(promptCount, 1);
 });
+
+test('the plan retry chain stops at PLAN_ATTEMPT_LIMIT', { timeout: 2000 }, async t => {
+  const { PLAN_ATTEMPT_LIMIT } = require('../src/runtime/host/auto-continue.cjs');
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'end_turn' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-cap', prompt: [{ type: 'text', text: 't' }] } });
+  const plan = done => {
+    const entries = [];
+    for (let i = 0; i < 40; i++) entries.push({ content: 'item ' + i, status: i < done ? 'completed' : 'pending' });
+    return { method: 'session/update', params: { sessionId: 's-cap',
+      update: { sessionUpdate: 'plan', entries } } };
+  };
+  connector.forwardClientRequest(plan(0));
+  // The snapshot is recorded when each continue fires, so each round reports
+  // fresh progress *after* the continue is sent — matching how a real agent
+  // makes progress during the continued turn.
+  for (let round = 0; round <= PLAN_ATTEMPT_LIMIT + 4; round++) {
+    await new Promise(r => setImmediate(r));
+    scheduler.advance(30000);
+    connector.forwardClientRequest(plan(round + 1));
+    await new Promise(r => setImmediate(r));
+  }
+  const stops = f.logs.filter(l => l.event === 'auto-continue-stopped');
+  assert.ok(stops.some(s => s.data.reason === 'plan-attempt-limit'), 'stopped with plan-attempt-limit');
+  assert.ok(promptCount <= 1 + PLAN_ATTEMPT_LIMIT, `no prompt beyond the cap, got ${promptCount}`);
+});
+
+test('auto-continue-evaluated fires with the fixed field set even when disabled', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  let enabled = true;
+  const handle = f.install({ isEnabled: () => enabled, getOptions: () => ({}), scheduler });
+  t.after(() => handle.dispose());
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest() { return Promise.resolve({ stopReason: 'end_turn' }); },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const p = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-eval', prompt: [{ type: 'text', text: 'hi' }] } });
+  enabled = false;
+  await p;
+  await new Promise(r => setImmediate(r));
+  const events = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(events.length, 1);
+  const data = events[0].data;
+  assert.deepEqual(Object.keys(data).sort(), [
+    'decision', 'enabled', 'hasPendingPlan', 'onProviderError', 'providerErrorMatched',
+    'retryDisallowed', 'site', 'stopReason', 'suppressed', 'terminalBlocker', 'untilPlanComplete',
+  ].sort());
+  assert.equal(data.site, 'resolve');
+  assert.equal(data.enabled, false);
+  assert.equal(data.decision, 'stop');
+});
+
+test('error retries still cap at 5 and are not affected by PLAN_ATTEMPT_LIMIT', { timeout: 2000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: true, untilPlanComplete: false }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.reject(new Error('Provider response could not be completed')); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const p = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-err', prompt: [{ type: 'text', text: 'hi' }] } });
+  p.catch(() => {});
+  for (let i = 0; i < 8; i++) {
+    await new Promise(r => setImmediate(r));
+    scheduler.advance(30000);
+  }
+  await new Promise(r => setImmediate(r));
+  const stops = f.logs.filter(l => l.event === 'auto-continue-stopped');
+  assert.ok(stops.some(s => s.data.reason === 'error-attempt-limit'), 'error chain still stops at 5');
+  assert.ok(promptCount <= 6, `error retries stayed within the old budget, got ${promptCount}`);
+});

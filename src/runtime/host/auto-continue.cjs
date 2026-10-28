@@ -33,6 +33,7 @@ function matchesTerminalBlocker(text) {
 
 const ERROR_ATTEMPT_LIMIT = 5;
 const ERROR_WINDOW_MS = 10 * 60 * 1000;
+const PLAN_ATTEMPT_LIMIT = 10;
 const PLAN_CONTINUABLE = new Set(['end_turn', 'max_tokens', 'max_turn_requests']);
 
 const RESET_METHODS = new Set([
@@ -140,6 +141,21 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
       try { Promise.resolve(onStopped(data)).catch(() => {}); } catch {}
     }
 
+    function stopPlanRetry(sessionId, turn, reason) {
+      cancelSessionTimer(sessionId);
+      if (entry.sessions.get(sessionId) !== turn) return;
+      turn.retryDisallowed = true;
+      const data = { reason, attempts: turn.attempts };
+      if (turn.deferred && !turn.deferred.settled && turn.lastResult) {
+        turn.deferred.settled = true;
+        if (turn.lastResult.isReject) turn.deferred.reject(turn.lastResult.value);
+        else turn.deferred.resolve(turn.lastResult.value);
+      }
+      entry.sessions.delete(sessionId);
+      report('auto-continue-stopped', data);
+      try { Promise.resolve(onStopped(data)).catch(() => {}); } catch {}
+    }
+
     function checkHasPendingPlan(turn) {
       if (!turn?.plans || turn.plans.size === 0) return false;
       for (const plan of turn.plans.values()) {
@@ -168,6 +184,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
         if (turn.errorAttempts >= ERROR_ATTEMPT_LIMIT) { stopErrorRetry(sessionId, turn, 'error-attempt-limit'); return; }
         if (now() >= turn.errorStartedAt + ERROR_WINDOW_MS) { stopErrorRetry(sessionId, turn, 'error-time-limit'); return; }
       } else {
+        if (turn.attempts >= PLAN_ATTEMPT_LIMIT) { stopPlanRetry(sessionId, turn, 'plan-attempt-limit'); return; }
         turn.errorAttempts = 0;
         turn.errorStartedAt = null;
       }
@@ -185,6 +202,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
         if (reason === 'error') {
           if (currentTurn.errorAttempts >= ERROR_ATTEMPT_LIMIT) { stopErrorRetry(sessionId, currentTurn, 'error-attempt-limit'); return; }
           if (now() >= currentTurn.errorStartedAt + ERROR_WINDOW_MS) { stopErrorRetry(sessionId, currentTurn, 'error-time-limit'); return; }
+        } else {
+          if (currentTurn.attempts >= PLAN_ATTEMPT_LIMIT) { stopPlanRetry(sessionId, currentTurn, 'plan-attempt-limit'); return; }
         }
         executeAuto(sessionId, attempts, currentTurn);
       }, delay);
@@ -312,10 +331,26 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const shouldRetryPlan = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true &&
             hasPendingPlan && PLAN_CONTINUABLE.has(res.stopReason);
 
+          // hasPlanProgress consumes its snapshot — keep the original lazy call:
+          // it only runs when the error branch did not, exactly like the old else-if.
+          const planRetry = !shouldRetryError && shouldRetryPlan && hasPlanProgress(turn);
+          report('auto-continue-evaluated', {
+            site: 'resolve',
+            stopReason: typeof res?.stopReason === 'string' ? res.stopReason : null,
+            enabled: isEnabled(),
+            onProviderError: options.onProviderError !== false,
+            untilPlanComplete: options.untilPlanComplete === true,
+            suppressed: sessionSuppressed(sessionId),
+            retryDisallowed: turn.retryDisallowed,
+            providerErrorMatched: matchesProviderError(turn.tail),
+            terminalBlocker: matchesTerminalBlocker(turn.tail),
+            hasPendingPlan,
+            decision: shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop',
+          });
           if (shouldRetryError) {
             turn.lastResult = { value: res, isReject: false };
             scheduleAuto(sessionId, turn, 'error');
-          } else if (shouldRetryPlan && hasPlanProgress(turn)) {
+          } else if (planRetry) {
             turn.lastResult = { value: res, isReject: false };
             scheduleAuto(sessionId, turn, 'plan');
           } else {
@@ -365,6 +400,19 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const isExactMsg = msg === TARGET_ERROR || msg === TARGET_ERROR + '.' || matchesTimeoutError(msg);
           const options = getOptions() || {};
 
+          report('auto-continue-evaluated', {
+            site: 'reject',
+            stopReason: null,
+            enabled: isEnabled(),
+            onProviderError: options.onProviderError !== false,
+            untilPlanComplete: options.untilPlanComplete === true,
+            suppressed: sessionSuppressed(sessionId),
+            retryDisallowed: turn.retryDisallowed,
+            providerErrorMatched: isExactMsg,
+            terminalBlocker: matchesTerminalBlocker(turn.tail),
+            hasPendingPlan: checkHasPendingPlan(turn),
+            decision: (isEnabled() && options.onProviderError !== false && isExactMsg && !sessionSuppressed(sessionId)) ? 'error-retry' : 'stop',
+          });
           if (isEnabled() && options.onProviderError !== false && isExactMsg && !sessionSuppressed(sessionId)) {
             turn.lastResult = { value: err, isReject: true };
             scheduleAuto(sessionId, turn, 'error');
@@ -511,9 +559,23 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             const allowedPlanReason = PLAN_CONTINUABLE.has(update.stopReason);
             const shouldRetryPlan = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true && hasPendingPlan && allowedPlanReason;
 
+            const planRetry = !shouldRetryError && shouldRetryPlan && hasPlanProgress(turn);
+            report('auto-continue-evaluated', {
+              site: 'idle',
+              stopReason: typeof update.stopReason === 'string' ? update.stopReason : null,
+              enabled: isEnabled(),
+              onProviderError: options.onProviderError !== false,
+              untilPlanComplete: options.untilPlanComplete === true,
+              suppressed: sessionSuppressed(sessionId),
+              retryDisallowed: turn.retryDisallowed,
+              providerErrorMatched: isError,
+              terminalBlocker: isBlocked,
+              hasPendingPlan,
+              decision: shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop',
+            });
             if (shouldRetryError) {
               scheduleAuto(sessionId, turn, 'error');
-            } else if (shouldRetryPlan && hasPlanProgress(turn)) {
+            } else if (planRetry) {
               scheduleAuto(sessionId, turn, 'plan');
             } else {
               entry.sessions.delete(sessionId);
@@ -716,7 +778,6 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
     if (originalSetStatus) {
       entry.setStatusWrapper = function (status, ...rest) {
         if (isTerminalStatus(status)) {
-          cancelSessionTimer();
           for (const timer of entry.timers.values()) clearTimer(timer);
           entry.timers.clear();
           for (const turn of entry.sessions.values()) {
@@ -814,5 +875,6 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
 module.exports = {
   installAutoContinue,
   matchesProviderError,
-  matchesTerminalBlocker
+  matchesTerminalBlocker,
+  PLAN_ATTEMPT_LIMIT
 };
