@@ -445,16 +445,19 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
     function validatePlanEntries(entries) {
       if (!Array.isArray(entries) || entries.length > 1000) return null;
       let pending = 0;
+      const normalized = [];
       for (const e of entries) {
         if (!e || typeof e !== 'object' || typeof e.content !== 'string') return null;
-        const status = e.status;
-        if (status !== 'pending' && status !== 'in_progress' && status !== 'completed' && status !== 'cancelled') {
+        // Native treats a missing status as pending and knows only three status values.
+        const status = e.status == null ? 'pending' : e.status;
+        if (status !== 'pending' && status !== 'in_progress' && status !== 'completed') {
           return null;
         }
         if (status === 'pending' || status === 'in_progress') pending++;
+        normalized.push([e.content, status]);
       }
-      const signature = createHash('sha256').update(JSON.stringify(entries
-        .map(e => JSON.stringify([e.content, e.status])).sort())).digest('hex');
+      const signature = createHash('sha256').update(JSON.stringify(normalized
+        .map(entry => JSON.stringify(entry)).sort())).digest('hex');
       return { invalid: false, pendingCount: pending, signature };
     }
 

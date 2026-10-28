@@ -913,3 +913,47 @@ test('a turn with no plan events reports zero plan counters', { timeout: 1000 },
   assert.equal(events[0].data.pendingItems, 0);
   assert.equal(events[0].data.hasPendingPlan, false);
 });
+
+test('entries without status count as pending', { timeout: 1000 }, async t => {
+  const f = planProgressFixture(t, 1);
+  f.prompt();
+  f.plan([{ content: 'a' }, { content: 'b' }]);
+  await f.finish();
+  const events = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.pendingItems, 2);
+  assert.equal(events[0].data.hasPendingPlan, true);
+  assert.equal(events[0].data.planUpdates, 1);
+  assert.equal(events[0].data.decision, 'plan-retry');
+});
+
+test('a non-native status invalidates the whole plan', { timeout: 1000 }, async t => {
+  const f = planProgressFixture(t, 1);
+  f.prompt();
+  f.plan([{ content: 'a', status: 'cancelled' }]);
+  await f.finish();
+  const events = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.pendingItems, 0);
+  assert.equal(events[0].data.hasPendingPlan, false);
+  assert.equal(events[0].data.planUpdates, 1);
+  assert.equal(f.scheduler.pendingCount(), 0);
+});
+
+test('an explicit pending status produces the same signature as a missing one', { timeout: 1000 }, async t => {
+  const f = planProgressFixture(t, 1);
+  const p = f.prompt();
+  f.plan([{ content: 'a' }]);
+  await f.finish();
+  assert.equal(f.scheduler.pendingCount(), 1);
+  f.scheduler.advance(2000);
+  assert.equal(f.calls.length, 2);
+  f.plan([{ content: 'a', status: 'pending' }]);
+  await f.finish();
+  const result = await p;
+  assert.equal(result.stopReason, 'end_turn');
+  assert.equal(f.scheduler.pendingCount(), 0);
+  const stopped = f.logs.filter(l => l.event === 'auto-continue-stopped');
+  assert.equal(stopped.length, 1);
+  assert.equal(stopped[0].data.reason, 'plan-no-progress');
+});
