@@ -256,7 +256,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     // be traced back to the connecting process afterwards (lsof -i TCP:<port>).
     const forwardLog = (event, fields) => log(event, { ...fields, peerPort: request.socket?.remotePort });
     if (request.method !== 'POST' || ![API_PREFIX + 'AssignModel', API_PREFIX + 'GetChatMessage'].includes(rpc)) {
-      forward(request, response, target, { getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids }); return;
+      forward(request, response, target, { rpc, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids }); return;
     }
     let body;
     try {
@@ -303,7 +303,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
       if (response.headersSent) { response.end(); return; }
       // Malformed data must never select a default provider.
     }
-    if (body) forward(request, response, target, { body, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids });
+    if (body) forward(request, response, target, { body, rpc, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids });
     else { response.writeHead(502); response.end(); }
   };
   const server = http.createServer((request, response) => {

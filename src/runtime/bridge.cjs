@@ -40,12 +40,12 @@ async function collect(stream, limit = 64 * 1024 * 1024) {
   for await (const chunk of stream) { length += chunk.length; if (length > limit) throw new Error('Message too large'); chunks.push(chunk); }
   return Buffer.concat(chunks, length);
 }
-function forward(request, response, target, { body, getCatalog, log = () => {}, onFusionStatus, onNativeModels, onAllowedUids, timeouts = {} } = {}) {
+function forward(request, response, target, { body, rpc = target.pathname, getCatalog, log = () => {}, onFusionStatus, onNativeModels, onAllowedUids, timeouts = {} } = {}) {
   const limits = { connect: 10000, headers: 120000, body: 120000 };
   for (const [key, name] of [[timeouts.connectMs, 'connect'], [timeouts.firstResponseMs, 'headers'], [timeouts.idleMs, 'body']]) {
     if (Number.isInteger(key) && key > 0 && key <= 2147483647) limits[name] = key;
   }
-  const bodyLimit = STREAMING_RPC.test(target.pathname)
+  const bodyLimit = STREAMING_RPC.test(rpc)
     ? (Number.isInteger(timeouts.streamingIdleMs) && timeouts.streamingIdleMs > 0
         ? Math.min(timeouts.streamingIdleMs, 2147483647)
         : Math.max(limits.body, STREAMING_IDLE_LIMIT))
@@ -55,7 +55,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
   // so a failed request must be distinguishable from a quiet one: exactly one
   // notification per request — the parsed observation on success, null on any
   // failure — and only for this one RPC.
-  const allowedTarget = target.pathname === TEAM_SETTINGS_RPC;
+  const allowedTarget = rpc === TEAM_SETTINGS_RPC;
   let allowedNotified = false;
   const notifyAllowed = observation => {
     if (!allowedTarget || allowedNotified) return;
@@ -77,7 +77,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
     clearTimeout(bodyTimer);
     bodyTimer = setTimeout(() => timedOut('body'), bodyLimit);
   };
-  const timedOut = phase => { try { log('forward-timeout', { phase, rpc: target.pathname.split('/').pop() }); } catch {} fail(); };
+  const timedOut = phase => { try { log('forward-timeout', { phase, rpc: rpc.split('/').pop() }); } catch {} fail(); };
   let incoming;
   const fail = () => {
     notifyAllowed(null);
@@ -106,7 +106,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
     upstream.on('error', fail);
     upstream.on('aborted', fail);
     upstream.on('close', () => { stop(); if (!upstream.complete) fail(); });
-    if (!CATALOG.test(target.pathname) || upstream.statusCode !== 200 || !getCatalog) {
+    if (!CATALOG.test(rpc) || upstream.statusCode !== 200 || !getCatalog) {
       if (allowedTarget) notifyAllowed(null);
       response.writeHead(upstream.statusCode, { ...upstream.headers, ...cors(request) }); upstream.pipe(response); return;
     }
@@ -115,9 +115,9 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
       const outgoingHeaders = { ...upstream.headers, ...cors(request) };
       try {
         const format = wire.decode(original, upstream.headers);
-        const observed = collectNativeModels(format.data, { rpc: target.pathname, format });
+        const observed = collectNativeModels(format.data, { rpc, format });
         if (observed.length) try { onNativeModels?.(observed); } catch {}
-        const observation = collectAllowedUids(format.data, { rpc: target.pathname, format });
+        const observation = collectAllowedUids(format.data, { rpc, format });
         if (allowedTarget) notifyAllowed(observation);
         else if (observation) try { onAllowedUids?.(observation); } catch {}
         const catalog = getCatalog();
@@ -126,7 +126,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         // logged for every response, so a shape that stops being recognized stays
         // visible instead of showing up once per process.
         let skipped;
-        const augmented = augmentCatalog(format.data, { rpc: target.pathname, format, catalog, onFusionStatus,
+        const augmented = augmentCatalog(format.data, { rpc, format, catalog, onFusionStatus,
           onSkip: code => { skipped ??= code; } });
         // Preserve transport gzip: a compressed upstream is re-compressed so
         // the rewritten catalog does not balloon on the wire. Per-message
@@ -135,7 +135,7 @@ function forward(request, response, target, { body, getCatalog, log = () => {}, 
         if (!format.gzip) delete outgoingHeaders['content-encoding'];
         delete outgoingHeaders['connect-content-encoding'];
         delete outgoingHeaders['transfer-encoding']; outgoingHeaders['content-length'] = String(outgoing.length);
-        log('catalog', { rpc: target.pathname.split('/').pop(), models: catalog.models.length, matrix: catalog.matrixUids?.size ?? 0, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented), ...(skipped ? { skipped } : {}) });
+        log('catalog', { rpc: rpc.split('/').pop(), models: catalog.models.length, matrix: catalog.matrixUids?.size ?? 0, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented), ...(skipped ? { skipped } : {}) });
       } catch { log('catalog-error', { code: 'catalog_transform_failed' }); notifyAllowed(null); }
       response.writeHead(upstream.statusCode, outgoingHeaders); response.end(outgoing);
     } catch { fail(); }

@@ -919,6 +919,45 @@ test('a pushed upstream origin receives forwarded RPCs and never the control tok
   assert.deepEqual(reset, { ok: true, custom: false });
 });
 
+test('a path-prefixed upstream origin still receives the augmented catalog', async t => {
+  const seen = [];
+  const upstream = http.createServer((req, res) => {
+    seen.push({ url: req.url });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"clientModelConfigs":[]}');
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { upstream.close(resolve); upstream.closeAllConnections(); }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-upstream-prefix-'));
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({
+    providers: [{ id: 'p', name: 'P', models: [{ id: 'foo', label: 'Foo' }] }],
+  }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const logs = [];
+  const backend = await actualBackend.startBackend({ root, port: 0, log: (event, data) => logs.push([event, data]) });
+  t.after(() => backend.close());
+  const base = 'http://127.0.0.1:' + backend.port;
+  const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
+  const rpc = API + 'GetCliModelConfigs';
+
+  // The deployment route keeps its path prefix on the wire…
+  const prefixed = 'http://127.0.0.1:' + upstream.address().port + '/_route/api_server';
+  assert.deepEqual(await pushUpstream({ root, origin: prefixed, port: backend.port }), { ok: true, custom: true });
+  const response = await fetch(base + rpc, { method: 'POST', body: 'native' });
+  assert.equal(response.status, 200);
+  assert.equal(seen.at(-1).url, '/_route/api_server' + rpc, 'the prefix survives into the real upstream request');
+  assert.match(await response.text(), /dfbyok-/, 'a prefixed origin still gets the augmented catalog');
+  const catalogLog = logs.find(([event]) => event === 'catalog');
+  assert.equal(catalogLog?.[1]?.rpc, 'GetCliModelConfigs');
+
+  // …and the same request against a bare origin still works (no regression).
+  assert.deepEqual(await pushUpstream({ root, origin: 'http://127.0.0.1:' + upstream.address().port, port: backend.port }),
+    { ok: true, custom: true });
+  const bare = await fetch(base + rpc, { method: 'POST', body: 'native' });
+  assert.equal(bare.status, 200);
+  assert.match(await bare.text(), /dfbyok-/, 'the unprefixed path still augments');
+});
+
 test('pushUpstream refuses a foreign runtime without sending anything', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-upstream-id-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
