@@ -782,12 +782,16 @@ test('auto-continue-evaluated fires with the fixed field set even when disabled'
   assert.equal(events.length, 1);
   const data = events[0].data;
   assert.deepEqual(Object.keys(data).sort(), [
-    'decision', 'enabled', 'hasPendingPlan', 'onProviderError', 'providerErrorMatched',
-    'retryDisallowed', 'site', 'stopReason', 'suppressed', 'terminalBlocker', 'untilPlanComplete',
+    'decision', 'enabled', 'hasPendingPlan', 'onProviderError', 'pendingItems', 'planUpdates',
+    'providerErrorMatched', 'reason', 'retryDisallowed', 'site', 'stopReason', 'suppressed',
+    'terminalBlocker', 'untilPlanComplete',
   ].sort());
   assert.equal(data.site, 'resolve');
   assert.equal(data.enabled, false);
   assert.equal(data.decision, 'stop');
+  assert.equal(data.reason, null);
+  assert.equal(data.planUpdates, 0);
+  assert.equal(data.pendingItems, 0);
 });
 
 test('error retries still cap at 5 and are not affected by PLAN_ATTEMPT_LIMIT', { timeout: 2000 }, async t => {
@@ -819,4 +823,93 @@ test('error retries still cap at 5 and are not affected by PLAN_ATTEMPT_LIMIT', 
   const stops = f.logs.filter(l => l.event === 'auto-continue-stopped');
   assert.ok(stops.some(s => s.data.reason === 'error-attempt-limit'), 'error chain still stops at 5');
   assert.ok(promptCount <= 6, `error retries stayed within the old budget, got ${promptCount}`);
+});
+
+
+test('a settle after a newer manual prompt is logged as untracked with reason superseded', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, getOptions: () => ({}), scheduler });
+  t.after(() => handle.dispose());
+  const resolvers = [];
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest() { return new Promise(r => { resolvers.push(r); }); },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-sup', prompt: [{ type: 'text', text: 'a' }] } });
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-sup', prompt: [{ type: 'text', text: 'b' }] } });
+  resolvers[0]({ stopReason: 'end_turn' });
+  await new Promise(r => setImmediate(r));
+  const events = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.decision, 'untracked');
+  assert.equal(events[0].data.reason, 'superseded');
+});
+
+test('a cancelled stopReason is evaluated as stop with reason cancelled and never scheduled', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, getOptions: () => ({ onProviderError: true, untilPlanComplete: true }), scheduler });
+  t.after(() => handle.dispose());
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest() { return Promise.resolve({ stopReason: 'cancelled' }); },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  await connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-cancel', prompt: [{ type: 'text', text: 'hi' }] } });
+  await new Promise(r => setImmediate(r));
+  const events = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.decision, 'stop');
+  assert.equal(events[0].data.reason, 'cancelled');
+  assert.equal(f.logs.filter(l => l.event === 'auto-continue-scheduled').length, 0);
+});
+
+test('plan_update events before end_turn make planUpdates and pendingItems visible', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, getOptions: () => ({ onProviderError: false, untilPlanComplete: true }), scheduler });
+  t.after(() => handle.dispose());
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') return Promise.resolve({ stopReason: 'end_turn' });
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-vis', prompt: [{ type: 'text', text: 't' }] } });
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-vis',
+    update: { sessionUpdate: 'plan_update', plan: { planId: 'p1', type: 'items', entries: [
+      { content: 'one', status: 'pending' }, { content: 'two', status: 'pending' }] } } } });
+  await new Promise(r => setImmediate(r));
+  const events = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(events.length, 1);
+  assert.ok(events[0].data.planUpdates >= 1);
+  assert.equal(events[0].data.pendingItems, 2);
+  assert.equal(events[0].data.hasPendingPlan, true);
+});
+
+test('a turn with no plan events reports zero plan counters', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, getOptions: () => ({}), scheduler });
+  t.after(() => handle.dispose());
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest() { return Promise.resolve({ stopReason: 'end_turn' }); },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  await connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-noplan', prompt: [{ type: 'text', text: 'hi' }] } });
+  await new Promise(r => setImmediate(r));
+  const events = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.planUpdates, 0);
+  assert.equal(events[0].data.pendingItems, 0);
+  assert.equal(events[0].data.hasPendingPlan, false);
 });

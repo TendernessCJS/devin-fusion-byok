@@ -16,7 +16,7 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   流程，且 key 需在 `permitted()` 白名单内，保证可回滚。不要直接写 `settings.json`。
   已配置 `http.proxy` 时 `enable()` 还会经同一 receipt 写入 `NO_PROXY=127.0.0.1,localhost,::1` 回环豁免，代理清空后由迁移分支自动还原。
 - 服务商错误自动继续的连续预算是 **5 次自动重试 / 10 分钟窗口**；触顶必须停止、结算等待中的请求并提示用户。待办（plan）链的预算是**每个真实用户轮次最多 10 次自动续接**（`PLAN_ATTEMPT_LIMIT`，触顶记 `plan-attempt-limit` 并提示）；两链预算彼此独立，也都与 Goal 的预算独立，不能互相绕过。
-- **两个开关默认关**，运行期从未触发过时不要假设它们有效：每次轮次结算都写一条 `auto-continue-evaluated`（只记 `site`/`stopReason`/`enabled`/`onProviderError`/`untilPlanComplete`/`suppressed`/`retryDisallowed`/`providerErrorMatched`/`terminalBlocker`/`hasPendingPlan`/`decision`，**不记任何正文或 id**）。判断"某次为什么没续"只认这条事件，别靠猜——`auto-continue-miss` 只在尾部文本像供应商错误时才写，plan 链完全无记录。该事件字段集有测试钉死，加字段须同步改测试。
+- **两个开关默认关**，运行期从未触发过时不要假设它们有效：每次轮次结算都写一条 `auto-continue-evaluated`（固定 14 字段：`site`/`stopReason`/`enabled`/`onProviderError`/`untilPlanComplete`/`suppressed`/`retryDisallowed`/`providerErrorMatched`/`terminalBlocker`/`hasPendingPlan`/`planUpdates`/`pendingItems`/`decision`/`reason`，**不记任何正文或 id**）。`decision` 取值 `error-retry`/`plan-retry`/`stop`/`untracked`；`reason` 只在非正常路径为字符串（`disposed`/`inactive`/`retry-disallowed`/`session-gone`/`superseded`/`generation-mismatch`/`no-stop-reason`/`cancelled`/`refusal`），正常评估为 `null`；`planUpdates`=本轮收到的 plan 家族 session/update 数，`pendingItems`=未完成条目总数——两者用于判定「原生是否真的下发 plan 事件」。判断"某次为什么没续"只认这条事件，别靠猜——`auto-continue-miss` 只在尾部文本像供应商错误时才写，plan 链完全无记录。该事件字段集有测试钉死，加字段须同步改测试。
 
 - `SOURCE_FILES` 已**不再是手工清单**（R2b-1）：`source-identity.cjs` 加载期从 `backend.cjs` 字面量 require 图推导哈希输入。
   **backend 闭包禁止动态 require**（非字面量 specifier 让推导抛错、起不来）。推导细节与守卫全貌见 `architecture-boundaries.md`。
