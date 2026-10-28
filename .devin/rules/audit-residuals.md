@@ -16,10 +16,12 @@ description: "Apply when a 审查/取证 result is being revisited, when someone
 - **Fast Context 的 MCP 配置是普通 JSON 文件**：`--root` 运行期无法由工具入参改变（工具只有 `query`/`url`），
   但任何有文件写权限的 agent 都能改写它，让**后续会话**指向别的目录。这是"agent 能写文件"这一前提的通用风险，
   **插件侧修不了**；已做的是 `--root` 必须绝对路径 + `realpathSync` + 必须是目录，且设置页与 `fast_context_status` 都会显示当前 root。
-- **`panel` 的取证等级**：静态层面已全覆盖（无 `innerHTML`/`eval`/`new Function`；`dom.cjs` 禁 `href/src/srcset/action/formaction/srcdoc/data/poster/background/xlink:href`；
-  CSP `default-src 'none'` + 每次渲染 `randomBytes(24)` nonce 并属性转义；扩展侧消息入口白名单 + 形状校验）。
-  **运行时（真实 DOM / CSP 是否生效）未取证**——Devin 启动不带 `--remote-debugging-port`，REA 的 web/Electron 工具接不上。
-  2026-10-28 决定接受该等级（要补需重启 Devin 并开调试端口）。**不要把"没抓过 DOM"当成"存在注入面"**。
+- **`panel` 的取证等级**：**静态逐行通读已完成**（17 文件 2,584 行）：HTML 模板里的 `${}` 只插 nonce、静态 CSS 字面量与函数源码序列化，
+  **零运行期数据进入 HTML 模板**；运行期数据一律走 `textContent` / `option.value` / `element()` helper（`dom.cjs` 禁 `href/src/srcset/action/formaction/srcdoc/data/poster/background/xlink:href`
+  并把 `on*` 转成 `addEventListener`）；选择器与属性名全部为字面量；CSP `default-src 'none'` + 每次渲染 `randomBytes(24)` nonce。
+  **唯一未取证的是运行时**（真实 DOM / CSP 是否生效）——Devin 启动不带 `--remote-debugging-port`，REA 的 web/Electron 工具接不上。
+  2026-10-28 决定接受该等级。**不要把"没抓过 DOM"当成"存在注入面"**，也不要因为"HTML 是整块字符串拼出来的"就认为必然有插值漏洞——
+  已逐条核过，插的都不是数据。
 
 ## 并发面
 
