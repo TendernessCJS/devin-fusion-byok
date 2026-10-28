@@ -67,6 +67,7 @@ function fixture(t, options = {}) {
   const deps = { lifecycle, config, configFile, vscode, context, log: () => {},
     catalog: () => ({ models: [] }), nativeMain: '/native/main.js', root, extensionPath,
     stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } },
+    createPublication: () => ({ observe() {}, changed: () => ({}), status: () => null, dispose() {} }),
     managedSettings: createManagedSettingsGate() };
 
   // enable.cjs derives the managed env from runtime/port.cjs now, which loads

@@ -76,6 +76,7 @@ function fixture(t, options = {}) {
     log: (event, data) => logs.push({ event, data: data && typeof data === 'object' ? { ...data } : data }),
     catalog: () => ({ models: [] }), nativeMain: '/native/main.js', root, extensionPath,
     stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } },
+    createPublication: () => ({ observe() {}, changed: () => ({}), status: () => null, dispose() {} }),
     managedSettings: createManagedSettingsGate() };
 
   const effective = { current: options.effective || { origin: null, source: 'default' } };
@@ -160,4 +161,19 @@ test('a repeated trigger resolving to the same origin sends no second POST', asy
   await f.handlers[0]({ affectsConfiguration: section => section === 'windsurf.portalUrl' });
   await f.settle();
   assert.equal(f.pushes.length, 2, 'a changed origin always pushes');
+});
+
+test('publication is cleared by teardown and rebuilt on the next enable', async t => {
+  const { teardown } = require('../src/activation/teardown.cjs');
+  const f = fixture(t, { effective: { origin: 'https://custom.example.com', source: 'ls-arg' } });
+  await f.shared.ensureEnabled();
+  await f.settle();
+  assert.ok(f.lifecycle.publication, 'enable wires the injected factory');
+  f.lifecycle.activationDisposed = true;
+  await teardown(f.lifecycle);
+  assert.equal(f.lifecycle.publication, undefined, 'teardown disposes and clears the slot');
+  f.lifecycle.activationDisposed = false;
+  await f.shared.ensureEnabled();
+  await f.settle();
+  assert.ok(f.lifecycle.publication, 'the next enable rebuilds publication via ??=');
 });

@@ -369,3 +369,10 @@ test('a probe:1 cache is never reused even when stat and signature match', async
   const rewritten = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
   assert.equal(rewritten.probe, PROBE_VERSION);
 });
+
+test('a missing service namespace marker reports drift on ls', async () => {
+  const { extensionPath, cacheFile } = fakeApp({ lsMarkers: ALL_LS.filter(m => m !== 'exa.api_server_pb.ApiServerService') });
+  const result = await checkNativeContract({ extensionPath, cacheFile });
+  assert.equal(result.status, 'drift');
+  assert.ok(result.missing.ls.includes('exa.api_server_pb.ApiServerService'));
+});

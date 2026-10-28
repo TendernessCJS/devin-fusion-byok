@@ -158,13 +158,13 @@ async function activate(context) {
     if (safe.code === 'cancelled') return;
     log('error', { code: safe.code }); vscode.window.showErrorMessage('Fusion BYOK：' + safe.message);
   } };
-  const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run, stores, managedSettings };
   lifecycle.log = log;
   lifecycle.nativeRefresh = () => vscode.commands.executeCommand('devin.refreshUserStatus');
   const createPublication = () => require('./activation/catalog-publication.cjs').createCatalogPublication({
     getCatalog: catalog, refreshUserStatus: lifecycle.nativeRefresh,
     isCurrent: () => live(lifecycle, config),
     log });
+  const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run, stores, managedSettings, createPublication };
   lifecycle.publication = createPublication();
   const cacheSync = installCacheSync({ deps, shared, publish: () => shared.management?.publish() });
   installCatalogSync({ deps, shared, onChange: () => {

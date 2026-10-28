@@ -13,7 +13,12 @@ const REQUIRED = {
   // GetUserJwt / GetWebSearchResults back the external Fast Context MCP: the
   // hardcoded field numbers in src/fast-context/web.cjs fail loudly when the
   // names go, but we want to know before that failure reaches users.
-  ls: ['cascade_model_config_data', 'GetUserJwt', 'GetWebSearchResults'],
+  // The three service names are the namespaces the bridge's CATALOG regex
+  // (src/runtime/bridge.cjs) matches against: a rename silently un-intercepts
+  // the catalog RPCs, and the bridge's unknown-RPC report ignores any method
+  // lacking "Model" — so the drift must be caught here.
+  ls: ['exa.language_server_pb.LanguageServerService', 'exa.api_server_pb.ApiServerService',
+    'exa.seat_management_pb.SeatManagementService', 'cascade_model_config_data', 'GetUserJwt', 'GetWebSearchResults'],
   desktop: ['devin.refreshUserStatus', 'cascade_model_config_data'],
   chat: ['cognition.ai/auth', 'cognition.ai/subagent_context'],
   // The ACP client bundle we wrap: session/update kinds, the method names our
@@ -39,7 +44,7 @@ const SIZE_CAP = 400 * 1024 * 1024;
 // Bump whenever the marker tables or probe semantics change: cached verdicts
 // are keyed on probe, otherwise an old 'ok' would be reused forever and new
 // markers would never be scanned.
-const PROBE_VERSION = 5;
+const PROBE_VERSION = 6;
 
 const ARTIFACT_KEYS = ['cli', 'ls', 'desktop', 'chat', 'acp'];
 const APP_ANCHOR = path.join('out', 'vs', 'workbench', 'workbench.desktop.main.js');

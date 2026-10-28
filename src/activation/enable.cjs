@@ -145,9 +145,9 @@ function installEnable({ deps, shared }) {
     // subscription is registered once per extension context, not per enable.
     const triggerPush = () => {
       // A newer trigger supersedes any in-flight resolution window.
-      const generation = (lifecycle.upstreamPushGeneration = (lifecycle.upstreamPushGeneration || 0) + 1);
+      const pushGeneration = (lifecycle.upstreamPushGeneration = (lifecycle.upstreamPushGeneration || 0) + 1);
       return pushConfiguredUpstream({ root: deps.root, vscode, log, lifecycle,
-        shouldContinue: () => live(lifecycle, config) && lifecycle.upstreamPushGeneration === generation });
+        shouldContinue: () => live(lifecycle, config) && lifecycle.upstreamPushGeneration === pushGeneration });
     };
     void triggerPush();
     if (!lifecycle.upstreamSubscription) {
@@ -161,10 +161,10 @@ function installEnable({ deps, shared }) {
     }
     // The publication coordinator owns every refresh of the stored desktop
     // catalog; the hook only reports what each native call actually carried.
-    lifecycle.publication ??= require('./catalog-publication.cjs').createCatalogPublication({
-      getCatalog: catalog, refreshUserStatus: lifecycle.nativeRefresh,
-      isCurrent: () => live(lifecycle, config),
-      log });
+    // The factory is provided once by extension.cjs and injected via deps —
+    // `??=` stays because disable() disposes and clears the slot, so a later
+    // enable must rebuild it.
+    lifecycle.publication ??= deps.createPublication();
     // Pin the publisher this generation's events belong to: a previous
     // hook's late native settle must never confirm a newer coordinator.
     const publisher = lifecycle.publication;

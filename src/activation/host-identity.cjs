@@ -44,6 +44,7 @@ function publishHostBuild({ root, extensionPath, version, activatedAt }) {
     ownsTemporary = true;
     try { fs.writeFileSync(fd, JSON.stringify(record) + '\n'); } finally { fs.closeSync(fd); }
     fs.renameSync(temporary, path.join(root, recordFile));
+    pruneRecords(dir);
     ownsTemporary = false;
     return record;
   } catch {
@@ -52,4 +53,22 @@ function publishHostBuild({ root, extensionPath, version, activatedAt }) {
   }
 }
 
-module.exports = { hostBuildId, publishHostBuild, BUILD_DIR };
+// Records are unbounded otherwise: every activate writes one file, and the
+// directory is only ever appended to. Keep the newest MAX_RECORDS `<pid>-<uuid>.json`
+// entries; the legacy `host-build.json` singleton is never touched.
+const MAX_RECORDS = 50;
+const RECORD_SHAPE = /^\d+-[0-9a-f-]{36}\.json$/;
+function pruneRecords(dir) {
+  try {
+    const entries = fs.readdirSync(dir)
+      .filter(name => RECORD_SHAPE.test(name))
+      .map(name => { try { return { name, mtime: fs.statSync(path.join(dir, name)).mtimeMs }; } catch { return null; } })
+      .filter(Boolean)
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const entry of entries.slice(MAX_RECORDS)) {
+      try { fs.unlinkSync(path.join(dir, entry.name)); } catch {}
+    }
+  } catch {}
+}
+
+module.exports = { hostBuildId, publishHostBuild, BUILD_DIR, MAX_RECORDS };

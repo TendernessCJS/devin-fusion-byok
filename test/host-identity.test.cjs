@@ -172,3 +172,24 @@ test('the real repository produces a stable build id', () => {
   assert.match(build.id, /^[0-9a-f]{64}$/);
   assert.ok(build.files >= 100, 'the hash must cover the real src tree');
 });
+
+test('record files are pruned to MAX_RECORDS keeping the newest', t => {
+  const { MAX_RECORDS } = require('../src/activation/host-identity.cjs');
+  const root = tree(t);
+  write(root, 'src/x.cjs', 'alpha');
+  const out = path.join(root, 'out');
+  const dir = path.join(out, BUILD_DIR);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(out, 'host-build.json'), '{"legacy":true}');
+  for (let i = 0; i < MAX_RECORDS + 5; i++) {
+    const f = path.join(dir, `${1000 + i}-${crypto.randomUUID()}.json`);
+    fs.writeFileSync(f, '{}');
+    const time = new Date(2020, 0, 1 + i);
+    fs.utimesSync(f, time, time);
+  }
+  publishHostBuild({ root: out, extensionPath: root, version: '1' });
+  const records = fs.readdirSync(dir).filter(name => /^\d+-[0-9a-f-]{36}\.json$/.test(name));
+  assert.ok(records.length <= MAX_RECORDS, `expected <= ${MAX_RECORDS} records, got ${records.length}`);
+  assert.ok(records.some(name => name.startsWith(process.pid + '-')), 'the just-written record survives');
+  assert.equal(fs.readFileSync(path.join(out, 'host-build.json'), 'utf8'), '{"legacy":true}', 'legacy singleton untouched');
+});
