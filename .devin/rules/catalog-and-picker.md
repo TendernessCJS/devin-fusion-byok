@@ -14,6 +14,7 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
   `uid`（能力保留，面板 UI 不再使用单 uid 形态）。族标签取「无标记 uid」成员的 label 剥掉档位/开关尾词（单成员族不剥，故 `SWE-1.6 Fast` 保持原样；
   **uid 变体后缀词表含 `lightning`**——`swe-2-medium-lightning` 是 fast-mode 变体而非家族名，`Lightning` 不剥 label 是因为
   `SWE-1.7 Lightning` 本身是家族名），并全局去重。
+- **emit 最终标签按「家族」整体唯一，同一家族不得被拆到不同 Lead 维度值**（2026-10-28，`catalog/build.cjs` 的 `claim`/`reserved` 循环）：先把每个家族的 `familyLabel` 与每个 lead 的最终标签登记进 `owners`；**只有撞名家族**（`owners` 集合 >1）才加后缀——未撞名家族的全部标签先进入 `reserved`，所以候选必须同时避开「familyLabel + effort 名」形态（否则 `Foo`+High 与 `Foo High`+无档位仍会撞）；撞名家族按 `family.key` 排序，后缀初值 `digest(family.key).slice(0,8)`，被占用再递增 `-2`/`-3`，命中后**整族统一改写** `familyLabel`，并把该族全部最终标签并入 `reserved`。**禁止退化成按 lead 逐个加后缀**：标签确实唯一了，但一族会散到不同 Lead 维度值，picker 里同一模型出现两行。为何必须：原生 mapper 同 label 后写覆盖 → 组内丢 uid，证据见 `native-observation-and-cli-cache-forensics.md`。
 - **picker 可见性契约（2026-10-15：先逆向实测、后由 App bundle 源码证实）**：picker 行 = `team_settings` proto
   **f7 `allowedModelUids` 白名单** ∩ `user_status` f33 **排序组 label 引用** ∩ 非内部 `kind`。内层 f22
   **就是 proto `DisplayOption` 枚举**（`windsurf-chat-client/index.js` 的 `nuk`/`nuM` + `niH`
@@ -74,31 +75,4 @@ backend 冷启动回显采纳**。bridge 对 GetCliTeamSettings **每请求恰�
 断连/超时/客户端取消）通知 `null` 并打断连续计数。**确认提交（control POST / 已去抖判定）直调
 `onAllowedUids` 立即生效并重置原始空计数，不再等 3**；unrestricted 时 `allowedUids` 为空仍要推，但
 models 必须非空（空 payload 不推），POST 的模式校验在 ingest 之前。旧缓存缺 `allowedMode` 键=restricted。
-
-## 桌面 auth 目录面与发布确认（Devin 3.11.216 / CLI 3000.11.216）
-
-- **写入面**：新 agent 窗口 picker 把 configOptions 与 `userStatus.cascadeModelConfigData` 按 UID 求交；
-  交集缺失条目进 `catalogMisses` 被丢弃。`windsurfAuth.setAuthStatus` 的
-  `userStatusProtoBinaryBase64` 是裸 `UserStatus`（模型列表在 f33），`auth-status.cjs` 在该调用处原地改写，
-  与 CLI 缓存改写共用 `augmentCatalog`（LS 桥看到的则是 f1→f33 信封，`collectNativeModels` 同判别读两形）。
-- **发布确认链**：`catalog-publication.cjs` 是唯一协调者——内容签名变化 → 1500ms 合并 →
-  `devin.refreshUserStatus`（同时最多一个在途）。**命令完成 ≠ 确认**：只有 hook 回报的
-  `applied`（已验证实际输出、带匹配签名）才可把该 emit 置 `ready`；跟踪 callId、未完成提交和启用世代，
-  旧提交迟到必须保守撤销确认并按预算修复，不能把旧世代事件交给新协调器。命令锁仅由该命令 settle 释放，
-  hook 确认不能提前释放；settle 后等确认 5s，自动尝试未确认再等 5s 按预算重试；
-  手工尝试未确认只降级，不派生自动重试；未验证写入（nativeApplied）须撤销旧 ready。
-  10s watchdog 只降级不释放锁，每签名最多 2 次、滚动 60s 最多 6 次自动尝试；
-  `cleared`（注销/空 payload）→ `waiting-auth`，配置变化不解除暂停，旧调用成功也不能复活确认。
-  在途期间目录又变 → settle 后立即发新签名（拒绝也不丢新目标）；手工 force 合并未发意图、
-  取消旧自动计时器、绕过成功签名去重，但仍排队且不重置自动预算；注销暂停独立于 watchdog 状态。
-- **停用恢复**：显式停用先 `deactivate()`（透传且仍观察）→ `drain(≤10s)` → 一次透传刷新验证
-  新的非空、合法目录提交不含我方条目；注销/畸形/超时/未排空/有残余均不得判恢复成功，不回放、不登出。
-  连接设置恢复与目录恢复分别报告；目录未确认不得展示无条件恢复成功。LS 清理失败也不能跳过 owned-settings 恢复。
-  面板「刷新模型目录」只走 `publication.changed({force:true})`，不复用会断 ACP 的旧 picker 刷新。
-
-## `GetModelStatuses` 结论（3.11.228 取证）
-
-调用点是 Agent Window 会话面板（`out/vs/sessions/sessions.desktop.main.js`，60s 节流）；
-`ModelStatusInfo.status` 只有 UNSPECIFIED/INFO/WARNING 三态 + message——**是提示徽标不是可用性白名单**。
-因此桥**不改写响应**（已列入 `KNOWN_UNCHANGED`，不报未知目录 RPC）、缺我方 uid 无功能影响。
-若哪天出现 `MODEL_STATUS_UNAVAILABLE` 之类的第四态，先取证再决定是否合成条目。
+- **桌面 auth 目录写入、发布确认链与停用恢复、`GetModelStatuses` 结论已分卷到 `catalog-publication.md`**：`windsurfAuth.setAuthStatus` 的原地改写、`catalog-publication.cjs` 的确认预算/看门狗/注销与停用恢复判据都在那一卷，**改发布确认或 `auth-status` 前必读**，不要在本文里重推预算数字。

@@ -35,7 +35,7 @@ description: "Apply when changing usage recording, attribution, time filtering, 
   的原值会被覆盖成 `true`，静态控件（顶栏重载/重启、刷新缓存等不随 render 重建的节点）就此永久禁用。正确写法参照 `openDialog` 里
   `const locked = [...].map(node => [node, node.disabled])`。
 - **面板 state 必须「去重稳定」，且 render 必须保住焦点与滚动**。`controller.cjs` 的 `postState` 用 `JSON.stringify(state)` 与上一次比较去重，
-  所以**任何每次都会变的字段写进 state 就等于关掉去重**：`checkCliCaches` 曾在每次自动检查时重盖 `{ at: new Date().toISOString() }`，而
+  所以**任何每次都会变的字段写进 state 就等于关掉去重**：`checkCliCaches`（现名 `inspectCliCaches`，见 `src/runtime/host/cli-cache.cjs`）曾在每次自动检查时重盖 `{ at: new Date().toISOString() }`，而
   `refreshNativeModels` **每 3 秒**跑一次（`setInterval`，并顺带 `management.publish()`），于是面板每 3 秒收到一条「新」state →
   webview `render()` 全量重建所有容器（`replaceChildren`）→ 搜索框被销毁（**焦点丢失**）、`.scroll` 列表 `scrollTop` 被夹回 0（**滚动复位**）。
   规则：①**时间戳只在结果真正变化（或 `force`）时才写**，判据是除 `at` 外的字段摘要，未变则**复用同一对象**（引用相等，state JSON 才不变）；②`render()` 必须快照并恢复

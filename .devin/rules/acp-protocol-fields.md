@@ -119,24 +119,14 @@ trigger: model_decision
 - **`cached_tokens` 是 `input_tokens` 的子集（inclusive）**：真机实测 `prompt_cache_hit_tokens:0 + prompt_cache_miss_tokens:7 = prompt_tokens:7`。因此 `ModelUsageStats.input_tokens`（字段 2）永远写含缓存总额，4/5 只是子集分列，**不要**把 input 改成「减缓存」。
 - **思考签名闭环已真机证实**（2026-10-16，真实 Devin 窗口 + 真实 DeepSeek anthropic 端点，经本地反代只记形状）：
 
-  ```
-  响应字段 10 delta_signature ──→ 客户端持久化 ──→ 请求字段 12 signature ──→ 回传 thinking 块
-  ```
-
   **字段 10 被两条路径复用**（2026-10-16 登记）：Anthropic 用它回传思考签名，Responses 用它携带推理状态信封（`dfbyok-responses-v1:` + base64url）。信封落在 Devin 侧持久化的同一个 `signature` 槽位，因此 Anthropic 侧回放必须拒绝 `dfbyok-` 前缀（`FOREIGN_STATE_PREFIX`）——否则外来信封会被当成思考签名写进 `{type:'thinking',signature}`，官方对修改过的思考块直接 400。两条路径各自读同一字段但语义不同，**不要让任何一边把对方的值当作自己的载荷**。
 
-  证据链：第 1 轮响应 `signature_delta` 1 次（**36 字符**）→ 第 2 轮请求新增助手轮块类型 `["thinking","tool_use"]`、`signedThinkingBlocks: 1`、签名长度 `[36]` → 第 3 轮 `[36, 36]` → 第 4 轮 `[36, 36, 36]`，**逐轮累积且长度逐字一致**。因此「客户端读字段 10 并写回请求字段 12」成立，捕获与回传两半都可达。
+  证据链（逐轮 36 字符累积）与可复用的真机方法见 `.devin/rules/acp-protocol-fields-forensics.md`。
 - **字段 21 `delta_signature_type` 不需要发**：上述闭环在**完全不发字段 21** 的情况下成立，所以「取值未知」不再阻塞任何事。`signatureType` 在 JS 里只被初始化为 `""`、无消费逻辑；除非未来真机出现签名回放失败，再考虑补它。
 - **脱敏思考靠签名通道往返**（2026-10-22 修正上一条旧结论）：`redacted_thinking` 在请求（字段 13）与响应（字段 11）两侧确实只有 bool、没有载荷，但 SDK 的 `RedactedThinkingBlock.data` 是**必填且要求续轮原样回传**，丢弃它等于放弃多轮连续性。本仓把数据挂在**字段 10** 上，用独立前缀 `dfbyok-redacted-v1:` 与 Responses 信封（`dfbyok-responses-v1:`）区分；回放时先判该前缀（**必须先于 `FOREIGN_STATE_PREFIX`**，因为后者也覆盖 `dfbyok-`），命中就发 `{type:'redacted_thinking',data}`，不伪造 thinking 块。已知上限：ACP 每轮只有一个 signature 槽，所以**同一条消息里只有第一个脱敏块能带数据**，之后只发 marker；thinking 签名与脱敏数据同时存在时后者覆盖前者。
 - Anthropic 侧 `ThinkingBlockParam.signature` 是**必需字段**：assistant 回传思考块仅在签名在场时进行，否则整块省略。
-- **验证方法（可复用）**：把临时 `apiFormat: anthropic` 供应商指向本地反代，反代只记录形状（块类型/签名长度/布尔），**不记正文与密钥**；跑一轮带工具回合即可看到回传。注意 baseUrl 会被规范化成 `<host>/anthropic/v1`，客户端再拼 `/messages`。
 
-- **ACP 方法频次基线（2026-10-18 真机，单窗口约 30 分钟，`devin acp` 3000.10.67）**：`session/list` **631**、`ext_method` 127、`session/new` 86、
-  `ext_notification` 86、`session/prompt` 60、`session/load` 56、`session/delete` 5、`authenticate` 5、`initialize` 3。
-  含义：`session/list` 约每 2.8 秒一次，是**宿主侧轮询**（本扩展不主动调 ACP 方法），排障时别把它当成异常流量；`session/new`/`session/load`
-  数量偏高是因为每个面板/子会话各建一次。基线随窗口活动变化，但**量级关系**（list ≫ new > prompt）可用于识别「谁在刷 ACP」。
-- **一条已知但不致命的 ACP 警告**：`ext_method{cognition.ai/revert/listSteps}` 对已不在活跃集合的会话会得到
-  `ACP revert: session <id> not in active sessions`（窗口重载后渲染端仍持有旧会话 id 时出现）。单次出现属竞态，不要据此认定会话损坏。
+- ACP 方法频次基线（`session/list` ≫ `session/new` > `session/prompt`，用于识别「谁在刷 ACP」）见 `.devin/rules/acp-protocol-fields-forensics.md`。
 
 ## 附件与缓存键字段（契约值；实证过程见 `.devin/rules/acp-protocol-fields-forensics.md`）
 

@@ -25,7 +25,7 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
   Responses 格式（`object:"response"`、id 前缀 `resp_`、SSE 首帧 `response.created`）——此时传输层全部正常，只是我们的 anthropic 适配器不认这些事件名，
   于是**状态 200、日志 chat-complete、回答为空**。判据只能是**响应体形状**（事件名/字段），不是状态码或 content-type。
 - **零输出成功检测**（`upstream_empty_output`，2026-10-16 加）：`serveChat` 在 `processor().finish()` 里判定「正常完成、无工具调用、
-  且整条流从未产生任何文本/思考」→ 抛错并在流里输出 `Provider returned no output.`。这是**通用兜底**：未来任何事件名变更或未知供应商行为都会
+  且**从未真正吐出过非空文本/思考增量**（判据是 `emittedText`，只在 delta 非空时自增；2026-10-28 修——此前用 `texts.size`，于是「有 text item 但增量全空」会被判成功）」→ 抛错并在流里输出 `Provider returned no output.`。这是**通用兜底**：未来任何事件名变更或未知供应商行为都会
   变成响亮错误而不是静默空回答。截断（`response.incomplete`）与 content_filter 不触发。给供应商加新事件时，`tracker.cjs` 的 `semanticOutput()`
   要同步，否则面板的 `firstOutputMs`/吞吐统计会漏。
 - **注解事件不处理是刻意的**：`response.output_text.annotation.added`、`response.content_part.done` 不进 `switch`；完整正文随

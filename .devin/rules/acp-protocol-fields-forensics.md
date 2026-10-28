@@ -48,6 +48,24 @@ tail -c +<偏移> <bundle> | head -c 600
 
 `GetChatMessageRequest` **字段 27 `prompt_cache_key`**：原生已带，此前不读。现读成 `request.promptCacheKey`，Responses 与 Chat 原样写 `body.prompt_cache_key`；**Anthropic 不发**（它要的是分段 `cache_control`）。省略该键不等于自动缓存失效，别据此判命中率。
 
+## 思考签名闭环、ACP 方法频次与已知警告（真机取证）
+
+  ```
+  响应字段 10 delta_signature ──→ 客户端持久化 ──→ 请求字段 12 signature ──→ 回传 thinking 块
+  ```
+
+  证据链：第 1 轮响应 `signature_delta` 1 次（**36 字符**）→ 第 2 轮请求新增助手轮块类型 `["thinking","tool_use"]`、`signedThinkingBlocks: 1`、签名长度 `[36]` → 第 3 轮 `[36, 36]` → 第 4 轮 `[36, 36, 36]`，**逐轮累积且长度逐字一致**。因此「客户端读字段 10 并写回请求字段 12」成立，捕获与回传两半都可达。
+
+- **验证方法（可复用）**：把临时 `apiFormat: anthropic` 供应商指向本地反代，反代只记录形状（块类型/签名长度/布尔），**不记正文与密钥**；跑一轮带工具回合即可看到回传。注意 baseUrl 会被规范化成 `<host>/anthropic/v1`，客户端再拼 `/messages`。
+
+- **ACP 方法频次基线（2026-10-18 真机，单窗口约 30 分钟，`devin acp` 3000.10.67）**：`session/list` **631**、`ext_method` 127、`session/new` 86、
+  `ext_notification` 86、`session/prompt` 60、`session/load` 56、`session/delete` 5、`authenticate` 5、`initialize` 3。
+  含义：`session/list` 约每 2.8 秒一次，是**宿主侧轮询**（本扩展不主动调 ACP 方法），排障时别把它当成异常流量；`session/new`/`session/load`
+  数量偏高是因为每个面板/子会话各建一次。基线随窗口活动变化，但**量级关系**（list ≫ new > prompt）可用于识别「谁在刷 ACP」。
+
+- **一条已知但不致命的 ACP 警告**：`ext_method{cognition.ai/revert/listSteps}` 对已不在活跃集合的会话会得到
+  `ACP revert: session <id> not in active sessions`（窗口重载后渲染端仍持有旧会话 id 时出现）。单次出现属竞态，不要据此认定会话损坏。
+
 ## 外部独立实现互证（dwgx/WindsurfAPI）
 
 另一份**独立逆向**落在同一组字段号上：`dwgx/WindsurfAPI`（本地克隆 `.refs/WindsurfAPI`，2026-10-26 更新至 HEAD `272429d3`，v3.141.592657）是 CLI → `server.codeium.com` 的上游 Connect-RPC 代理，与我们客户端侧实现逆的是同一批 `exa.api_server_pb`/`exa.chat_pb` 消息。该仓没有 `.proto`，字段号写在手写的 `parseFields` 与注释里（`src/devin-connect-catalog.js` 顶部 `F_*` 常量）。
