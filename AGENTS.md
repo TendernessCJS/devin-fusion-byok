@@ -66,6 +66,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/provider-sdk-parity.md` | **判断某个 provider 线格式字段是否合法、该不该发，或更新 `.refs` 里的 SDK 时必读**——SDK 基线版本与更新方式、我们发送字段的合法性对照、原生无法表达因此刻意不发的字段、以及「REA 管不到 provider 线格式」的判据 |
 | `.devin/rules/testing-notes.md` | 写或调测试 |
 | `.devin/rules/retired-and-deadends.md` | 清理配置键、审「这段代码还活着吗」、疑惑旧字段为何还在 |
+| `.devin/rules/audit-residuals.md` | **想"修"某个看着像漏洞/漏做的取舍前必读**——已核残余（DNS 不校验、`ownsSession` fail-closed、`finish_reason` 缺失落 end_turn、config 恢复依赖 `.bak`、panel 运行时未取证）与已排除怀疑（unzip 穿越、SQL 注入、rg 参数注入） |
 | `.devin/rules/acp-protocol-fields.md` | 改 `src/protocol/*` 的 protobuf 字段号、核对原生请求/响应/用量字段 |
 | `.devin/rules/acp-protocol-fields-forensics.md` | 改字段号、怀疑读数过期，或排查 CompletionDelta 错位陷阱时必读（实测方法与证据） |
 | `.devin/rules/acp-protocol-fields-forensics-rea.md` | **用 REA 取证、或想知道「本机 REA 还能用什么」时必读**——原生面不可用的确切原因、语义图预算实测、partial evidence 只在同会话内有效 |
