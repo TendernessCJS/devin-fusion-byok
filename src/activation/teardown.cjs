@@ -16,6 +16,7 @@ async function teardown(lifecycle, { restore = false } = {}) {
   lifecycle.resetAutoContinue?.();
   lifecycle.stopNativeSync?.(); lifecycle.stopNativeSync = undefined;
   lifecycle.activationGeneration++; lifecycle.runtimeWaitAbort?.abort(); lifecycle.reconcileHalted = true;
+  try { lifecycle.upstreamPushAbort?.abort(); } catch {}
   try { lifecycle.publication?.dispose?.(); lifecycle.publication = undefined; } catch {}
   const auth = lifecycle.authStatus;
   if (auth) {

@@ -87,22 +87,33 @@ async function attempt({ root, origin, port = PORT, signal, request = httpFetch 
   }
 }
 const RETRY_PAUSES = [100, 250, 500];
-function wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function wait(ms, signal) {
+  return new Promise(resolve => {
+    if (signal?.aborted) { resolve(); return; }
+    let timer;
+    const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); };
+    timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
 async function pushUpstream(options) {
   let result;
   for (let index = 0; index <= RETRY_PAUSES.length; index++) {
+    // Never start another attempt for an aborted caller — the pause between
+    // attempts is exactly where a superseding trigger lands.
+    if (options.signal?.aborted) { result ??= { ok: false, reason: 'unavailable' }; break; }
     try { result = await attempt(options); }
     catch (error) {
       const code = error?.cause?.code ?? error?.code;
       if (index === RETRY_PAUSES.length || options.signal?.aborted) { result = { ok: false, reason: 'unavailable', code: String(code) }; break; }
-      await wait(RETRY_PAUSES[index]);
+      await wait(RETRY_PAUSES[index], options.signal);
       continue;
     }
     // A retriable identity mismatch is the same handover race as a dead socket:
     // the health answer arrived, it just described the old instance. It shares
     // the same bounded pauses — four attempts total.
     if (!result?.retriable || index === RETRY_PAUSES.length || options.signal?.aborted) break;
-    await wait(RETRY_PAUSES[index]);
+    await wait(RETRY_PAUSES[index], options.signal);
   }
   // `retriable` is internal control flow only — it must never reach the log or
   // the receipt, so strip it explicitly rather than relying on the shape.

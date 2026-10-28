@@ -37,19 +37,63 @@ const { checkNativeContract } = require('./native-contract.cjs');
 // The resolution window converges late (the LS spawns ~1s after activation),
 // so triggers are generation-guarded and successful pushes are deduplicated:
 // a repeat trigger that resolves to the same (origin, source) sends no POST.
-async function pushConfiguredUpstream({ root, vscode, log, lifecycle, shouldContinue = () => true }) {
+// A commit belongs to the trigger that produced it: the generation is checked
+// again after the resolution window and once more when the turn to publish
+// arrives, and commits are serialised so an older trigger's POST can never land
+// after a newer one. The signal aborts an in-flight POST on supersede/disable.
+function serializePush(lifecycle, task) {
+  const previous = lifecycle?.upstreamPushChain || Promise.resolve();
+  const run = previous.then(task, task);
+  if (lifecycle) lifecycle.upstreamPushChain = run.then(() => {}, () => {});
+  return run;
+}
+
+async function pushConfiguredUpstream({ root, vscode, log, lifecycle, signal, shouldContinue = () => true, isLive = () => true }) {
+  // A liveness check that can no longer be answered (storage gone, config
+  // unreadable) is indistinguishable from a dead activation — never publish.
+  const cancelled = () => {
+    try { return Boolean(signal?.aborted) || !shouldContinue(); }
+    catch { return true; }
+  };
+  // A cancelled trigger is observable exactly once — without it "no new push"
+  // cannot be told apart from a dedupe hit, which deliberately stays silent.
+  let skipLogged = false;
+  const skipped = () => {
+    if (skipLogged) return;
+    skipLogged = true;
+    let reason = 'superseded';
+    try { if (!isLive()) reason = 'disabled'; } catch { reason = 'disabled'; }
+    log('upstream-push-skipped', { reason });
+  };
+  // A resolver reporting LS rows it could not adopt is observable once per
+  // trigger: the bundle/origin codes are the whole story, never the values.
+  let rejectedLogged = false;
+  const onDiag = info => {
+    if (rejectedLogged) return;
+    rejectedLogged = true;
+    log('origin-ls-rejected', { dropped: info?.dropped });
+  };
   try {
-    const effective = await resolveEffectiveOriginWhenAvailable({ vscode, shouldContinue });
+    const effective = await resolveEffectiveOriginWhenAvailable({ vscode, signal, shouldContinue, onDiag });
+    if (cancelled()) { skipped(); return; }
     // The dedupe key lives in memory only — compared, never logged or written.
     const key = `${lifecycle?.activationGeneration}${effective.origin ?? ''}${effective.source}`;
-    if (lifecycle && lifecycle.upstreamPushedKey === key) return;
-    const result = await pushUpstream({ root, origin: effective.origin, source: effective.source });
-    if (result.ok && lifecycle) lifecycle.upstreamPushedKey = key;
-    // Success is logged too: a silent success makes "did the push happen?"
-    // unanswerable from the log. Only flags and enums are recorded — never the host.
-    if (result.ok) log('upstream-push', { ok: true, custom: result.custom === true, source: effective.source });
-    else log('upstream-push', { ok: false, reason: result.reason, source: effective.source, ...(result.code ? { code: result.code } : {}), ...(result.detail ? { detail: result.detail } : {}) });
-  } catch { log('upstream-push', { ok: false, reason: 'unavailable' }); }
+    return await serializePush(lifecycle, async () => {
+      if (cancelled()) { skipped(); return; }
+      if (lifecycle && lifecycle.upstreamPushedKey === key) return;
+      // The POST commits remote state we cannot read back: invalidate the
+      // dedupe key before sending so a cancelled or failed push never leaves
+      // the key claiming a state the backend may not hold.
+      if (lifecycle) lifecycle.upstreamPushedKey = undefined;
+      const result = await pushUpstream({ root, origin: effective.origin, source: effective.source, signal });
+      if (cancelled()) { skipped(); return; }
+      if (result.ok && lifecycle) lifecycle.upstreamPushedKey = key;
+      // Success is logged too: a silent success makes "did the push happen?"
+      // unanswerable from the log. Only flags and enums are recorded — never the host.
+      if (result.ok) log('upstream-push', { ok: true, custom: result.custom === true, source: effective.source });
+      else log('upstream-push', { ok: false, reason: result.reason, source: effective.source, ...(result.code ? { code: result.code } : {}), ...(result.detail ? { detail: result.detail } : {}) });
+    });
+  } catch { if (!cancelled()) log('upstream-push', { ok: false, reason: 'unavailable' }); else skipped(); }
 }
 
 function installEnable({ deps, shared }) {
@@ -146,8 +190,12 @@ function installEnable({ deps, shared }) {
     const triggerPush = () => {
       // A newer trigger supersedes any in-flight resolution window.
       const pushGeneration = (lifecycle.upstreamPushGeneration = (lifecycle.upstreamPushGeneration || 0) + 1);
-      return pushConfiguredUpstream({ root: deps.root, vscode, log, lifecycle,
-        shouldContinue: () => live(lifecycle, config) && lifecycle.upstreamPushGeneration === pushGeneration });
+      try { lifecycle.upstreamPushAbort?.abort(); } catch {}
+      const controller = new AbortController();
+      lifecycle.upstreamPushAbort = controller;
+      return pushConfiguredUpstream({ root: deps.root, vscode, log, lifecycle, signal: controller.signal,
+        shouldContinue: () => live(lifecycle, config) && lifecycle.upstreamPushGeneration === pushGeneration,
+        isLive: () => live(lifecycle, config) });
     };
     void triggerPush();
     if (!lifecycle.upstreamSubscription) {
