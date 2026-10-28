@@ -25,7 +25,11 @@ test('plan tracking v1/v2: pending->pending->completed sends exactly 2 continues
       if (req.method === 'session/prompt') {
         promptCount++;
         // The first two turns hit the turn budget (the continue trigger); the
-        // final turn finishes normally — `end_turn` never continues.
+        // final turn finishes normally — `end_turn` never continues. Truncated
+        // turns emit text so the empty-truncation guard does not stop them.
+        if (promptCount <= 2) connector.forwardClientRequest({ method: 'session/update',
+          params: { sessionId: req.params.sessionId,
+            update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
         return Promise.resolve({ stopReason: promptCount <= 2 ? 'max_turn_requests' : 'end_turn' });
       }
       return Promise.resolve({});
@@ -155,6 +159,9 @@ test('plan completion while timer is pending cancels continuation and resolves v
     sendRequest(req) {
       if (req.method === 'session/prompt') {
         promptCount++;
+        connector.forwardClientRequest({ method: 'session/update',
+          params: { sessionId: req.params.sessionId,
+            update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
         return Promise.resolve({ stopReason: 'max_turn_requests' });
       }
       return Promise.resolve({});
@@ -216,6 +223,9 @@ test('incoming permission request disallows retry and clears pending timer', { t
     location: { kind: 'local' },
     protocolVersion: 1,
     sendRequest(req) {
+      if (req.method === 'session/prompt') connector.forwardClientRequest({ method: 'session/update',
+        params: { sessionId: req.params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
       return Promise.resolve({ stopReason: 'max_turn_requests' });
     },
     forwardClientRequest() {}
@@ -447,6 +457,9 @@ test('legacy ext/method _session/elicitation and finishedOutcome cancel pending 
     location: { kind: 'local' },
     protocolVersion: 1,
     sendRequest(req) {
+      if (req.method === 'session/prompt') connector.forwardClientRequest({ method: 'session/update',
+        params: { sessionId: req.params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
       return Promise.resolve({ stopReason: 'max_turn_requests' });
     },
     forwardClientRequest() {}
@@ -510,7 +523,7 @@ for (const protocolVersion of [1, 2]) {
       const stopped = f.logs.filter(log => log.event === 'auto-continue-stopped');
       assert.equal(stopped.length, 1);
       assert.equal(stopped[0].data.reason, 'plan-no-progress');
-      assert.equal(stopped[0].data.attempts, 1);
+      assert.equal(stopped[0].data.attempts, variant === 'error-recovery' ? 0 : 1);
       assert.deepEqual(Object.keys(stopped[0].data).sort(), ['attempts', 'reason']);
       assert.equal(JSON.stringify(f.logs).includes('Blocked'), false);
       f.scheduler.advance(60000);
@@ -586,7 +599,10 @@ test('max_turn_requests with a pending plan schedules one continue', { timeout: 
   const connector = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
     sendRequest(req) {
-      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      if (req.method === 'session/prompt') { promptCount++; connector.forwardClientRequest({ method: 'session/update',
+        params: { sessionId: req.params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
+        return Promise.resolve({ stopReason: 'max_turn_requests' }); }
       return Promise.resolve({});
     },
     forwardClientRequest() {}
@@ -645,7 +661,10 @@ test('max_turn_requests does not continue when untilPlanComplete is off', { time
   const connector = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
     sendRequest(req) {
-      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      if (req.method === 'session/prompt') { promptCount++; connector.forwardClientRequest({ method: 'session/update',
+        params: { sessionId: req.params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
+        return Promise.resolve({ stopReason: 'max_turn_requests' }); }
       return Promise.resolve({});
     },
     forwardClientRequest() {}
@@ -681,6 +700,8 @@ test('v2 idle with max_turn_requests and a pending plan schedules one continue',
   connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-v2-mtr', prompt: [{ type: 'text', text: 'task' }] } });
   connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-v2-mtr',
     update: { sessionUpdate: 'plan', entries: [{ content: 'Step 1', status: 'pending' }] } } });
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-v2-mtr',
+    update: { sessionUpdate: 'agent_message', messageId: 'm1', content: [{ type: 'text', text: 'working' }] } } });
   connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-v2-mtr',
     update: { sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' } } });
   await new Promise(r => setImmediate(r));
@@ -735,7 +756,10 @@ test('the plan retry chain stops at PLAN_ATTEMPT_LIMIT', { timeout: 2000 }, asyn
   const connector = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
     sendRequest(req) {
-      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      if (req.method === 'session/prompt') { promptCount++; connector.forwardClientRequest({ method: 'session/update',
+        params: { sessionId: req.params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
+        return Promise.resolve({ stopReason: 'max_turn_requests' }); }
       return Promise.resolve({});
     },
     forwardClientRequest() {}
@@ -973,7 +997,10 @@ test('max_turn_requests without a plan continues once', { timeout: 1000 }, async
   const connector = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
     sendRequest(req) {
-      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      if (req.method === 'session/prompt') { promptCount++; connector.forwardClientRequest({ method: 'session/update',
+        params: { sessionId: req.params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
+        return Promise.resolve({ stopReason: 'max_turn_requests' }); }
       return Promise.resolve({});
     },
     forwardClientRequest() {}
@@ -1005,7 +1032,10 @@ test('a plan-less turn-limit stop obeys the attempt budget', { timeout: 2000 }, 
   const connector = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
     sendRequest(req) {
-      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      if (req.method === 'session/prompt') { promptCount++; connector.forwardClientRequest({ method: 'session/update',
+        params: { sessionId: req.params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
+        return Promise.resolve({ stopReason: 'max_turn_requests' }); }
       return Promise.resolve({});
     },
     forwardClientRequest() {}
@@ -1072,6 +1102,8 @@ test('v2 idle with max_turn_requests and no plan schedules one continue', { time
   f.api.registerConnection(connector);
   connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-v2-mtr-noplan', prompt: [{ type: 'text', text: 'task' }] } });
   connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-v2-mtr-noplan',
+    update: { sessionUpdate: 'agent_message', messageId: 'm1', content: [{ type: 'text', text: 'working' }] } } });
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-v2-mtr-noplan',
     update: { sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' } } });
   await new Promise(r => setImmediate(r));
   assert.equal(scheduler.pendingCount(), 1);
@@ -1092,7 +1124,10 @@ test('max_turn_requests without a plan does not continue when untilPlanComplete 
   const connector = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
     sendRequest(req) {
-      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      if (req.method === 'session/prompt') { promptCount++; connector.forwardClientRequest({ method: 'session/update',
+        params: { sessionId: req.params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
+        return Promise.resolve({ stopReason: 'max_turn_requests' }); }
       return Promise.resolve({});
     },
     forwardClientRequest() {}
@@ -1117,7 +1152,10 @@ test('max_tokens without a plan continues once', { timeout: 1000 }, async t => {
   const connector = {
     agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
     sendRequest(req) {
-      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_tokens' }); }
+      if (req.method === 'session/prompt') { promptCount++; connector.forwardClientRequest({ method: 'session/update',
+        params: { sessionId: req.params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
+        return Promise.resolve({ stopReason: 'max_tokens' }); }
       return Promise.resolve({});
     },
     forwardClientRequest() {}

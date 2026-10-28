@@ -337,11 +337,13 @@ test('switching to plan continuation resets the consecutive error budget', { tim
   scheduler.advance(30000);
   assert.equal(promptCount, 2, 'one error retry spent');
 
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } });
   plan([{ content: 'Step 1', status: 'pending' }]);
   await new Promise(r => setImmediate(r));
   scheduler.advance(30000);
   assert.equal(promptCount, 3, 'the pending plan keeps the turn going');
 
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'more work' } });
   plan([{ content: 'Step 1', status: 'in_progress' }]);
   await new Promise(r => setImmediate(r));
   scheduler.advance(30000);
@@ -446,4 +448,56 @@ test('a rejected onStopped promise is contained without unhandled rejections', a
   assert.equal(stops.length, 1);
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(unhandled, false, 'the callback rejection is caught');
+});
+
+test('error retries do not consume plan attempts or inflate plan backoff', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: true, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  const resolvers = [];
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') return new Promise(resolve => resolvers.push(resolve));
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const update = value => connector.forwardClientRequest({
+    method: 'session/update', params: { sessionId: 's-split', update: value }
+  });
+  const text = s => update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: s } });
+
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-split', prompt: [{ type: 'text', text: 't' }] } });
+  text('some output');
+  resolvers.shift()({ stopReason: 'max_tokens' });
+  await new Promise(r => setImmediate(r));
+  scheduler.advance(2000);
+  await new Promise(r => setImmediate(r));
+
+  text('Provider returned HTTP 429.');
+  resolvers.shift()({ stopReason: 'max_turn_requests' });
+  await new Promise(r => setImmediate(r));
+  scheduler.advance(2000);
+  await new Promise(r => setImmediate(r));
+
+  text('more output');
+  resolvers.shift()({ stopReason: 'max_tokens' });
+  await new Promise(r => setImmediate(r));
+
+  const scheduled = f.logs.filter(l => l.event === 'auto-continue-scheduled').map(l => ({ ...l.data }));
+  assert.deepEqual(scheduled, [
+    { attempts: 0, delay: 2000, reason: 'plan' },
+    { attempts: 0, delay: 2000, reason: 'error' },
+    { attempts: 1, delay: 4000, reason: 'plan' }
+  ], 'the error retry must not bump the plan backoff (pre-fix: attempts 3 / delay 16000)');
+  scheduler.advance(4000);
+  await new Promise(r => setImmediate(r));
+  resolvers.shift()({ stopReason: 'end_turn' });
 });

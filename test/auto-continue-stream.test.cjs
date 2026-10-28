@@ -100,6 +100,7 @@ test('auto continue handles v1 fail -> continue -> success with backoff and synt
   assert.ok(optimisticMsg);
   assert.equal(optimisticMsg.params.update.content.text, 'continue');
   assert.equal(optimisticMsg.params.update._meta['cognition.ai/isOptimistic'], true);
+  assert.equal(optimisticMsg.params.update._meta['cognition.ai/messageSubIndex'], 0, 'part must be mergeable with the agent echo');
 
   connector.forwardClientRequest({
     method: 'session/update',
@@ -367,6 +368,7 @@ test('auto continue handles v2 idle completion, duplicate idle suppression, and 
   assert.ok(synthetic);
   assert.equal(synthetic.params.update.content[0].type, 'text');
   assert.equal(synthetic.params.update.content[0].text, 'continue');
+  assert.equal(synthetic.params.update._meta['cognition.ai/messageSubIndex'], 0, 'part must be mergeable with the agent echo');
 
   connector.forwardClientRequest({
     method: 'session/update',
@@ -1313,4 +1315,122 @@ test('reconnectingMaxDelay from a local connector reclaims pending retries', { t
   connector.setStatus('reconnectingMaxDelay');
   assert.equal(handle.status().pendingTimers, 0);
   assert.equal(handle.status().activeSessions, 0);
+});
+
+test('a truncation with no visible text and no tool calls does not continue', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_tokens' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-empty-trunc', prompt: [{ type: 'text', text: 'do' }] } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 0, 'budget was burned on thinking, not visible output — no continue');
+  scheduler.advance(30000);
+  assert.equal(promptCount, 1);
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(evaluated.length, 1);
+  assert.equal(evaluated[0].data.decision, 'stop');
+  assert.equal(evaluated[0].data.reason, 'truncated-empty');
+  assert.equal(f.logs.some(l => l.event === 'auto-continue-scheduled'), false);
+});
+
+test('an empty truncation with the plan chain off reports no reason', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: false }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') return Promise.resolve({ stopReason: 'max_tokens' });
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-empty-off', prompt: [{ type: 'text', text: 'do' }] } });
+  await new Promise(r => setImmediate(r));
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(evaluated.length, 1);
+  assert.equal(evaluated[0].data.decision, 'stop');
+  assert.equal(evaluated[0].data.reason, null, 'the empty-truncation label must not mask a disabled plan chain');
+  assert.equal(f.logs.some(l => l.event === 'auto-continue-scheduled'), false);
+});
+
+test('a truncation with visible text still continues', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_tokens' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-text-trunc', prompt: [{ type: 'text', text: 'do' }] } });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-text-trunc', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial answer' } } }
+  });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1, 'visible output means the budget did real work — continue');
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+});
+
+test('a truncation with a tool call but no text still continues', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-tool-trunc', prompt: [{ type: 'text', text: 'do' }] } });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-tool-trunc', update: { sessionUpdate: 'tool_call', toolCallId: 'tc1', title: 'run' } }
+  });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1, 'a tool call is visible progress — continue');
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
 });

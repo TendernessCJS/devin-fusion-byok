@@ -154,6 +154,22 @@ test('a dispatch mirrors a synthetic user message without leaking the capability
   assert.match(synthetic.params.update.content[0].text, /Goal 自动推进（第 4 次运行）/);
   assert.equal(synthetic.params.update.content[0].text.includes('secret-token-inside'), false);
   assert.equal(typeof synthetic.params.update._meta['cognition.ai/clientMessageId'], 'string');
+  assert.equal(synthetic.params.update._meta['cognition.ai/messageSubIndex'], 0, 'part must be mergeable with the agent echo');
+});
+
+test('a v1 dispatch mirrors user_message_chunk with messageSubIndex', async t => {
+  const f = fixture();
+  const handle = f.install({ isEnabled: () => true });
+  t.after(() => handle.dispose());
+  const c = connector({ protocolVersion: 1 });
+  f.api.registerConnection(c);
+  await c.sendRequest({ method: 'session/new', params: { sessionId: 's1' } });
+  c.forwardClientRequest(idle('s1'));
+  handle.setGoalOwned('s1', true);
+  handle.dispatch({ sessionId: 's1', runId: 'run-1', revision: 2, prompt: 'p', runsStarted: 2 });
+  const synthetic = c.forwards.find(entry => entry.params?.update?.sessionUpdate === 'user_message_chunk');
+  assert.ok(synthetic);
+  assert.equal(synthetic.params.update._meta['cognition.ai/messageSubIndex'], 0, 'v1 chunk must be mergeable with the agent echo');
 });
 
 test('a stale v2 idle with no running state cannot consume a later run', async t => {

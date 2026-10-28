@@ -821,6 +821,37 @@ test('finish_reason content_filter maps to stopReason 11', async t => {
   assert.equal(num(result.messages.at(-1), 5), 11);
 });
 
+// Auto-continue keys on the client-side `max_tokens` stop reason, which exists
+// only if the provider's truncation survives this layer as stopReason 3. Chat
+// and Anthropic are the two formats in production use, so both need their own
+// assertion here — the Responses path is covered by the incomplete tests.
+test('finish_reason length maps to stopReason 3 (MAX_TOKENS)', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { choices: [{ index: 0, delta: { content: 'cut off mid' }, finish_reason: 'length' }] }
+    ].map(event).join('') + 'data: [DONE]\n\n');
+  }, 'openai-chat-completions');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'cut off mid');
+  assert.equal(num(result.messages.at(-1), 5), 3, 'finish_reason length ends as MAX_TOKENS');
+});
+
+test('anthropic stop_reason max_tokens maps to stopReason 3 (MAX_TOKENS)', async t => {
+  const request = Buffer.concat([s(21, 'local-model'), nativeMessage(1, 'user')]);
+  const fixture = await upstreamFixture(t, [
+    event({ type: 'message_start', message: { usage: { input_tokens: 1, output_tokens: 0 } } }),
+    event({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+    event({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'cut off mid' } }),
+    event({ type: 'content_block_stop', index: 0 }),
+    event({ type: 'message_delta', delta: { stop_reason: 'max_tokens' } }),
+    event({ type: 'message_stop' }),
+  ]);
+  const result = await stateSession(t, { apiFormat: 'anthropic' }, request, fixture);
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'cut off mid');
+  assert.equal(num(result.messages.at(-1), 5), 3, 'stop_reason max_tokens ends as MAX_TOKENS');
+});
+
 test('raw heartbeat keeps stream alive past idle timeout until completion', async t => {
   const app = await bridge(t, async (req, res) => {
     res.writeHead(200, { 'content-type': 'text/event-stream' });

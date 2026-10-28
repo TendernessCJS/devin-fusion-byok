@@ -38,7 +38,8 @@ const PLAN_ATTEMPT_LIMIT = 10;
 // request budget (native shows "send another message to continue") and
 // `max_tokens` is output cut at the provider limit. `end_turn` is a normal
 // finish — continuing it would override the model's own decision on evidence
-// the model writes itself.
+// the model writes itself. A truncation with zero visible text and zero tool
+// calls does not continue either: under the same budget it must repeat.
 const CONTINUABLE_STOP = new Set(['max_tokens', 'max_turn_requests']);
 
 const RESET_METHODS = new Set([
@@ -193,7 +194,9 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
         turn.errorAttempts = 0;
         turn.errorStartedAt = null;
       }
-      const attempts = turn.attempts || 0;
+      // Each chain backs off on its own counter: an error retry must not
+      // inflate the plan backoff nor consume a plan slot.
+      const attempts = reason === 'error' ? (turn.errorAttempts || 0) : (turn.attempts || 0);
       const safePow = Math.min(attempts, 10);
       const delay = Math.min(2000 * Math.pow(2, safePow), 30000);
       const generation = turn.generation;
@@ -222,6 +225,13 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
       const timestamp = new Date().toISOString();
       const isV2 = (connector.protocolVersion >= 2) || !!activeTurn.isV2;
 
+      // The synthetic user message must carry `messageSubIndex`, exactly like the
+      // app's own optimistic messages: the client's chunk reducer merges an
+      // incoming `user_message_chunk` into an existing part only when both
+      // `cognition.ai/clientMessageId` and `cognition.ai/messageSubIndex` match
+      // (the reducer copies the update `_meta` onto each part). Without the
+      // subindex the agent's echo of the prompt is appended as a second part and
+      // the bubble reads "continuecontinue".
       const synthetic = isV2 ? {
         method: 'session/update',
         params: {
@@ -232,6 +242,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             content: [{ type: 'text', text: 'continue' }],
             _meta: {
               'cognition.ai/clientMessageId': clientMessageId,
+              'cognition.ai/messageSubIndex': 0,
               'cognition.ai/isOptimistic': true,
               'cognition.ai/timestamp': timestamp
             }
@@ -246,6 +257,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             content: { type: 'text', text: 'continue' },
             _meta: {
               'cognition.ai/clientMessageId': clientMessageId,
+              'cognition.ai/messageSubIndex': 0,
               'cognition.ai/isOptimistic': true,
               'cognition.ai/timestamp': timestamp
             }
@@ -268,7 +280,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           }
         }
       };
-      autoAttempts.set(promptRequest, attempts + 1);
+      autoAttempts.set(promptRequest, { attempts: attempts + 1, reason });
       autoContinueCount++;
       report('auto-continue-fired', { attempts: attempts + 1 });
 
@@ -366,8 +378,10 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const shouldRetryError = !turn.retryDisallowed && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && matchesProviderError(turn.tail);
           const hasPendingPlan = checkHasPendingPlan(turn);
           const isBlocked = matchesTerminalBlocker(turn.tail);
-          const shouldRetryPlan = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true &&
+          const emptyTruncation = CONTINUABLE_STOP.has(res.stopReason) && !(turn.textChars > 0) && !(turn.toolCalls > 0);
+          const planEligible = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true &&
             CONTINUABLE_STOP.has(res.stopReason);
+          const shouldRetryPlan = planEligible && !emptyTruncation;
 
           // hasPlanProgress consumes its snapshot — keep the original lazy call:
           // it only runs when the error branch did not, exactly like the old else-if.
@@ -375,7 +389,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           // truncation into a spin, so progress is required only then.
           const planRetry = !shouldRetryError && shouldRetryPlan && (!hasPendingPlan || hasPlanProgress(turn));
           emitEvaluated(turn, sessionId, 'resolve', res.stopReason,
-            shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop', null);
+            shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop',
+            !shouldRetryError && !planRetry && emptyTruncation && planEligible ? 'truncated-empty' : null);
           if (shouldRetryError) {
             turn.lastResult = { value: res, isReject: false };
             scheduleAuto(sessionId, turn, 'error');
@@ -579,13 +594,16 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             const shouldRetryError = !turn.retryDisallowed && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && isError;
             const hasPendingPlan = checkHasPendingPlan(turn);
             const allowedPlanReason = CONTINUABLE_STOP.has(update.stopReason);
-            const shouldRetryPlan = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true && allowedPlanReason;
+            const emptyTruncation = allowedPlanReason && !(turn.textChars > 0) && !(turn.toolCalls > 0);
+            const planEligible = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true && allowedPlanReason;
+            const shouldRetryPlan = planEligible && !emptyTruncation;
 
             // Same lazy contract as the resolve branch: progress is checked
             // only when a pending plan exists and the error chain lost.
             const planRetry = !shouldRetryError && shouldRetryPlan && (!hasPendingPlan || hasPlanProgress(turn));
             emitEvaluated(turn, sessionId, 'idle', update.stopReason,
-              shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop', null);
+              shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop',
+              !shouldRetryError && !planRetry && emptyTruncation && planEligible ? 'truncated-empty' : null);
             if (shouldRetryError) {
               scheduleAuto(sessionId, turn, 'error');
             } else if (planRetry) {
@@ -631,6 +649,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
         const content = update.content;
         if (content?.type === 'text' && typeof content.text === 'string') {
           turn.tail = (turn.tail + content.text).slice(-4096);
+          turn.textChars = (turn.textChars || 0) + content.text.length;
         } else {
           turn.tail = '';
         }
@@ -658,9 +677,13 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             }
           }
           turn.tail = lastWasNonText ? '' : text.slice(-4096);
+          turn.textChars = (turn.textChars || 0) + text.length;
         }
+      } else if (kind === 'tool_call') {
+        turn.tail = '';
+        turn.toolCalls = (turn.toolCalls || 0) + 1;
       } else if (kind === 'user_message_chunk' || kind === 'user_message' ||
-                 kind === 'tool_call' || kind === 'tool_call_update' || kind === 'tool_call_content_chunk' ||
+                 kind === 'tool_call_update' || kind === 'tool_call_content_chunk' ||
                  kind === 'agent_thought_chunk' || kind === 'agent_thought') {
         turn.tail = '';
       }
@@ -716,6 +739,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
               retryDisallowed: false,
               lastResult: null,
               deferred: null,
+              textChars: 0,
+              toolCalls: 0,
               planUpdates: 0,
               plans: new Map(),
               autoPlanSnapshot: null,
@@ -729,9 +754,13 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const currentTurn = entry.sessions.get(sessionId);
           if (currentTurn) {
             currentTurn.generation = ++entry.turnGeneration;
-            currentTurn.attempts = autoAttempts.get(request) || (currentTurn.attempts + 1);
+            const auto = autoAttempts.get(request);
+            if (auto) { if (auto.reason !== 'error') currentTurn.attempts = auto.attempts; }
+            else currentTurn.attempts = currentTurn.attempts + 1;
             currentTurn.autoPlanSnapshot = planSnapshot(currentTurn);
             currentTurn.tail = '';
+            currentTurn.textChars = 0;
+            currentTurn.toolCalls = 0;
             currentTurn.messageId = null;
             currentTurn.consumed = false;
             currentTurn.lastResult = null;
