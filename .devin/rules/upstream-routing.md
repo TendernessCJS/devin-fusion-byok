@@ -38,7 +38,7 @@ backend 转发非拦截 RPC 时，目标 origin **不是常量**，而是跟随�
 
 | 事件 | 落点 | 说明 |
 | --- | --- | --- |
-| `upstream-push` | 扩展 **output channel「Devin Fusion BYOK」** | 宿主侧，成功 `{ok:true,custom,source}`、失败 `{ok:false,reason,source,code?,detail?}`；channel **不落盘** |
+| `upstream-push` | 扩展 **output channel「Devin Fusion BYOK」** | 宿主侧，成功 `{ok:true,custom,source}`、失败 `{ok:false,reason,source,code?,detail?}`；channel 落盘到 `~/Library/Application Support/Devin/logs/<启动会话>/window<N>/exthost/output_logging_*/1-Devin Fusion BYOK.log`，事后可查 |
 | `upstream-origin` | backend `runtime.log` | 只有 backend **真的收到**推送才写，`{custom}` |
 | `upstream-push.json` | `<globalStorage>/upstream-push.json` | 宿主侧收据 `{at, ok, custom|reason, source, code?, detail?}`，事后可判 |
 | `upstream-push-skipped` | 扩展 output channel | 推送被代际取消，每触发至多一条，`reason: disabled|superseded`；去重命中不写日志，靠它区分 |

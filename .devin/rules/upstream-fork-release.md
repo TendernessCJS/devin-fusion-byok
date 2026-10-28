@@ -78,7 +78,7 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 - 结构性冲突：upstream 仍在改**单体** `src/extension.cjs`，而本 fork 已把它拆成 `src/activation/`（`extension.cjs` 仅 154 行）。直接 merge 会在该文件大面积冲突且语义错位 → **不 merge，按结构映射手工移植**。
 - **5 项全部已移植**（提交 `3d07548`，随后 `d660869` 升 0.3.49 并完成真机验收）：① `src/lifecycle/host-disabled.cjs` —— 用户在扩展管理器里禁用插件时恢复自有设置，否则 `WINDSURF_API_SERVER_URL` 会一直指向已死的 backend，把用户的 Devin CLI 打坏（正好命中本仓最重的注入面）；② `config.goalEnabled` 开关 —— Goal 默认关闭；③ 外部 MCP（`code_search`/`web_search`/`web_read_url` + 账号检测 + 开关，默认关闭）；④ 页面读取（≤5 次 https 重定向、拒私有主机、不执行脚本）；⑤ 稳定 launcher。
 - **结构映射规则（下次照做）**：`panel/model.cjs → panel/manager.cjs`、`runtime/goal-state.cjs → goal/controller.cjs`、单体 `extension.cjs → src/activation/*` + `lifecycle` 槽。**不要让上游的旧名文件复活**（会变成没有调用方的孤儿）。
-- **刻意保留的 fork 差异，不要被上游覆盖**：版本号（自管）、`repository` 字段、面板 tab 顺序、`postState` 队列与 `reloadWindow`、DOM 助手前缀（`byId(x,'fc-')`）。
+- **刻意保留的 fork 差异，不要被上游覆盖**：版本号（自管）、`repository` 字段、面板 tab 顺序、`postState` 队列与 `reloadWindow`、DOM 助手前缀（`byId(x,'fc-')`），以及**自动继续的续跑条件**：本仓 `CONTINUABLE_STOP = {max_tokens, max_turn_requests}`、无 plan 的截断直接续；上游是 `end_turn || max_tokens` 且**必须** `hasPendingPlan`。同步时若整体覆盖 `runtime/host/auto-continue.cjs`（上游路径是 `runtime/auto-continue.cjs`），会把 `end_turn` 门控带回来——那是有意分歧不是回归，依据见 `acp-protocol-fields-forensics.md` 的 stop reason 实测与 `runtime-and-injection.md` 的回退条件。
 - **边界**：Goal 与对外 MCP 属**上游拥有**代码，本机不做 e2e 验收（见 `testing-notes.md`）；「仓库测试全绿」不等于「本机验过」。
 
 **`cdc7d42`（v0.4.5）的移植状态：读后整体移植、再按用户决定整体回退 → 净移植 0（2026-10-26）**

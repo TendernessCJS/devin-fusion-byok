@@ -76,7 +76,13 @@ tail -c +<偏移> <bundle> | head -c 600
 - **案例 3（`#18`，已在上一轮记录）**：对方只有注释提到 `#18` 是上下文窗口，代码并未解析该字段。
 - **方法论**：交叉验证要同时落到**对方的解析代码**和**本机 schema** 两侧；连续三例说明只读注释会引入假事实。本机取证见上文「怎么读权威字段号」——`newFieldList` 字面量是唯一权威，LS 二进制描述符只证存在性、不含字段号。
 - **反例**（附到「不要猜数值枚举」）：对方 `docs/HISTORY-LEDGER-2026-07-late.md`（~147 行）曾按 protobuf 变体名顺序猜「`StopReason 4 = max_turn_requests`」，被付费实测推翻（4 是付费层正常完成）——后果是完整付费响应被报成截断，按 length 续写的客户端会无限续写。
-- **交叉确认**：对方 `docs/DEVIN-CONNECT-CUTOVER.md`（~434 行）列的 stop reason 集合 `end_turn, max_tokens, max_turn_requests, refusal, cancelled` 与本仓 `src/runtime/host/auto-continue.cjs` 的处理集合一致。
+- **stop reason 枚举实测**（2026-10-28，`@exa/chat-client/index.js`）：v1 `session/prompt` 结果是**封闭**枚举
+  `end_turn, max_tokens, max_turn_requests, refusal, cancelled`（偏移 ~3498576），与对方 `docs/DEVIN-CONNECT-CUTOVER.md`
+  （~434 行）所列一致；v2 `state_update.stopReason` 是**开放**联合 `[5 值, string]`（偏移 ~3775106），所以判定必须用
+  集合成员，穷举会漏。原生对各值的对待并不对等：i18n 只给 `max_turn_requests` 配了 continue 语义
+  （`Reached max tool calls — send another message to continue`，英文/西/日/葡四套，偏移 ~11065694），`max_tokens`
+  在 bundle 里**零**用户可见处理（无文案、无重试，同名字面量全是无关的 proto 字段），`end_turn` 无 affordance。
+  本仓据此把 `CONTINUABLE_STOP` 收窄为 `{max_tokens, max_turn_requests}`，条件见 `runtime-and-injection.md`。
 
 ## REA 的 JS 语义图在本 artifact 上拿不到
 
