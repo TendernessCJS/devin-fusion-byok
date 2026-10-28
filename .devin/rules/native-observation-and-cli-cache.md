@@ -14,7 +14,7 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   完整取值只有五个：`loading`（初始态，`extension.cjs` 的 `shared` 初值）/`ready`/`empty`/`unsupported`/`unavailable`，**没有 `pending`**（那是 `auto-continue` 的状态名，勿混）。
 - **读失败不是空目录（2026-10-19 定论）**：宿主侧一次目录读取有四种结论，只有三种是权威的——`ready`（读到 N 条）、`empty`（后端明确回答「现在是空」）、
   `unsupported`（旧协议的 `nativeModelsProtocol !== 1`）由 `readNativeModels` 返回；`unavailable`（连接失败/身份校验失败/超时/载荷非法）由 `catalog-sync` 的
-  catch 合成（`catalog-sync.cjs:68`），**它不是目录结论**。`refreshNativeModels` 必须在
+  catch 合成（`syncPending` 闭包内的 catch），**它不是目录结论**。`refreshNativeModels` 必须在
   `clear()` 之前拦它：视图非空时**保留已发布条目**、只把 `nativeCatalogStatus` 置为 `unavailable`，并走一次 `commit({ bumpRevision: false })`（面板要看到
   「无法连接插件本地服务」，但视图没变就不该推进 revision），同时打 `native-refresh-retained`。否则后端换进程的那几秒会把已发布条目清成 0、picker 显示「没有模型」（实测数字见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。**`empty` 必须继续清空**——陈旧条目清理依赖它，一起保护掉会让陈旧条目永久留存。冷启动不受此保护（首帧视图本来就空，无可保留）；
   也不要为此让宿主去读 `native-cache.json`，那会造出第二个 cache 读者。

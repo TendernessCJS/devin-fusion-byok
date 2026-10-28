@@ -42,11 +42,11 @@ tail -c +<偏移> <bundle> | head -c 600
 
 ## 附件与缓存键字段（2026-10-22 实证补齐）
 
-`ChatMessagePrompt` 此前只解析 `images`（10），`videos`（20）与 `documents`（21）**静默丢弃**。内层形状：`VideoData`=`1 base64_data/2 mime_type/3 url`；`DocumentData`=`1 base64_data/2 mime_type/3 filename/4 url`（是 `filename`，JSON 侧曾误拼 `fileName`）。
+内层形状与出站映射的**契约值不在这里**——见 `acp-protocol-fields.md`「附件与缓存键字段」。本节只留实证增量（2026-10-22）：
 
-出站映射（**失败要响亮，不许退回静默丢**）：文档在 Responses 走 `{type:'input_file',file_data|file_url,filename}`（`file_data` 是**原始 base64**）、Chat 走 `{type:'file',file:{file_data,filename}}`（Chat **没有** URL 形态）、Anthropic 走 `{type:'document',source:{type:'base64',media_type:'application/pdf'}}`，`text/plain` 用 `{type:'text',media_type:'text/plain',data:<base64 解码后的原文>}`。**视频三种协议都无载荷**，直接抛 `attachment_unsupported`（detail `video`）；Anthropic 上 pdf/text-plain 之外的文档 mime 同样抛。该码已进 `allowedCodes`，文案是 `Attached media is not supported by this provider protocol.`；`buildRequestBody` 在取响应之前抛，外层 catch 必须单独认领，否则会被归成 `upstream_network`。
-
-`GetChatMessageRequest` **字段 27 `prompt_cache_key`**：原生已带，此前不读。现读成 `request.promptCacheKey`，Responses 与 Chat 原样写 `body.prompt_cache_key`；**Anthropic 不发**（它要的是分段 `cache_control`）。省略该键不等于自动缓存失效，别据此判命中率。
+- `ChatMessagePrompt` 此前只解析 `images`（10），`videos`（20）与 `documents`（21）**静默丢弃**——这是「附件能挂上但供应商收不到」那次事故的成因。
+- 错误文案原文是 `Attached media is not supported by this provider protocol.`（码 `attachment_unsupported` 已进 `allowedCodes`）；`buildRequestBody` 在取响应**之前**抛，外层 catch 必须单独认领，否则会被归成 `upstream_network`。
+- `GetChatMessageRequest` 字段 27 `prompt_cache_key`：原生**已带**，此前不读。**省略该键不等于缓存失效**，别据此判命中率。
 
 ## 思考签名闭环、ACP 方法频次与已知警告（真机取证）
 

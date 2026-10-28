@@ -62,11 +62,11 @@ description: "Apply when diagnosing why injection or catalog changes appear not 
 
 ## 激活层耦合度量（2026-10-26 架构审查）
 
-- **`shared` 槽共 41 个**（`extension.cjs` 只声明 18 个，其余由各 installer 赋值）：**66 个写入点 / 226 个访问点 / 跨 7 个文件**；`catalog-sync.cjs` 单文件触及 **22** 个槽。
-- **只有 1 个槽被 ≥2 个文件写**：`backendStatus`（`commands` + `enable`）。其余 40 个都是单写者 ⇒「installer 互写对方的键」只在这一点成立，耦合的真实形态是**晚期绑定的 service locator**（读点全在回调内，install 阶段不取值），所以安装顺序并不像最初判断的那样脆弱。
+- **`shared` 现在只剩 10 个槽**（清单见下条）；「41 槽 / 66 写入点 / 226 访问点 / 跨 7 文件」是拆分前的旧快照，2026-10-28 复核已不成立，**别再用**。
+- **只有 1 个槽被 ≥2 个文件写**：`backendStatus`（`commands` + `enable`）。其余 9 个都是单写者 ⇒「installer 互写对方的键」只在这一点成立，耦合的真实形态是**晚期绑定的 service locator**（读点全在回调内，install 阶段不取值），所以安装顺序并不像最初判断的那样脆弱。
 - 归属分组（2026-10-26 已按此落地）：`deps.stores.nativeCatalog` **22 槽**（owner `catalog-sync`）、`deps.stores.cacheSync` **3 槽**（owner `cache-sync`）、`deps.stores.acpObservation` **2 槽**（**owner 是 `enable`**，读者才是 `cache-sync`+`panel-install`——正因写者在外，它不能并进 cacheSync 私有状态）、`deps.stores.panel` **4 槽**（`statusBar`/`updateStatusBar`/`manager`/`contextObserver`，owner `panel-install`，`extension.cjs` 的 catalog-changed 钩子只读 `updateStatusBar`）；仍在 `shared` 的 **10 槽**：`commands` 的 4 个函数槽、`management` 1、`backendStatus` 1、continuation 2、`ensureEnabled`/`disablePromise` 2。
-- 测试伪造规模（拆分成本的主项）：只有 **2** 个测试文件实质构造 `shared`——`native-models-sync`（12 槽 / 690 行）与 `activation-sync`（3 槽 / 265 行）。
-- 失效判据分布：generation 绑定 6 处（`enable.cjs:64/91/93/99/114`、`catalog-sync.cjs:71`，其中 **4 处字面完全相同**）、generation 无关 8 处、abort 2 处；曾存在肯定/否定两种写法混用（`enable.cjs:120`）。
+- 测试伪造规模（拆分成本的主项）：只有 **2** 个测试文件实质构造 `shared`——`native-models-sync`（12 槽）与 `activation-sync`（3 槽）。行数不记，变化太快。
+- 失效判据分布：`enable.cjs` 有 **5 处** `superseded(lifecycle, config, generation)`（**3 处字面相同**），publish 侧另按 `activationGeneration`+`publication` 双比较；`catalog-sync` 同样按 generation 校验。**刻意不记 file:line**——旧记录在 2026-10-28 复核时已全部指错行。
 - **历史判断已推翻**：曾认为「禁用发生在 enable 写入段的 `await` 期间时，写入仍会完成、teardown 会按 receipt 自愈还原」——75222e4 与后续收口已证明 receipt **不提供异步顺序**（恢复 snapshot 先取、在途写入后落，receipt 已被清空），现由 `managed-settings.cjs` 的 `critical`/`drain` 保证顺序，恢复**必须重读**设置与 receipt。
 - 本次审查的两处误判（已更正，别再重复）：① `catalog → runtime` **不是**层方向倒置，`port.cjs` 留在 `runtime/` 才能待在 backend 闭包内；② `goal/controller` 与 `auto-continue` **不是**「补丁 + 状态机」混排——前者本身就是 store/状态机（补丁在独立文件 `goal/continue-hook.cjs`），后者没有替换式补丁（走 `loadAcpApi`），它真实的混排是「错误文本匹配器 / 连接挂载 / 续跑状态机」三件事。
 
