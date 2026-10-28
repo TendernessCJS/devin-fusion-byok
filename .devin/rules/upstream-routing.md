@@ -19,6 +19,20 @@ backend 转发非拦截 RPC 时，目标 origin **不是常量**，而是跟随�
   拒 userinfo、query、hash、畸形 URL、backend 自身回环端口；保留路径前缀并去尾斜杠。
 - **状态按 backend 实例隔离**（`startBackend()` 内的闭包变量）：放到模块级会让同进程两个实例共享一个推送值。
 - 唯一写入点是 `activation/enable.cjs`：激活后触发一次 + 订阅这四个键（`codeium.apiServerUrl`/`devin.portalUrl`/`windsurf.portalUrl`/`windsurf.serviceUrl`），每次触发跑收敛窗口并以代际取消旧窗口，同 `(origin, source)` 去重不发；别在别处重复写。
+- **每次触发都以代际取消上一代**：新触发先 `upstreamPushAbort.abort()` 旧 controller，signal 直达
+  `resolveEffectiveOriginWhenAvailable`（中止收敛窗口与窗口内 `ps`/`sleep`）与 `pushUpstream`（中止在途 POST
+  与重试等待）；解析完成后与串行化提交点（`serializePush`）各再校验一次代际——旧代际既不发 POST 也不
+  覆盖 `upstreamPushedKey`。`teardown` 同样 abort 在途推送。曾实测复现：旧 resolver 晚于新 resolver
+  resolve 会把 backend 指回旧 origin 并改写去重键，故这几处校验一处都不能省。
+- **去重键在进入 POST 前作废**：`upstreamPushedKey` 只在「代际校验后、真正调用 `pushUpstream` 前」清为
+  `undefined`——POST 一经发出，远端状态即不可确定，被取消/失败的推送不得沿用旧键（否则 A→B→A 里 backend
+  停在 B 而键声称 A）。resolver 阶段的取消不清键（键仍可信）。`pushUpstream` 的重试等待同样可中断：
+  每次 attempt 前先查 `signal.aborted`，pre-aborted 连 `/health` 都不发。
+- **转发判定用逻辑 RPC 路径**：`forward()` 的目录增强 / team-settings 白名单 / 流式空闲预算按 `rpc` 选项
+  （backend 传入的 `incoming.pathname`）判定，不是 `target.pathname`——后者携带部署前缀
+  （`/_route/api_server/exa...`），曾让 `CATALOG` 的 `^` 锚定与 `TEAM_SETTINGS_RPC` 全等同时失效，
+  HTTP 仍 200 但 BYOK 静默消失、无 `catalog` 事件。前缀本身仍原样进真实上游请求。排查「带前缀的部署上
+  BYOK 消失」先看这里。
 
 ## 观测落点（最容易判错的一节）
 
@@ -27,6 +41,8 @@ backend 转发非拦截 RPC 时，目标 origin **不是常量**，而是跟随�
 | `upstream-push` | 扩展 **output channel「Devin Fusion BYOK」** | 宿主侧，成功 `{ok:true,custom,source}`、失败 `{ok:false,reason,source,code?,detail?}`；channel **不落盘** |
 | `upstream-origin` | backend `runtime.log` | 只有 backend **真的收到**推送才写，`{custom}` |
 | `upstream-push.json` | `<globalStorage>/upstream-push.json` | 宿主侧收据 `{at, ok, custom|reason, source, code?, detail?}`，事后可判 |
+| `upstream-push-skipped` | 扩展 output channel | 推送被代际取消，每触发至多一条，`reason: disabled|superseded`；去重命中不写日志，靠它区分 |
+| `origin-ls-rejected` | 扩展 output channel | `dropped: ['bundle'|'flag'|'origin']` 去重排序；仅在「看到 LS 行但一个都没能采纳」时出现，正常安装不产生 |
 
 - **payload 一律不含 host/origin**（租户域名不得进日志），别为排障加。
 - 去重命中时**不写日志也不写收据**——「没有新收据」不等于没触发，判活看触发侧的 generation 语义。
@@ -51,9 +67,11 @@ backend 转发非拦截 RPC 时，目标 origin **不是常量**，而是跟随�
   `windsurf.serviceUrl` 是遗留键、原生只在迁移时读一次，作末位兜底；③ 部署默认（`source:'default'`，
   推 `null` 复位）。`source` 枚举进日志与收据，origin 永不落盘。portal 由官方 `devin.setPortalUrl`
   命令写入（InputBox → `windsurf.portalUrl` + `devin.portalUrl`）。
-- **LS 行匹配按可执行路径**，不是裸子串：正则 `/\/language_server_[A-Za-z0-9_]+(\s|$)/` 定位可执行位，
-  只在其后查 flag——命令行中段提到二进制名的行（`ps | grep` 自匹配陷阱，2026-10-27 实测中招）必须忽略。
-  候选按 pid 降序逐个过 `resolveUpstreamOrigin`，首个合法者胜。
+- **LS 行匹配按命令位置 argv[0] + 同一 .app bundle 归属**：`ls` 行的 argv[0] 必须以
+  `/language_server_*` 结尾（中段提及该路径的行不算），且能从宿主 `process.execPath` 推出 `.app/` 前缀时
+  还要求可执行文件落在同一 bundle 内——另一安装的 LS 不得凭 pid 压过本窗口。bundle 归属是**安装级不是
+  窗口级**（同账号多窗口无法区分）；无法推出 bundle（测试、非 macOS）时只做命令位置约束。flag 只在
+  argv[0] 之后查。候选按 pid 降序逐个过 `resolveUpstreamOrigin`，首个合法者胜。
 - **收敛窗口** `resolveEffectiveOriginWhenAvailable`：激活比 LS 早约 1 秒（实测 11:19:07 推送 → 11:19:08
   LS 才启动），首解析常落在 `default`；故按 0/2/5/10s 追加最多 3 次重解析，拿到非 `default` 立即停，
   `shouldContinue`（宿主停用或更新的触发到达）为假即止。**去重**：同一代激活里 `(origin, source)`

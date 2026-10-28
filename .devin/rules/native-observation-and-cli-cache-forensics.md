@@ -47,3 +47,12 @@ trigger: model_decision
 ## 后端换进程清空视图的实测
 
 后端换进程的那几秒（实测 12 秒）会把 885 条已发布条目清成 0，picker 显示「没有模型」——这是 `unavailable` 必须被拦住的因果证据。
+
+## 原生目录 mapper 的 label→uid 解析是后写覆盖
+
+实测（REA 解析 `modelCatalogSource-*.js` + 本机端到端复现）：webapp 的目录 mapper 先建 `Map<label, modelUid>`
+（**同 label 后写覆盖**），再把 sort 分组的 `modelLabels` 逐条映射为 uid。两个 uid 共享一个最终 label 时，
+**两 uid 都留在 `models`、但分组里前一个 uid 消失、后一个出现两次**——所以 emit 侧最终展示标签必须唯一；
+去重只按 familyLabel 做不够（effort 后缀在之后追加，`Foo`+High 与 `Foo High`+无档位可撞）。另一个实测边界：
+`GetCliModelConfigs` 载荷**无排序区**（own group 不会注入），`GetCascadeModelConfigs` 才有
+`clientModelSorts`——「分组丢 uid」只在后者一类带 sorts 的 RPC 上表现。
