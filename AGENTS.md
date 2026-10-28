@@ -67,6 +67,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/retired-and-deadends.md` | 清理配置键、审「这段代码还活着吗」、疑惑旧字段为何还在 |
 | `.devin/rules/acp-protocol-fields.md` | 改 `src/protocol/*` 的 protobuf 字段号、核对原生请求/响应/用量字段 |
 | `.devin/rules/acp-protocol-fields-forensics.md` | 改字段号、怀疑读数过期，或排查 CompletionDelta 错位陷阱时必读（实测方法与证据） |
+| `.devin/rules/acp-protocol-fields-forensics-rea.md` | **用 REA 取证、或想知道「本机 REA 还能用什么」时必读**——原生面不可用的确切原因、语义图预算实测、partial evidence 只在同会话内有效 |
 
 ## 仓库与 remote
 - `origin` = 本仓库的 fork（`git@github.com:TendernessCJS/devin-fusion-byok.git`），是日常推送目标。

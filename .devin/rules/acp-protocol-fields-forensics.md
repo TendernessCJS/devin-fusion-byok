@@ -78,28 +78,10 @@ tail -c +<偏移> <bundle> | head -c 600
 - **反例**（附到「不要猜数值枚举」）：对方 `docs/HISTORY-LEDGER-2026-07-late.md`（~147 行）曾按 protobuf 变体名顺序猜「`StopReason 4 = max_turn_requests`」，被付费实测推翻（4 是付费层正常完成）——后果是完整付费响应被报成截断，按 length 续写的客户端会无限续写。
 - **交叉确认**：对方 `docs/DEVIN-CONNECT-CUTOVER.md`（~434 行）列的 stop reason 集合 `end_turn, max_tokens, max_turn_requests, refusal, cancelled` 与本仓 `src/runtime/host/auto-continue.cjs` 的处理集合一致。
 
-## REA 的 JS 语义图在本 artifact 上不可用（2026-10-26）
+## REA 的 JS 语义图在本 artifact 上拿不到
 
-`analyze_javascript_application` 对该 bundle 三连失败，**不要重复尝试**：
-
-| 输入 | 结果 |
-| --- | --- |
-| `out/vs/sessions/sessions.desktop.main.js` | 拒绝：只接受目录或 `.asar` |
-| `/Applications/Devin.app` | 内存预算耗尽，停在 `node_modules/react-dom/...development.js`，未触及 sessions |
-| `out/vs/sessions`（40 MB 单 bundle） | **解析阶段 worker 堆耗尽**：limit `1098907648 B`；`visited_ast_nodes 4479`、`skipped_javascript_files 1`、coverage `partial`、`retryable: false` |
-
-结论：证据只能停在**字节级静态观察**（`grep -abo` 取偏移 + `dd` 读窗口）。**不得**把 `partial` 语义图当作「不存在某逻辑」的证明。
-
-### 复测：单文件 + 4 GiB 仍然失败（同日，Code 模式）
-
-| 输入 | 结果 |
-| --- | --- |
-| `out/vs/sessions` + `source_paths:["sessions.desktop.main.js"]` + `max_heap_mb:4096` + `detail:summary` | **仍在解析期堆耗尽**：`javascript_analysis_worker_heap_limit_bytes 4320133120`、`parsed_javascript_files 0`、`skipped_javascript_files 1`、semantic/application coverage `partial` |
-
-⇒ **不是「分析范围过大」这一单因素**，提高 `max_heap_mb` 不是有效重试方向，别再把「加大内存」当解法。
-根 digest 两次一致（`4d07c15a…f9f2c`），确认分析的是同一份 Devin 产物；目录摘要 `examined 2 / total 7`（`source_paths` 只选 1 个文件，另 2 个被排除在分析范围外）。
-
-**取证纪律**：retained Evidence 只在**同一 MCP 会话内**有效，`close_binary` 或会话重启后按旧 `evidence_id` 取会得 `evidence_integrity_mismatch`（`reason: missing`）。所以取证后要立刻 `export_evidence_bundle` 到文件，否则手里只剩一个读不到的 ID——上一轮就是只留了 ID 没导出。
+历史过程与全部实测数据见 `acp-protocol-fields-forensics-rea.md`「REA 的原生面与语义图预算」一节——`analyze_javascript_application` 对本 artifact
+**在解析阶段就吃满预算**，`partial` 图不得当作「不存在某逻辑」的证明，**不要重复尝试**。
 
 ## 谁组装 prompt 历史：原生 CLI，不是 JS bundle
 
@@ -145,24 +127,6 @@ ModelAssignment: 1 assignment_jwt,2 model_uid,3 harness_uids
 ```
 注：`ClientModelSort.groups` 的内层类型在 schema 里是 minified 引用、无独立 `typeName`，组内字段（f1 name / f2 label）无法描述符断言，仍靠 fixture。
 
-### REA 的原生面与语义图预算（2026-10-28 复测）
+### REA 的原生面与语义图预算
 
-- **原生面整体不可用**，错误码是 `provider_unavailable`（旧的 `capability_unavailable` 记录已过期）：候选
-  `ghidra/hopper/ida/kuna` 全被拒，Ghidra 一项的 `java_probe_failure` 显示**本机没有 Java 运行时**（`java` 退出 1）
-  ⇒ 只装 Ghidra 不够，还要 JDK。`binary_overview`（仅读 Mach-O 元数据）走同一 provider 选择器，**同样不可用**——元数据不是绕道。
-- **`search_strings` 不是 JS 检索工具**：它只按原生 provider 选路，对本仓 JS bundle 一样返回 `provider_unavailable`。
-  查 bundle 字面量只能用 `grep -abo` 取偏移 + `dd` 读窗口。
-- **`find_xrefs_to_name` 仍是 `target_unavailable`**：JS 分析产出是证据快照，不是活符号库。
-- **另两处能力缺口（此前未记）**：`recover_javascript_sources` 需要 `REA_WAKARU_COMMAND` 指向
-  **Wakaru ^1.13.0 Linux x64**，macOS 无解；`analyze_web_bundle` 需要活浏览器 `cdp_endpoint` + `target_id`，
-  **对磁盘产物不适用**。
-- **`analyze_javascript_application` 只收目录或 `.asar`**（单文件报 `unsupported_target`）。本轮以
-  `extensions/windsurf` + `source_paths:["dist/extension.js"]` 复测：`analysis_status:"interrupted"`、
-  `analysis_failure.code:"resource_constraint"`、`retryable:false`，worker `old_space 1024 MB` /
-  `heap 1098907648 B` / `timeout 300000 ms`，stderr 是真实 V8 `Ineffective mark-compacts near heap limit`。
-  ⇒ 上一轮记的「partial(truncated) / 1,085 模块 / unknowns 79,318·142,708·18,203」**本轮不可复现**，
-  降级为历史一次性观测：不得当基线，更不得当「不存在某调用」的证明；只指向 `dist` 目录时只出 9 节点
-  partial 图（无 app 结构），同样不可用。
-- **交叉验证一条**：REA `open_binary` 的 `sha256` 与本仓探针 `native-contract.json` 的 `signature` 逐段对应
-  （顺序 `cli:ls:desktop:chat:acp`；2026-10-28 复核 ls=第 2 段 `9d9fad2b…`、acp=第 5 段 `fa7fbaba…`），
-  可复用确认「两边看的是同一份产物」。
+REA 各工具的本机可用性、语义图的 8 组预算实测、partial evidence 的同会话失效纪律，见 `acp-protocol-fields-forensics-rea.md`（2026-10-28 复测，REA 6.8.0）。
