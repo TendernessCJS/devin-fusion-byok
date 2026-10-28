@@ -26,6 +26,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
   const stateItems = new Map();
   let finalItems = null;
   const texts = new Map();
+  let emittedText = 0;
   let terminal = false;
   let reason = 2;
   let chatFinish = null;
@@ -58,7 +59,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
     }
     const delta = complete ? value.slice(previous.length) : value;
     texts.set(key, complete ? value : previous + value);
-    if (delta) await emit(thinking ? thinkingChunk(id, delta) : textChunk(id, delta));
+    if (delta) { await emit(thinking ? thinkingChunk(id, delta) : textChunk(id, delta)); emittedText++; }
   };
   const item = async (value, index, done) => {
     if (scope && value && typeof value === 'object' && index !== undefined) stateItems.set(index, value);
@@ -215,7 +216,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
       if (reason === 2 && tools.length === 0 && (chatFinish === 'tool_calls' || chatFinish === 'function_call')) {
         onDiag({ event: 'tool-claim-mismatch', textChunks: texts.size, toolChunks: 0 });
       }
-      if (reason === 2 && !tools.length && !texts.size) {
+      if (reason === 2 && !tools.length && !emittedText) {
         const err = new Error('Upstream completed without output');
         err.code = 'upstream_empty_output';
         throw err;

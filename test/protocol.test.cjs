@@ -383,6 +383,39 @@ test('completed without any content reports upstream_empty_output but truncation
   assert.equal(truncatedMetrics[0].status, 'success');
 });
 
+test('a completed message carrying empty text is not a successful turn', async t => {
+  const metrics = [];
+  const proxy = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.created', response: { status: 'in_progress' } },
+      { type: 'response.completed', response: { status: 'completed',
+        output: [{ type: 'message', content: [{ type: 'output_text', text: '' }] }] } },
+    ].map(event).join(''));
+  }, 'openai-responses', {}, value => metrics.push(value));
+  const output = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+  assert.match(output.messages.map(m => str(m, 3)).join(''), /no output/i);
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].status, 'error');
+  assert.equal(metrics[0].code, 'upstream_empty_output');
+});
+
+test('a reasoning-only completion still counts as output', async t => {
+  const metrics = [];
+  const proxy = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.created', response: { status: 'in_progress' } },
+      { type: 'response.completed', response: { status: 'completed',
+        output: [{ type: 'reasoning', summary: [{ type: 'summary_text', text: 'thinking' }] }] } },
+    ].map(event).join(''));
+  }, 'openai-responses', {}, value => metrics.push(value));
+  const output = unpack(Buffer.from(await (await fetch(proxy.url)).arrayBuffer()));
+  assert.equal(output.messages.map(m => str(m, 9)).join(''), 'thinking');
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].status, 'success');
+});
+
 test('a done text that contradicts the streamed deltas reports upstream_text_mismatch', async t => {
   const metrics = [];
   const proxy = await bridge(t, async (req, res) => {
