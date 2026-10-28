@@ -13,6 +13,7 @@ const { buildCatalog, augmentCatalog, resolveAssignment } = require('../src/cata
 const { fields, str, num, s, v, m } = require('../src/protocol/wire.cjs');
 const { cat, proto, json, lsStatus, config, OBSERVED_SWE, statusFixture } = require('./helpers/catalog-fixtures.cjs');
 const { webappAvailable, loadWebappPicker, loadModelCatalogMapper, loadFamilyPipeline } = require('./helpers/installed-renderer.cjs');
+const { digest } = require('../src/catalog/identity.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -275,4 +276,110 @@ test('installed-renderer probe: a file at the assets path or fs failures fail lo
   // Duplicate anchor-bearing bundles are drift, never a first-match win.
   const dup = helperAt(tempRoot({ 'x.js': 'pre catalogMisses post', 'y.js': 'pre catalogMisses post' }));
   assert.throws(() => dup.loadWebappPicker(), /layout changed/);
+});
+
+test('the installed catalog mapper keeps both colliding-label models resolvable by uid', { skip: !webappAvailable }, () => {
+  const colliding = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [
+    { id: 'foo', label: 'Foo', efforts: ['high'] },
+    { id: 'foo-high', label: 'Foo High', effortMode: 'none' }] }] }, [], null);
+  const own = colliding.models.filter(model => model.uid.startsWith('dfbyok-') && model.kind === 'model');
+  assert.equal(own.length, 2);
+  assert.notEqual(own[0].label, own[1].label, 'emitted labels must be unique (fix D)');
+
+  // JSON cascade payload: sorts section present but empty → own group injected.
+  const injected = augmentCatalog({ clientModelConfigs: [], clientModelSorts: [] },
+    { rpc: '/exa.api_server_pb.ApiServerService/GetCascadeModelConfigs', format: { json: true }, catalog: colliding });
+  const ownGroups = injected.clientModelSorts.flatMap(sort => sort.groups || [])
+    .filter(group => group.groupName === 'Devin Fusion BYOK');
+  assert.equal(ownGroups.length, 1, 'the empty-sorts branch must inject exactly one own group');
+  assert.equal(ownGroups[0].modelLabels.length, 2, 'both emitted labels reach the sort group');
+
+  const defaults = entry => ({ pricingType: 0, creditMultiplier: 0, modelCostTier: 0,
+    modelDimensions: [], complianceLevels: [], disabled: false, ...entry });
+  const mapper = loadModelCatalogMapper();
+  const mapGroups = payload => mapper(payload).sorts
+    .flatMap(sort => sort.groups || [])
+    .map(group => group.modelUids || [])
+    .filter(uids => uids.some(uid => uid.startsWith('dfbyok-')));
+
+  const resolved = mapGroups({
+    clientModelConfigs: injected.clientModelConfigs.map(defaults),
+    clientModelSorts: injected.clientModelSorts,
+  });
+  const flat = resolved.flat();
+  assert.equal(resolved.length, 1, 'the own group resolves in the native mapper');
+  assert.deepEqual([...flat].sort(), own.map(model => model.uid).sort(),
+    'every emitted uid survives the label-keyed lookup');
+
+  // Mutation control: force the collision the fix prevents and prove the same
+  // assertion would have caught it — identical labels collapse through the
+  // native Map<label, uid> to the later writer.
+  const collapsedInput = {
+    clientModelConfigs: injected.clientModelConfigs.map(entry => defaults(
+      entry.modelUid.startsWith('dfbyok-') ? { ...entry, label: 'P · Foo High' } : entry)),
+    clientModelSorts: injected.clientModelSorts.map(sort => ({ ...sort,
+      groups: (sort.groups || []).map(group => group.groupName === 'Devin Fusion BYOK'
+        ? { ...group, modelLabels: ['P · Foo High', 'P · Foo High'] } : group) })),
+  };
+  const collapsed = mapGroups(collapsedInput).flat();
+  assert.ok(new Set(collapsed).size < 2, 'control: identical labels collapse to a single uid in the native mapper');
+  assert.equal(collapsed.includes(own[0].uid) && collapsed.includes(own[1].uid), false,
+    'control: at least one uid vanished from the group');
+});
+
+test('family-wide disambiguation keeps every own uid exactly once in the real mapper', { skip: !webappAvailable }, () => {
+  const digestOfFooHigh = digest(JSON.stringify(['p', 'foo-high'])).slice(0, 8);
+  const built = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [
+    { id: 'foo', label: 'Foo', efforts: ['low', 'high'] },
+    { id: 'foo-high', label: 'Foo High', effortMode: 'none' },
+    { id: 'squatter', label: `Foo High (${digestOfFooHigh})`, effortMode: 'none' }] }] }, [], null);
+  const own = built.models.filter(model => model.kind === 'model');
+  assert.equal(own.length, 4, 'foo emits two effort variants');
+  const labels = own.map(model => model.label);
+  assert.equal(new Set(labels).size, labels.length, 'final labels unique before emit');
+
+  const injected = augmentCatalog({ clientModelConfigs: [], clientModelSorts: [] },
+    { rpc: '/exa.api_server_pb.ApiServerService/GetCascadeModelConfigs', format: { json: true }, catalog: built });
+  const defaults = entry => ({ pricingType: 0, creditMultiplier: 0, modelCostTier: 0,
+    modelDimensions: [], complianceLevels: [], disabled: false, ...entry });
+  const mapped = loadModelCatalogMapper()({
+    clientModelConfigs: injected.clientModelConfigs.map(defaults),
+    clientModelSorts: injected.clientModelSorts,
+  });
+  const groupUids = mapped.sorts.flatMap(sort => sort.groups || [])
+    .flatMap(group => group.modelUids || [])
+    .filter(uid => uid.startsWith('dfbyok-'));
+  assert.deepEqual([...groupUids].sort(), own.map(model => model.uid).sort(),
+    'the label-keyed native mapper resolves every own uid exactly once');
+});
+
+test('a colliding family stays one Lead value; its effort variants select through the real picker', { skip: !webappAvailable }, () => {
+  const collideConfig = { providers: [{ id: 'p', name: 'P', models: [
+    { id: 'foo', label: 'Foo', efforts: ['low', 'high'] },
+    { id: 'foo-high', label: 'Foo High', effortMode: 'none' }] }],
+    sidekicks: [{ nativeUid: 'swe-2-max', label: 'SWE-2 Max' }] };
+  const built = buildCatalog(collideConfig, OBSERVED_SWE);
+  const own = built.models.filter(model => model.kind === 'model');
+  const fooLabel = own.map(model => model.json.modelFamilyMetadata.modelFamilyLabel)
+    .find(label => label.startsWith('P · Foo ('));
+  assert.ok(fooLabel, 'the colliding foo family got a keyed family label');
+  // Every variant of the foo family shares the same familyLabel.
+  const fooUids = own.filter(model => model.json.modelFamilyMetadata.modelFamilyLabel === fooLabel)
+    .map(model => model.uid);
+  assert.equal(fooUids.length, 2, 'low and high live in one family');
+
+  const f = fixture(built);
+  const leadValues = [...f.fusion.dimensions.find(d => d.name === 'Lead').values].map(v => v.name);
+  assert.equal(leadValues.filter(name => name === fooLabel).length, 1,
+    'exactly one Lead value represents the whole foo family');
+  assert.ok(leadValues.every(name => name !== 'P · Foo'), 'no un-suffixed colliding label remains');
+
+  f.select('Sidekick', 'SWE-2 Max');
+  f.select('Lead', fooLabel);
+  const lowPick = f.select('Effort', 'Low');
+  const lowAssign = resolveAssignment({ modelRouterUid: lowPick.modelUid }, json, f.catalog);
+  assert.equal(lowAssign.assignment.modelUid, fooUids.find(uid => f.catalog.routes[uid].effort === 'low'));
+  const highPick = f.select('Effort', 'High');
+  const highAssign = resolveAssignment({ modelRouterUid: highPick.modelUid }, json, f.catalog);
+  assert.equal(highAssign.assignment.modelUid, fooUids.find(uid => f.catalog.routes[uid].effort === 'high'));
 });

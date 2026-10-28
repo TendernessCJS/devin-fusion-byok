@@ -73,6 +73,56 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
     familyKeys.get(lead.familyLabel).add(lead.key);
   }
   for (const lead of leads) if (familyKeys.get(lead.familyLabel).size > 1) lead.familyLabel += ` (${lead.providerId}/${lead.model})`;
+  // Labels also index native sort groups (Map<label, uid>), and the effort
+  // suffix is appended after the family label, so families can still collide
+  // on the final label ("Foo" + High vs "Foo High" + none) — or on the family
+  // name itself, since a hand-written label may match the generated
+  // `(providerId/model)` suffix. Renaming must be family-level: variants of a
+  // family share one Lead-dimension value, so splitting a colliding family
+  // would strand the other variants. Uids and routes stay untouched, and the
+  // outcome only depends on `key`, never on config order.
+  const finalLabel = lead => lead.familyLabel + (lead.effort ? ` ${effortMetadata(lead.effort).name}` : '');
+  const familiesByKey = new Map();
+  for (const lead of leads) {
+    const list = familiesByKey.get(lead.key) || [];
+    list.push(lead);
+    familiesByKey.set(lead.key, list);
+  }
+  const families = [...familiesByKey.entries()].map(([key, members]) => ({ key, leads: members }));
+  // A label claimed by two families — whether as a family name or a variant's
+  // final label — marks both families for renaming.
+  const owners = new Map();
+  const claim = (label, family) => {
+    let set = owners.get(label);
+    if (!set) owners.set(label, set = new Set());
+    set.add(family);
+  };
+  for (const family of families) {
+    claim(family.leads[0].familyLabel, family);
+    for (const lead of family.leads) claim(finalLabel(lead), family);
+  }
+  const affected = new Set();
+  for (const set of owners.values()) if (set.size > 1) for (const family of set) affected.add(family);
+  const reserved = new Set();
+  for (const family of families) {
+    if (affected.has(family)) continue;
+    reserved.add(family.leads[0].familyLabel);
+    for (const lead of family.leads) reserved.add(finalLabel(lead));
+  }
+  for (const family of [...affected].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)) {
+    const identity = digest(family.key).slice(0, 8);
+    let suffix = identity, candidate;
+    for (let counter = 1; ; counter++) {
+      candidate = `${family.leads[0].familyLabel} (${suffix})`;
+      const free = !reserved.has(candidate) &&
+        family.leads.every(lead => !reserved.has(candidate + (lead.effort ? ` ${effortMetadata(lead.effort).name}` : '')));
+      if (free) break;
+      suffix = `${identity}-${counter + 1}`;
+    }
+    for (const lead of family.leads) lead.familyLabel = candidate;
+    reserved.add(candidate);
+    for (const lead of family.leads) reserved.add(finalLabel(lead));
+  }
   for (const lead of leads) {
     const effort = effortMetadata(lead.effort);
     models.push(configFor({ ...lead, label: lead.familyLabel + (lead.effort ? ` ${effort.name}` : ''),

@@ -6,6 +6,7 @@ const { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels } =
 const { fields, str, num, s, v, m } = require('../src/protocol/wire.cjs');
 const { cat, proto, json, lsStatus, config, OBSERVED_SWE, catalog, getNested, configs, statusFixture } = require('./helpers/catalog-fixtures.cjs');
 const { webappAvailable, loadWebappPicker } = require('./helpers/installed-renderer.cjs');
+const { digest } = require('../src/catalog/identity.cjs');
 
 test('stable model identities and independent Lead/Sidekick orders survive reordering and label changes', () => {
   const reordered = config();
@@ -69,6 +70,75 @@ test('duplicate labels are disambiguated and invalid provider identities fail be
   assert.equal(new Set(result.models.filter(model => model.kind === 'model').map(model => model.label)).size, 2);
   assert.throws(() => buildCatalog({ providers: [{ id: 'a', models: [{ id: 'x' }, { id: 'x' }] }] }), /Duplicate/);
   assert.throws(() => buildCatalog({ providers: [{ id: 'a', models: [{ id: 'x', efforts: ['HIGH'] }] }] }), /effort/);
+});
+
+test('models whose final labels collide stay distinct in the native mapper', () => {
+  const built = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [
+    { id: 'foo', label: 'Foo', efforts: ['high'] },
+    { id: 'foo-high', label: 'Foo High', effortMode: 'none' },
+  ] }] }, [], null);
+  const own = built.models.filter(model => model.uid.startsWith('dfbyok-') && model.kind === 'model');
+  assert.equal(own.length, 2);
+  assert.notEqual(own[0].label, own[1].label,
+    'the native mapper resolves sort groups by label — a collision drops a uid');
+  for (const model of own) assert.match(model.uid, /^dfbyok-p-[a-z0-9-]+-[0-9a-f]{16}$/, 'uid shape unchanged');
+  // No collision → no disambiguation suffix.
+  const solo = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [
+    { id: 'foo', label: 'Foo', efforts: ['high'] }] }] }, [], null);
+  const single = solo.models.filter(model => model.kind === 'model');
+  assert.equal(single.length, 1);
+  assert.equal(single[0].label, 'P · Foo High');
+});
+
+test('final-label collisions are renamed family-wide, deterministically and without touching squatters', () => {
+  const labels = built => Object.fromEntries(built.models
+    .filter(model => model.kind === 'model')
+    .map(model => [model.uid, model.label]));
+  const families = built => {
+    const byFamily = new Map();
+    for (const model of built.models.filter(model => model.kind === 'model')) {
+      const fam = model.json.modelFamilyMetadata.modelFamilyLabel;
+      (byFamily.get(fam) || byFamily.set(fam, []).get(fam)).push(model.uid);
+    }
+    return byFamily;
+  };
+  const allFinal = built => built.models.map(model => model.label);
+
+  // Foo with two efforts + Foo High with none: the High variant collides on
+  // the final label, so BOTH families move to a keyed suffix — every variant
+  // of a family keeps the same familyLabel (one Lead-dimension value).
+  const baseModels = [{ id: 'foo', label: 'Foo', efforts: ['low', 'high'] },
+    { id: 'foo-high', label: 'Foo High', effortMode: 'none' }];
+  const models = order => order.map(i => baseModels[i]);
+  const colliding = buildCatalog({ providers: [{ id: 'p', name: 'P', models: models([0, 1]) }] }, [], null);
+  const fams = families(colliding);
+  assert.equal(fams.size, 2, 'two families, each internally uniform');
+  for (const [name, uids] of fams) assert.ok(name.includes('(') && name.includes(')'), 'colliding family renamed: ' + name);
+  assert.equal(new Set(allFinal(colliding)).size, allFinal(colliding).length, 'every final label unique');
+  const shuffled = buildCatalog({ providers: [{ id: 'p', name: 'P', models: models([1, 0]) }] }, [], null);
+  assert.equal(models([1, 0])[0].id, 'foo-high', 'the input order really is reversed');
+  assert.deepEqual(labels(shuffled), labels(colliding), 'config order never changes the keyed name');
+
+  // A hand-written label squatting the exact generated name forces a counter
+  // suffix — and the squatter itself is never rewritten.
+  const digestOfFooHigh = digest(JSON.stringify(['p', 'foo-high'])).slice(0, 8);
+  const squatterLabel = `Foo High (${digestOfFooHigh})`;
+  const squatted = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [
+    { id: 'foo', label: 'Foo', efforts: ['high'] },
+    { id: 'foo-high', label: 'Foo High', effortMode: 'none' },
+    { id: 'squatter', label: squatterLabel, effortMode: 'none' }] }] }, [], null);
+  const squatLabels = Object.values(labels(squatted));
+  assert.equal(new Set(squatLabels).size, squatLabels.length, 'labels unique even under a deliberate squat');
+  assert.ok(squatLabels.includes('P · ' + squatterLabel), 'the squatting hand-written label is preserved verbatim');
+  assert.ok(squatLabels.some(label => label.includes(`${digestOfFooHigh}-`)), 'the displaced family escalates to a counter suffix');
+
+  // Plain + matrix final labels all unique for the old counterexample shape.
+  const trio = buildCatalog({ providers: [{ id: 'p', name: 'P', models: [
+    { id: 'foo', label: 'Foo', efforts: ['high'] },
+    { id: 'foo-high', label: 'Foo High', effortMode: 'none' },
+    { id: 'bar', label: 'Foo (foo/high)', efforts: ['high'] }] }] }, [], null);
+  const trioLabels = allFinal(trio);
+  assert.equal(new Set(trioLabels).size, trioLabels.length, 'plain and matrix labels all unique');
 });
 
 test('missing output limits default to 131072 and clamp to the model context window', () => {
