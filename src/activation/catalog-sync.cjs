@@ -32,6 +32,7 @@ function installCatalogSync({ deps, shared, onChange }) {
     stores.nativeCatalog.pushToBackend();
     return published;
   };
+  stores.nativeCatalog.markUnsupported = () => { stores.nativeCatalog.nativeCatalogStatus = 'unsupported'; };
   stores.nativeCatalog.pushToBackend = () => {
     if (!live(lifecycle, config) || stores.nativeCatalog.pushTimer !== undefined) return;
     // Nothing to offer yet: an empty payload must not advance the pushed

@@ -106,7 +106,14 @@ function installEnable({ deps, shared }) {
       // finally block would strip again underneath.
       const disabling = shared.disablePromise;
       if (disabling) { try { await disabling; } catch {} }
-      if (!live(lifecycle, config) || lifecycle.connection) return;
+      if (!live(lifecycle, config)) return;
+      const existing = lifecycle.connection;
+      if (existing) {
+        // A remote connection that lost its tunnel retries the tunnel alone —
+        // backend and settings are already in place.
+        if (existing.status?.state === 'unavailable' && typeof existing.retry === 'function') return existing.retry();
+        return;
+      }
       return enable();
     });
     enableQueue = operation.catch(() => {});
@@ -174,7 +181,46 @@ function installEnable({ deps, shared }) {
     }
     if (superseded(lifecycle, config, generation)) return;
     const native = vscode.extensions.getExtension('codeium.windsurf');
-    if (!native) throw new Error('未找到 Devin 原生扩展');
+    if (!native) {
+      if (!vscode.env?.remoteName) throw new Error('未找到 Devin 原生扩展');
+      // Remote window: the native extension runs on the remote side, so no
+      // catalog injection is possible — the only deliverable here is the
+      // reverse tunnel plus the agentEnv write that already happened above.
+      let remoteState = 'connecting';
+      const support = deps.lifecycle.remoteSupport;
+      let connecting = null;
+      const connect = () => {
+        if (!support) { remoteState = 'unavailable'; return Promise.reject(new Error('remote_support_unavailable')); }
+        if (remoteState === 'disposed' || lifecycle.connection !== connection) return Promise.resolve();
+        if (connecting) return connecting;
+        remoteState = 'connecting';
+        connecting = (async () => {
+          try {
+            await support.start();
+            await support.ensureCurrentRemoteWindowTunnel();
+            if (remoteState === 'disposed' || lifecycle.connection !== connection) return;
+            remoteState = 'ready';
+          } catch (error) {
+            if (remoteState !== 'disposed' && lifecycle.connection === connection) remoteState = 'unavailable';
+            log('remote-tunnel-unavailable');
+            throw error;
+          } finally { connecting = null; }
+        })();
+        return connecting;
+      };
+      const connection = lifecycle.connection = {
+        get status() { return { state: remoteState, tunnels: support?.status?.() || [] }; },
+        retry() { return connect(); },
+        dispose() { remoteState = 'disposed'; },
+      };
+      // No LS bridge and no auth-status hook run on this side, so the desktop
+      // catalog can never be observed here: say so instead of polling forever.
+      stores.nativeCatalog.markUnsupported?.();
+      if (!support) remoteState = 'unavailable';
+      else void connect().catch(() => {});
+      log('activated-remote', { tunnel: Boolean(support) });
+      return;
+    }
     const injected = await installLsInjection({ nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main),
       createBridge: (port, extra) => createLsBridge(port, { ...extra, getCatalog: catalog, log, onNativeModels: stores.nativeCatalog.observeNativeModels,
         onAllowedUids: stores.nativeCatalog.observeAllowedUids,

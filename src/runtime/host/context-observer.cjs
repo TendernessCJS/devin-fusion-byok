@@ -18,7 +18,8 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
   function enabled() { return !disposed && isEnabled(); }
   function attach(connector) {
     const state = createContextState(), saved = [];
-    const entry = { state, active: true, saved };
+    const entry = { state, active: true, saved, epoch: 0, disconnected: false };
+    entry.disconnect = () => { entry.epoch++; entry.disconnected = true; state.clear(); };
     function wrap(key, factory) {
       const previous = Object.getOwnPropertyDescriptor(connector, key), fn = connector[key];
       const wrapper = factory(fn);
@@ -35,6 +36,7 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
     }
     try {
       wrap('sendRequest', fn => function (...args) {
+        const epoch = entry.epoch;
         let method, sessionId, generation;
         safe(() => {
           method = args[0]?.method;
@@ -47,13 +49,13 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
         let result;
         try { result = Reflect.apply(fn, this, args); }
         catch (error) { safe(() => { if (method === 'session/prompt') state.finish(sessionId, generation, 'error'); }); throw error; }
-        const success = value => safe(() => {
+        const success = value => { if (epoch !== entry.epoch) return; safe(() => {
           if (method === 'session/prompt' && !(connector.protocolVersion >= 2)) state.finish(sessionId, generation);
           if (method === 'session/cancel') state.finish(sessionId, undefined, 'cancelled');
           if (['session/new', 'session/load', 'session/resume', 'session/set_config_option'].includes(method)) state.selectModel(value?.sessionId || sessionId, value?.configOptions);
           if (method === 'session/new') focus(value?.sessionId || sessionId);
-        });
-        const failure = () => safe(() => { if (method === 'session/prompt') state.finish(sessionId, generation, 'error'); });
+        }); };
+        const failure = () => { if (epoch !== entry.epoch) return; safe(() => { if (method === 'session/prompt') state.finish(sessionId, generation, 'error'); }); };
         if (result && typeof result.then === 'function') result.then(success, failure); else success(result);
         return result;
       });
@@ -79,10 +81,16 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
       });
       if (typeof connector.setStatus === 'function') wrap('setStatus', fn => function (status, ...rest) {
         const result = Reflect.apply(fn, this, [status, ...rest]);
-        if (isTerminalStatus(status)) detach();
+        // A remote transport drop is a detach for local connectors (they never
+        // report `disconnected`), but a remote connector survives it and must
+        // only have its state evicted — see the TERMINAL_STATUS note.
+        if (isTerminalStatus(status)) {
+          if (connector.location?.kind === 'local') detach(); else entry.disconnect();
+        } else if (status === 'connected' || status === 'ready') entry.disconnected = false;
         return result;
       });
-      connections.set(connector, { ...entry, detach });
+      entry.detach = detach;
+      connections.set(connector, entry);
     } catch { detach(); }
   }
   const layer = registry.addLayer({
@@ -90,12 +98,21 @@ function installContextObserver({ nativeMainPath, isEnabled = () => true }) {
     priority: 40,
     attach(connector) {
       registrations++;
-      if (connections.size >= 32 || connections.has(connector) || connector?.agentId !== 'devin-cli' || connector.bundled !== true || connector.location?.kind !== 'local' ||
+      if (connections.size >= 32 || connections.has(connector) || connector?.agentId !== 'devin-cli' || connector.bundled !== true || !['local', 'ssh', 'wsl'].includes(connector.location?.kind) ||
           typeof connector.sendRequest !== 'function' || typeof connector.forwardClientRequest !== 'function') return null;
       attach(connector);
       return connections.has(connector) ? connector : null;
     },
     detach(connector) { connections.get(connector)?.detach?.(); },
+    update(target, change) {
+      const status = change?.status;
+      if (typeof status !== 'string') return;
+      for (const [connector, entry] of connections) {
+        if (connector.location?.kind === 'local' || (target !== connector && target !== connector.id)) continue;
+        if (isTerminalStatus(status)) entry.disconnect();
+        else if (status === 'connected' || status === 'ready') entry.disconnected = false;
+      }
+    },
   });
   const handle = {
     status,

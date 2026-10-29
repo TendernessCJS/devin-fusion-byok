@@ -121,6 +121,21 @@ function fixture(t, initial = {}) {
       .createManagedSettingsGate({ timeoutMs: initial.managedSettingsTimeoutMs }),
   };
   if (initial.hostDisabled) overrides['./lifecycle/host-disabled.cjs'] = { isHostDisabled: () => true };
+  const remoteCalls = { start: 0, stop: 0, ensure: 0 };
+  let remoteEnsure = () => Promise.resolve();
+  if (initial.remote) {
+    vscode.env = { remoteName: 'ssh-remote' };
+    vscode.extensions.getExtension = () => undefined;
+    overrides['./activation/remote-support.cjs'] = {
+      discoverRemoteMain: () => null,
+      createRemoteSupport: () => ({
+        start() { remoteCalls.start++; return Promise.resolve(); },
+        stop() { remoteCalls.stop++; },
+        status: () => [],
+        ensureCurrentRemoteWindowTunnel() { remoteCalls.ensure++; return remoteEnsure(); },
+      }),
+    };
+  }
   const loader = createSandboxLoader({ filename, overrides, globals: {
     AbortController, AbortSignal, setInterval, clearInterval, setTimeout: (fn, _ms) => setTimeout(fn, 0), clearTimeout,
     fetch: (...args) => fetchImpl(...args),
@@ -157,6 +172,8 @@ function fixture(t, initial = {}) {
     authDisposed: () => authDisposed, setAuthRestore: value => { authRestoreResult = value; },
     acpDisposed: () => acpDisposed, setBridgeDisposeError: error => { bridgeDisposeError = error; },
     settle: async (ticks = 20) => { for (let index = 0; index < ticks; index++) await next(); },
+    remoteCalls: () => remoteCalls,
+    setRemoteEnsure: fn => { remoteEnsure = fn; },
     counts: () => ({ installed, disposed }) };
 }
 test('normal window unload restores its LS hook without reverting shared CLI environment', async t => {
@@ -1197,4 +1214,70 @@ test('a host-disable drain timeout logs pending rather than restored', { timeout
     'the restored event is reserved for a completed drain');
   gate.release();
   await Promise.allSettled([enabling]);
+});
+
+test('a remote window without the native extension activates through the reverse tunnel only', async t => {
+  const f = fixture(t, { remote: true });
+  const api = await f.activate(f.context);
+  await f.settle();
+  assert.equal(f.globals.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL, 'http://127.0.0.1:39842',
+    'the agentEnv write still routes the remote CLI at the local backend');
+  assert.equal(f.remoteCalls().start, 2, 'the tunnel install starts eagerly and the enable path starts it');
+  assert.equal(f.remoteCalls().ensure, 1, 'the current window tunnel is requested once');
+  assert.equal(api.status().state, 'ready');
+  assert.deepEqual(api.status().tunnels, []);
+  assert.equal(f.counts().installed, 0, 'no LS bridge installs without the native extension');
+  assert.ok(f.logs.some(line => line.includes('activated-remote')));
+  await f.deactivate();
+  assert.equal(f.remoteCalls().stop, 1, 'teardown stops the tunnel support');
+});
+
+test('an initially-disabled remote window starts the tunnel only on enable', async t => {
+  const f = fixture(t, { remote: true, config: { enabled: false } });
+  const api = await f.activate(f.context);
+  await f.settle();
+  assert.equal(f.remoteCalls().start, 0, 'disabled activation installs no process-global wrappers');
+  assert.equal(f.remoteCalls().ensure, 0);
+  const config = JSON.parse(fs.readFileSync(f.configFile)); config.enabled = true;
+  fs.writeFileSync(f.configFile, JSON.stringify(config));
+  f.watchers[0]();
+  await f.settle();
+  assert.equal(f.remoteCalls().start, 1, 'enable starts the support lazily');
+  assert.equal(f.remoteCalls().ensure, 1);
+  assert.equal(api.status().state, 'ready');
+});
+
+test('disable then re-enable restarts remote support on the same window', async t => {
+  const f = fixture(t, { remote: true });
+  const api = await f.activate(f.context);
+  await f.settle();
+  assert.equal(api.status().state, 'ready');
+  await f.commands.get('devinFusionByok.disable')();
+  assert.equal(f.remoteCalls().stop, 1);
+  const config = JSON.parse(fs.readFileSync(f.configFile)); config.enabled = true;
+  fs.writeFileSync(f.configFile, JSON.stringify(config));
+  f.watchers[0]();
+  await f.settle();
+  assert.equal(f.remoteCalls().start, 3, 'the support object survives teardown and installs again');
+  assert.equal(f.remoteCalls().ensure, 2);
+  assert.equal(api.status().state, 'ready');
+});
+
+test('a failed remote tunnel retries through ensureEnabled without re-running setup', async t => {
+  const f = fixture(t, { remote: true });
+  f.setRemoteEnsure(() => Promise.reject(new Error('tunnel_down')));
+  const api = await f.activate(f.context);
+  await f.settle();
+  assert.equal(api.status().state, 'unavailable');
+  assert.equal(f.remoteCalls().ensure, 1);
+  assert.equal(f.counts().installed, 0);
+  f.setRemoteEnsure(() => Promise.resolve());
+  f.watchers[0]();
+  await f.settle();
+  assert.equal(f.remoteCalls().ensure, 2, 'a later enable trigger retries the tunnel');
+  assert.equal(f.remoteCalls().start, 3, 'retry goes through support.start() again');
+  assert.equal(api.status().state, 'ready');
+  f.watchers[0]();
+  await f.settle();
+  assert.equal(f.remoteCalls().ensure, 2, 'a ready connection stays idempotent');
 });

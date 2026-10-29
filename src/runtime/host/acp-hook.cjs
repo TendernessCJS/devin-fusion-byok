@@ -62,6 +62,9 @@ function createAcpRegistry(api, { log, scheduler, attachGraceMs = 30000 } = {}) 
   let everAttached = false;
   let registrationDescriptor = null;
   let originalRegister = null;
+  let updateDescriptor = null;
+  let originalUpdate = null;
+  let updateWrapped = false;
   const setTimer = typeof scheduler?.setTimeout === 'function' ? scheduler.setTimeout
     : (typeof setTimeout === 'function' ? setTimeout : null);
 
@@ -87,6 +90,14 @@ function createAcpRegistry(api, { log, scheduler, attachGraceMs = 30000 } = {}) 
     }
     restoreMember(api, 'registerConnection', registerConnection, registrationDescriptor);
     wrapped = api.registerConnection === registerConnection;
+    if (updateWrapped) {
+      restoreMember(api, 'updateConnection', updateConnection, updateDescriptor);
+      // A foreign wrapper still sitting on top keeps ours buried in its call
+      // chain — it stays installed, so the flag must record that. Only a
+      // topmost restore (or a foreign chain that dropped us entirely, which
+      // is undetectable) means the wrapper is really gone.
+      updateWrapped = api.updateConnection !== updateConnection;
+    }
   }
 
   function detachConnector(connector) {
@@ -158,11 +169,30 @@ function createAcpRegistry(api, { log, scheduler, attachGraceMs = 30000 } = {}) 
     return registration;
   }
 
+  function updateConnection(...args) {
+    const result = Reflect.apply(originalUpdate, this, args);
+    for (const layer of sortedLayers()) {
+      if (!layer.active) continue;
+      try { layer.update?.(args[0], args[1]); } catch {}
+    }
+    return result;
+  }
+
   function ensureWrapped() {
     if (wrapped) return;
     registrationDescriptor = Object.getOwnPropertyDescriptor(api, 'registerConnection');
     originalRegister = api.registerConnection;
     api.registerConnection = registerConnection;
+    // While our update wrapper is buried under a foreign one it must never be
+    // wrapped again: the foreign wrapper still calls into it, so capturing
+    // that foreign wrapper as `originalUpdate` would make our dispatch
+    // recurse into itself forever.
+    if (!updateWrapped && typeof api.updateConnection === 'function') {
+      updateDescriptor = Object.getOwnPropertyDescriptor(api, 'updateConnection');
+      originalUpdate = api.updateConnection;
+      api.updateConnection = updateConnection;
+      updateWrapped = true;
+    }
     wrapped = true;
   }
 
@@ -187,12 +217,12 @@ function createAcpRegistry(api, { log, scheduler, attachGraceMs = 30000 } = {}) 
     addLogger(logger) {
       if (typeof logger === 'function') loggers.add(logger);
     },
-    addLayer({ id, priority = 0, attach, detach } = {}) {
+    addLayer({ id, priority = 0, attach, detach, update } = {}) {
       if (layers.has(id)) throw new Error(`Duplicate ACP injection layer id: ${id}`);
       if (typeof attach !== 'function' || typeof detach !== 'function') {
         throw new TypeError('ACP injection layers require attach/detach functions');
       }
-      const layer = { id, priority, attach, detach, active: true, connectors: new Set() };
+      const layer = { id, priority, attach, detach, update, active: true, connectors: new Set() };
       layers.set(id, layer);
       ensureWrapped();
       armAttachProbe();

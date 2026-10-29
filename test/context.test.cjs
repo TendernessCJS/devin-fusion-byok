@@ -479,3 +479,59 @@ test('tps falls back to the latest eligible sample with a visible timestamp note
   assert.match(out.row.title, /时间无法解析/);
   assert.doesNotMatch(out.row.title, /早于最近一次请求/);
 });
+
+test('an ssh connector stays attached across disconnect, evicts state, and updateConnection drives it', async () => {
+  const updateCalls = [];
+  const api = { registerConnection() { return { dispose() {} }; },
+    updateConnection(target, change) { updateCalls.push([target, change?.status]); return 'updated'; } };
+  const originalUpdate = api.updateConnection;
+  const module = { exports: {} };
+  const createRequire = () => () => ({ windsurfAcp: api });
+  vm.runInNewContext(fs.readFileSync(require.resolve('../src/runtime/host/context-observer.cjs'), 'utf8'), { module, exports: module.exports, require(name) {
+    if (name === 'node:module') return { createRequire };
+    if (name === './acp-hook.cjs') {
+      const hook = { exports: {} };
+      vm.runInNewContext(fs.readFileSync(require.resolve('../src/runtime/host/acp-hook.cjs'), 'utf8'),
+        { module: hook, exports: hook.exports, require: () => ({ createRequire }) });
+      return hook.exports;
+    }
+    return { createContextState, usageRejectionReason, USAGE_REJECTIONS };
+  } });
+  const connector = { agentId: 'devin-cli', bundled: true, id: 'conn-ssh', location: { kind: 'ssh', alias: 'box' }, protocolVersion: 1,
+    sendRequest() { return connector.response; }, response: Promise.resolve({}),
+    forwardClientRequest() {}, setStatus() {} };
+  const handle = module.exports.installContextObserver({ nativeMainPath: 'native' });
+  assert.notEqual(api.updateConnection, originalUpdate, 'the registry wraps updateConnection for reconnect eviction');
+  api.registerConnection(connector);
+
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 'r' } });
+  await tick();
+  assert.equal(handle.snapshot().length, 1);
+  connector.setStatus('disconnected');
+  assert.equal(handle.status().connections, 1, 'a remote transport drop keeps the connector mounted');
+  assert.equal(handle.snapshot().length, 0, 'its observed state is evicted anyway');
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 'r', update: update() } });
+  assert.equal(handle.status().sessionUpdates, 1, 'session updates still record while mounted');
+
+  // A result that lands after the disconnect belongs to the dead epoch and is dropped.
+  let resolveLate;
+  connector.response = new Promise(resolve => { resolveLate = resolve; });
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 'r2' } });
+  api.updateConnection(connector, { status: 'disconnected' });
+  resolveLate({});
+  await tick();
+  assert.equal(handle.snapshot().length, 0, 'a pre-disconnect late result cannot write into the new epoch');
+
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 'r3' } });
+  await tick();
+  assert.equal(handle.snapshot().length, 1);
+  api.updateConnection('conn-ssh', { status: 'disconnected' });
+  assert.equal(handle.snapshot().length, 0, 'updateConnection by connector id also evicts');
+  api.updateConnection(connector, { status: 'connected' });
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 'r4' } });
+  connector.response = Promise.resolve({});
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 'r4' } });
+  await tick();
+  assert.equal(handle.snapshot().length, 1, 'the connector keeps observing after reconnect');
+  handle.dispose();
+});

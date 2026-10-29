@@ -100,7 +100,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
 
   function attach(connector) {
     if (disposed || !connector || connector[ATTACHED] || connector.agentId !== 'devin-cli' ||
-        connector.bundled !== true || connector.location?.kind !== 'local' ||
+        connector.bundled !== true || !['local', 'ssh', 'wsl'].includes(connector.location?.kind) ||
         typeof connector.sendRequest !== 'function' || typeof connector.forwardClientRequest !== 'function') {
       return null;
     }
@@ -818,21 +818,23 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
       return Reflect.apply(originalForward, this, args);
     };
 
+    entry.disconnect = () => {
+      for (const timer of entry.timers.values()) clearTimer(timer);
+      entry.timers.clear();
+      for (const turn of entry.sessions.values()) {
+        turn.retryDisallowed = true;
+        if (turn.deferred && !turn.deferred.settled && turn.lastResult) {
+          turn.deferred.settled = true;
+          if (turn.lastResult.isReject) turn.deferred.reject(turn.lastResult.value);
+          else turn.deferred.resolve(turn.lastResult.value);
+        }
+      }
+      entry.sessions.clear();
+    };
+
     if (originalSetStatus) {
       entry.setStatusWrapper = function (status, ...rest) {
-        if (isTerminalStatus(status)) {
-          for (const timer of entry.timers.values()) clearTimer(timer);
-          entry.timers.clear();
-          for (const turn of entry.sessions.values()) {
-            turn.retryDisallowed = true;
-            if (turn.deferred && !turn.deferred.settled && turn.lastResult) {
-              turn.deferred.settled = true;
-              if (turn.lastResult.isReject) turn.deferred.reject(turn.lastResult.value);
-              else turn.deferred.resolve(turn.lastResult.value);
-            }
-          }
-          entry.sessions.clear();
-        }
+        if (isTerminalStatus(status)) entry.disconnect();
         return Reflect.apply(originalSetStatus, this, [status, ...rest]);
       };
     }
@@ -856,7 +858,14 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
   }
 
   const layer = createAcpRegistry(api).addLayer({
-    id: 'auto-continue', priority: 10, attach, detach });
+    id: 'auto-continue', priority: 10, attach, detach,
+    update(target, change) {
+      if (!isTerminalStatus(change?.status)) return;
+      for (const [connector, entry] of connections) {
+        if (connector.location?.kind === 'local' || (target !== connector && target !== connector.id)) continue;
+        entry.disconnect();
+      }
+    } });
 
   const handle = {
     status() {

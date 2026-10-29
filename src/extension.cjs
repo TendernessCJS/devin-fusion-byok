@@ -24,10 +24,12 @@ const { createAcpObservationState } = require('./activation/stores/acp-observati
 const { createPanelState } = require('./activation/stores/panel.cjs');
 const { createManagedSettingsGate } = require('./activation/managed-settings.cjs');
 const { publishHostBuild } = require('./activation/host-identity.cjs');
+const { createRemoteSupport } = require('./activation/remote-support.cjs');
 // Shared lifecycle state across activate/teardown/deactivate.
 const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
   cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
   connection: undefined, acpObserver: undefined, authStatus: undefined, publication: undefined,
+  remoteSupport: undefined,
   nativeRefresh: undefined, log: undefined, runtimeWaitAbort: undefined,
   restoreOnHostDisable: undefined,
   activationGeneration: 0, reconcileHalted: true, activationDisposed: true };
@@ -69,6 +71,19 @@ async function activate(context) {
         ? path.resolve(native.extensionPath, native.packageJSON.main) : null;
     } catch { return null; }
   })();
+  // Remote windows keep this extension UI-side while the native extension
+  // lives on the remote: catalog injection is impossible there, so remote
+  // support only wraps the remote extension's ssh spawn / authority resolver
+  // to establish a reverse tunnel back to the local backend. The wrappers
+  // must be in place before the window resolves its remote authority, hence
+  // the unconditional eager start.
+  let remoteSupport;
+  try {
+    remoteSupport = createRemoteSupport({ vscode, root, nativeMain, log,
+      isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false });
+  } catch { log('remote-support-unavailable'); }
+  lifecycle.remoteSupport = remoteSupport;
+  if (config().enabled !== false) void remoteSupport?.start();
   const installContinuation = () => {
     try {
       if (nativeMain) {

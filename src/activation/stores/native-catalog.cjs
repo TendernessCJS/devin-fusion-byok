@@ -11,7 +11,7 @@ function createNativeCatalogState() {
     nativeRevision: 0, lastPushedRevision: 0, nativeSyncSize: -1,
     nativePushStale: false,
     pushTimer: undefined, lastPushAt: 0,
-    pushToBackend: undefined, refreshNativeModels: undefined,
+    pushToBackend: undefined, refreshNativeModels: undefined, markUnsupported: undefined,
     startNativeSync: undefined, observeNativeModels: undefined, observeAllowedUids: undefined,
     syncAbort: undefined, syncPending: undefined, syncTimer: undefined,
   };

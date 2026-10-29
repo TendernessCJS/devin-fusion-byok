@@ -45,6 +45,7 @@ async function teardown(lifecycle, { restore = false } = {}) {
     lifecycle.acpObserver = undefined;
     try { lifecycle.authStatus?.dispose?.(); } catch {}
     lifecycle.authStatus = undefined;
+    try { lifecycle.remoteSupport?.stop?.(); } catch {}
   }
   return verdict;
 }

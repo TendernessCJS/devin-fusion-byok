@@ -235,3 +235,61 @@ test('a connector attached before the probe fires does not report, even after it
   probe.fn();
   assert.equal(logs.filter(entry => entry.event === 'acp-attach-missing').length, 0);
 });
+
+test('updateConnection dispatches to layer update hooks and unwrap restores it', () => {
+  const events = [];
+  const api = {
+    registerConnection() { return { dispose() {} }; },
+    updateConnection(target, change) { events.push(['native-update', target, change.status]); return 'updated'; },
+  };
+  const originalUpdate = api.updateConnection;
+  const registry = createAcpRegistry(api);
+  const updates = [];
+  const layer = registry.addLayer({ id: 'remote-aware', priority: 5,
+    attach() { return null; }, detach() {},
+    update(target, change) { updates.push([target, change.status]); } });
+  assert.notEqual(api.updateConnection, originalUpdate, 'the registry wraps updateConnection alongside registerConnection');
+  assert.equal(api.updateConnection('conn-a', { status: 'disconnected' }), 'updated',
+    'the native result passes through untouched');
+  assert.deepEqual(events, [['native-update', 'conn-a', 'disconnected']]);
+  assert.deepEqual(updates, [['conn-a', 'disconnected']], 'the layer update sees target and change');
+  layer.remove();
+  assert.equal(api.updateConnection, originalUpdate, 'unwrapping the last layer restores updateConnection');
+  api.updateConnection('conn-b', { status: 'disconnected' });
+  assert.deepEqual(updates.length, 1, 'a removed layer stops receiving updates');
+});
+
+test('an api without updateConnection installs and unwraps unchanged', () => {
+  const f = fixture();
+  const layer = createAcpRegistry(f.api).addLayer({ id: 'plain', priority: 5,
+    attach() { return null; }, detach() {} });
+  assert.equal(f.api.updateConnection, undefined);
+  layer.remove();
+  assert.equal(f.api.registerConnection, f.originalRegister);
+});
+
+test('a foreign updateConnection wrapper over ours is preserved and never recurses after re-wrap', () => {
+  const events = [];
+  const api = {
+    registerConnection() { return { dispose() {} }; },
+    updateConnection() { events.push('native'); return 'native-result'; },
+  };
+  const registry = createAcpRegistry(api);
+  const updates = [];
+  const first = registry.addLayer({ id: 'one', priority: 5,
+    attach() { return null; }, detach() {},
+    update() { updates.push('one'); } });
+  const ours = api.updateConnection;
+  api.updateConnection = function (...args) { events.push('foreign'); return ours.apply(this, args); };
+  const foreign = api.updateConnection;
+  first.remove();
+  assert.equal(api.updateConnection, foreign, 'unwrap leaves the foreign wrapper (and our buried one) alone');
+  const second = registry.addLayer({ id: 'two', priority: 5,
+    attach() { return null; }, detach() {},
+    update() { updates.push('two'); } });
+  assert.equal(api.updateConnection, foreign, 're-wrapping never clobbers or re-wraps the foreign chain');
+  assert.equal(api.updateConnection('conn', { status: 'disconnected' }), 'native-result');
+  assert.deepEqual(events, ['foreign', 'native'], 'the chain reaches the native method exactly once');
+  assert.deepEqual(updates, ['two'], 'only the live layer receives the update');
+  second.remove();
+});
