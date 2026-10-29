@@ -390,7 +390,20 @@ test('official models render as one row per family with a single family switch',
   const { byId, posts, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FAMILY_FIXTURE } } });
   const list = byId('native-list');
-  assert.equal(byId('native-count').textContent, '0 / 2 个系列 · 已隐藏 2');
+  assert.equal(byId('native-count').textContent, '0 / 2 个系列');
+  // The list opens on the 可用 filter, so the hidden families are reached
+  // through the 全部 pill — the header count stays global either way.
+  collect(byId('native-models'), 'button', node => node.className.split(' ').includes('pill') && textOf(node).startsWith('全部'))[0].listeners.click();
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: [...FAMILY_FIXTURE,
+    { id: 'fam-int', label: 'Fam Internal', vendor: 'OpenAI', variants: 1, efforts: [], toggles: [],
+      hidden: false, internal: true,
+      members: [{ uid: 'fam-int-1', label: 'Fam Internal', disabled: false, eligible: false, hidden: false }] }] } } });
+  assert.equal(byId('native-count').textContent, '1 / 3 个系列',
+    'the internal family joins the total; only hidden families leave the numerator');
+  const fold = collect(byId('native-list'), 'details', node => node.className === 'fold')[0];
+  assert.match(textOf(fold), /内部条目 · 1（退役与路由用途，Devin 不显示）/);
+  assert.match(textOf(fold), /picker 不显示/);
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FAMILY_FIXTURE } } });
 
   const rows = collect(list, 'div', node => node.className === 'row');
   assert.equal(collect(list, 'details', node => node.className === 'fold').length, 0,
@@ -427,6 +440,7 @@ test('official models render as one row per family with a single family switch',
 test('the official-model search matches family labels and member uids', () => {
   const { byId, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FAMILY_FIXTURE } } });
+  collect(byId('native-models'), 'button', node => node.className.split(' ').includes('pill') && textOf(node).startsWith('全部'))[0].listeners.click();
   const search = collect(byId('native-models'), 'input', node => node.attributes.type === 'search')[0];
   search.value = 'glm-5-2-max';
   search.listeners.input({ target: search });
@@ -445,11 +459,26 @@ const FILTER_FIXTURE = [
     members: [{ uid: 'fam-hid-1', label: 'Fam Hid', disabled: false, eligible: false, hidden: true }] },
 ];
 
+test('the official models list opens on the available filter', () => {
+  const { byId, posts, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FILTER_FIXTURE } } });
+  const active = collect(byId('native-models'), 'button', node => node.className === 'pill active');
+  assert.equal(active.length, 1, 'exactly one pill is active on first render');
+  assert.equal(textOf(active[0]), '可用 1', 'the default filter is 可用');
+  const rows = collect(byId('native-list'), 'div', node => node.className === 'row');
+  assert.equal(rows.length, 1, 'only the usable family renders by default');
+  assert.match(textOf(rows[0]), /Fam OK/);
+  assert.ok(!posts.some(message => message.type === 'setNativeModelHidden'), 'the default filter posts nothing');
+});
+
 test('the native filter pills narrow the list and never post a request', () => {
   const { byId, posts, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FILTER_FIXTURE } } });
   const pills = collect(byId('native-models'), 'button', node => node.className.split(' ').includes('pill'));
-  assert.deepEqual(pills.map(node => textOf(node)), ['全部 3', '可用 2', '不可用 1', '已隐藏 1']);
+  assert.deepEqual(pills.map(node => textOf(node)), ['全部 3', '可用 1', '已隐藏 1', '不可用 1', '内部 0']);
+  assert.deepEqual(pills.map(node => node.attributes.title), ['所有观测到的官方家族，含内部条目', '账号可用且未被本机隐藏',
+    '本机隐藏，可随时恢复', '账号或团队未授权，无法使用', '退役与路由用途，Devin 的模型列表不显示'],
+    'each pill explains its own state on hover');
   pills.find(node => textOf(node).startsWith('不可用')).listeners.click();
   const rows = collect(byId('native-list'), 'div', node => node.className === 'row');
   assert.equal(rows.length, 1, 'only the disabled family survives the filter');
@@ -465,7 +494,7 @@ test('the native filter pills narrow the list and never post a request', () => {
 test('the disabled-family bulk button hides every member uid of those families', () => {
   const { byId, posts, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FILTER_FIXTURE } } });
-  const bulkButton = collect(byId('native-models'), 'button', node => textOf(node) === '停用不可用系列（1）')[0];
+  const bulkButton = collect(byId('native-models'), 'button', node => textOf(node) === '隐藏不可用系列（1）')[0];
   assert.ok(bulkButton, 'the bulk button counts the disabled families');
   assert.equal(bulkButton.disabled, false);
   bulkButton.listeners.click();
@@ -477,11 +506,11 @@ test('the disabled-family bulk button hides every member uid of those families',
 test('the enable-all button unhides every member of hidden families', () => {
   const { byId, posts, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FILTER_FIXTURE } } });
-  collect(byId('native-models'), 'button', node => textOf(node) === '全部启用')[0].listeners.click();
+  collect(byId('native-models'), 'button', node => textOf(node) === '全部显示')[0].listeners.click();
   const post = posts.find(message => message.type === 'setNativeModelHidden');
   assert.deepEqual(JSON.parse(JSON.stringify(post.payload)), { uids: ['fam-hid-1'], hidden: false });
   receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FILTER_FIXTURE.slice(0, 2) } } });
-  assert.equal(collect(byId('native-models'), 'button', node => textOf(node) === '全部启用')[0].disabled, true,
+  assert.equal(collect(byId('native-models'), 'button', node => textOf(node) === '全部显示')[0].disabled, true,
     'no hidden family means a disabled button');
 });
 
@@ -491,7 +520,7 @@ test('bulk hide splits uid lists over 250 into sequential requests', async () =>
     ({ uid: 'big-' + index, label: 'Big ' + index, disabled: true, eligible: false, hidden: false }));
   receive({ data: { type: 'state', state: { ...state(), nativeFamilies: [
     { id: 'big', label: 'Big', vendor: 'OpenAI', variants: 300, efforts: [], toggles: [], hidden: false, disabled: true, members }] } } });
-  collect(byId('native-models'), 'button', node => textOf(node) === '停用不可用系列（1）')[0].listeners.click();
+  collect(byId('native-models'), 'button', node => textOf(node) === '隐藏不可用系列（1）')[0].listeners.click();
   const first = posts.find(message => message.type === 'setNativeModelHidden');
   assert.ok(first, 'the first batch posts immediately');
   assert.equal(first.payload.uids.length, 250, 'batches stay under the 256-uid manager limit');
@@ -693,4 +722,24 @@ test('the main panel CSP denies everything except nonced styles and scripts', ()
     assert.ok(csp.includes(directive), directive + ' missing from ' + csp);
   assert.ok(html.includes('<script nonce="safe">'), 'the script carries the nonce');
   assert.ok(html.includes('nonce="safe"'), 'styles share the same nonce');
+});
+
+test('the internal pill counts internal families and lists them flat without posting', () => {
+  const { byId, posts, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: [...FILTER_FIXTURE,
+    { id: 'fam-int', label: 'Fam Internal', vendor: 'OpenAI', variants: 1, efforts: [], toggles: [],
+      hidden: false, internal: true,
+      members: [{ uid: 'fam-int-1', label: 'Fam Internal', disabled: false, eligible: false, hidden: false }] }] } } });
+  const pills = collect(byId('native-models'), 'button', node => node.className.split(' ').includes('pill'));
+  assert.deepEqual(pills.map(node => textOf(node)), ['全部 4', '可用 1', '已隐藏 1', '不可用 1', '内部 1']);
+  pills.find(node => textOf(node).startsWith('内部')).listeners.click();
+  const rows = collect(byId('native-list'), 'div', node => node.className === 'row');
+  assert.equal(rows.length, 1, 'the internal pill renders exactly the internal family');
+  assert.match(textOf(rows[0]), /Fam Internal/);
+  assert.match(textOf(rows[0]), /picker 不显示/);
+  assert.equal(collect(byId('native-list'), 'div', node => node.className === 'vendor-head').length, 0,
+    'internal rows render flat, without vendor heads');
+  assert.equal(collect(byId('native-list'), 'details', node => node.className === 'fold').length, 0,
+    'and without the internal fold');
+  assert.ok(!posts.some(message => message.type === 'setNativeModelHidden'), 'filtering never posts');
 });

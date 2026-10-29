@@ -61,11 +61,8 @@ function createSettingsView(ui) {
     const container = byId('native-models');
     container.replaceChildren();
     const all = state().nativeFamilies || [];
-    const visible = all.filter(family => !family.hidden && !family.internal).length;
-    const hiddenCount = all.filter(family => family.hidden).length;
-    const internalCount = all.filter(family => family.internal).length;
-    byId('native-count').textContent = all.length
-      ? visible + ' / ' + all.length + ' 个系列' + (hiddenCount ? ' · 已隐藏 ' + hiddenCount : '') + (internalCount ? ' · 内部 ' + internalCount : '') : '';
+    const listed = all.filter(family => family.hidden !== true).length;
+    byId('native-count').textContent = all.length ? listed + ' / ' + all.length + ' 个系列' : '';
     const search = element('input', { type: 'search', placeholder: '搜索官方模型', 'aria-label': '搜索官方模型',
       oninput: event => { selection.nativeSearch = event.target.value; renderNativeRows(); } });
     search.value = selection.nativeSearch;
@@ -73,15 +70,31 @@ function createSettingsView(ui) {
     const list = element('div', { id: 'native-list', class: 'list scroll', 'aria-label': '官方模型列表' });
     scrollTargets.set('native-list', list);
     const shown = all.filter(family => !family.internal);
-    const counts = { all: shown.length,
-      available: shown.filter(family => family.disabled !== true).length,
-      disabled: shown.filter(family => family.disabled === true).length,
-      hidden: shown.filter(family => family.hidden === true).length };
-    const FILTERS = [['all', '全部'], ['available', '可用'], ['disabled', '不可用'], ['hidden', '已隐藏']];
-    if (!FILTERS.some(([key]) => key === selection.nativeFilter)) selection.nativeFilter = 'all';
+    // The pills are an additive breakdown of the non-internal families: a
+    // hidden family is counted only under 已隐藏, so 可用 + 已隐藏 + 不可用 always
+    // equals 全部 minus 内部. Counting a hidden family as 可用 as well would
+    // make the default 可用 view show families the user has already turned off.
+    // Labels are states (what the count describes); the verbs 隐藏/显示 belong
+    // to the bulk buttons below, so a pill never reads as an action.
+    const counts = { all: all.length,
+      available: shown.filter(family => family.hidden !== true && family.disabled !== true).length,
+      disabled: shown.filter(family => family.hidden !== true && family.disabled === true).length,
+      hidden: shown.filter(family => family.hidden === true).length,
+      internal: all.filter(family => family.internal === true).length };
+    // 全部 first (the only way back to filtered-out families), then the three
+    // mutually exclusive states of a picker family, then 内部 — a different
+    // class entirely (never rendered by the picker, opens a flat list).
+    const FILTERS = [['all', '全部'], ['available', '可用'], ['hidden', '已隐藏'], ['disabled', '不可用'], ['internal', '内部']];
+    const FILTER_TITLES = {
+      all: '所有观测到的官方家族，含内部条目',
+      available: '账号可用且未被本机隐藏',
+      hidden: '本机隐藏，可随时恢复',
+      disabled: '账号或团队未授权，无法使用',
+      internal: '退役与路由用途，Devin 的模型列表不显示' };
+    if (!FILTERS.some(([key]) => key === selection.nativeFilter)) selection.nativeFilter = 'available';
     const pillNodes = new Map();
     const pills = element('div', { class: 'filter-pills' }, FILTERS.map(([key, label]) => {
-      const node = element('button', { type: 'button', text: label + ' ' + counts[key],
+      const node = element('button', { type: 'button', text: label + ' ' + counts[key], title: FILTER_TITLES[key],
         class: 'pill' + (selection.nativeFilter === key ? ' active' : ''),
         onclick: () => {
           selection.nativeFilter = key;
@@ -104,13 +117,13 @@ function createSettingsView(ui) {
       element('button', { type: 'button', class: 'secondary', text: label,
         disabled: off() || !families.length,
         onclick: () => setHidden(families, hidden, progress, success) });
-    container.append(element('p', { class: 'hint mb', text: '停用的系列会从 Devin 模型列表隐藏，也不再出现在「Fusion」页候选中；仅本机生效，不影响账号。' }),
+    container.append(element('p', { class: 'hint mb', text: '隐藏的系列会从 Devin 的模型列表里消失，也不再出现在「Fusion」页候选中；仅本机生效，不影响账号与计费。' }),
       element('div', { class: 'toolbar' }, search, pills),
       element('div', { class: 'toolbar' },
-        bulk('停用不可用系列（' + disabledTargets.length + '）', disabledTargets, true, '正在停用不可用系列…', '已停用不可用系列。'),
-        bulk('全部停用', shownTargets, true, '正在停用全部系列…', '已停用全部系列。'),
-        bulk('全部启用', hiddenTargets, false, '正在启用全部系列…', '已启用全部系列。'),
-        button('刷新', () => run(() => request('refreshNativeModels'), '正在同步官方模型…', '已同步。'))),
+        bulk('隐藏不可用系列' + (disabledTargets.length ? '（' + disabledTargets.length + '）' : ''), disabledTargets, true, '正在隐藏不可用系列…', '已隐藏不可用系列。'),
+        bulk('全部隐藏', shownTargets, true, '正在隐藏全部系列…', '已隐藏全部系列。'),
+        bulk('全部显示', hiddenTargets, false, '正在恢复显示…', '已恢复显示全部系列。'),
+        button('刷新', () => run(() => request('refreshNativeModels'), '正在同步官方模型…', '已同步。'), 'secondary')),
       list);
     renderNativeRows();
   }
@@ -124,13 +137,19 @@ function createSettingsView(ui) {
     const filter = selection.nativeFilter;
     const families = all.filter(family => {
       if (query && !(family.label + ' ' + (family.vendor || '') + ' ' + family.members.map(member => member.uid + ' ' + member.label).join(' ')).toLocaleLowerCase().includes(query)) return false;
-      if (filter === 'available') return family.disabled !== true;
-      if (filter === 'disabled') return family.disabled === true;
-      if (filter === 'hidden') return family.hidden === true;
+      if (filter === 'available') return !family.internal && family.hidden !== true && family.disabled !== true;
+      if (filter === 'disabled') return !family.internal && family.hidden !== true && family.disabled === true;
+      if (filter === 'hidden') return !family.internal && family.hidden === true;
+      if (filter === 'internal') return family.internal === true;
       return true;
     });
     if (!families.length) {
-      container.append(element('div', { class: 'empty', text: all.length ? '当前筛选下没有匹配的官方模型。' : ({ loading: '正在同步官方模型…', unsupported: '当前后台版本暂不支持同步。', unavailable: '无法连接插件本地服务，请点刷新重试。', empty: '还没收到官方模型，打开一次 Devin 的模型选择器后再刷新。' }[state().nativeCatalogStatus] || '还没收到官方模型，请点刷新重试。') }));
+      // The default view is a filter, so an empty list must say which one and
+      // where the rest went instead of looking like a sync failure.
+      const filtered = query ? '当前筛选下没有匹配的官方模型。'
+        : filter === 'all' ? '没有可显示的官方模型。'
+        : '当前筛选下没有可显示的家族，切换上方筛选查看其余条目。';
+      container.append(element('div', { class: 'empty', text: all.length ? filtered : ({ loading: '正在同步官方模型…', unsupported: '当前后台版本暂不支持同步。', unavailable: '无法连接本地后台，请点「刷新」重试。', empty: '还没收到官方模型，打开一次 Devin 的模型选择器后再刷新。' }[state().nativeCatalogStatus] || '还没收到官方模型，请点刷新重试。') }));
       return;
     }
     function nativeRow(family) {
@@ -139,11 +158,16 @@ function createSettingsView(ui) {
       if (family.efforts.length) sub.push('Effort ' + family.efforts.join(' / '));
       if (family.toggles.length) sub.push(...family.toggles);
       if (family.disabled !== true && !family.members.some(member => member.eligible)) sub.push('不可用作 Fusion Lead/Sidekick');
+      if (family.internal === true) sub.push('picker 不显示');
       return element('div', { class: 'row' },
         element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: family.label }),
           element('span', { class: 'row-sub', text: sub.join(' · ') })),
         switchInput(!family.hidden, family.variants > 1 ? '在列表中显示 ' + family.label + ' 的 ' + family.variants + ' 个变体' : '在列表中显示 ' + family.label,
           show => run(() => request('setNativeModelHidden', { uids: family.members.map(member => member.uid), hidden: !show })), off() || family.internal === true));
+    }
+    if (filter === 'internal') {
+      for (const family of families) container.append(nativeRow(family));
+      return;
     }
     const groups = new Map();
     for (const family of families) {
@@ -163,7 +187,7 @@ function createSettingsView(ui) {
     const internal = families.filter(family => family.internal);
     if (internal.length) {
       const details = element('details', { class: 'fold', open: !!query },
-        element('summary', { text: '内部条目 · ' + internal.length + ' · 退役与路由/内部用途' }));
+        element('summary', { text: '内部条目 · ' + internal.length + '（退役与路由用途，Devin 不显示）' }));
       for (const family of internal) details.append(nativeRow(family));
       container.append(details);
     }

@@ -17,7 +17,7 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
     tab: saved.tab || 'models',
     modelSearch: '',
     nativeSearch: '',
-    nativeFilter: 'all',
+    nativeFilter: 'available',
     roleSearch: { lead: '', sidekick: '' },
     roleMoreOpen: { lead: false, sidekick: false },
   };
