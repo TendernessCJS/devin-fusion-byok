@@ -709,6 +709,7 @@ test('publicState groups observed natives into server families without fusion en
   ].map(entry => ({ ...entry, disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'claude-opus-4.6' }));
   const observed = [...glm, ...claude,
     { uid: 'swe-1-6-fast', label: 'SWE-1.6 Fast', disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'swe-1.6-fast' },
+    { uid: 'dead-a', label: 'Dead A', disabled: true, isModelRouter: false, harnessUids: ['h'], familyUid: 'dead-family' },
     { uid: 'claude-x', label: 'Claude X', disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: '  padded-family  ' },
     { uid: 'solo-a', label: 'Solo A', disabled: false, isModelRouter: false, harnessUids: ['h'] },
     { uid: 'fusion-official-x', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], familyUid: 'fusion-family' },
@@ -740,6 +741,9 @@ test('publicState groups observed natives into server families without fusion en
   assert.equal(solo.label, 'Solo A', 'a missing family uid falls back to a one-member family');
   const padded = state.nativeFamilies.find(family => family.id === 'padded-family');
   assert.equal(padded.label, 'Claude X', 'the observed family uid is used as trimmed');
+  const dead = state.nativeFamilies.find(family => family.id === 'dead-family');
+  assert.equal(dead.disabled, true, 'a family whose members are all disabled reports disabled');
+  assert.equal(glm5.disabled, false, 'a family with any enabled member stays enabled');
   const labels = state.nativeFamilies.map(family => family.label);
   assert.equal(new Set(labels).size, labels.length, 'family labels stay unique');
 

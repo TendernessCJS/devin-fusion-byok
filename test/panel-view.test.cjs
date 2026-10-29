@@ -435,6 +435,75 @@ test('the official-model search matches family labels and member uids', () => {
   assert.match(textOf(rows[0]), /GLM-5\.2/);
 });
 
+const FILTER_FIXTURE = [
+  { id: 'fam-ok', label: 'Fam OK', vendor: 'OpenAI', variants: 1, efforts: [], toggles: [], hidden: false, disabled: false,
+    members: [{ uid: 'fam-ok-1', label: 'Fam OK', disabled: false, eligible: true, hidden: false }] },
+  { id: 'fam-dead', label: 'Fam Dead', vendor: 'OpenAI', variants: 2, efforts: [], toggles: [], hidden: false, disabled: true,
+    members: [{ uid: 'fam-dead-1', label: 'Fam Dead A', disabled: true, eligible: false, hidden: false },
+      { uid: 'fam-dead-2', label: 'Fam Dead B', disabled: true, eligible: false, hidden: false }] },
+  { id: 'fam-hid', label: 'Fam Hid', vendor: 'Google', variants: 1, efforts: [], toggles: [], hidden: true, disabled: false,
+    members: [{ uid: 'fam-hid-1', label: 'Fam Hid', disabled: false, eligible: false, hidden: true }] },
+];
+
+test('the native filter pills narrow the list and never post a request', () => {
+  const { byId, posts, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FILTER_FIXTURE } } });
+  const pills = collect(byId('native-models'), 'button', node => node.className.split(' ').includes('pill'));
+  assert.deepEqual(pills.map(node => textOf(node)), ['全部 3', '可用 2', '不可用 1', '已隐藏 1']);
+  pills.find(node => textOf(node).startsWith('不可用')).listeners.click();
+  const rows = collect(byId('native-list'), 'div', node => node.className === 'row');
+  assert.equal(rows.length, 1, 'only the disabled family survives the filter');
+  assert.match(textOf(rows[0]), /Fam Dead/);
+  assert.match(textOf(rows[0]), /账号不可用/);
+  assert.doesNotMatch(textOf(rows[0]), /不可用作 Fusion Lead\/Sidekick/,
+    'an unavailable family skips the ineligible note');
+  assert.equal(collect(byId('native-models'), 'button', node => node.className === 'pill active').length, 1,
+    'exactly one pill stays active');
+  assert.ok(!posts.some(message => message.type === 'setNativeModelHidden'), 'filtering never posts');
+});
+
+test('the disabled-family bulk button hides every member uid of those families', () => {
+  const { byId, posts, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FILTER_FIXTURE } } });
+  const bulkButton = collect(byId('native-models'), 'button', node => textOf(node) === '停用不可用系列（1）')[0];
+  assert.ok(bulkButton, 'the bulk button counts the disabled families');
+  assert.equal(bulkButton.disabled, false);
+  bulkButton.listeners.click();
+  const post = posts.find(message => message.type === 'setNativeModelHidden');
+  assert.deepEqual(JSON.parse(JSON.stringify(post.payload)),
+    { uids: ['fam-dead-1', 'fam-dead-2'], hidden: true }, 'every member uid of the disabled family is hidden');
+});
+
+test('the enable-all button unhides every member of hidden families', () => {
+  const { byId, posts, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FILTER_FIXTURE } } });
+  collect(byId('native-models'), 'button', node => textOf(node) === '全部启用')[0].listeners.click();
+  const post = posts.find(message => message.type === 'setNativeModelHidden');
+  assert.deepEqual(JSON.parse(JSON.stringify(post.payload)), { uids: ['fam-hid-1'], hidden: false });
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: FILTER_FIXTURE.slice(0, 2) } } });
+  assert.equal(collect(byId('native-models'), 'button', node => textOf(node) === '全部启用')[0].disabled, true,
+    'no hidden family means a disabled button');
+});
+
+test('bulk hide splits uid lists over 250 into sequential requests', async () => {
+  const { byId, posts, receive } = panel();
+  const members = Array.from({ length: 300 }, (_, index) =>
+    ({ uid: 'big-' + index, label: 'Big ' + index, disabled: true, eligible: false, hidden: false }));
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: [
+    { id: 'big', label: 'Big', vendor: 'OpenAI', variants: 300, efforts: [], toggles: [], hidden: false, disabled: true, members }] } } });
+  collect(byId('native-models'), 'button', node => textOf(node) === '停用不可用系列（1）')[0].listeners.click();
+  const first = posts.find(message => message.type === 'setNativeModelHidden');
+  assert.ok(first, 'the first batch posts immediately');
+  assert.equal(first.payload.uids.length, 250, 'batches stay under the 256-uid manager limit');
+  assert.equal(posts.filter(message => message.type === 'setNativeModelHidden').length, 1,
+    'the second batch waits for the first result');
+  receive({ data: { type: 'result', id: first.id, ok: true } });
+  await Promise.resolve(); await Promise.resolve();
+  const sent = posts.filter(message => message.type === 'setNativeModelHidden');
+  assert.equal(sent.length, 2, 'the remainder follows as its own request');
+  assert.deepEqual(JSON.parse(JSON.stringify(sent[1].payload.uids)), members.slice(250).map(member => member.uid));
+});
+
 test('model rows carry tier and context info, and a missing key warns on import', () => {
   const { byId, receive } = panel();
   const next = state();

@@ -101,6 +101,10 @@ function panelStyles() {
     .empty button { margin-top: 12px; }
     .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
     .toolbar input[type="search"] { flex: 1 1 200px; width: auto; }
+    .filter-pills { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+    button.pill { min-height: 24px; padding: 2px 10px; font-size: 12px; border-radius: 12px; color: var(--muted); background: transparent; border: 1px solid var(--border); }
+    button.pill:hover { color: var(--vscode-foreground, #ddd); background: var(--hover); }
+    button.pill.active { color: var(--vscode-button-foreground, #fff); background: var(--accent); border-color: var(--accent); }
     .models-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; }
     .provider-nav { display: grid; gap: 2px; }
     button.provider-item { display: block; text-align: left; width: 100%; padding: 8px 10px; white-space: normal; color: inherit; background: transparent; border-color: transparent; }

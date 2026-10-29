@@ -130,6 +130,7 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
       efforts: [...effortOrders.entries()].sort((a, b) => a[1] - b[1]).map(([name]) => name),
       toggles: [...toggles].sort(),
       hidden: anyHidden,
+      disabled: members.every(member => member.disabled === true),
       members };
   });
   // A hidden uid whose model left the observed catalog still gets a single-
@@ -140,7 +141,7 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     const id = `uid:${uid}`;
     const label = uid;
     nativeFamilies.push({ id, label, variants: 1, efforts: [], toggles: [],
-      hidden: true, internal: false,
+      hidden: true, internal: false, disabled: false,
       members: [{ uid, label, disabled: false, eligible: false, hidden: true }] });
   }
   // Vendor grouping mirrors the official picker's provider sections; stable

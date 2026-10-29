@@ -41,14 +41,14 @@ function createSettingsView(ui) {
     const setting = (title, sub, control) => element('div', { class: 'setting' },
       element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: title }), sub ? element('span', { class: 'row-sub', text: sub }) : null), control);
     const status = state().autoContinueStatus === 'attached' ? null
-      : state().autoContinueStatus === 'waiting' ? '还没连上会话：重新加载窗口并新建对话后生效。'
+      : state().autoContinueStatus === 'waiting' ? '新建一次对话后即可生效。'
       : '自动继续当前不可用，请在「输出」面板的 Devin Fusion BYOK 通道查看日志。';
     // The auto-continue card is rebuilt on every state push, so it cannot be a
     // <details>: the open flag would reset. The heading lives inside the card
     // instead, keeping title, switches and warning one visual unit.
     container.append(element('div', { class: 'list mt' },
       element('div', { class: 'list-head', text: '自动继续' }),
-      setting('服务商出错时自动重试', '临时错误打断回复时自动发送 continue。按量计费的服务商可能多扣费。',
+      setting('服务商出错时自动重试', '遇到临时错误打断回复时自动发送继续指令（按量计费接口可能增加消耗）。',
         switchInput(state().autoContinueOnProviderError === true, '服务商出错时自动重试',
           value => run(() => request('setAutoContinue', { enabled: value })), off())),
       setting('被截断时自动继续', '模型输出被截断（max_tokens）或单轮请求预算用尽（max_turn_requests）时自动推进；若还有未完成的 Plan，则要求它确有进展。随时可以手动停止。',
@@ -72,8 +72,45 @@ function createSettingsView(ui) {
     focusTargets.set('native-search', search);
     const list = element('div', { id: 'native-list', class: 'list scroll', 'aria-label': '官方模型列表' });
     scrollTargets.set('native-list', list);
+    const shown = all.filter(family => !family.internal);
+    const counts = { all: shown.length,
+      available: shown.filter(family => family.disabled !== true).length,
+      disabled: shown.filter(family => family.disabled === true).length,
+      hidden: shown.filter(family => family.hidden === true).length };
+    const FILTERS = [['all', '全部'], ['available', '可用'], ['disabled', '不可用'], ['hidden', '已隐藏']];
+    if (!FILTERS.some(([key]) => key === selection.nativeFilter)) selection.nativeFilter = 'all';
+    const pillNodes = new Map();
+    const pills = element('div', { class: 'filter-pills' }, FILTERS.map(([key, label]) => {
+      const node = element('button', { type: 'button', text: label + ' ' + counts[key],
+        class: 'pill' + (selection.nativeFilter === key ? ' active' : ''),
+        onclick: () => {
+          selection.nativeFilter = key;
+          for (const [name, pill] of pillNodes) pill.className = 'pill' + (name === key ? ' active' : '');
+          renderNativeRows();
+        } });
+      pillNodes.set(key, node);
+      return node;
+    }));
+    const uidsOf = families => [...new Set(families.flatMap(family => family.members.map(member => member.uid)))];
+    const setHidden = (families, hidden, progress, success) => run(async () => {
+      const uids = uidsOf(families);
+      for (let at = 0; at < uids.length; at += 250)
+        await request('setNativeModelHidden', { uids: uids.slice(at, at + 250), hidden });
+    }, progress, success);
+    const disabledTargets = shown.filter(family => family.disabled === true && !family.hidden);
+    const shownTargets = shown.filter(family => !family.hidden);
+    const hiddenTargets = shown.filter(family => family.hidden === true);
+    const bulk = (label, families, hidden, progress, success) =>
+      element('button', { type: 'button', class: 'secondary', text: label,
+        disabled: off() || !families.length,
+        onclick: () => setHidden(families, hidden, progress, success) });
     container.append(element('p', { class: 'hint mb', text: '停用的系列会从 Devin 模型列表隐藏，也不再出现在「Fusion」页候选中；仅本机生效，不影响账号。' }),
-      element('div', { class: 'toolbar' }, search, button('刷新', () => run(() => request('refreshNativeModels'), '正在同步官方模型…', '已同步。'))),
+      element('div', { class: 'toolbar' }, search, pills),
+      element('div', { class: 'toolbar' },
+        bulk('停用不可用系列（' + disabledTargets.length + '）', disabledTargets, true, '正在停用不可用系列…', '已停用不可用系列。'),
+        bulk('全部停用', shownTargets, true, '正在停用全部系列…', '已停用全部系列。'),
+        bulk('全部启用', hiddenTargets, false, '正在启用全部系列…', '已启用全部系列。'),
+        button('刷新', () => run(() => request('refreshNativeModels'), '正在同步官方模型…', '已同步。'))),
       list);
     renderNativeRows();
   }
@@ -84,17 +121,24 @@ function createSettingsView(ui) {
     container.replaceChildren();
     const all = state().nativeFamilies || [];
     const query = selection.nativeSearch.trim().toLocaleLowerCase();
-    const families = all.filter(family => !query ||
-      (family.label + ' ' + (family.vendor || '') + ' ' + family.members.map(member => member.uid + ' ' + member.label).join(' ')).toLocaleLowerCase().includes(query));
+    const filter = selection.nativeFilter;
+    const families = all.filter(family => {
+      if (query && !(family.label + ' ' + (family.vendor || '') + ' ' + family.members.map(member => member.uid + ' ' + member.label).join(' ')).toLocaleLowerCase().includes(query)) return false;
+      if (filter === 'available') return family.disabled !== true;
+      if (filter === 'disabled') return family.disabled === true;
+      if (filter === 'hidden') return family.hidden === true;
+      return true;
+    });
     if (!families.length) {
-      container.append(element('div', { class: 'empty', text: all.length ? '没有匹配的模型。' : ({ loading: '正在同步官方模型…', unsupported: '当前后台版本暂不支持同步。', unavailable: '无法连接插件本地服务，请点刷新重试。', empty: '还没收到官方模型，打开一次 Devin 的模型选择器后再刷新。' }[state().nativeCatalogStatus] || '还没收到官方模型，请点刷新重试。') }));
+      container.append(element('div', { class: 'empty', text: all.length ? '当前筛选下没有匹配的官方模型。' : ({ loading: '正在同步官方模型…', unsupported: '当前后台版本暂不支持同步。', unavailable: '无法连接插件本地服务，请点刷新重试。', empty: '还没收到官方模型，打开一次 Devin 的模型选择器后再刷新。' }[state().nativeCatalogStatus] || '还没收到官方模型，请点刷新重试。') }));
       return;
     }
     function nativeRow(family) {
       const sub = family.variants > 1 ? [family.variants + ' 个变体'] : [];
+      if (family.disabled === true) sub.unshift('账号不可用');
       if (family.efforts.length) sub.push('Effort ' + family.efforts.join(' / '));
       if (family.toggles.length) sub.push(...family.toggles);
-      if (!family.members.some(member => member.eligible)) sub.push('不可用作 Fusion Lead/Sidekick');
+      if (family.disabled !== true && !family.members.some(member => member.eligible)) sub.push('不可用作 Fusion Lead/Sidekick');
       return element('div', { class: 'row' },
         element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: family.label }),
           element('span', { class: 'row-sub', text: sub.join(' · ') })),
@@ -110,7 +154,8 @@ function createSettingsView(ui) {
     }
     for (const [vendor, group] of groups) {
       container.append(element('div', { class: 'vendor-head', text: vendor + ' · ' + group.length + ' 个系列' }));
-      for (const family of group) container.append(nativeRow(family));
+      for (const family of [...group].sort((a, b) => Number(a.disabled === true) - Number(b.disabled === true)))
+        container.append(nativeRow(family));
     }
     // Retired leftovers, review/check rows and router cards (Adaptive/Fusion
     // render in the picker but are routing surfaces, not models) are folded
