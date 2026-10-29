@@ -22,6 +22,10 @@ git fetch upstream && git merge upstream/main
   **`package.json` 的 `version` 冲突它救不了** —— upstream 每次改的版本号都不同，冲突片段内容随之变化，匹配不上。
 - 冲突处理：`package.json` 的 `version` **一律取本 fork 的值（ours）**。版本号由本 fork 自管、不跟随 upstream；上游每次发版都会只在这一行产生冲突，固定改 1
   行即可。
+- **tag 命名空间只属于本 fork**（2026-10-29 设 `git config --local remote.upstream.tagOpt --no-tags`）：上游与 fork 用**同一套版本号**（都发 `v0.4.x`），
+  `fetch upstream` 默认会把上游 release tag 一起导入，把本 fork 的发布 tag 语义搅乱——实测导入过 `v0.4.5`（指向 `cdc7d42`，上游提交）与 `v0.4.7`，两者都
+  **不是**本 fork 发过的版本（fork 从 `v0.4.0` 直接跳到 `v0.5.1`）；`v0.4.7` 已删。看上游 tag 用 `git ls-remote --tags upstream`；`git fetch --tags upstream`
+  会把污染带回来，别用。判据：`for t in $(git tag); do c=$(git rev-parse "$t^{}"); git merge-base --is-ancestor "$c" upstream/main && ! git merge-base --is-ancestor "$c" main && echo "上游 tag: $t"; done`。
 
 ### 版本号怎么取
 
@@ -64,12 +68,12 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 | 项 | 值 |
 | --- | --- |
 | **基线**（真正的 `git merge-base`；本 fork 从未 merge 过，2026-10-18 的 v0.4.0 是**手工结构映射移植**（`3d07548`），不产生 merge 提交，故基线仍停在此处） | `5bae0bf` —— 2026-10-04，`feat: add Fast Context MCP and panel tab in v0.3.42` |
-| **上次读取上游** | 2026-10-26 |
-| **`upstream/main` 当前位置（未移植，未 merge）** | `cdc7d42` —— `fix: restore native model picker compatibility in v0.4.5`，2026-10-26（`git tag --points-at` 有 `v0.4.5`，已 fetch） |
+| **上次读取上游** | 2026-10-29 |
+| **`upstream/main` 当前位置（未移植，未 merge）** | `2a1cffb` —— `fix: harden remote catalog refresh, WSL/empty-window authority, and reconnect eviction in v0.4.7`，2026-10-29（上游 tag **不再导入本地**，见「同步 upstream」的 tag 命名空间一条） |
 | **上一个已移植位点** | `713836e` —— `feat: release v0.4.0 with external MCP switch and Goal switch`，2026-10-17 |
 | **⚠️ 别把 `v0.4.0` 当上游 tag** | `git tag --points-at 713836e` 为**空**（上游该 tag 本地未 fetch）；本仓 `v0.4.0` 指向 `e1d609a`，是**本 fork 自己的发布提交**。`git show v0.4.0` 拿到的不是上游移植源 |
-| **基线以来 upstream 新增提交** | **3（2 已移植，1 读后决定不移植）**：`58b324b`（web search / 页面读取 / 一键检查，v0.3.43）；`713836e`（v0.4.0：外部 MCP 开关、Goal 开关、稳定 launcher、页面读取、**宿主禁用时恢复自有设置**）；`cdc7d42`（v0.4.5：原生 picker 兼容，见下条） |
-| 我们领先基线 | 279 个提交（2026-10-26 实测；每次移植都要重算：`git rev-list --count "$(git merge-base upstream/main HEAD)"..HEAD`） |
+| **基线以来 upstream 新增提交** | **5（3 已读，其中 2 个本轮选择性移植）**：`58b324b`（web search / 页面读取 / 一键检查，v0.3.43）；`713836e`（v0.4.0：外部 MCP 开关、Goal 开关、稳定 launcher、页面读取、**宿主禁用时恢复自有设置**）；`cdc7d42`（v0.4.5：原生 picker 兼容，见下条）；`7cea3d8` + `2a1cffb`（v0.4.7：Remote-SSH/WSL 与重连淘汰，见下条） |
+| 我们领先基线 | 322 个提交（2026-10-29 实测；每次移植都要重算：`git rev-list --count "$(git merge-base upstream/main HEAD)"..HEAD`） |
 
 **不要把「基线」改成 upstream 的新位置**（与旧版本这节的措辞不同，这是 2026-10-18 的修正）：基线一旦上移，`git log 5bae0bf..upstream/main` 就再也列不出这两个**已移植但未 merge**的提交，追踪证据随之消失。只更新「上次读取」与「当前位置」两格。
 
@@ -92,6 +96,14 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 - 这轮改动**未提交、无分支**，只存在于 `/tmp` 备份（会被系统清理）。将来若要重做，按结构映射重新实现，别去找旧分支。
 
 **下次看到 upstream 动 picker/首页/原生列表时的判据**：先确认「有没有人消费这份新数据」再动手——面板能显示的家族数已在 `nativeFamilies` 里，重复做投影只会增加 backend 闭包与重启次数。
+
+**`7cea3d8` + `2a1cffb`（v0.4.7）的移植状态：选择性移植（2026-10-29）**
+
+上游这一版是 Remote-SSH/WSL 支持（约 800 行 + 测试）及其加固。仍然**不 merge**（它继续改单体 `extension.cjs`，且 `host-catalog.cjs` 在本仓不存在），按结构映射重写。
+
+- **移植了**：① 反向隧道 → `src/runtime/host/remote-tunnel.cjs`（端口取 `port.cjs` 的 `PORT`，身份取 `controlFile(root).rootId`，健康探测同时校验 `SERVICE`；含 `2a1cffb` 的 CRLF trim、direct 出表复探、`lastResolvedAuthority` 兜底、wsl workspace 包装）；② 远端激活 → `src/activation/remote-support.cjs`（发现 `codeium.windsurf-remote-openssh` / `-wsl` 的 main，懒安装 + 代际守卫，`manager` 作「只装一次」的守卫）＋ `enable.cjs` 的 `!native && vscode.env?.remoteName` 分支 ＋ `teardown.cjs` 的 stop；③ ACP 重连淘汰 → registry 新增**可选层钩子 `update`**（包 `api.updateConnection`），context-observer / auto-continue 接受 `ssh|wsl` connector，远端断线只 `epoch++` 清状态、**不摘挂载**（本地终态仍是 `reconnectingMaxDelay`，本地行为逐字未变）；④ 面板：官方模型页的批量停用/启用 + 筛选胶囊（家族粒度，按 250 uid 分批以适配 manager 的 256 上限）与两处文案。
+- **有意不取**：① `host-catalog.cjs` 的远端分支（读 `state.vscdb` + `node:sqlite` + `vscode.windsurfAuth`）——本仓目录注入走 LS 桥 ＋ `setAuthStatus` 包装，远端窗口里二者都装不上，无法按结构映射落地，且**写入 auth 存储的路径无法本机验证**；② `officialServer` 白名单加 `server.self-serve.windsurf.com`——本机 native bundle 里 0 处（该 origin 只被我们自己的 Fast Context/Exa 用），属无证据放宽安全校验；③ `panel/controller.cjs` 的 `delete require.cache` 热重载（打包后无收益）；④ picker 首页双列网格（`homeModels`，A/B 早已按用户决定回退）。
+- **判据/未验证**：远端链路**未在真实远端窗口验收**，只能看 `activated-remote` 与 `remote-tunnel-unavailable` 两条日志。已知盲点：空窗口（无 folder）且 remote 扩展的 resolver 早于本扩展激活时，`currentAuthority()` 只剩 `lastResolvedAuthority` 兜底。若将来要补目录注入，先确认 UI 侧 `vscode.windsurfAuth` 是否存在、`state.vscdb` 读的是本地还是远端。
 
 看上游有没有值得参考的新改动：
 
