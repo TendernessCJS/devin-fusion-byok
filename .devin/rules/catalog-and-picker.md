@@ -14,6 +14,7 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
   `uid`（能力保留，面板 UI 不再使用单 uid 形态）。族标签取「无标记 uid」成员的 label 剥掉档位/开关尾词（单成员族不剥，故 `SWE-1.6 Fast` 保持原样；
   **uid 变体后缀词表含 `lightning`**——`swe-2-medium-lightning` 是 fast-mode 变体而非家族名，`Lightning` 不剥 label 是因为
   `SWE-1.7 Lightning` 本身是家族名），并全局去重。
+- **「官方模型显示」的筛选是状态投影，默认只列可用家族**（2026-10-29）：胶囊顺序固定 `全部 → 可用 → 已隐藏 → 不可用 → 内部`，前四者对非内部家族构成**互斥加和分解**（`可用 + 已隐藏 + 不可用 = 全部 − 内部`）——隐藏的族**只计入「已隐藏」**，否则默认「可用」会把用户已关掉的族又铺出来。胶囊文案用**状态词**（已隐藏/不可用/内部），动词（隐藏/显示）只留在批量按钮上；每个胶囊带 `title` 说明自己的判据。`内部` 胶囊**平铺**渲染（不出 vendor 头、不出 `details.fold`）。`nativeFilter` 默认与非法值兜底都是 `available`；空态必须区分「有搜索词」「筛选后为空」「目录为空」三种文案，不能一律显示同步失败。
 - **emit 最终标签按「家族」整体唯一，同一家族不得被拆到不同 Lead 维度值**（2026-10-28，`catalog/build.cjs` 的 `claim`/`reserved` 循环）：先把每个家族的 `familyLabel` 与每个 lead 的最终标签登记进 `owners`；**只有撞名家族**（`owners` 集合 >1）才加后缀——未撞名家族的全部标签先进入 `reserved`，所以候选必须同时避开「familyLabel + effort 名」形态（否则 `Foo`+High 与 `Foo High`+无档位仍会撞）；撞名家族按 `family.key` 排序，后缀初值 `digest(family.key).slice(0,8)`，被占用再递增 `-2`/`-3`，命中后**整族统一改写** `familyLabel`，并把该族全部最终标签并入 `reserved`。**禁止退化成按 lead 逐个加后缀**：标签确实唯一了，但一族会散到不同 Lead 维度值，picker 里同一模型出现两行。为何必须：原生 mapper 同 label 后写覆盖 → 组内丢 uid，证据见 `native-observation-and-cli-cache-forensics.md`。
 - **picker 可见性契约（2026-10-15：先逆向实测、后由 App bundle 源码证实）**：picker 行 = `team_settings` proto
   **f7 `allowedModelUids` 白名单** ∩ `user_status` f33 **排序组 label 引用** ∩ 非内部 `kind`。内层 f22
