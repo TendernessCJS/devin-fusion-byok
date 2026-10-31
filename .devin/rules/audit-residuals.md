@@ -42,7 +42,9 @@ description: "Apply when a 审查/取证 result is being revisited, when someone
 - **状态信封只在 `verdict === 'match'` 且不超 `MAX_STATE_BYTES` 时回放**，`mismatch`/`oversize` 一律丢弃并退回纯文本 + 工具调用形态；
   失败细分 reason 只出现在 `state-envelope-replay-failed`（正常重放不发日志），所以"为什么没走信封"要去翻失败事件。
 - **Anthropic 真签名通道没有 provider 作用域**（与上面的状态信封不对称）：会话中途换 anthropic 格式 provider 会回放旧 endpoint 的签名。
-  **证据等级：外部实现推演，本仓零样本**——不要因为"看着像漏洞"就加守卫，判别信号与最小修法见 `provider-measurements-anthropic-chat.md`。
+  **证据等级：外部证据只证明对方上游逐字节校验签名；本仓零样本**，不构成对任意 Anthropic 端点的不兼容结论；不预设
+  `sha256(signature)→scope` 持久索引为唯一修法，属待议设计。不要因为"看着像漏洞"就加守卫，判别信号与最小修法见
+  `provider-measurements-anthropic-chat.md`。
 
 ## 持久化与发布
 

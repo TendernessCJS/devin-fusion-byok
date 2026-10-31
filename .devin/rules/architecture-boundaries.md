@@ -11,11 +11,14 @@ description: "Apply when changing module ownership, the src/runtime partition, p
   转导出旧导出面，客户端（`native-models`/`monitor-client`）改依赖 `contract.cjs`+`port.cjs`+`retry.cjs`，`backend-handshake` 用 `source-identity` 做
   fresh 检查。**backend 闭包禁止动态 require**（非字面量 specifier 让推导抛错、起不来）；新模块被正常 `require` 即自动进哈希。
   `test/architecture.test.cjs` 禁绝 backend 闭包进宿主/UI/发现/更新模块并查文件级循环。
-- **`src/protocol/` 是多关注点的混合体，不要按目录名或文件名推断职责**（9 个文件）：① 协议转换 —— `native-chat-codec.cjs`（**Devin 侧**：解析
+- **`src/protocol/` 是多关注点的混合体，不要按目录名或文件名推断职责**（10 个文件）：① 协议转换 —— `native-chat-codec.cjs`（**Devin 侧**：解析
   `exa.chat_pb` 原生请求 + 造出站 ACP chunk）、`inference.cjs`（**三协议统一入口**：`serveChat` + `processor` 的流编排/有界降级/推理状态通道衔接；
   **不是 Responses 专用**）；它的内部职责已按协议语义拆开：`provider-request.cjs`（格式判定/端点/请求体构造，**OpenAI Chat 的请求体在这里**）、
   `provider-events.cjs`（SSE 解析/用量快照/错误详情）、`state-envelope.cjs`（状态信封前缀、`{scope, items}` 构造与其校验）、`cache-support.cjs`
-  （`providerKey()`，供状态信封/缓存复用），`anthropic.cjs` 仍是
+  （`providerKey()`，供状态信封/缓存复用）、`stream-writer.cjs`（**出站背压的所有者**：每帧一次 `res.write`，返回 false 时只等一个 drain，
+  **必须有上限**——`serveChat` 注入 `timeouts.drainMs`，默认 120000ms、夹取上限 600000ms；超时按客户端取消结算（`outcome: cancelled`、
+  `code: client_cancelled`、日志 `chat-aborted` 带 `reason: backpressure-timeout`），**不得**往已堵住的 socket 再写错误文案，也不得据此触发
+  供应商错误续跑；零依赖、只做传输，不认识模型/protobuf/monitor），`anthropic.cjs` 仍是
   Anthropic Messages 的独立实现。`inference.cjs` 的导出面被下游依赖（`backend.cjs` 取 `serveChat`，测试取 `buildRequestBody`/`parseEvent`/`STATE_PREFIX`），
   再拆时**保持这四个导出不变**；② 字节层 —— `wire.cjs` 是**全仓共享**的 proto 读写/framing/gzip 工具，`catalog/*`、`fast-context/`、
   `runtime/` 都直接依赖它，**不是协议专用**；③ 埋点 —— `tracker.cjs` 是计量（→ monitor），它落在 `protocol/` 是**依赖图决定而非语义决定**：为消除

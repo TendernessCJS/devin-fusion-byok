@@ -21,8 +21,9 @@ description: "Apply before changing Anthropic or Chat wire semantics — the per
   而 Anthropic 的真签名通道只查 `FOREIGN_STATE_PREFIX` 等前缀，**没有 provider 作用域**。因此「会话中途切到另一个 anthropic 格式 provider」
   会把旧 endpoint 签发的签名原样回放给新 endpoint。外部独立实现（`dwgx/WindsurfAPI`，2026-10-30 发布）实测其上游**逐字节校验签名**
   （改一个字符即 `invalid_argument`），可作为「这类回放会被硬拒」的旁证——但**本仓从未观测到该 400**，也**不要**因此直接加守卫。
-  判别信号：一次 400 且错误体提到 signature/thinking。届时最小修法是「发出签名时记 `sha256(signature) → provider scope`，
-  回放时有记录且作用域不同才丢弃」；直接按 provider 变化清空会误伤同 provider 的正常续轮。
+  判别信号：一次 400 且错误体提到 signature/thinking——但这只是排查线索（现已由 `chat-error.diagnostic` 记一枚枚举），
+  不是因果证明。修法属待议设计（候选之一是「发出签名时记 `sha256(signature) → provider scope`，
+  回放时有记录且作用域不同才丢弃」）；直接按 provider 变化清空会误伤同 provider 的正常续轮。
 - **DeepSeek 的 anthropic 面忽略 `cache_control`**（2026-10-25 实测）：13 条消息的同一请求，带断点与不带断点、热缓存下完全一致（`input_tokens 227` / `cache_read_input_tokens 384`），文档亦明示忽略。**因此 `cache_read_input_tokens` 非 0 不能证明断点生效**——DeepSeek 有独立的自动上下文缓存。
 - **DeepSeek 的自动缓存命中率很高**（同日 `monitor.jsonl` 实测）：单回合 `inputTokens 72,253` / `cachedTokens 70,656`（97.8%），Responses 面一直命中。别把「缓存计数为 0」当成常态，也别把非 0 归因给我们的断点。
 - **文档输入三面都不通**（同日探针）：Responses `input_file`、Anthropic `document` 均 **200 但被忽略**（模型回答「没有附件」）；Chat `file` 直接 400 `file must have a file_id or file_data`（DeepSeek 把 `file_data` 放在 content part 顶层，不是 OpenAI 的嵌套 `file` 对象）。**按本卷「附件走 `resource_link`、`documents` 恒为空」的实测，这三条映射真机不可达，故不改代码**，仅记录形状差异备查。

@@ -84,3 +84,7 @@ description: "Apply when writing or debugging tests — the installed-renderer s
 - 反证必须对**真实源码文本做回退**（`reverted(from, to)` 整段替换后跑守卫），不要只喂人造行首样例——`installTimeCaptures` 曾因 `^` 行首锚定漏掉行内属性位置的真实捕获。
 - **前瞻与 `\s*` 的顺序是坑**：`:\s*(?!...)` 里 `\s*` 能回退到 0、让前瞻落在空格字符上，合法箭头包装会被误报；`\s*` 要收进前瞻内部。这个坑在本仓同一守卫上踩过两次。
 - 夹具陷阱：`extension-lifecycle.test.cjs` 的沙盒把 `src/activation/*` 的 `setTimeout` 换成 0ms 来实现快速重试；`managed-settings.cjs` 已**从该替换中排除**——否则 5 s drain 预算会塌成 0ms、drain 恒走超时分支，R1 用例会「因为错误的原因变绿」。新加依赖计时预算的 activation 模块时先核对 `shareGlobals` 的覆盖面。
+
+## 固定报文契约基线
+
+`node --test test/provider-wire-contract.test.cjs`：52 个合成场景（17 场景 × 3 协议 + 1 无断点对照）的 `buildRequestBody` 输出与 `test/fixtures/provider-wire-contract.json`（基线 commit `04dc73d`，A–E 批次之前的默认报文）逐字段 deepEqual。场景构造在 `test/fixtures/provider-wire-cases.cjs`，字面量不得「优化」。**新批次不得重新生成基线来「修绿」**：与基线不一致意味着默认报文被改动，必须停下定位；有意变更须逐场景说明理由并显式改 JSON。该测试不依赖 `.refs`、不联网。
