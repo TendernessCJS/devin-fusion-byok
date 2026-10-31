@@ -5,16 +5,16 @@ description: "Apply when judging whether a provider wire field is legitimate, up
 
 # 供应商 SDK 对照（provider-sdk-parity）
 
-## 基线版本（2026-10-24 更新）
+## 基线版本（2026-10-31 更新）
 
 | 包 | `.refs/` 目录 | 版本 | tag | commit |
 | --- | --- | --- | --- | --- |
 | `@anthropic-ai/sdk` | `anthropic-sdk-typescript` | **1.3.0** | `sdk-v1.3.0` | `cb5fba41` |
-| `openai` | `openai-node` | **7.43.0** | `v7.43.0` | `d02d4de7` |
+| `openai` | `openai-node` | **7.47.0** | `v7.47.0` | `c717857c` |
 
 参照物（不是我们的对照实现）：Devin.app 自带 **`@anthropic-ai/sdk 0.82.0`**，**没有** `openai`。
 
-**未发布预警（2026-10-26 核对）**：`openai-node` 远端 HEAD 已领先 `v7.43.0` 7 笔，其中 `d8931e7f` 给 Responses 的**显式缓存断点**加 `ttl?: '30m' | '12h'`，并注明断点从请求的 `prompt_cache_options.ttl` 继承——即下文「刻意不发」里的 `prompt_cache_options` 正在变成带生命周期的正式能力。**此时不跟进**：npm 仍是 7.43.0，而契约测试读 `src/**/*.ts`，钉未发布 HEAD 会把预览字段记成稳定契约。发布后按上文流程更新，并重评 `prompt_cache_options` 该不该发。
+**2026-10-26 那条「未发布预警」已结案**：当时远端 HEAD 领先 `v7.43.0`，其中 `d8931e7f` 给 Responses 的显式缓存断点加 `ttl?: '30m' | '12h'`。**现已发布并已同步到 7.47.0**——`responses.ts` 里 `ttl?: '30m' | '12h'` 的出现次数 7.43.0 是 3 处、7.47.0 是 9 处，且 `prompt_cache_retention` 已被 SDK 标注 `@deprecated`（改用 `prompt_cache_options.ttl`）。**重评结论：仍然不发**（理由见下文「刻意不发」表）。
 
 ## 更新方式：必须是 git 克隆，不能是 npm tarball
 
@@ -50,7 +50,7 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 | Anthropic `thinking`（`budget_tokens` / `adaptive`） | 无 | 不请求扩展思考。`output_config.effort` 是**力度**，不等于开启思考；`anthropic.cjs` 的 thinking/signature/redacted 回放只在**上游自己吐**时才走到 |
 | Anthropic `cache_control`（缓存断点） | **已实现**（见下节） | 由 `prompt_cache_key` 驱动，带 400 因果降级 |
 | OpenAI `verbosity` / `text.verbosity` | 无 | 力度已由目录里的 effort 变体表达 |
-| `prompt_cache_options` / `prompt_cache_retention` / `prompt_cache_breakpoint` | 无 | 默认即 implicit 缓存，行为等价；这些新字段第三方网关普遍不认 |
+| `prompt_cache_options` / `prompt_cache_retention` / `prompt_cache_breakpoint` | 无 | 默认即 implicit 缓存，行为等价；这些新字段第三方网关普遍不认。**7.44+ 把 `ttl?: '30m'|'12h'` 正式化、并把 `prompt_cache_retention` 标为 deprecated——仍不发**：ttl 是「缓存保多久」的账单/延迟取舍，原生没有对应控制位，发了等于替用户做决定 |
 | `max_tool_calls`（7.43 新增） | 无 | 不设上限 |
 | `safety_identifier` / `metadata.user_id` | 无 | 不从账号数据反推身份 |
 | `text.format`（结构化输出） | 无 | 原生工具已用 JSON schema，不需要额外输出格式 |
@@ -89,11 +89,12 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 
 也就是说：原生不跟这两家 API 说话，**漏了字段也没有补偿层**；字段合法性只能以 SDK/API 为准。
 
-## 版本间实际变化（2026-10-24 实测）
+## 版本间实际变化（2026-10-31 实测）
 
 - **anthropic 1.1.0 → 1.3.0**：`messages.ts` 只有文档注释改动（22 增 5 删），`MessageCreateParamsBase` 字段**零增删**；`StopReason` 未变。
 - **openai 7.41.0 → 7.43.0**：`ResponseCreateParamsBase` 仅新增 `max_tool_calls`；`ResponseStreamEvent` 联合**零增删**；`shared.ts` 新增带 `detail?: 'low'|'high'|'auto'|'original'` 的 `input_image` 形状（我们已符合，`detail` 可选）。
-- 结论：两次升级对我们的发送面**零动作**，契约测试 10/10 绿且 `skipped 0`。
+- **openai 7.43.0 → 7.47.0**：`ResponseCreateParamsBase` 顶层字段**零增删**（脚本逐字段比对，不是目测）；`shared.ts` 仅 `AllModels`/`ChatModel` 注释与新增模型字面量 `gpt-6.1-terra`（模型清单来自目录，与我们无关）；`responses.ts` 的净增量是 WebSocket warmup、agent session/tool settings、text format 解析、realtime/SIP/组织密钥等**我们不发**的域，另有 `ttl` 正式化（见上）。契约测试 10/10 绿、`skipped 0`。
+- 结论：三次升级对我们的发送面**零动作**。
 
 ## 纪律
 
