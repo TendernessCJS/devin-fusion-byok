@@ -1698,3 +1698,288 @@ test('a truncation with a tool call but no text still continues', { timeout: 100
   scheduler.advance(2000);
   assert.equal(promptCount, 2);
 });
+
+test('terminal state_update settles a queued v1 result exactly once', { timeout: 5000 }, async t => {
+  for (const state of ['cancelled', 'requires_action', 'refusal']) for (const rejected of [false, true]) {
+    await t.test(`${state}/${rejected ? 'reject' : 'resolve'}`, async t => {
+      const f = fixture();
+      const scheduler = fakeScheduler();
+      const handle = f.install({ isEnabled: () => true, scheduler,
+        getOptions: () => ({ onProviderError: true, untilPlanComplete: true }) });
+      t.after(() => handle.dispose());
+      const native = rejected ? new Error('Provider response could not be completed.') : { stopReason: 'max_turn_requests' };
+      let sends = 0, settlements = 0;
+      const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+        sendRequest(req) { if (req.method === 'session/prompt') sends++; return rejected ? Promise.reject(native) : Promise.resolve(native); },
+        forwardClientRequest() {} };
+      f.api.registerConnection(connector);
+      const update = value => connector.forwardClientRequest({
+        method: 'session/update', params: { sessionId: 'queued', update: value }
+      });
+      const wrapped = connector.sendRequest({ method: 'session/prompt',
+        params: { sessionId: 'queued', prompt: [{ type: 'text', text: 'go' }] } });
+      const settled = wrapped.then(value => { settlements++; return { value }; },
+        error => { settlements++; return { error }; });
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(scheduler.pendingCount(), 1, 'continuation is queued before the state arrives');
+      update({ sessionUpdate: 'state_update', state });
+      const result = await settled;
+      assert.equal(rejected ? result.error : result.value, native, 'settle with the original native result');
+      assert.equal(handle.status().activeSessions, 0);
+      assert.equal(handle.status().pendingTimers, 0);
+      update({ sessionUpdate: 'state_update', state });
+      scheduler.advance(60000);
+      handle.dispose();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(scheduler.pendingCount(), 0);
+      assert.equal(sends, 1);
+      assert.equal(settlements, 1, 'the wrapped promise settles exactly once');
+    });
+  }
+});
+
+test('stopReason-equivalent state_update branches settle queued results', { timeout: 2000 }, async t => {
+  for (const stopReason of ['cancelled', 'refusal']) {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({ isEnabled: () => true, scheduler,
+      getOptions: () => ({ onProviderError: true, untilPlanComplete: true }) });
+    t.after(() => handle.dispose());
+    const native = { stopReason: 'max_turn_requests' };
+    let sends = 0, settlements = 0;
+    const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+      sendRequest(req) { if (req.method === 'session/prompt') sends++; return Promise.resolve(native); },
+      forwardClientRequest() {} };
+    f.api.registerConnection(connector);
+    const update = value => connector.forwardClientRequest({
+      method: 'session/update', params: { sessionId: 'queued', update: value }
+    });
+    const wrapped = connector.sendRequest({ method: 'session/prompt',
+      params: { sessionId: 'queued', prompt: [{ type: 'text', text: 'go' }] } });
+    const settled = wrapped.then(value => { settlements++; return { value }; },
+      error => { settlements++; return { error }; });
+    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(scheduler.pendingCount(), 1);
+    update({ sessionUpdate: 'state_update', state: 'idle', stopReason });
+    const result = await settled;
+    assert.equal(result.value, native, stopReason + ' settles with the original result');
+    assert.equal(handle.status().activeSessions, 0);
+    scheduler.advance(60000);
+    assert.equal(sends, 1);
+    assert.equal(settlements, 1);
+  }
+});
+
+test('a terminal state_update before the native result keeps the later settle', { timeout: 2000 }, async t => {
+  for (const rejected of [false, true]) {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({ isEnabled: () => true, scheduler,
+      getOptions: () => ({ onProviderError: true, untilPlanComplete: true }) });
+    t.after(() => handle.dispose());
+    let release, sends = 0, settlements = 0;
+    const native = rejected ? new Error('Provider response could not be completed.') : { stopReason: 'end_turn' };
+    const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+      sendRequest(req) { if (req.method === 'session/prompt') { sends++; return new Promise((resolve, reject) => { release = rejected ? () => reject(native) : () => resolve(native); }); } return Promise.resolve({}); },
+      forwardClientRequest() {} };
+    f.api.registerConnection(connector);
+    const wrapped = connector.sendRequest({ method: 'session/prompt',
+      params: { sessionId: 'queued', prompt: [{ type: 'text', text: 'go' }] } });
+    const settled = wrapped.then(value => { settlements++; return { value }; },
+      error => { settlements++; return { error }; });
+    connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 'queued',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } } } });
+    await new Promise(resolve => setImmediate(resolve));
+    connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 'queued',
+      update: { sessionUpdate: 'state_update', state: 'cancelled' } } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settlements, 0, 'nothing settles before the native result exists');
+    release();
+    const result = await settled;
+    assert.equal(rejected ? result.error : result.value, native, 'the late native result still settles');
+    assert.equal(settlements, 1);
+    assert.equal(sends, 1);
+  }
+});
+
+test('terminal state_update settles a queued v2 acknowledgement', { timeout: 2000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler,
+    getOptions: () => ({ onProviderError: true, untilPlanComplete: true }) });
+  t.after(() => handle.dispose());
+  const ack = { acknowledgment: true };
+  let sends = 0, settlements = 0;
+  const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 2,
+    sendRequest(req) { if (req.method === 'session/prompt') sends++; return Promise.resolve(ack); },
+    forwardClientRequest() {} };
+  f.api.registerConnection(connector);
+  const update = value => connector.forwardClientRequest({
+    method: 'session/update', params: { sessionId: 'queued', update: value }
+  });
+  const wrapped = connector.sendRequest({ method: 'session/prompt',
+    params: { sessionId: 'queued', prompt: [{ type: 'text', text: 'go' }] } });
+  const settled = wrapped.then(value => { settlements++; return { value }; },
+    error => { settlements++; return { error }; });
+  update({ sessionUpdate: 'agent_message', messageId: 'm1', content: [{ type: 'text', text: 'partial' }] });
+  update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(scheduler.pendingCount(), 1, 'v2 plan continuation is queued');
+  update({ sessionUpdate: 'state_update', state: 'cancelled' });
+  const result = await settled;
+  assert.equal(result.value, ack, 'v2 settles with the original acknowledgement');
+  assert.equal(handle.status().activeSessions, 0);
+  scheduler.advance(60000);
+  assert.equal(sends, 1);
+  assert.equal(settlements, 1);
+});
+
+test('session-info reason requires held to be the deciding gate', { timeout: 5000 }, async t => {
+  for (const held of [false, true]) for (const withText of [false, true]) {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({ isEnabled: () => true, scheduler,
+      getOptions: () => ({ onProviderError: true, untilPlanComplete: true }) });
+    t.after(() => handle.dispose());
+    let sends = 0;
+    const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+      sendRequest(req) { if (req.method === 'session/prompt') sends++; return Promise.resolve({ stopReason: 'max_tokens' }); },
+      forwardClientRequest() {} };
+    f.api.registerConnection(connector);
+    const update = value => connector.forwardClientRequest({
+      method: 'session/update', params: { sessionId: 's', update: value } });
+    connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's', prompt: [{ type: 'text', text: 'hi' }] } });
+    if (held) update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
+    if (withText) update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } });
+    await new Promise(r => setImmediate(r));
+    const ev = f.logs.find(l => l.event === 'auto-continue-evaluated');
+    if (!held && withText) {
+      assert.equal(ev?.data?.decision, 'plan-retry');
+      assert.equal(scheduler.pendingCount(), 1);
+    } else {
+      const expectedReason = held && withText ? 'session-info' : 'truncated-empty';
+      assert.equal(ev?.data?.decision, 'stop', `held=${held} text=${withText}`);
+      assert.equal(ev?.data?.reason, expectedReason, `held=${held} text=${withText}`);
+      assert.equal(scheduler.pendingCount(), 0);
+    }
+    assert.equal(sends, 1);
+  }
+});
+
+test('attribution of a stalled or progressed plan under held', { timeout: 5000 }, async t => {
+  for (const [held, progressed] of [[true, false], [true, true], [false, false]]) {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({ isEnabled: () => true, scheduler,
+      getOptions: () => ({ onProviderError: true, untilPlanComplete: true }) });
+    t.after(() => handle.dispose());
+    let sends = 0, releaseSecond;
+    const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+      sendRequest(req) {
+        if (req.method === 'session/prompt') {
+          sends++;
+          if (sends === 2) return new Promise(resolve => { releaseSecond = resolve; });
+          return Promise.resolve({ stopReason: 'max_turn_requests' });
+        }
+        return Promise.resolve({});
+      },
+      forwardClientRequest() {} };
+    f.api.registerConnection(connector);
+    const update = value => connector.forwardClientRequest({
+      method: 'session/update', params: { sessionId: 's', update: value } });
+    const wrapped = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's', prompt: [{ type: 'text', text: 'hi' }] } });
+    let settled = 0; wrapped.then(() => settled++, () => settled++);
+    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } });
+    update({ sessionUpdate: 'plan', entries: [{ content: 'step', status: 'pending' }] });
+    await new Promise(r => setImmediate(r));
+    assert.equal(scheduler.pendingCount(), 1, `held=${held} progressed=${progressed}: plan continuation queued`);
+    scheduler.advance(5000);
+    await new Promise(r => setImmediate(r));
+    assert.equal(sends, 2, 'the auto prompt fired once');
+    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'more' } });
+    if (progressed) update({ sessionUpdate: 'plan', entries: [{ content: 'step', status: 'completed' }, { content: 'next', status: 'pending' }] });
+    if (held) update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
+    releaseSecond({ stopReason: 'max_turn_requests' });
+    await new Promise(r => setImmediate(r));
+    const last = f.logs.filter(l => l.event === 'auto-continue-evaluated').pop();
+    assert.equal(last?.data?.decision, 'stop', `held=${held} progressed=${progressed}`);
+    const expected = held ? (progressed ? 'session-info' : null) : null;
+    assert.equal(last?.data?.reason, expected, `held=${held} progressed=${progressed}`);
+    assert.equal(f.logs.filter(l => l.event === 'auto-continue-stopped' && l.data?.reason === 'plan-no-progress').length,
+      !held && !progressed ? 1 : 0, `held=${held} progressed=${progressed}: plan-no-progress count`);
+    assert.equal(sends, 2);
+  }
+});
+
+test('v2 idle uses the same deciding-gate attribution', { timeout: 5000 }, async t => {
+  for (const held of [false, true]) for (const withText of [false, true]) {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({ isEnabled: () => true, scheduler,
+      getOptions: () => ({ onProviderError: true, untilPlanComplete: true }) });
+    t.after(() => handle.dispose());
+    let sends = 0;
+    const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 2,
+      sendRequest() { sends++; return Promise.resolve({}); },
+      forwardClientRequest() {} };
+    f.api.registerConnection(connector);
+    const update = value => connector.forwardClientRequest({
+      method: 'session/update', params: { sessionId: 's', update: value } });
+    connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's', prompt: [{ type: 'text', text: 'hi' }] } });
+    if (held) update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
+    update({ sessionUpdate: 'agent_message', messageId: 'm1', content: withText ? [{ type: 'text', text: 'partial' }] : [] });
+    update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_tokens' });
+    await new Promise(r => setImmediate(r));
+    const ev = f.logs.find(l => l.event === 'auto-continue-evaluated');
+    if (!held && withText) {
+      assert.equal(ev?.data?.decision, 'plan-retry', `v2 held=${held} text=${withText}`);
+      assert.equal(scheduler.pendingCount(), 1);
+    } else {
+      const expectedReason = held && withText ? 'session-info' : 'truncated-empty';
+      assert.equal(ev?.data?.decision, 'stop', `v2 held=${held} text=${withText}`);
+      assert.equal(ev?.data?.reason, expectedReason, `v2 held=${held} text=${withText}`);
+      assert.equal(scheduler.pendingCount(), 0);
+    }
+    assert.equal(sends, 1);
+  }
+});
+
+test('v2 idle stalled-plan attribution mirrors resolve', { timeout: 5000 }, async t => {
+  for (const [held, progressed] of [[true, false], [true, true], [false, false]]) {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({ isEnabled: () => true, scheduler,
+      getOptions: () => ({ onProviderError: true, untilPlanComplete: true }) });
+    t.after(() => handle.dispose());
+    let sends = 0;
+    const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 2,
+      sendRequest() { sends++; return Promise.resolve({}); },
+      forwardClientRequest() {} };
+    f.api.registerConnection(connector);
+    const update = value => connector.forwardClientRequest({
+      method: 'session/update', params: { sessionId: 's', update: value } });
+    connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's', prompt: [{ type: 'text', text: 'hi' }] } });
+    update({ sessionUpdate: 'agent_message', messageId: 'm1', content: [{ type: 'text', text: 'partial' }] });
+    update({ sessionUpdate: 'plan', entries: [{ content: 'step', status: 'pending' }] });
+    update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' });
+    await new Promise(r => setImmediate(r));
+    assert.equal(scheduler.pendingCount(), 1, `v2 held=${held} progressed=${progressed}: plan continuation queued`);
+    scheduler.advance(5000);
+    await new Promise(r => setImmediate(r));
+    assert.equal(sends, 2, 'the v2 auto prompt fired once');
+    update({ sessionUpdate: 'agent_message', messageId: 'm2', content: [{ type: 'text', text: 'more' }] });
+    if (progressed) update({ sessionUpdate: 'plan', entries: [{ content: 'step', status: 'completed' }, { content: 'next', status: 'pending' }] });
+    if (held) update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
+    update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' });
+    await new Promise(r => setImmediate(r));
+    const last = f.logs.filter(l => l.event === 'auto-continue-evaluated').pop();
+    assert.equal(last?.data?.decision, 'stop', `v2 held=${held} progressed=${progressed}`);
+    const expected = held ? (progressed ? 'session-info' : null) : null;
+    assert.equal(last?.data?.reason, expected, `v2 held=${held} progressed=${progressed}`);
+    assert.equal(f.logs.filter(l => l.event === 'auto-continue-stopped' && l.data?.reason === 'plan-no-progress').length,
+      !held && !progressed ? 1 : 0, `v2 held=${held} progressed=${progressed}: plan-no-progress count`);
+    assert.equal(sends, 2);
+  }
+});

@@ -182,8 +182,11 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
         .filter(plan => !plan.invalid).map(plan => plan.signature))].sort());
     }
 
+    function planProgressed(turn) {
+      return turn.autoPlanSnapshot === null || turn.autoPlanSnapshot !== planSnapshot(turn);
+    }
     function hasPlanProgress(turn) {
-      if (turn.autoPlanSnapshot === null || turn.autoPlanSnapshot !== planSnapshot(turn)) return true;
+      if (planProgressed(turn)) return true;
       report('auto-continue-stopped', { reason: 'plan-no-progress', attempts: turn.attempts });
       return false;
     }
@@ -402,8 +405,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const planRetry = !shouldRetryError && shouldRetryPlan && (!hasPendingPlan || hasPlanProgress(turn));
           emitEvaluated(turn, sessionId, 'resolve', res.stopReason,
             shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop',
-            !shouldRetryError && !planRetry && held && (errorEligible || planEligibleWithoutHeld) ? 'session-info'
-              : !shouldRetryError && !planRetry && emptyTruncation && planEligible ? 'truncated-empty' : null);
+            !shouldRetryError && !planRetry && held && (errorEligible || (planEligibleWithoutHeld && !emptyTruncation && (!hasPendingPlan || planProgressed(turn)))) ? 'session-info'
+              : !shouldRetryError && !planRetry && emptyTruncation && planEligibleWithoutHeld ? 'truncated-empty' : null);
           if (shouldRetryError) {
             turn.lastResult = { value: res, isReject: false };
             scheduleAuto(sessionId, turn, 'error');
@@ -602,6 +605,11 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           turn.retryDisallowed = true;
           turn.consumed = true;
           turn.tail = '';
+          if (turn.deferred && !turn.deferred.settled && turn.lastResult) {
+            turn.deferred.settled = true;
+            if (turn.lastResult.isReject) turn.deferred.reject(turn.lastResult.value);
+            else turn.deferred.resolve(turn.lastResult.value);
+          }
           entry.sessions.delete(sessionId);
           report('auto-continue-disqualified', { reason: 'state', state: state ?? null,
             stopReason: typeof update.stopReason === 'string' ? update.stopReason : null });
@@ -627,8 +635,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             const planRetry = !shouldRetryError && shouldRetryPlan && (!hasPendingPlan || hasPlanProgress(turn));
             emitEvaluated(turn, sessionId, 'idle', update.stopReason,
               shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop',
-              !shouldRetryError && !planRetry && held && (errorEligible || planEligibleWithoutHeld) ? 'session-info'
-                : !shouldRetryError && !planRetry && emptyTruncation && planEligible ? 'truncated-empty' : null);
+              !shouldRetryError && !planRetry && held && (errorEligible || (planEligibleWithoutHeld && !emptyTruncation && (!hasPendingPlan || planProgressed(turn)))) ? 'session-info'
+                : !shouldRetryError && !planRetry && emptyTruncation && planEligibleWithoutHeld ? 'truncated-empty' : null);
             if (shouldRetryError) {
               scheduleAuto(sessionId, turn, 'error');
             } else if (planRetry) {
