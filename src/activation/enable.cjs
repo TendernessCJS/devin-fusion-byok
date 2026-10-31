@@ -13,6 +13,7 @@ const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
 const { globalSetting } = require('./settings.cjs');
 const { safeError, RuntimeError } = require('./errors.cjs');
+const { describeError } = require('./remote-support.cjs');
 
 // A configured http.proxy routes this window, so the managed CLI env must exempt
 // loopback or devin-cli cannot reach the local backend or the LS bridge. Read
@@ -202,7 +203,7 @@ function installEnable({ deps, shared }) {
             remoteState = 'ready';
           } catch (error) {
             if (remoteState !== 'disposed' && lifecycle.connection === connection) remoteState = 'unavailable';
-            log('remote-tunnel-unavailable');
+            log('remote-tunnel-unavailable', describeError(error));
             throw error;
           } finally { connecting = null; }
         })();

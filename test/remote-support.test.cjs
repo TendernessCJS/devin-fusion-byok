@@ -1,6 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { createSandboxLoader } = require('./helpers/sandbox.cjs');
 const filename = path.resolve(__dirname, '../src/activation/remote-support.cjs');
@@ -43,6 +45,91 @@ test('a failed install logs once, never throws, and a later start retries', asyn
   await f.support.start();
   assert.equal(f.installCalls.length, 2, 'the cleared install promise lets a later start retry');
   assert.deepEqual(f.support.status(), ['tunnel']);
+});
+
+test('a failed install records a bounded error summary', async t => {
+  const logs = [];
+  const loader = createSandboxLoader({ filename, overrides: {
+    '../runtime/host/remote-tunnel.cjs': { installRemoteSupport: () => {
+      const error = new Error('x'.repeat(500)); error.code = 'ERR_INSTALL'; throw error; } },
+  } });
+  t.after(() => loader.assertStubsUsed('remote-support'));
+  const support = loader.module.exports.createRemoteSupport({
+    vscode: { extensions: { getExtension: () => undefined } }, root: '/root',
+    log: (event, data) => logs.push({ event, ...data }) });
+  await support.start();
+  await tick();
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].event, 'remote-support-unavailable');
+  assert.equal(logs[0].code, 'ERR_INSTALL', 'the cause is no longer swallowed');
+  assert.equal(logs[0].message.length, 200, 'the message is truncated before it reaches the log');
+});
+
+test('discoverRemoteMain resolves a manifest main that omits the extension', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-remote-main-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'dist'));
+  const file = path.join(root, 'dist/extension.js');
+  fs.writeFileSync(file, 'module.exports = {};');
+  const { discoverRemoteMain } = require(filename);
+  const vscode = { extensions: { getExtension: () => ({ extensionPath: root, packageJSON: { main: './dist/extension' } }) } };
+  assert.equal(discoverRemoteMain(vscode, 'codeium.windsurf-remote-openssh', 'unused'),
+    file, 'an extensionless main must anchor to the file that exists');
+  vscode.extensions.getExtension = () => ({ extensionPath: root, packageJSON: { main: './dist/extension.js' } });
+  assert.equal(discoverRemoteMain(vscode, 'x', 'unused'), file, 'an explicit extension is kept as is');
+  vscode.extensions.getExtension = () => ({ extensionPath: root, packageJSON: { main: './dist/missing' } });
+  assert.equal(discoverRemoteMain(vscode, 'x', 'unused'), null, 'a main with no file on disk resolves to null');
+});
+
+test('discoverRemoteMain falls back to appRoot and resolves the same way', t => {
+  const appRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-remote-app-'));
+  t.after(() => fs.rmSync(appRoot, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(appRoot, 'extensions/windsurf-remote-wsl/dist'), { recursive: true });
+  const file = path.join(appRoot, 'extensions/windsurf-remote-wsl/dist/extension.js');
+  fs.writeFileSync(file, 'module.exports = {};');
+  const { discoverRemoteMain } = require(filename);
+  const vscode = { extensions: { getExtension: () => undefined }, env: { appRoot } };
+  assert.equal(discoverRemoteMain(vscode, 'codeium.windsurf-remote-wsl', 'extensions/windsurf-remote-wsl/dist/extension.js'), file);
+  assert.equal(discoverRemoteMain(vscode, 'codeium.windsurf-remote-wsl', 'extensions/nope/dist/extension.js'), null);
+});
+
+test('describeError falls back to the error name and omits an empty message', () => {
+  const { describeError } = require(filename);
+  assert.deepEqual(describeError(new TypeError('read only')), { code: 'TypeError', message: 'read only' });
+  assert.deepEqual(describeError({}), { code: 'error' });
+});
+
+test('the local-window probe installs inert wrappers, disposes them and reports success', t => {
+  const logs = []; let disposed = 0, inert = null;
+  const loader = createSandboxLoader({ filename, overrides: {
+    '../runtime/host/remote-tunnel.cjs': { installRemoteSupport: options => {
+      inert = options.isEnabled(); return { dispose() { disposed++; } }; } },
+  } });
+  t.after(() => loader.assertStubsUsed('remote-support'));
+  const ok = loader.module.exports.probeRemoteSupport({
+    vscode: { extensions: { getExtension: () => undefined } }, root: '/root',
+    log: (event, data) => logs.push({ event, ...data }) });
+  assert.equal(ok, true);
+  assert.equal(inert, false, 'the probe must never be able to inject ssh arguments');
+  assert.equal(disposed, 1, 'the probe leaves no wrapper behind');
+  assert.deepEqual(logs, [{ event: 'remote-support-probe', installed: true }]);
+});
+
+test('the local-window probe keeps the cause of a failed install', t => {
+  const logs = [];
+  const loader = createSandboxLoader({ filename, overrides: {
+    '../runtime/host/remote-tunnel.cjs': { installRemoteSupport: () => {
+      const error = new Error('Cannot set property spawn'); error.code = 'ERR_PROBE'; throw error; } },
+  } });
+  t.after(() => loader.assertStubsUsed('remote-support'));
+  const ok = loader.module.exports.probeRemoteSupport({
+    vscode: { extensions: { getExtension: () => undefined } }, root: '/root',
+    log: (event, data) => logs.push({ event, ...data }) });
+  assert.equal(ok, false);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].event, 'remote-support-probe');
+  assert.equal(logs[0].code, 'ERR_PROBE');
+  assert.equal(logs[0].message, 'Cannot set property spawn');
 });
 
 test('stop disposes the manager and clears status', async t => {

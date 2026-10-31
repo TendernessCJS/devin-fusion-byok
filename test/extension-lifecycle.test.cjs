@@ -121,20 +121,24 @@ function fixture(t, initial = {}) {
       .createManagedSettingsGate({ timeoutMs: initial.managedSettingsTimeoutMs }),
   };
   if (initial.hostDisabled) overrides['./lifecycle/host-disabled.cjs'] = { isHostDisabled: () => true };
-  const remoteCalls = { start: 0, stop: 0, ensure: 0 };
+  const remoteCalls = { start: 0, stop: 0, ensure: 0, probe: 0 };
   let remoteEnsure = () => Promise.resolve();
+  // Installed unconditionally so a local window can assert it never starts the
+  // process-global remote wrappers.
+  overrides['./activation/remote-support.cjs'] = {
+    discoverRemoteMain: () => null,
+    describeError: () => ({ code: 'stub' }),
+    probeRemoteSupport: () => { remoteCalls.probe++; return Promise.resolve(); },
+    createRemoteSupport: () => ({
+      start() { remoteCalls.start++; return Promise.resolve(); },
+      stop() { remoteCalls.stop++; },
+      status: () => [],
+      ensureCurrentRemoteWindowTunnel() { remoteCalls.ensure++; return remoteEnsure(); },
+    }),
+  };
   if (initial.remote) {
     vscode.env = { remoteName: 'ssh-remote' };
     vscode.extensions.getExtension = () => undefined;
-    overrides['./activation/remote-support.cjs'] = {
-      discoverRemoteMain: () => null,
-      createRemoteSupport: () => ({
-        start() { remoteCalls.start++; return Promise.resolve(); },
-        stop() { remoteCalls.stop++; },
-        status: () => [],
-        ensureCurrentRemoteWindowTunnel() { remoteCalls.ensure++; return remoteEnsure(); },
-      }),
-    };
   }
   const loader = createSandboxLoader({ filename, overrides, globals: {
     AbortController, AbortSignal, setInterval, clearInterval, setTimeout: (fn, _ms) => setTimeout(fn, 0), clearTimeout,
@@ -1214,6 +1218,17 @@ test('a host-disable drain timeout logs pending rather than restored', { timeout
     'the restored event is reserved for a completed drain');
   gate.release();
   await Promise.allSettled([enabling]);
+});
+
+test('a local window never installs the process-global remote wrappers', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  assert.equal(f.remoteCalls().start, 0, 'a local window has no remote authority to tunnel');
+  assert.equal(f.remoteCalls().ensure, 0);
+  assert.equal(f.remoteCalls().probe, 1, 'the local window still proves the host can be patched');
+  assert.equal(f.counts().installed, 1, 'the local path still installs the LS bridge');
+  assert.ok(!f.logs.some(line => line.includes('remote-support-unavailable')));
 });
 
 test('a remote window without the native extension activates through the reverse tunnel only', async t => {

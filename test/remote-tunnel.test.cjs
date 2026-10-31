@@ -73,6 +73,19 @@ test('SSH spawn and resolver wrappers are scoped, reversible and do not wait for
   handle.dispose(); assert.equal(child.spawn, originalSpawn); assert.equal(workspace.registerRemoteAuthorityResolver, originalRegister);
 });
 
+test('a failed install unwinds the wrappers it already installed', () => {
+  const vm = require('node:vm'), module = { exports: {} };
+  const child = { spawn() { return 'spawned'; } };
+  // Accessor-only property: assignment throws in strict mode, after spawn is wrapped.
+  const workspace = { get registerRemoteAuthorityResolver() { return () => 'registered'; } };
+  vm.runInNewContext(fs.readFileSync(MODULE_PATH, 'utf8'), { module, Buffer, URL, setTimeout, clearTimeout, process,
+    require(name) { if (name === 'node:module') return { createRequire: () => key => key === 'vscode' ? { workspace } : child }; return moduleRequire(name); } });
+  const originalSpawn = child.spawn;
+  assert.throws(() => module.exports.installRemoteSupport({ vscode: { workspace: {} }, opensshMainPath: '/ssh/main.js', root: '/missing' }),
+    /only a getter/);
+  assert.equal(child.spawn, originalSpawn, 'the spawn wrapper is unwound when the resolver wrap throws');
+});
+
 test('WSL resolver fallback handles empty windows, CRLF and direct reprobes', async t => {
   const vm = require('node:vm'), module = { exports: {} }, registrations = [], calls = [];
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fusion-wsl-'));

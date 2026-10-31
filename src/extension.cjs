@@ -24,7 +24,7 @@ const { createAcpObservationState } = require('./activation/stores/acp-observati
 const { createPanelState } = require('./activation/stores/panel.cjs');
 const { createManagedSettingsGate } = require('./activation/managed-settings.cjs');
 const { publishHostBuild } = require('./activation/host-identity.cjs');
-const { createRemoteSupport } = require('./activation/remote-support.cjs');
+const { createRemoteSupport, describeError, probeRemoteSupport } = require('./activation/remote-support.cjs');
 // Shared lifecycle state across activate/teardown/deactivate.
 const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
   cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
@@ -76,14 +76,19 @@ async function activate(context) {
   // support only wraps the remote extension's ssh spawn / authority resolver
   // to establish a reverse tunnel back to the local backend. The wrappers
   // must be in place before the window resolves its remote authority, hence
-  // the unconditional eager start.
+  // the eager start inside remote windows only: a local window needs no
+  // tunnel and must not install process-level patches it can never use.
+  const remoteWindow = Boolean(vscode.env?.remoteName);
   let remoteSupport;
   try {
     remoteSupport = createRemoteSupport({ vscode, root, nativeMain, log,
       isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false });
-  } catch { log('remote-support-unavailable'); }
+  } catch (error) { log('remote-support-unavailable', describeError(error)); }
   lifecycle.remoteSupport = remoteSupport;
-  if (config().enabled !== false) void remoteSupport?.start();
+  if (config().enabled !== false && remoteWindow) void remoteSupport?.start();
+  // Local windows keep the wrappers out but still report whether this host can
+  // be patched at all — otherwise the first remote window is where it fails.
+  else if (config().enabled !== false) void probeRemoteSupport({ vscode, root, nativeMain, log });
   const installContinuation = () => {
     try {
       if (nativeMain) {

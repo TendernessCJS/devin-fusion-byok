@@ -2,14 +2,35 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+// A manifest main may omit the extension: `windsurf-remote-openssh` declares
+// `./dist/extension` while the file is `extension.js`. That path is only used
+// as the createRequire anchor, and the extension host does not resolve it —
+// the install failed with ENOENT on the literal path, so remote support never
+// installed at all. Normalise to the file that actually exists.
+function resolveMainFile(base) {
+  for (const candidate of [base, base + '.js', base + '.json', path.join(base, 'index.js')]) {
+    try { if (fs.statSync(candidate).isFile()) return candidate; } catch {}
+  }
+  return null;
+}
+
 function discoverRemoteMain(vscode, extensionId, fallbackRel) {
   try {
     const ext = vscode.extensions?.getExtension?.(extensionId);
-    if (ext?.extensionPath && ext.packageJSON?.main) return path.resolve(ext.extensionPath, ext.packageJSON.main);
+    if (ext?.extensionPath && ext.packageJSON?.main) return resolveMainFile(path.resolve(ext.extensionPath, ext.packageJSON.main));
     const appRoot = vscode.env?.appRoot;
-    const fallback = appRoot && path.join(appRoot, fallbackRel);
-    return fallback && fs.existsSync(fallback) ? fallback : null;
+    return appRoot ? resolveMainFile(path.join(appRoot, fallbackRel)) : null;
   } catch { return null; }
+}
+
+// Diagnostics only: remote install failures are swallowed so a broken wrapper
+// never breaks activation, which left the log without any cause. Record the
+// error code plus a truncated message; no payload from the wrapped modules.
+function describeError(error) {
+  const code = typeof error?.code === 'string' ? error.code
+    : typeof error?.name === 'string' ? error.name : 'error';
+  const message = typeof error?.message === 'string' ? error.message.slice(0, 200) : '';
+  return message ? { code, message } : { code };
 }
 
 function createRemoteSupport({ vscode, root, nativeMain, isEnabled = () => true, log = () => {} }) {
@@ -29,7 +50,7 @@ function createRemoteSupport({ vscode, root, nativeMain, isEnabled = () => true,
           opensshMainPath: discoverRemoteMain(vscode, 'codeium.windsurf-remote-openssh', 'extensions/windsurf-remote-openssh/dist/extension.js'),
           wslMainPath: discoverRemoteMain(vscode, 'codeium.windsurf-remote-wsl', 'extensions/windsurf-remote-wsl/dist/extension.js'),
           root, isEnabled, log });
-      } catch { try { log('remote-support-unavailable'); } catch {} return; }
+      } catch (error) { try { log('remote-support-unavailable', describeError(error)); } catch {} return; }
       if (current !== generation) { try { installed.dispose(); } catch {} return; }
       manager = installed;
     })();
@@ -55,4 +76,25 @@ function createRemoteSupport({ vscode, root, nativeMain, isEnabled = () => true,
   };
 }
 
-module.exports = { discoverRemoteMain, createRemoteSupport };
+// A local window never installs the remote wrappers, so a host that cannot be
+// patched would fail invisibly there. Probe once with injection disabled: the
+// wrappers are inert (isEnabled is false), they are disposed immediately, and a
+// failure keeps its cause instead of degrading into one unknown event name.
+function probeRemoteSupport({ vscode, root, nativeMain, log = () => {} }) {
+  let installed;
+  try {
+    installed = require('../runtime/host/remote-tunnel.cjs').installRemoteSupport({
+      vscode, nativeMainPath: nativeMain,
+      opensshMainPath: discoverRemoteMain(vscode, 'codeium.windsurf-remote-openssh', 'extensions/windsurf-remote-openssh/dist/extension.js'),
+      wslMainPath: discoverRemoteMain(vscode, 'codeium.windsurf-remote-wsl', 'extensions/windsurf-remote-wsl/dist/extension.js'),
+      root, isEnabled: () => false, log });
+  } catch (error) {
+    try { log('remote-support-probe', describeError(error)); } catch {}
+    return false;
+  }
+  try { installed.dispose(); } catch {}
+  try { log('remote-support-probe', { installed: true }); } catch {}
+  return true;
+}
+
+module.exports = { discoverRemoteMain, createRemoteSupport, describeError, probeRemoteSupport };

@@ -142,24 +142,29 @@ function installRemoteSupport({ vscode, nativeMainPath, opensshMainPath, wslMain
   const manager = createRemoteTunnelManager({ workspace, vscode, root, port, isEnabled, log });
   const restores = [];
   function wrap(obj, key, make) { const original = obj?.[key]; if (typeof original !== 'function') return; const descriptor = Object.getOwnPropertyDescriptor(obj, key), wrapper = make(original); obj[key] = wrapper; restores.push(() => { if (obj[key] === wrapper) { if (descriptor) Object.defineProperty(obj, key, descriptor); else delete obj[key]; } }); }
-  if (opensshMainPath) {
-    const child = createRequire(opensshMainPath)('child_process');
-    wrap(child, 'spawn', original => function (command, args, options, ...rest) {
-      const env = options?.env || {};
-      if (isEnabled() && (env.SSH_ASKPASS || Object.keys(env).some(key => key.startsWith('WINDSURF_SSH_ASKPASS_')))) args = injectSshRemoteForwardArgs(args, port);
-      return Reflect.apply(original, this, [command, args, options, ...rest]);
-    });
-  }
-  const workspaces = new Set([workspace]);
-  if (wslMainPath) workspaces.add(createRequire(wslMainPath)('vscode').workspace);
-  for (const targetWorkspace of workspaces) wrap(targetWorkspace, 'registerRemoteAuthorityResolver', original => function (prefix, resolver, ...rest) {
-    if (['ssh-remote', 'wsl'].includes(prefix) && typeof resolver?.resolve === 'function') {
-      const proxy = Object.create(resolver), resolve = resolver.resolve;
-      proxy.resolve = async function (authority, ...args) { const result = await Reflect.apply(resolve, resolver, [authority, ...args]); manager.recordResolvedAuthority(authority); if (isEnabled()) void manager.ensureTunnel(authority, { strictPort: true }).catch(() => { try { log('remote-tunnel-unavailable'); } catch {} }); return result; };
-      resolver = proxy;
+  // A throw halfway through leaves already-installed process-global wrappers
+  // behind with no manager to restore them, so undo everything before rethrowing.
+  const unwind = () => { manager.dispose(); for (const restore of restores.reverse()) { try { restore(); } catch {} } };
+  try {
+    if (opensshMainPath) {
+      const child = createRequire(opensshMainPath)('child_process');
+      wrap(child, 'spawn', original => function (command, args, options, ...rest) {
+        const env = options?.env || {};
+        if (isEnabled() && (env.SSH_ASKPASS || Object.keys(env).some(key => key.startsWith('WINDSURF_SSH_ASKPASS_')))) args = injectSshRemoteForwardArgs(args, port);
+        return Reflect.apply(original, this, [command, args, options, ...rest]);
+      });
     }
-    return Reflect.apply(original, this, [prefix, resolver, ...rest]);
-  });
+    const workspaces = new Set([workspace]);
+    if (wslMainPath) workspaces.add(createRequire(wslMainPath)('vscode').workspace);
+    for (const targetWorkspace of workspaces) wrap(targetWorkspace, 'registerRemoteAuthorityResolver', original => function (prefix, resolver, ...rest) {
+      if (['ssh-remote', 'wsl'].includes(prefix) && typeof resolver?.resolve === 'function') {
+        const proxy = Object.create(resolver), resolve = resolver.resolve;
+        proxy.resolve = async function (authority, ...args) { const result = await Reflect.apply(resolve, resolver, [authority, ...args]); manager.recordResolvedAuthority(authority); if (isEnabled()) void manager.ensureTunnel(authority, { strictPort: true }).catch(() => { try { log('remote-tunnel-unavailable'); } catch {} }); return result; };
+        resolver = proxy;
+      }
+      return Reflect.apply(original, this, [prefix, resolver, ...rest]);
+    });
+  } catch (error) { unwind(); throw error; }
   return { ...manager, dispose() { manager.dispose(); for (const restore of restores.reverse()) restore(); } };
 }
 module.exports = { locationToAuthority, injectSshRemoteForwardArgs, createRemoteTunnelManager, installRemoteSupport, remoteProgram };
