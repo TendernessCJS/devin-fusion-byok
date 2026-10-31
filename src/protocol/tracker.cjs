@@ -43,6 +43,10 @@ function createTracker({ id, route, provider, now = () => performance.now(), sta
   const start = now();
   let firstOutput = null, firstText = null, firstResponse = null, lastOutput = null, usage = null, complete = false;
   let hasTools = false, hasReasoning = false, terminalAt = null, providerStop = null;
+  // The provider-emitted tool block is the only authority on which calls were
+  // actually sent: fragment merging below is a fallback for turns that never
+  // reported a finished block.
+  let emittedToolIds = null;
   const chatToolIds = new Map(), responseToolIds = new Map(), itemIndexes = new Map();
   const rememberResponseTool = (item, index) => {
     if (item?.type !== 'function_call' && item?.type !== 'custom_tool_call') return;
@@ -78,12 +82,21 @@ function createTracker({ id, route, provider, now = () => performance.now(), sta
       if (semantic.output) { firstOutput ??= elapsed; lastOutput = elapsed; }
       const textDelta = chat ? typeof delta?.content === 'string' && delta.content.length > 0 : event.type === 'response.output_text.delta' && typeof data?.delta === 'string' && data.delta.length > 0;
       if (textDelta) firstText ??= elapsed;
-      const next = usageOf(event.data, chat);
-      if (next) {
-        usage = next;
-        if (usage.reasoningTokens > 0) hasReasoning = true;
-        complete = usage.inputTokens !== null && usage.outputTokens !== null && !usageIsInconsistent(usage);
+      // A present-but-invalid usage clears the snapshot instead of reviving the
+      // previous one: an absent field means "no news", an explicit null means
+      // the upstream withdrew the numbers.
+      const container = chat ? event.data : event.data?.response;
+      if (container && typeof container === 'object' && Object.hasOwn(container, 'usage')) {
+        usage = usageOf(event.data, chat);
+        complete = false;
+        if (usage) {
+          if (usage.reasoningTokens > 0) hasReasoning = true;
+          complete = usage.inputTokens !== null && usage.outputTokens !== null && !usageIsInconsistent(usage);
+        }
       }
+    },
+    toolsEmitted(ids) {
+      emittedToolIds = [...new Set((Array.isArray(ids) ? ids : []).map(identifier).filter(Boolean))].slice(-32);
     },
     finish(status, httpStatus, code = null) {
       const durationMs = Math.max(0, now() - start);
@@ -99,7 +112,7 @@ function createTracker({ id, route, provider, now = () => performance.now(), sta
         outputSpanMs: firstOutput !== null && lastOutput > firstOutput ? lastOutput - firstOutput : null,
         tps, decodeMs, visibleTokens, hasTools, hasReasoning,
         throughputTps: !inconsistent && usage?.outputTokens != null && durationMs > 0 ? usage.outputTokens * 1000 / durationMs : null,
-        toolIds: [...new Set([...chatToolIds.values(), ...responseToolIds.values()].map(identifier).filter(Boolean))].slice(-32),
+        toolIds: emittedToolIds ?? [...new Set([...chatToolIds.values(), ...responseToolIds.values()].map(identifier).filter(Boolean))].slice(-32),
         usageComplete: complete };
     },
     providerStopReason() { return providerStop; }

@@ -692,6 +692,55 @@ test('chat tool-call id fragments merge across chunks and responses keep only th
     'the item-scoped id is replaced by the real call_id at done');
 });
 
+test('the emitted tool block overrides fragment merging in attribution', () => {
+  const resent = tracker();
+  const callChunk = (id, fn) => ({ data: { choices: [{ delta: { tool_calls: [{ index: 0, id, function: fn }] } }] } });
+  resent.value.event(callChunk('call_1', { name: 'exec', arguments: '{"a":' }), true);
+  resent.value.event(callChunk('call_1', { arguments: '1}' }), true);
+  assert.deepEqual(resent.value.finish('success', 200).toolIds, ['call_1call_1'],
+    'precondition: the fragment fallback concatenates a resent id, which is why an authority is needed');
+  const authoritative = tracker();
+  authoritative.value.event(callChunk('call_1', { name: 'exec', arguments: '{"a":' }), true);
+  authoritative.value.event(callChunk('call_1', { arguments: '1}' }), true);
+  authoritative.value.toolsEmitted(['call_1']);
+  assert.deepEqual(authoritative.value.finish('success', 200).toolIds, ['call_1'],
+    'a resent id is attributed once, exactly as written to the stream');
+  const none = tracker();
+  none.value.event(callChunk('call_1', { name: 'exec', arguments: '{"a":' }), true);
+  none.value.toolsEmitted([]);
+  assert.deepEqual(none.value.finish('success', 200).toolIds, [],
+    'an explicit empty list means the turn emitted no tool block');
+  const sanitized = tracker();
+  sanitized.value.toolsEmitted(['a\u0000b', 'ok_1', 'ok_1', 7, '']);
+  assert.deepEqual(sanitized.value.finish('success', 200).toolIds, ['ok_1'],
+    'non-identifier values, duplicates and empties never reach the public record');
+});
+
+test('an explicitly invalid usage snapshot clears the previous one', () => {
+  const valid = { data: { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3 } } };
+  const t = tracker();
+  t.at(10); t.value.event(valid, true);
+  t.at(20); t.value.event({ data: { choices: [], usage: null } }, true);
+  const cleared = t.value.finish('success', 200);
+  assert.equal(cleared.inputTokens, null, 'a withdrawn snapshot never revives the previous counts');
+  assert.equal(cleared.outputTokens, null);
+  assert.equal(cleared.usageComplete, false);
+  assert.equal(cleared.throughputTps, null);
+
+  const absent = tracker();
+  absent.at(10); absent.value.event(valid, true);
+  absent.at(20); absent.value.event({ data: { choices: [] } }, true);
+  assert.equal(absent.value.finish('success', 200).inputTokens, 7, 'a missing field carries no news');
+
+  const partial = tracker();
+  partial.at(10); partial.value.event({ data: { choices: [], usage: { prompt_tokens: 5, completion_tokens: 2 } } }, true);
+  partial.at(20); partial.value.event({ data: { choices: [], usage: { completion_tokens: 9 } } }, true);
+  const record = partial.value.finish('success', 200);
+  assert.equal(record.inputTokens, null, 'partial snapshots replace rather than merge');
+  assert.equal(record.outputTokens, 9);
+  assert.equal(record.usageComplete, false);
+});
+
 test('latest text TPS wins over averages and cancelled usage still counts into throughput', () => {
   const base = tracker().value.finish('success', 200);
   const summary = summarize([
