@@ -73,9 +73,10 @@ description: "Apply when writing or debugging tests — the installed-renderer s
 - 安装根可用参数或 `DFBYOK_TEST_APP_ROOT` 覆盖，默认 `/Applications/Devin.app/Contents/Resources/app`；
   assets listing 与文件内容按 root 缓存。仅 assets 目录不存在可 skip；目录存在但候选缺失、重复、
   不可读或锚点漂移必须 fail-loud，不得在能力探测阶段把解析失败转成 unavailable。
-- `native-field-contract.test.cjs` 从 webapp assets 的 protobuf-es `newFieldList` 描述文本按字段号断言；
-  只锁定实际读取的字段，新字段（ModelInfo f26、ChatMessagePrompt f22、ModelUsageStats f13、
-  GetChatMessageRequest f28）只登记存在性。仅 assets 目录缺失可 skip，目录存在却没有 schema 锚点必须 fail。
+- `native-field-contract.test.cjs` 从 webapp assets 的 protobuf-es `newFieldList` 锁定实际消费字段的
+  号/名/kind/scalar T/repeated/opt，及关键 message/enum 引用的完整 typeName（import→export 递归解析）；
+  新字段（ModelInfo f26、ChatMessagePrompt f22、ModelUsageStats f13、GetChatMessageRequest f28）只登记。
+  opt/repeated 只认 `!0`/`true`、`!1`/`false` 与缺席——其他字面量/表达式必须 fail；仅 assets 目录缺失可 skip。
 
 ## 源码形状守卫的覆盖边界
 

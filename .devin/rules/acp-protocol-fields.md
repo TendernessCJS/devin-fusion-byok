@@ -9,14 +9,14 @@ trigger: model_decision
 
 ## 出站：`exa.api_server_pb.GetChatMessageResponse`（chunk 全集）
 
-下表是**逐字段读出的完整 30 个字段**（3.11.216 读数，`sessions.desktop.main.js` 偏移 ~5,997,111 `newFieldList` 与 webapp `editor-settings-*.js` 核出；演进 23→28→30），非只列用到的——子集曾让人误判「字段号不连续」。f29/f30 **已登记未使用**：本仓对该消息纯透传不解码，登记只为不把「没读」误判成「漏读」。
+下表是**逐字段读出的完整 30 个字段**（关键字段类型于 3.11.238 从 webapp assets 的 protobuf-es `newFieldList` 复核；演进 23→28→30），非只列用到的——子集曾让人误判「字段号不连续」。f29/f30 **已登记未使用**：原生转发保持透传；BYOK 只构造自身响应块，不生成官方通知或换模事件。
 
 | 号 | 字段 | 类型 | 本仓用法 |
 | --- | --- | --- | --- |
 | 1 | `message_id` | string | — |
 | 2 | `timestamp` | Timestamp | — |
 | 3 | `delta_text` | string | ✓ `textChunk` |
-| 4 | `delta_tokens` | int32 | — |
+| 4 | `delta_tokens` | uint32 | — |
 | 5 | `stop_reason` | enum StopReason | ✓ `stopChunk` |
 | 6 | `delta_tool_calls` | repeated ChatToolCall | ✓ `toolChunk` |
 | 7 | `usage` | ModelUsageStats | ✓ `usageChunk` |
@@ -26,11 +26,11 @@ trigger: model_decision
 | 11 | `thinking_redacted` | bool | ✓ `redactedThinkingChunk`，本字段只是标志；脱敏数据走字段 10，见「脱敏思考」条 |
 | 12 | `latency` | double | — |
 | 13 | `completion_profile` | CompletionProfile | — |
-| 14 | `credit_cost` | double | — |
+| 14 | `credit_cost` | int32 | — |
 | 15 | `output_id` | string | — |
 | 16 | `thinking_id` | string | — |
 | 17 | `request_id` | string | — |
-| 18 | `committed_credit_cost` | double | — |
+| 18 | `committed_credit_cost` | int32 | — |
 | 19 | `prompt` | string | — |
 | 20 | `gemini_thought_signature` | bytes | — |
 | 21 | `delta_signature_type` | string | 未发；**已证不需要**，见下 |
@@ -41,12 +41,12 @@ trigger: model_decision
 | 26 | `committed_quota_cost_basis_points` | int64 optional | — |
 | 27 | `committed_overage_cost_cents` | int64 optional | — |
 | 28 | `response_dimension_groups` | repeated message | — |
-| 29 | `notifications` | repeated StreamNotification | —（纯透传，未解码） |
-| 30 | `model_change` | message optional | —（纯透传，未解码） |
+| 29 | `notifications` | repeated StreamNotification | —（原生透传；BYOK 不生成） |
+| 30 | `model_change` | message optional | —（原生透传；BYOK 不生成） |
 
 ## 入站：`exa.chat_pb.ChatMessagePrompt`（请求侧，已由 `parseChat` 消费）
 
-完整 21 个字段（`sessions.desktop.main.js` 偏移 6258731 处核出）：
+完整 22 个字段（3.11.238 webapp 描述符复核 f22）：
 
 | 号 | 字段 | 类型 |
 | --- | --- | --- |
@@ -99,7 +99,7 @@ trigger: model_decision
 | 9 | `model_uid` | |
 | 12 | `provider_refusal` | 拒绝标记（本仓未发） |
 
-（另有 1 `model_deprecated`(enum，jsonName `model`)、10 `billing_model_uid`、11 `requested_model_uid`。）
+（另有 1 `model_deprecated`(enum，jsonName `model`)、10 `billing_model_uid`、11 `requested_model_uid`、13 `used_provider_plan`(bool，未消费)。）
 
 ## `ChatToolCall` 与 `StopReason`
 

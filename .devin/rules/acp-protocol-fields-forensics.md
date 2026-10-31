@@ -123,6 +123,18 @@ tail -c +<偏移> <bundle> | head -c 600
 - `orphan` 在该 bundle 出现 33 次，全部无关：工作台文件「孤立」状态（`isOrphaned`/`setOrphaned`）与 Teams 集成「orphaned channels」。
 - `trimHistory` 是 toast 通知库的历史裁剪，不是对话历史。
 
+## 3.11.238 字段形状门禁（2026-10-31）
+
+- `test/native-field-contract.test.cjs` 从 webapp assets 的 `newFieldList` 平衡扫描字段对象，锁定实际消费字段的号、名、kind、scalar T、repeated/opt 及关键枚举；f26–f28 等仅登记，不等于消费。map 的嵌套对象与 `jsonName` 不得被简单正则误判。
+- 同一检查器对真实 schema 文本做缺失/改号/改名/改类型/改基数/改枚举变异，并隔离回退生产 codec 的文本字段号；首轮 101/101 定向测试、0 skipped。来源是当前安装包，不是临时证据目录；生产映射与固定 provider 报文未改。
+
+## 3.11.238 复查缺口与补强（2026-10-31）
+
+- 首轮布尔判定是 `includes(',opt:!0')`：`opt:true`/表达式一律静默当作 false；现为顶层属性扫描——缺席 false、`!0`/`true` true、`!1`/`false` false、其他值 throw，且顶层不可解析 token 直接失败。
+- 首轮 `source.replace(raw,…)` 变异可命中 bundle 中靠前出现的同文字段、目标 descriptor 未真正被改——变异现为类型锚点内定位替换（`indexOf(raw, typeAnchor)`）。
+- message/enum 字段的 `T:` 引用改为按文件标记解析局部 `Alias=class`/`setEnumType` + ESM import→export（含转导与 visited 防环）递归到完整 typeName，只断言已审定关键字段；缺 import/export、重复、未解析全 fail-loud。
+- 目录转发路径新增 catalog 最终 `end(outgoing)` 的 finish 等待：复用 drain 期限（`phase:'drain'`），`finishing` 期间迟到 pause/drain 不动期限，finish/close/error/abort 归口清理；`_write` 与 `_final` 挂起同界，`_write` 挂起上游 `end` 也不清该期限。
+
 ## 3.11.228 读出的三条消息字段（REA 2026-10-27）
 
 读法：在 `extensions/windsurf/dist/extension.js` 里搜 `typeName="exa.api_server_pb.AssignModelRequest"`，紧跟的 `newFieldList` 就是权威字段号（`ModelStatusInfo` 同理，在 `codeium_common_pb`）。

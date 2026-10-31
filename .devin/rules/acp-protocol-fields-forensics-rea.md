@@ -7,6 +7,10 @@ trigger: model_decision
 
 本卷是从 `acp-protocol-fields-forensics.md` 拆出的 **REA 侧证据**：字段号读法留在原卷，这里只记本机 REA 能做什么、不能做什么，以及为什么。
 
+## 插件交付包的独立证据（2026-10-31，REA 6.8.0）
+
+上述大型 Devin bundle 的预算结论**不推翻也不涵盖插件小型交付包**：对 0.6.2 VSIX 解包副本的 121 个 JavaScript 文件，REA 全部解析成功、零解析失败；但后续关键链路的语义图仍是 partial，含 unknowns。它只能提供静态关系线索，本轮两项收尾缺陷与一项诊断遗漏均由源码核对和有界合成复现确认，不能称为自动扫描发现或“无漏洞”证明。证据在 `/tmp/rea-review-0.6.2/`，是本次分析留档，不是永久权威来源。
+
 ## REA 的原生面与语义图预算（2026-10-28 复测，REA 6.8.0）
 
 - **原生面整体不可用**，错误码是 `provider_unavailable`（旧的 `capability_unavailable` 记录已过期）：候选
