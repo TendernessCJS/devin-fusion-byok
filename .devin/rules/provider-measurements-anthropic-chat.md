@@ -16,6 +16,13 @@ description: "Apply before changing Anthropic or Chat wire semantics — the per
 - **base path 是厂商相关**：Moonshot 上 `/anthropic/messages` 为 **404**、`/anthropic/v1/messages` 才 200；DeepSeek 两个路径都 200（宽容，不是规范）。面板填厂商文档给的 `…/anthropic` 在 Moonshot 上**必然 404**，排障先看这一条。
 - **签名闭环只在有签名的厂商成立**：DeepSeek 返回 36 字符签名且原样回放 200；Moonshot 不返回签名，所以续轮只能省略 signed thinking 块（`FOREIGN_STATE_PREFIX` 之外，脱敏数据另有 `dfbyok-redacted-v1:` 通道，见 `acp-protocol-fields.md`）。缺签名不等于工具多轮不可用，需厂商专项测试再下结论。**补测（2026-10-22）：把 `signature` 删掉再回放，DeepSeek 仍返回 200**——它不校验签名，所以
   「签名回放 200」不能证明我们保真，只有真 Anthropic 端点能戳穿；同理，本地全绿也不代表签名通道正确。
+- **两条回放通道的门控不对称（2026-10-31 登记，未复现）**：字段 10 上的状态信封（Responses）回放前要比对
+  `stateScope(provider, route)`（provider `id`+`baseUrl`+`apiKey`+`model`），**换 provider 会自动降级为不发**（`reason: scope`，属合法降级）；
+  而 Anthropic 的真签名通道只查 `FOREIGN_STATE_PREFIX` 等前缀，**没有 provider 作用域**。因此「会话中途切到另一个 anthropic 格式 provider」
+  会把旧 endpoint 签发的签名原样回放给新 endpoint。外部独立实现（`dwgx/WindsurfAPI`，2026-10-30 发布）实测其上游**逐字节校验签名**
+  （改一个字符即 `invalid_argument`），可作为「这类回放会被硬拒」的旁证——但**本仓从未观测到该 400**，也**不要**因此直接加守卫。
+  判别信号：一次 400 且错误体提到 signature/thinking。届时最小修法是「发出签名时记 `sha256(signature) → provider scope`，
+  回放时有记录且作用域不同才丢弃」；直接按 provider 变化清空会误伤同 provider 的正常续轮。
 - **DeepSeek 的 anthropic 面忽略 `cache_control`**（2026-10-25 实测）：13 条消息的同一请求，带断点与不带断点、热缓存下完全一致（`input_tokens 227` / `cache_read_input_tokens 384`），文档亦明示忽略。**因此 `cache_read_input_tokens` 非 0 不能证明断点生效**——DeepSeek 有独立的自动上下文缓存。
 - **DeepSeek 的自动缓存命中率很高**（同日 `monitor.jsonl` 实测）：单回合 `inputTokens 72,253` / `cachedTokens 70,656`（97.8%），Responses 面一直命中。别把「缓存计数为 0」当成常态，也别把非 0 归因给我们的断点。
 - **文档输入三面都不通**（同日探针）：Responses `input_file`、Anthropic `document` 均 **200 但被忽略**（模型回答「没有附件」）；Chat `file` 直接 400 `file must have a file_id or file_data`（DeepSeek 把 `file_data` 放在 content part 顶层，不是 OpenAI 的嵌套 `file` 对象）。**按本卷「附件走 `resource_link`、`documents` 恒为空」的实测，这三条映射真机不可达，故不改代码**，仅记录形状差异备查。
