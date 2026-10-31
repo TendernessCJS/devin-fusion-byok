@@ -381,12 +381,18 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           turn.consumed = true;
           const options = getOptions() || {};
 
-          const shouldRetryError = !turn.retryDisallowed && !sessionHeld(turn) && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && matchesProviderError(turn.tail);
+          // `session-info` is a diagnostic, so it may only be reported when the
+          // input-state gate is what actually decided the turn. Eligibility is
+          // therefore evaluated without that gate and applied afterwards.
+          const held = sessionHeld(turn);
+          const errorEligible = !turn.retryDisallowed && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && matchesProviderError(turn.tail);
           const hasPendingPlan = checkHasPendingPlan(turn);
           const isBlocked = matchesTerminalBlocker(turn.tail);
           const emptyTruncation = CONTINUABLE_STOP.has(res.stopReason) && !(turn.textChars > 0) && !(turn.toolCalls > 0);
-          const planEligible = !turn.retryDisallowed && !sessionHeld(turn) && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true &&
+          const planEligibleWithoutHeld = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true &&
             CONTINUABLE_STOP.has(res.stopReason);
+          const shouldRetryError = errorEligible && !held;
+          const planEligible = planEligibleWithoutHeld && !held;
           const shouldRetryPlan = planEligible && !emptyTruncation;
 
           // hasPlanProgress consumes its snapshot — keep the original lazy call:
@@ -396,7 +402,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const planRetry = !shouldRetryError && shouldRetryPlan && (!hasPendingPlan || hasPlanProgress(turn));
           emitEvaluated(turn, sessionId, 'resolve', res.stopReason,
             shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop',
-            !shouldRetryError && !planRetry && sessionHeld(turn) ? 'session-info'
+            !shouldRetryError && !planRetry && held && (errorEligible || planEligibleWithoutHeld) ? 'session-info'
               : !shouldRetryError && !planRetry && emptyTruncation && planEligible ? 'truncated-empty' : null);
           if (shouldRetryError) {
             turn.lastResult = { value: res, isReject: false };
@@ -450,10 +456,12 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const msg = typeof err?.message === 'string' ? err.message : (typeof err === 'string' ? err : '');
           const isExactMsg = msg === TARGET_ERROR || msg === TARGET_ERROR + '.' || matchesTimeoutError(msg);
           const options = getOptions() || {};
-          const shouldRetryError = !sessionHeld(turn) && isEnabled() && options.onProviderError !== false && isExactMsg && !sessionSuppressed(sessionId);
+          const held = sessionHeld(turn);
+          const errorEligible = isEnabled() && options.onProviderError !== false && isExactMsg && !sessionSuppressed(sessionId);
+          const shouldRetryError = errorEligible && !held;
 
           emitEvaluated(turn, sessionId, 'reject', null,
-            shouldRetryError ? 'error-retry' : 'stop', sessionHeld(turn) ? 'session-info' : null,
+            shouldRetryError ? 'error-retry' : 'stop', !shouldRetryError && held && errorEligible ? 'session-info' : null,
             { providerErrorMatched: isExactMsg });
           if (shouldRetryError) {
             turn.lastResult = { value: err, isReject: true };
@@ -604,11 +612,14 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             const options = getOptions() || {};
             const isError = matchesProviderError(turn.tail);
             const isBlocked = matchesTerminalBlocker(turn.tail);
-            const shouldRetryError = !turn.retryDisallowed && !sessionHeld(turn) && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && isError;
+            const held = sessionHeld(turn);
+            const errorEligible = !turn.retryDisallowed && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && isError;
             const hasPendingPlan = checkHasPendingPlan(turn);
             const allowedPlanReason = CONTINUABLE_STOP.has(update.stopReason);
             const emptyTruncation = allowedPlanReason && !(turn.textChars > 0) && !(turn.toolCalls > 0);
-            const planEligible = !turn.retryDisallowed && !sessionHeld(turn) && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true && allowedPlanReason;
+            const planEligibleWithoutHeld = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true && allowedPlanReason;
+            const shouldRetryError = errorEligible && !held;
+            const planEligible = planEligibleWithoutHeld && !held;
             const shouldRetryPlan = planEligible && !emptyTruncation;
 
             // Same lazy contract as the resolve branch: progress is checked
@@ -616,7 +627,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             const planRetry = !shouldRetryError && shouldRetryPlan && (!hasPendingPlan || hasPlanProgress(turn));
             emitEvaluated(turn, sessionId, 'idle', update.stopReason,
               shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop',
-              !shouldRetryError && !planRetry && sessionHeld(turn) ? 'session-info'
+              !shouldRetryError && !planRetry && held && (errorEligible || planEligibleWithoutHeld) ? 'session-info'
                 : !shouldRetryError && !planRetry && emptyTruncation && planEligible ? 'truncated-empty' : null);
             if (shouldRetryError) {
               scheduleAuto(sessionId, turn, 'error');

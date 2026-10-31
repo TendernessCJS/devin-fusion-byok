@@ -957,6 +957,55 @@ test('userActionRequired still gates a continuation while it is set', { timeout:
   assert.equal(evaluated.at(-1).data.retryDisallowed, false, 'the turn is held, not permanently disqualified');
 });
 
+test('an ineligible turn does not blame the input-state gate', { timeout: 1000 }, async t => {
+  // `end_turn` is not a continuable stop reason, so the gate never decided this
+  // turn: reporting `session-info` here would send a reader looking at the
+  // wrong condition.
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, getOptions: () => ({ onProviderError: false, untilPlanComplete: true }), scheduler });
+  t.after(() => handle.dispose());
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) { return Promise.resolve(req.method === 'session/prompt' ? { stopReason: 'end_turn' } : {}); },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const update = value => connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-other', update: value } });
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-other', prompt: [{ type: 'text', text: 'do' }] } });
+  update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'confirm' } });
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial answer' } });
+  await new Promise(r => setImmediate(r));
+  scheduler.advance(2000);
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated').at(-1).data;
+  assert.equal(evaluated.decision, 'stop');
+  assert.equal(evaluated.reason, null, 'end_turn blocked the turn, not the input-state gate');
+});
+
+test('a rejection that could not retry anyway is not attributed to the gate', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, getOptions: () => ({ onProviderError: true, untilPlanComplete: false }), scheduler });
+  t.after(() => handle.dispose());
+  let rejectNative;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest() { return new Promise((_, reject) => { rejectNative = reject; }); },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const settled = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-unrelated', prompt: [{ type: 'text', text: 'go' }] } })
+    .catch(error => error);
+  connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-unrelated',
+    update: { sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'confirm' } } } });
+  rejectNative(new Error('connection reset by peer'));
+  await new Promise(r => setImmediate(r));
+  assert.equal((await settled) instanceof Error, true, "the native rejection still reaches the caller");
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated').at(-1).data;
+  assert.equal(evaluated.decision, 'stop');
+  assert.equal(evaluated.reason, null, 'an unmatched message is why no retry happened');
+});
+
 test('v2 requires_action interleaving and state transitions clear pending retry', async t => {
   const f = fixture();
   const scheduler = fakeScheduler();

@@ -30,7 +30,7 @@ description: 自动继续（auto-continue）的实测依据与判据——`sessi
 
 1. 先看 `auto-continue-evaluated` 的 `stopReason`/`decision`/`reason`——只有 `max_tokens`/`max_turn_requests` 可续，`end_turn` 是正常收尾。
 2. `decision: untracked` + `reason: session-gone` 说明这一轮在结束前被移出跟踪表：查同会话更早的 `auto-continue-disqualified`。
-3. 有 `reason: session-info` + `decision: stop`：那是**当时仍置位**的最新态门控，不是永久作废；看 `session-info-observed` 的 `{action,disabled}` 序列即可确认是「一直没清除」还是「清除后仍被挡」。
+3. 有 `reason: session-info` + `decision: stop`：那是**当时仍置位**的最新态门控，不是永久作废；看 `session-info-observed` 的 `{action,disabled}` 序列即可确认是「一直没清除」还是「清除后仍被挡」。`session-info` 只在门控确实是决定因素时才记——同一轮若因开关关闭或 `stopReason` 不可续而不续，`reason` 为 `null`（2026-10-31 修正，之前是「只要标记在位就记 `session-info`」，会把排查引向错误的门）。
 4. `session-info-observed` 只在 `action`/`disabled` **发生变化**时写一次，不含正文与 id；它取代了此前只能从 `session-gone` 反推的做法。
 
 ## 事件字段（本卷持有，契约卷只留事件名）
