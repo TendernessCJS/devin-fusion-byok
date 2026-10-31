@@ -527,7 +527,9 @@ test('the control endpoint validates the mode before mutating state', async t =>
 });
 
 test('a legacy cache without allowedMode stays restricted and legacy posts still work', async t => {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-cache-')), 'native-cache.json');
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-cache-'));
+  t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
+  const file = path.join(cacheRoot, 'native-cache.json');
   fs.writeFileSync(file, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), models: [], allowedUids: ['a1', 'a2'] }));
   const seeded = loadNativeCache(file);
   assert.equal(seeded.allowedMode, 'restricted', 'a missing key can never lift a restriction');

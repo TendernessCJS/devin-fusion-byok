@@ -482,10 +482,11 @@ test('staleFusionUids requires a populated `known` set instead of falling back t
   assert.deepEqual(staleFusionUids(flat, { emitted: new Set(), known: new Set(['lead', 'swe-2-high']) }), []);
 });
 
-test('a throwing staleProbe is a safe no-op for refreshStaleCliCaches', () => {
+test('a throwing staleProbe is a safe no-op for refreshStaleCliCaches', t => {
   const os = require('node:os'), nodePath = require('node:path');
   const { refreshStaleCliCaches } = require('../src/runtime/host/cli-cache.cjs');
   const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'cli-cache-staleprobe-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const name = 'model_configs_v5.bbbbbbbbbbbbbbbb.bin';
   const payload = m(1, cat(s(1, 'dfbyok-new-uid'), s(22, 'dfbyok-new-uid'))).toString('base64');
   const file = nodePath.join(dir, name);

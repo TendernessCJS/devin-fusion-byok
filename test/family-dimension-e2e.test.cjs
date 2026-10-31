@@ -27,8 +27,11 @@ function helperAt(root) {
     { module: mod, require, process: { env: { DFBYOK_TEST_APP_ROOT: root } } });
   return mod.exports;
 }
-const tempRoot = files => {
+// Each synthetic install root belongs to the test that asked for it: cleanup
+// registered here keeps every call site leak-free by construction.
+const tempRoot = (t, files) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-app-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const assets = path.join(root, 'out/vs/workbench/devin-webapp-host/assets');
   for (const [name, source] of Object.entries(files || {})) {
     fs.mkdirSync(assets, { recursive: true });
@@ -248,33 +251,36 @@ test('mutation proof: a wrong order or a missing dimension value breaks the exac
     'removing the Effort dimension value removes the dimension entirely');
 });
 
-test('installed-renderer probe: missing assets dir skips, present-but-drifted fails loudly', () => {
-  const missing = helperAt(fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-empty-')));
+test('installed-renderer probe: missing assets dir skips, present-but-drifted fails loudly', t => {
+  const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-empty-'));
+  t.after(() => fs.rmSync(emptyRoot, { recursive: true, force: true }));
+  const missing = helperAt(emptyRoot);
   assert.equal(missing.webappAvailable, false, 'no assets dir is the only skip channel');
   // A directory that exists must yield exactly one matching bundle — anything
   // else is a layout change, never a silent skip.
-  const drifted = helperAt(tempRoot({ 'renamed.js': 'function replacementPicker() { return []; }' }));
+  const drifted = helperAt(tempRoot(t, { 'renamed.js': 'function replacementPicker() { return []; }' }));
   assert.equal(drifted.webappAvailable, true);
   assert.throws(() => drifted.loadWebappPicker(), /layout changed/);
-  const duplicated = helperAt(tempRoot({
+  const duplicated = helperAt(tempRoot(t, {
     'a.js': 'x catalogMisses y', 'b.js': 'x catalogMisses y' }));
   assert.throws(() => duplicated.loadWebappPicker(), /layout changed.*2 bundles|duplicate/i);
   // A real present-but-anchorless mapper bundle must throw too.
-  const noMapper = helperAt(tempRoot({ 'modelCatalogSource-x.js': 'export{}' }));
+  const noMapper = helperAt(tempRoot(t, { 'modelCatalogSource-x.js': 'export{}' }));
   assert.throws(() => noMapper.loadModelCatalogMapper(), /not found|layout changed/);
   // The family pipeline resolves minified names by body shape: a build that
   // keeps the grouping shape but renames the rows builder must fail, not
   // silently eval a partial slice.
   const grouping = 'function Gp(e){let t=new Map,n=[];for(let r of e){let e=r.familyUid;return{t,n}}}';
-  assert.throws(() => helperAt(tempRoot({ 'app-initial-x.js': grouping })).loadFamilyPipeline(),
+  assert.throws(() => helperAt(tempRoot(t, { 'app-initial-x.js': grouping })).loadFamilyPipeline(),
     /family pipeline shape/);
-  assert.throws(() => helperAt(tempRoot({ 'a.js': grouping, 'b.js': grouping })).loadFamilyPipeline(),
+  assert.throws(() => helperAt(tempRoot(t, { 'a.js': grouping, 'b.js': grouping })).loadFamilyPipeline(),
     /layout changed.*2 bundles/);
 });
 
-test('installed-renderer probe: a file at the assets path or fs failures fail loudly, never skip', () => {
+test('installed-renderer probe: a file at the assets path or fs failures fail loudly, never skip', t => {
   // The assets path existing as a regular file is drift, not absence.
   const fileRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-file-'));
+  t.after(() => fs.rmSync(fileRoot, { recursive: true, force: true }));
   const assetsFile = path.join(fileRoot, 'out/vs/workbench/devin-webapp-host/assets');
   fs.mkdirSync(path.dirname(assetsFile), { recursive: true });
   fs.writeFileSync(assetsFile, 'not a directory');
@@ -282,7 +288,7 @@ test('installed-renderer probe: a file at the assets path or fs failures fail lo
   assert.equal(h.webappAvailable, true, 'a file at the path is not ENOENT');
   assert.throws(() => h.loadWebappPicker(), /layout changed|ENOENT|ENOTDIR/);
   // Duplicate anchor-bearing bundles are drift, never a first-match win.
-  const dup = helperAt(tempRoot({ 'x.js': 'pre catalogMisses post', 'y.js': 'pre catalogMisses post' }));
+  const dup = helperAt(tempRoot(t, { 'x.js': 'pre catalogMisses post', 'y.js': 'pre catalogMisses post' }));
   assert.throws(() => dup.loadWebappPicker(), /layout changed/);
 });
 

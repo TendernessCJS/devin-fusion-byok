@@ -5,7 +5,16 @@ const path = require('node:path');
 const os = require('node:os');
 const { checkNativeContract, scanMarkers, sha256, artifacts, PROBE_VERSION, REQUIRED, INFORMATIONAL } = require('../src/activation/native-contract.cjs');
 
-const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'native-contract-'));
+const { after } = require('node:test');
+const roots = [];
+const tmpdir = () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'native-contract-'));
+  roots.push(root);
+  return root;
+};
+// fakeApp() builds an install root per call, so cleanup is registered once for
+// the file: an abandoned root would survive the run and pile up in $TMPDIR.
+after(() => { for (const root of roots) fs.rmSync(root, { recursive: true, force: true }); });
 
 const ALL_CLI = [...REQUIRED.cli, ...INFORMATIONAL.cli];
 const ALL_LS = [...REQUIRED.ls, ...INFORMATIONAL.ls];

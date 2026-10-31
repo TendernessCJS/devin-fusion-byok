@@ -9,7 +9,16 @@ const { buildCatalog, augmentCatalog, staleFusionUids } = require('../src/catalo
 const { s, v, m } = require('../src/protocol/wire.cjs');
 const cat = (...parts) => Buffer.concat(parts.flat());
 
-const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cli-cache-'));
+const { after } = require('node:test');
+const roots = [];
+const tmpdir = () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-cache-'));
+  roots.push(root);
+  return root;
+};
+// Nearly every case asks for its own cache dir; cleanup is registered once for
+// the file instead of per test, so an abandoned root cannot pile up in $TMPDIR.
+after(() => { for (const root of roots) fs.rmSync(root, { recursive: true, force: true }); });
 const OWN = ['dfbyok-provider-aaaa-model-x-1111', 'dfbyok-provider-aaaa-model-y-2222', 'fusion-dfbyok-preset-3333'];
 // Envelope validation requires real protobuf payloads, so markers are embedded
 // in the minimal shape each cache kind stores: model configs carry f1 entries
