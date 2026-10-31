@@ -88,3 +88,7 @@ description: "Apply when writing or debugging tests — the installed-renderer s
 ## 固定报文契约基线
 
 `node --test test/provider-wire-contract.test.cjs`：52 个合成场景（17 场景 × 3 协议 + 1 无断点对照）的 `buildRequestBody` 输出与 `test/fixtures/provider-wire-contract.json`（基线 commit `04dc73d`，A–E 批次之前的默认报文）逐字段 deepEqual。场景构造在 `test/fixtures/provider-wire-cases.cjs`，字面量不得「优化」。**新批次不得重新生成基线来「修绿」**：与基线不一致意味着默认报文被改动，必须停下定位；有意变更须逐场景说明理由并显式改 JSON。该测试不依赖 `.refs`、不联网。
+
+## 终态与预算契约矩阵
+
+`node --test test/inference-contract.test.cjs`：三协议终态（正常/截断/refusal/错误帧/无终态 EOF/非法工具 JSON/只有思考/只有签名标记/终态后帧）+ 预算（降级重发不套连接重试、多字段 400 只走首分支、Anthropic 强制选择最多三发、首头/空闲/背压/暂停期取消各只发一次）。每个用例同时断言客户端 ACP 帧、monitor 单次结算与**上游真实请求次数**——`received.length` 由测试自己的服务端统计，不得改成被测代码内部的计数。期望值按契约写死，实现改动导致失败时先判断是实现漂移还是契约变更；不得把 `expect` 调成当前实际输出来「修绿」。
