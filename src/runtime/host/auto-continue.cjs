@@ -31,6 +31,10 @@ function matchesTerminalBlocker(text) {
   return TERMINAL_BLOCKER_RE.test(trimmed);
 }
 
+// Gate on the latest observed input state, without permanently invalidating a
+// running turn. Actual clearing updates still need runtime observation.
+const sessionHeld = turn => Boolean(turn?.sessionInfo && (turn.sessionInfo.action || turn.sessionInfo.disabled));
+
 const ERROR_ATTEMPT_LIMIT = 5;
 const ERROR_WINDOW_MS = 10 * 60 * 1000;
 const PLAN_ATTEMPT_LIMIT = 10;
@@ -377,11 +381,11 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           turn.consumed = true;
           const options = getOptions() || {};
 
-          const shouldRetryError = !turn.retryDisallowed && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && matchesProviderError(turn.tail);
+          const shouldRetryError = !turn.retryDisallowed && !sessionHeld(turn) && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && matchesProviderError(turn.tail);
           const hasPendingPlan = checkHasPendingPlan(turn);
           const isBlocked = matchesTerminalBlocker(turn.tail);
           const emptyTruncation = CONTINUABLE_STOP.has(res.stopReason) && !(turn.textChars > 0) && !(turn.toolCalls > 0);
-          const planEligible = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true &&
+          const planEligible = !turn.retryDisallowed && !sessionHeld(turn) && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true &&
             CONTINUABLE_STOP.has(res.stopReason);
           const shouldRetryPlan = planEligible && !emptyTruncation;
 
@@ -392,7 +396,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const planRetry = !shouldRetryError && shouldRetryPlan && (!hasPendingPlan || hasPlanProgress(turn));
           emitEvaluated(turn, sessionId, 'resolve', res.stopReason,
             shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop',
-            !shouldRetryError && !planRetry && emptyTruncation && planEligible ? 'truncated-empty' : null);
+            !shouldRetryError && !planRetry && sessionHeld(turn) ? 'session-info'
+              : !shouldRetryError && !planRetry && emptyTruncation && planEligible ? 'truncated-empty' : null);
           if (shouldRetryError) {
             turn.lastResult = { value: res, isReject: false };
             scheduleAuto(sessionId, turn, 'error');
@@ -445,11 +450,12 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           const msg = typeof err?.message === 'string' ? err.message : (typeof err === 'string' ? err : '');
           const isExactMsg = msg === TARGET_ERROR || msg === TARGET_ERROR + '.' || matchesTimeoutError(msg);
           const options = getOptions() || {};
+          const shouldRetryError = !sessionHeld(turn) && isEnabled() && options.onProviderError !== false && isExactMsg && !sessionSuppressed(sessionId);
 
           emitEvaluated(turn, sessionId, 'reject', null,
-            (isEnabled() && options.onProviderError !== false && isExactMsg && !sessionSuppressed(sessionId)) ? 'error-retry' : 'stop', null,
+            shouldRetryError ? 'error-retry' : 'stop', sessionHeld(turn) ? 'session-info' : null,
             { providerErrorMatched: isExactMsg });
-          if (isEnabled() && options.onProviderError !== false && isExactMsg && !sessionSuppressed(sessionId)) {
+          if (shouldRetryError) {
             turn.lastResult = { value: err, isReject: true };
             scheduleAuto(sessionId, turn, 'error');
           } else {
@@ -598,11 +604,11 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             const options = getOptions() || {};
             const isError = matchesProviderError(turn.tail);
             const isBlocked = matchesTerminalBlocker(turn.tail);
-            const shouldRetryError = !turn.retryDisallowed && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && isError;
+            const shouldRetryError = !turn.retryDisallowed && !sessionHeld(turn) && isEnabled() && !sessionSuppressed(sessionId) && options.onProviderError !== false && isError;
             const hasPendingPlan = checkHasPendingPlan(turn);
             const allowedPlanReason = CONTINUABLE_STOP.has(update.stopReason);
             const emptyTruncation = allowedPlanReason && !(turn.textChars > 0) && !(turn.toolCalls > 0);
-            const planEligible = !turn.retryDisallowed && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true && allowedPlanReason;
+            const planEligible = !turn.retryDisallowed && !sessionHeld(turn) && !isBlocked && isEnabled() && !sessionSuppressed(sessionId) && options.untilPlanComplete === true && allowedPlanReason;
             const shouldRetryPlan = planEligible && !emptyTruncation;
 
             // Same lazy contract as the resolve branch: progress is checked
@@ -610,7 +616,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             const planRetry = !shouldRetryError && shouldRetryPlan && (!hasPendingPlan || hasPlanProgress(turn));
             emitEvaluated(turn, sessionId, 'idle', update.stopReason,
               shouldRetryError ? 'error-retry' : planRetry ? 'plan-retry' : 'stop',
-              !shouldRetryError && !planRetry && emptyTruncation && planEligible ? 'truncated-empty' : null);
+              !shouldRetryError && !planRetry && sessionHeld(turn) ? 'session-info'
+                : !shouldRetryError && !planRetry && emptyTruncation && planEligible ? 'truncated-empty' : null);
             if (shouldRetryError) {
               scheduleAuto(sessionId, turn, 'error');
             } else if (planRetry) {
@@ -628,9 +635,19 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
         const outcome = meta['cognition.ai/finishedOutcome'];
         const disabled = meta['cognition.ai/inputDisabledReason'];
         const actionReq = meta['cognition.ai/userActionRequired'];
-        if (SESSION_OUTCOMES.includes(outcome) ||
-            (typeof disabled === 'string' && disabled) ||
-            (typeof actionReq === 'string' && actionReq)) {
+        const previous = turn.sessionInfo || { action: false, disabled: false, outcome: null };
+        const next = {
+          action: typeof actionReq === 'string' && actionReq !== '',
+          disabled: typeof disabled === 'string' && disabled !== '',
+          outcome: SESSION_OUTCOMES.includes(outcome) ? outcome : null
+        };
+        turn.sessionInfo = next;
+        // Only transitions are recorded: the flag is client UI state and would
+        // otherwise be logged on every update.
+        if (next.action !== previous.action || next.disabled !== previous.disabled) {
+          report('session-info-observed', { action: next.action, disabled: next.disabled, outcome: next.outcome });
+        }
+        if (next.outcome) {
           cancelSessionTimer(sessionId);
           turn.retryDisallowed = true;
           if (turn.deferred && !turn.deferred.settled && turn.lastResult) {
@@ -639,16 +656,26 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             else turn.deferred.resolve(turn.lastResult.value);
           }
           entry.sessions.delete(sessionId);
-          // The last silent disqualifier: it both clears the turn and hides
-          // itself, so the only trace is a later `session-gone`.
-          report('auto-continue-disqualified', {
-            reason: 'session-info',
-            trigger: typeof actionReq === 'string' && actionReq ? 'action-required'
-              : typeof disabled === 'string' && disabled ? 'input-disabled' : 'outcome',
-            outcome: SESSION_OUTCOMES.includes(outcome) ? outcome : null
-          });
+          report('auto-continue-disqualified', { reason: 'session-info', trigger: 'outcome', outcome: next.outcome });
           return;
         }
+        // Input-state flags gate continuation only while present; whether the
+        // native client sends a clearing update remains to be observed.
+        if (next.action || next.disabled) {
+          cancelSessionTimer(sessionId);
+          if (turn.consumed) {
+            if (turn.deferred && !turn.deferred.settled && turn.lastResult) {
+              turn.deferred.settled = true;
+              if (turn.lastResult.isReject) turn.deferred.reject(turn.lastResult.value);
+              else turn.deferred.resolve(turn.lastResult.value);
+            }
+            entry.sessions.delete(sessionId);
+            report('auto-continue-disqualified', { reason: 'session-info', outcome: null,
+              trigger: next.action ? 'action-required' : 'input-disabled' });
+          }
+          return;
+        }
+        return;
       }
 
       if (turn.consumed) return;

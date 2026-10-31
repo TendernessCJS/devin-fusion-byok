@@ -4,6 +4,76 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { fixture, fakeScheduler } = require('./helpers/auto-continue-fixture.cjs');
 
+test('input-state cancellation settles queued v1 results exactly once', { timeout: 2000 }, async t => {
+  for (const rejected of [false, true]) for (const field of ['userActionRequired', 'inputDisabledReason']) {
+    await t.test(`${field}/${rejected ? 'reject' : 'resolve'}`, async t => {
+      const f = fixture();
+      const scheduler = fakeScheduler();
+      const handle = f.install({ isEnabled: () => true, scheduler,
+        getOptions: () => ({ onProviderError: true, untilPlanComplete: true }) });
+      t.after(() => handle.dispose());
+      const native = rejected ? new Error('Provider response could not be completed.') : { stopReason: 'max_turn_requests' };
+      let sends = 0, settlements = 0;
+      const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+        sendRequest() { sends++; return rejected ? Promise.reject(native) : Promise.resolve(native); },
+        forwardClientRequest() {} };
+      f.api.registerConnection(connector);
+      const update = value => connector.forwardClientRequest({
+        method: 'session/update', params: { sessionId: 'queued', update: value }
+      });
+      const wrapped = connector.sendRequest({ method: 'session/prompt',
+        params: { sessionId: 'queued', prompt: [{ type: 'text', text: 'go' }] } });
+      const settled = wrapped.then(value => { settlements++; return { value }; },
+        error => { settlements++; return { error }; });
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(scheduler.pendingCount(), 1);
+      update({ sessionUpdate: 'session_info_update', _meta: { [`cognition.ai/${field}`]: 'waiting' } });
+      const result = await settled;
+      assert.equal(rejected ? result.error : result.value, native, 'settle with the original native result');
+      update({ sessionUpdate: 'session_info_update', _meta: { [`cognition.ai/${field}`]: '' } });
+      scheduler.advance(60000);
+      handle.dispose();
+      assert.equal(scheduler.pendingCount(), 0);
+      assert.equal(sends, 1);
+      assert.equal(settlements, 1);
+    });
+  }
+});
+
+test('native rejection obeys the latest input state before scheduling', { timeout: 2000 }, async t => {
+  for (const cleared of [false, true]) await t.test(cleared ? 'cleared' : 'held', async t => {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({ isEnabled: () => true, scheduler });
+    t.after(() => handle.dispose());
+    let rejectNative, sends = 0;
+    const failure = new Error('Provider response could not be completed.');
+    const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+      sendRequest() { sends++; return new Promise((_, reject) => { rejectNative = reject; }); },
+      forwardClientRequest() {} };
+    f.api.registerConnection(connector);
+    const info = value => connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 'held',
+      update: { sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': value } } } });
+    const wrapped = connector.sendRequest({ method: 'session/prompt',
+      params: { sessionId: 'held', prompt: [{ type: 'text', text: 'go' }] } });
+    const settled = assert.rejects(wrapped, error => error === failure);
+    info('waiting');
+    if (cleared) info('');
+    rejectNative(failure);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(scheduler.pendingCount(), cleared ? 1 : 0);
+    const evaluation = f.logs.filter(entry => entry.event === 'auto-continue-evaluated').at(-1).data;
+    assert.equal(evaluation.decision, cleared ? 'error-retry' : 'stop');
+    assert.equal(evaluation.reason, cleared ? null : 'session-info');
+    if (cleared) info('waiting');
+    await settled;
+    scheduler.advance(60000);
+    assert.equal(sends, 1);
+    assert.equal(scheduler.pendingCount(), 0);
+  });
+});
+
 test('matchesProviderError recognizes exact suffix with and without period', () => {
   const f = fixture();
   assert.equal(f.matchesProviderError('Provider response could not be completed'), true);
@@ -799,12 +869,92 @@ test('a session_info_update or a new prompt names what disqualified the turn', a
   prompt('s-again');
 
   const disqualified = f.logs.filter(l => l.event === 'auto-continue-disqualified');
-  assert.deepEqual(disqualified.map(l => l.data.reason), ['session-info', 'session-info', 'new-prompt'],
-    'the two silent paths that hid behind session-gone now name themselves');
-  assert.equal(disqualified[0].data.trigger, 'action-required');
-  assert.equal(disqualified[0].data.outcome, null);
-  assert.equal(disqualified[1].data.trigger, 'outcome');
-  assert.equal(disqualified[1].data.outcome, 'completed');
+  assert.deepEqual(disqualified.map(l => l.data.reason), ['session-info', 'new-prompt'],
+    'a terminal outcome and a fresh prompt name themselves; an unanswered client prompt only gates');
+  assert.equal(disqualified[0].data.trigger, 'outcome');
+  assert.equal(disqualified[0].data.outcome, 'completed');
+  const observed = f.logs.filter(l => l.event === 'session-info-observed');
+  assert.deepEqual(observed.map(l => l.data.action), [true],
+    'the client-side flag is recorded once, on its transition');
+});
+
+test('a cleared userActionRequired no longer voids the turn', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  const info = meta => connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-cleared', update: { sessionUpdate: 'session_info_update', _meta: meta } }
+  });
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-cleared', prompt: [{ type: 'text', text: 'do' }] } });
+  info({ 'cognition.ai/userActionRequired': 'confirm' });
+  info({ 'cognition.ai/userActionRequired': '' });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-cleared', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial answer' } } }
+  });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1, 'the answered prompt must not void a truncated turn');
+  scheduler.advance(2000);
+  assert.equal(promptCount, 2);
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(evaluated.at(-1).data.decision, 'plan-retry');
+  assert.deepEqual(f.logs.filter(l => l.event === 'session-info-observed').map(l => l.data.action), [true, false],
+    'setting and clearing are both observable, with no turn-level disqualification');
+  assert.equal(f.logs.some(l => l.event === 'auto-continue-disqualified'), false);
+});
+
+test('userActionRequired still gates a continuation while it is set', { timeout: 1000 }, async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+      return Promise.resolve({});
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-held', prompt: [{ type: 'text', text: 'do' }] } });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-held', update: { sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'confirm' } } }
+  });
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-held', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial answer' } } }
+  });
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 0, 'never prompt the model while the client is still asking the user');
+  scheduler.advance(2000);
+  assert.equal(promptCount, 1);
+  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+  assert.equal(evaluated.at(-1).data.decision, 'stop');
+  assert.equal(evaluated.at(-1).data.reason, 'session-info', 'the gate names itself instead of looking like a completed turn');
+  assert.equal(evaluated.at(-1).data.retryDisallowed, false, 'the turn is held, not permanently disqualified');
 });
 
 test('v2 requires_action interleaving and state transitions clear pending retry', async t => {

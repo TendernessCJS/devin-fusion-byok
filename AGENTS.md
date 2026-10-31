@@ -41,6 +41,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/runtime-and-injection.md` | 改 ACP/LS 注入、backend 生命周期与关闭、日志、用户设置写入、重试预算或安全校验（模块归属、`protocol/` 与 `activation/` 职责、`SOURCE_FILES` 见下一条 `architecture-boundaries.md`） |
 | `.devin/rules/architecture-boundaries.md` | 改模块归属、`src/runtime` 分区、`protocol/` 职责、根门面或 `architecture.test.cjs` 守卫时必读——模块拓扑与依赖守卫的实测描述 |
 | `.devin/rules/runtime-forensics.md` | **排查「注入/目录改写改了没生效」时必读**——api server 凭据优先级、`agentEnv` 只覆盖主 agent、日志归属（宿主 channel vs `runtime.log`）、连接按 pid 判、桥的 gzip 体积 |
+| `.devin/rules/auto-continue-forensics.md` | **排查「该续没续」或改 `auto-continue.cjs` 资格判定时必读**——2026-10-31 `session-info` 永久取消资格的真机时间线与修复依据、两个观测事件的字段、残留待定项 |
 | `.devin/rules/upstream-routing.md` | **排查「转发打到了哪里」或推送没生效时必读**——upstream origin 契约与校验、原生派生链与收敛窗口、激活期推送失败的 identity 分级、`upstream-push` / `upstream-origin` / `upstream-push.json` 三个观测落点 |
 | `.devin/rules/fusion-matrix.md` | 改 Fusion 矩阵 emit 规则、Lead/Sidekick 资格与命名、harness、Fast Mode |
 | `.devin/rules/catalog-and-picker.md` | 改 picker 可见性契约、角色白名单、陈旧条目判定与清理、推送门控、`nativeFamilies`、维度 order |
