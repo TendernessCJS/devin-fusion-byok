@@ -168,19 +168,56 @@ function loadModelCatalogMapper(root) {
   return vm.runInNewContext(`${body};${init[1]}();f`, context).mapModelCatalog();
 }
 
-// The family pipeline in the app-initial bundle: Nt (grouping), Pt (dimension
-// dedupe), Ft (toggle), Rt/Vt (metadata projection / disabled lift), Ut
-// (dimension selection with prefix fallback), Gt/Kt (ordered rows). The slice
-// is contiguous and self-contained; i18n callables are caller-supplied.
+// The family pipeline lives in one app-initial bundle. Minified names change
+// with every Devin build, so each role is resolved by body shape and reported
+// under the historical key the tests already use. 3.11.238 renamed the whole
+// set (grouping Nt -> Rt, rows Kt -> Zt) and left `function Nt(e){let t=new
+// Map` in an unrelated bundle — anchoring on a name picked the wrong file.
+const FAMILY_SHAPES = {
+  // grouping: models -> { families, ungrouped }
+  Nt: /function (\w+)\(e\)\{let t=new Map,n=\[\];for\(let r of e\)\{let e=r\.familyUid;/,
+  // dimension dedupe: models -> [{ name, values }] sorted by order
+  Pt: /function (\w+)\(e\)\{let t=new Map;for\(let n of e\)if\(n\.familyMetadata\)for\(let\[e,r\]of Object\.entries\(n\.familyMetadata\)\)\{/,
+  // toggle: exactly two values, both unnamed
+  Ft: /function (\w+)\(e\)\{return e\.length===2&&e\.every\(e=>e\.name===``\)\}/,
+  // rows builder: takes the grouped input and reads fullFamilies/families/ordered
+  Kt: /function (\w+)\(e,t,n,r,i\)\{let\{fullFamilies:a,families:o,ordered:s\}=e/
+};
+
+const familyPipelines = new Map();
 function loadFamilyPipeline(root) {
-  const bundle = webappBundle(root, 'function Nt(e){let t=new Map');
-  if (!bundle) throw new Error('installed Devin family pipeline bundle not found');
-  const source = bundle.source;
-  const start = source.indexOf('function Nt(');
-  if (start < 0) throw new Error('installed Devin family pipeline anchor not found');
-  const kt = required(source.match(/function (\w+)\(e,t,n,r,i\)\{let\{fullFamilies:a,families:o,ordered:s\}=e/), 'family rows builder');
-  const end = start + source.slice(start).indexOf(kt[0]) + functionSource(source, kt[1]).length;
-  const api = vm.runInNewContext(`${source.slice(start, end)};({Nt,Pt,Ft,Lt,Rt,Vt,Ut,Gt,Kt})`);
+  const dir = webappDirOf(root);
+  if (familyPipelines.has(dir)) return familyPipelines.get(dir);
+  let names;
+  try { names = fs.readdirSync(dir); }
+  catch (error) {
+    if (error?.code === 'ENOENT') throw new Error('installed Devin family pipeline bundle not found');
+    throw new Error(`installed Devin layout changed: ${dir} unreadable (${error.code || error.message})`);
+  }
+  const hits = [];
+  for (const name of names) {
+    if (!name.endsWith('.js')) continue;
+    const source = fs.readFileSync(path.join(dir, name), 'utf8');
+    const grouping = source.match(FAMILY_SHAPES.Nt);
+    if (grouping) hits.push({ name, source, grouping });
+  }
+  if (!hits.length) throw new Error(`installed Devin layout changed: no bundle in ${dir} carries the family grouping shape`);
+  if (hits.length > 1) throw new Error(`installed Devin layout changed: the family grouping shape matches ${hits.length} bundles (${hits.map(hit => hit.name).join(', ')})`);
+  const { source, grouping } = hits[0];
+  const resolved = { Nt: grouping[1] };
+  for (const key of ['Pt', 'Ft', 'Kt']) resolved[key] = required(source.match(FAMILY_SHAPES[key]), `family pipeline shape ${key}`)[1];
+  // Two-argument wrapper: families of `t ?? e` as fullFamilies, `e` as ordered.
+  resolved.Gt = required(source.match(new RegExp(`function (\\w+)\\(e,t\\)\\{let\\{families:\\w+\\}=${grouping[1]}\\(t\\?\\?e\\)`)), 'grouped picker input')[1];
+  // Dimension selection with prefix fallback: reads the current model's orders
+  // through the collector, then walks back over the earlier dimensions.
+  resolved.Ut = required(source.match(/function (\w+)\(e,t,n,r\)\{let \w+=\w+\(t,e\.dimensions\),\w+=e\.dimensions\[n\]/), 'dimension selection')[1];
+  const start = source.indexOf(grouping[0]);
+  const rowsStart = source.indexOf(`function ${resolved.Kt}(`);
+  if (!(start >= 0 && rowsStart > start)) throw new Error('installed Devin family pipeline range');
+  const end = rowsStart + functionSource(source, resolved.Kt).length;
+  const exported = Object.entries(resolved).map(([key, name]) => `${key}:${name}`).join(',');
+  const api = vm.runInNewContext(`${source.slice(start, end)};({${exported}})`);
+  familyPipelines.set(dir, api);
   return api;
 }
 

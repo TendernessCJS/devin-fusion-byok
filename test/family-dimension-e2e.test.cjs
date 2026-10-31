@@ -262,6 +262,14 @@ test('installed-renderer probe: missing assets dir skips, present-but-drifted fa
   // A real present-but-anchorless mapper bundle must throw too.
   const noMapper = helperAt(tempRoot({ 'modelCatalogSource-x.js': 'export{}' }));
   assert.throws(() => noMapper.loadModelCatalogMapper(), /not found|layout changed/);
+  // The family pipeline resolves minified names by body shape: a build that
+  // keeps the grouping shape but renames the rows builder must fail, not
+  // silently eval a partial slice.
+  const grouping = 'function Gp(e){let t=new Map,n=[];for(let r of e){let e=r.familyUid;return{t,n}}}';
+  assert.throws(() => helperAt(tempRoot({ 'app-initial-x.js': grouping })).loadFamilyPipeline(),
+    /family pipeline shape/);
+  assert.throws(() => helperAt(tempRoot({ 'a.js': grouping, 'b.js': grouping })).loadFamilyPipeline(),
+    /layout changed.*2 bundles/);
 });
 
 test('installed-renderer probe: a file at the assets path or fs failures fail loudly, never skip', () => {
