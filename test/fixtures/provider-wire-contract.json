@@ -1,0 +1,2499 @@
+{
+  "metadata": {
+    "commit": "04dc73d35e50f25822dded8efbaee7b9e47d06e7",
+    "dirty": false,
+    "capturedFrom": "src/protocol/provider-request.cjs",
+    "route": {
+      "model": "fixture-model",
+      "uid": "local-fixture-uid",
+      "effort": "high"
+    },
+    "provider": {
+      "id": "provider-fixture-1",
+      "baseUrl": "https://provider.example.invalid/v1",
+      "apiKey": "fixture-key",
+      "apiFormat": "openai-responses"
+    }
+  },
+  "cases": [
+    {
+      "scenario": "plain-text",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "developer",
+            "content": "system instructions"
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "plain-text",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "system instructions"
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "plain-text",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "system": "system instructions",
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "multi-turn-system-middle",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "developer",
+            "content": "lead prompt"
+          },
+          {
+            "role": "user",
+            "content": "first"
+          },
+          {
+            "role": "assistant",
+            "content": "answer one"
+          },
+          {
+            "role": "developer",
+            "content": "mid stream system"
+          },
+          {
+            "role": "user",
+            "content": "second"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "multi-turn-system-middle",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "lead prompt"
+          },
+          {
+            "role": "user",
+            "content": "first"
+          },
+          {
+            "role": "assistant",
+            "content": "answer one"
+          },
+          {
+            "role": "system",
+            "content": "mid stream system"
+          },
+          {
+            "role": "user",
+            "content": "second"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "multi-turn-system-middle",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "first"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "answer one"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "mid stream system"
+              },
+              {
+                "type": "text",
+                "text": "second"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "system": "lead prompt",
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "parallel-tools",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "user",
+            "content": "go"
+          },
+          {
+            "role": "assistant",
+            "content": "checking"
+          },
+          {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "shell_command",
+            "arguments": "{\"cmd\":\"ls\"}"
+          },
+          {
+            "type": "function_call",
+            "call_id": "call_2",
+            "name": "sidekick",
+            "arguments": "{\"prompt\":\"task\"}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "ok"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_2",
+            "output": "done"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "parallel-tools",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "go"
+          },
+          {
+            "role": "assistant",
+            "content": "checking",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "shell_command",
+                  "arguments": "{\"cmd\":\"ls\"}"
+                }
+              },
+              {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                  "name": "sidekick",
+                  "arguments": "{\"prompt\":\"task\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "ok"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_2",
+            "content": "done"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "parallel-tools",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "go"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "checking"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_1",
+                "name": "shell_command",
+                "input": {
+                  "cmd": "ls"
+                }
+              },
+              {
+                "type": "tool_use",
+                "id": "call_2",
+                "name": "sidekick",
+                "input": {
+                  "prompt": "task"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "content": "ok"
+              },
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_2",
+                "content": "done",
+                "is_error": true
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "tool-empty-input",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "user",
+            "content": "go"
+          },
+          {
+            "type": "function_call",
+            "call_id": "call_e",
+            "name": "shell_command",
+            "arguments": "{}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_e",
+            "output": ""
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "tool-empty-input",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "go"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_e",
+                "type": "function",
+                "function": {
+                  "name": "shell_command",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_e",
+            "content": ""
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "tool-empty-input",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "go"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call_e",
+                "name": "shell_command",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_e",
+                "content": ""
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "raw-json-whitespace",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "user",
+            "content": "go"
+          },
+          {
+            "type": "function_call",
+            "call_id": "call_w",
+            "name": "shell_command",
+            "arguments": "{ \"cmd\" :  \"echo 1\" }"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_w",
+            "output": "echo 1"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "raw-json-whitespace",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "go"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_w",
+                "type": "function",
+                "function": {
+                  "name": "shell_command",
+                  "arguments": "{ \"cmd\" :  \"echo 1\" }"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_w",
+            "content": "echo 1"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "raw-json-whitespace",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "go"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call_w",
+                "name": "shell_command",
+                "input": {
+                  "cmd": "echo 1"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_w",
+                "content": "echo 1"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "strict-and-parallel",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "developer",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "go"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "parallel_tool_calls": false,
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell_command",
+            "description": "Run a command",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "cmd": {
+                  "type": "string",
+                  "description": "command"
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "keeps the array form verbatim"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "options": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "retries": {
+                          "type": "integer",
+                          "default": 3
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "cmd"
+              ],
+              "additionalProperties": false
+            },
+            "strict": true
+          },
+          {
+            "type": "function",
+            "name": "sidekick",
+            "description": "Delegate work",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "prompt": {
+                  "type": "string"
+                }
+              }
+            },
+            "strict": false
+          }
+        ]
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "strict-and-parallel",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "go"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "parallel_tool_calls": false,
+        "reasoning_effort": "high",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "shell_command",
+              "description": "Run a command",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "cmd": {
+                    "type": "string",
+                    "description": "command"
+                  },
+                  "target": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "keeps the array form verbatim"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "retries": {
+                            "type": "integer",
+                            "default": 3
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "cmd"
+                ],
+                "additionalProperties": false
+              },
+              "strict": true
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "sidekick",
+              "description": "Delegate work",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string"
+                  }
+                }
+              },
+              "strict": false
+            }
+          }
+        ]
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "strict-and-parallel",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "go"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "system": "sys",
+        "output_config": {
+          "effort": "high"
+        },
+        "tools": [
+          {
+            "name": "shell_command",
+            "description": "Run a command",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "cmd": {
+                  "type": "string",
+                  "description": "command"
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "keeps the array form verbatim"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "options": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "retries": {
+                          "type": "integer",
+                          "default": 3
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "cmd"
+              ],
+              "additionalProperties": false
+            },
+            "strict": true
+          },
+          {
+            "name": "sidekick",
+            "description": "Delegate work",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "prompt": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "tool_choice": {
+          "type": "auto",
+          "disable_parallel_tool_use": true
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "forced-tool-choice",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "developer",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "go"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell_command",
+            "description": "Run a command",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "cmd": {
+                  "type": "string",
+                  "description": "command"
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "keeps the array form verbatim"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "options": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "retries": {
+                          "type": "integer",
+                          "default": 3
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "cmd"
+              ],
+              "additionalProperties": false
+            },
+            "strict": true
+          },
+          {
+            "type": "function",
+            "name": "sidekick",
+            "description": "Delegate work",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "prompt": {
+                  "type": "string"
+                }
+              }
+            },
+            "strict": false
+          }
+        ],
+        "tool_choice": {
+          "type": "function",
+          "name": "shell_command"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "forced-tool-choice",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "go"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "shell_command",
+              "description": "Run a command",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "cmd": {
+                    "type": "string",
+                    "description": "command"
+                  },
+                  "target": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "keeps the array form verbatim"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "retries": {
+                            "type": "integer",
+                            "default": 3
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "cmd"
+                ],
+                "additionalProperties": false
+              },
+              "strict": true
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "sidekick",
+              "description": "Delegate work",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string"
+                  }
+                }
+              },
+              "strict": false
+            }
+          }
+        ],
+        "tool_choice": {
+          "type": "function",
+          "function": {
+            "name": "shell_command"
+          }
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "forced-tool-choice",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "go"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "system": "sys",
+        "output_config": {
+          "effort": "high"
+        },
+        "tools": [
+          {
+            "name": "shell_command",
+            "description": "Run a command",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "cmd": {
+                  "type": "string",
+                  "description": "command"
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "keeps the array form verbatim"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "options": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "retries": {
+                          "type": "integer",
+                          "default": 3
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "cmd"
+              ],
+              "additionalProperties": false
+            },
+            "strict": true
+          },
+          {
+            "name": "sidekick",
+            "description": "Delegate work",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "prompt": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "tool_choice": {
+          "type": "tool",
+          "name": "shell_command"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "forced-anthropic-choice",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "developer",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "go"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "shell_command",
+            "description": "Run a command",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "cmd": {
+                  "type": "string",
+                  "description": "command"
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "keeps the array form verbatim"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "options": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "retries": {
+                          "type": "integer",
+                          "default": 3
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "cmd"
+              ],
+              "additionalProperties": false
+            },
+            "strict": true
+          },
+          {
+            "type": "function",
+            "name": "sidekick",
+            "description": "Delegate work",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "prompt": {
+                  "type": "string"
+                }
+              }
+            },
+            "strict": false
+          }
+        ],
+        "tool_choice": {
+          "type": "function",
+          "name": "shell_command"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "forced-anthropic-choice",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "go"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "shell_command",
+              "description": "Run a command",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "cmd": {
+                    "type": "string",
+                    "description": "command"
+                  },
+                  "target": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "keeps the array form verbatim"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "retries": {
+                            "type": "integer",
+                            "default": 3
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "cmd"
+                ],
+                "additionalProperties": false
+              },
+              "strict": true
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "sidekick",
+              "description": "Delegate work",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string"
+                  }
+                }
+              },
+              "strict": false
+            }
+          }
+        ],
+        "tool_choice": {
+          "type": "function",
+          "function": {
+            "name": "shell_command"
+          }
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "forced-anthropic-choice",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "go"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "system": "sys",
+        "output_config": {
+          "effort": "high"
+        },
+        "tools": [
+          {
+            "name": "shell_command",
+            "description": "Run a command",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "cmd": {
+                  "type": "string",
+                  "description": "command"
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "keeps the array form verbatim"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "options": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "retries": {
+                          "type": "integer",
+                          "default": 3
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "cmd"
+              ],
+              "additionalProperties": false
+            },
+            "strict": true
+          },
+          {
+            "name": "sidekick",
+            "description": "Delegate work",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "prompt": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "tool_choice": {
+          "type": "tool",
+          "name": "shell_command"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "custom-tool-grammar",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "user",
+            "content": "search"
+          },
+          {
+            "type": "custom_tool_call",
+            "call_id": "call_c",
+            "name": "pattern_search",
+            "input": "not json"
+          },
+          {
+            "type": "custom_tool_call_output",
+            "call_id": "call_c",
+            "output": "hit"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "custom",
+            "name": "pattern_search",
+            "description": "raw input tool",
+            "format": {
+              "type": "grammar",
+              "definition": "start: \"x\"",
+              "syntax": "lark"
+            }
+          }
+        ]
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "custom-tool-grammar",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "search"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_c",
+                "type": "function",
+                "function": {
+                  "name": "pattern_search",
+                  "arguments": "not json"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_c",
+            "content": "hit"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "pattern_search",
+              "description": "raw input tool",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              },
+              "strict": false
+            }
+          }
+        ]
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "custom-tool-grammar",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "search"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call_c",
+                "name": "pattern_search",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_c",
+                "content": "hit"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "output_config": {
+          "effort": "high"
+        },
+        "tools": [
+          {
+            "name": "pattern_search",
+            "description": "raw input tool",
+            "input_schema": {
+              "type": "object",
+              "properties": {}
+            }
+          }
+        ]
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "image-attachment",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "look"
+              },
+              {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,aGVsbG8="
+              },
+              {
+                "type": "input_text",
+                "text": "caption text"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "image-attachment",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "look"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,aGVsbG8="
+                }
+              },
+              {
+                "type": "text",
+                "text": "caption text"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "image-attachment",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "look"
+              },
+              {
+                "type": "image",
+                "source": {
+                  "type": "base64",
+                  "media_type": "image/png",
+                  "data": "aGVsbG8="
+                }
+              },
+              {
+                "type": "text",
+                "text": "caption text"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "document-attachment",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "read"
+              },
+              {
+                "type": "input_file",
+                "file_data": "cGxhaW4gYm9keQ==",
+                "filename": "note.txt"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "document-attachment",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "read"
+              },
+              {
+                "type": "file",
+                "file": {
+                  "file_data": "cGxhaW4gYm9keQ==",
+                  "filename": "note.txt"
+                }
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "document-attachment",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "read"
+              },
+              {
+                "type": "document",
+                "source": {
+                  "type": "text",
+                  "media_type": "text/plain",
+                  "data": "plain body"
+                }
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "prompt-cache-key",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "developer",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "a"
+          },
+          {
+            "role": "assistant",
+            "content": "b"
+          },
+          {
+            "role": "user",
+            "content": "c"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "prompt_cache_key": "cache-key-1",
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "prompt-cache-key",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "a"
+          },
+          {
+            "role": "assistant",
+            "content": "b"
+          },
+          {
+            "role": "user",
+            "content": "c"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "prompt_cache_key": "cache-key-1",
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "prompt-cache-key",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "a"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "b",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "c"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "system": "sys",
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "signed-thinking",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "user",
+            "content": "think"
+          },
+          {
+            "role": "assistant",
+            "content": "visible"
+          },
+          {
+            "role": "user",
+            "content": "next"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "signed-thinking",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "think"
+          },
+          {
+            "role": "assistant",
+            "content": "visible"
+          },
+          {
+            "role": "user",
+            "content": "next"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "signed-thinking",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "think"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "internal reasoning",
+                "signature": "EqQBCgIYAhIMsignature-fixture"
+              },
+              {
+                "type": "text",
+                "text": "visible"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "next"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "redacted-thinking",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "user",
+            "content": "think"
+          },
+          {
+            "role": "assistant",
+            "content": "visible"
+          },
+          {
+            "role": "user",
+            "content": "next"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "redacted-thinking",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "think"
+          },
+          {
+            "role": "assistant",
+            "content": "visible"
+          },
+          {
+            "role": "user",
+            "content": "next"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "redacted-thinking",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "think"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "redacted_thinking",
+                "data": "opaque-fixture-bytes"
+              },
+              {
+                "type": "text",
+                "text": "visible"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "next"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "responses-state-replay",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "developer",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "plan"
+          },
+          {
+            "type": "reasoning",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "planned"
+              }
+            ],
+            "encrypted_content": "fixture-encrypted-content"
+          },
+          {
+            "type": "message",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "assistant answer"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": [
+        {
+          "outcome": "replayed",
+          "bytes": 430,
+          "items": 2
+        }
+      ]
+    },
+    {
+      "scenario": "responses-state-replay",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "plan"
+          },
+          {
+            "role": "assistant",
+            "content": "assistant answer"
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "responses-state-replay",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plan"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "assistant answer"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "continue"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "system": "sys",
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "responses-state-foreign-scope",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "developer",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "plan"
+          },
+          {
+            "role": "assistant",
+            "content": "assistant answer"
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": [
+        {
+          "outcome": "scope",
+          "bytes": 380
+        }
+      ]
+    },
+    {
+      "scenario": "responses-state-foreign-scope",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "sys"
+          },
+          {
+            "role": "user",
+            "content": "plan"
+          },
+          {
+            "role": "assistant",
+            "content": "assistant answer"
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "responses-state-foreign-scope",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plan"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "assistant answer"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "continue"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "system": "sys",
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "foreign-responses-envelope-on-anthropic",
+      "format": "openai-responses",
+      "body": {
+        "model": "fixture-model",
+        "input": [
+          {
+            "role": "user",
+            "content": "plan"
+          },
+          {
+            "role": "assistant",
+            "content": "answer"
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "stream": true,
+        "store": false,
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        }
+      },
+      "stateOutcomes": [
+        {
+          "outcome": "scope",
+          "bytes": 52
+        }
+      ]
+    },
+    {
+      "scenario": "foreign-responses-envelope-on-anthropic",
+      "format": "openai-chat-completions",
+      "body": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "plan"
+          },
+          {
+            "role": "assistant",
+            "content": "answer"
+          },
+          {
+            "role": "user",
+            "content": "continue"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "foreign-responses-envelope-on-anthropic",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "plan"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "answer"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "continue"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    },
+    {
+      "scenario": "prompt-cache-key-no-breakpoints",
+      "format": "anthropic",
+      "body": {
+        "model": "fixture-model",
+        "max_tokens": 64000,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "a"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "b"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "c"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "system": "sys",
+        "output_config": {
+          "effort": "high"
+        }
+      },
+      "stateOutcomes": []
+    }
+  ]
+}
