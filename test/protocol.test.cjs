@@ -1971,7 +1971,7 @@ test('retryDeadlineMs 0 disables connection retries', async t => {
   assert.equal(metrics.length, 1, 'usage is settled exactly once');
 });
 
-async function direct(t, request, upstreamHandler, { apiFormat = 'openai', logs = [] } = {}) {
+async function direct(t, request, upstreamHandler, { apiFormat = 'openai', logs = [], onMetrics = () => {} } = {}) {
   const requests = [];
   const upstream = await server(async (req, res) => {
     const chunks = [];
@@ -1982,7 +1982,7 @@ async function direct(t, request, upstreamHandler, { apiFormat = 'openai', logs 
   // Serve via a real HTTP hop so res is a genuine ServerResponse.
   const proxy = await server((req, res) => {
     serveChat({ request, route: { model: 'm', uid: 'u' },
-      provider: { baseUrl: `${upstream.url}/v1`, apiFormat }, res, log: event => logs.push(event) });
+      provider: { baseUrl: `${upstream.url}/v1`, apiFormat }, res, log: event => logs.push(event), onMetrics });
   }, t);
   const body = await new Promise((resolve, reject) => {
     http.get(proxy.url + '/x', res => { const c = []; res.on('data', d => c.push(d)); res.on('end', () => resolve(Buffer.concat(c))); }).on('error', reject);
@@ -2141,6 +2141,66 @@ test('a plain-text stop finish logs no tool-claim-mismatch', async t => {
   assert.equal(unpack(body).messages.map(m => str(m, 3)).join(''), 'plain text');
 });
 
+test('monitor tool attribution matches the ids written to the ACP stream', async t => {
+  const chatMetrics = [];
+  const chat = await direct(t, userRequest([{ role: 'user', content: 'go' }]), (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'sidekick', arguments: '{"prompt":' } }] } }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', function: { arguments: '"task"}' } }] }, finish_reason: 'tool_calls' }] },
+    ].map(event).join('') + 'data: [DONE]\n\n');
+  }, { apiFormat: 'openai-chat-completions', onMetrics: value => chatMetrics.push(value) });
+  const chatTools = unpack(chat.body).messages.flatMap(message => fields(message, 6));
+  assert.deepEqual(chatTools.map(tool => str(tool.value, 1)), ['call_1'], 'a resent id is written once, whole');
+  assert.deepEqual(chatMetrics[0].toolIds, ['call_1'], 'attribution uses the emitted id, never its concatenation');
+
+  const responsesMetrics = [];
+  const responses = await direct(t, userRequest([{ role: 'user', content: 'go' }]), (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'item_tmp', name: 'sidekick', arguments: '' } },
+      { type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'item_tmp', delta: '{"prompt":"x"}' },
+      { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'item_tmp', call_id: 'call_real', name: 'sidekick', arguments: '{"prompt":"x"}' } },
+      { type: 'response.completed', response: { status: 'completed', output: [
+        { type: 'function_call', id: 'item_tmp', call_id: 'call_real', name: 'sidekick', arguments: '{"prompt":"x"}' },
+      ] } },
+    ].map(event).join(''));
+  }, { apiFormat: 'openai-responses', onMetrics: value => responsesMetrics.push(value) });
+  const responsesTools = unpack(responses.body).messages.flatMap(message => fields(message, 6));
+  assert.deepEqual(responsesTools.map(tool => str(tool.value, 1)), ['call_real']);
+  assert.deepEqual(responsesMetrics[0].toolIds, ['call_real'], 'the item id never leaks into attribution');
+
+  const anthropicMetrics = [];
+  const anthropic = await direct(t, userRequest([{ role: 'user', content: 'go' }]), (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'sidekick', input: {} } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"prompt":"y"}' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { input_tokens: 4, output_tokens: 2 } },
+      { type: 'message_stop' },
+    ].map(event).join(''));
+  }, { apiFormat: 'anthropic', onMetrics: value => anthropicMetrics.push(value) });
+  const anthropicTools = unpack(anthropic.body).messages.flatMap(message => fields(message, 6));
+  assert.deepEqual(anthropicTools.map(tool => str(tool.value, 1)), ['toolu_1']);
+  assert.deepEqual(anthropicMetrics[0].toolIds, ['toolu_1'], 'the adapter id is attributed verbatim');
+});
+
+test('a withdrawn usage snapshot reaches neither the ACP usage block nor the record', async t => {
+  const metrics = [];
+  const result = await direct(t, userRequest([{ role: 'user', content: 'go' }]), (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3 } },
+      { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }], usage: null },
+    ].map(event).join('') + 'data: [DONE]\n\n');
+  }, { apiFormat: 'openai-chat-completions', onMetrics: value => metrics.push(value) });
+  const messages = unpack(result.body).messages;
+  assert.equal(messages.flatMap(message => fields(message, 7)).length, 0, 'no usage block is written for a withdrawn snapshot');
+  assert.equal(metrics[0].inputTokens, null);
+  assert.equal(metrics[0].usageComplete, false);
+});
+
 test('buildAnthropicBody emits identical bodies for parallel tools, thinking and breakpoints', () => {
   const provider = { apiFormat: 'anthropic' };
   const parallel = buildRequestBody({ systemPrompt: 'sys', messages: [
@@ -2234,4 +2294,91 @@ test('computer_use_config field 8 is detected without changing the outbound body
     assert.deepEqual(buildRequestBody(configured, { model: 'm' }, { apiFormat }),
       buildRequestBody(plain, { model: 'm' }, { apiFormat }), apiFormat);
   }
+});
+
+test('Chat Completions parses an LF-only event stream', async t => {
+  const app = await bridge(t, async (_, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      'data: {"choices":[{"delta":{"content":"hello "}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"world"},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    ].join(''));
+  }, 'openai-chat-completions');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'hello world');
+});
+
+test('Responses parses a CRLF event stream', async t => {
+  const app = await bridge(t, async (_, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      'data: {"type":"response.output_text.delta","delta":"line-one","output_index":0,"content_index":0}\r\n\r\n',
+      'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\r\n\r\n',
+    ].join(''));
+  });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'line-one');
+});
+
+test('Anthropic parses a CR-only event stream', async t => {
+  const app = await bridge(t, async (_, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      'event: message_start\rdata: {"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":0}}}\r\r',
+      'event: content_block_delta\rdata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"cr only"}}\r\r',
+      'event: message_delta\rdata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\r\r',
+      'event: message_stop\rdata: {"type":"message_stop"}\r\r',
+    ].join(''));
+  }, 'anthropic');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'cr only');
+  assert.equal(num(result.messages.at(-1), 5), 2, 'stop_reason end_turn keeps its native code');
+});
+
+test('a final 400 mentioning signature logs the diagnostic enum without the body', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end('{"error":{"message":"zzq sentinel signature refusal in thinking"}}');
+  }, 'anthropic');
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(app.requests.length, 1, 'an unrelated 400 must not be retried');
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'Provider returned HTTP 400.');
+  const errors = app.logs.filter(event => event.event === 'chat-error');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].diagnostic, 'signature-mentioned');
+  assert.equal(JSON.stringify(app.logs).includes('zzq sentinel'), false, 'the error body never reaches the log');
+});
+
+test('the triage hint describes the attempt that actually failed', async t => {
+  const logs = [];
+  const request = { systemPrompt: '', messages: [{ role: 'user', content: 'go' }], tools: [
+    { name: 'sidekick', description: 'd', parameters: { type: 'object', properties: {} } },
+  ], toolChoice: { type: 'function', name: 'sidekick' } };
+  let attempt = 0;
+  const { requests } = await direct(t, request, (req, res) => {
+    attempt++;
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end(attempt === 1
+      ? '{"error":{"message":"tool_choice is not supported while signature checking"}}'
+      : '{"error":{"message":"tool_choice is not supported"}}');
+  }, { logs });
+  assert.equal(requests.length, 2, 'the forced choice degrades exactly once');
+  const errors = logs.filter(event => event.event === 'chat-error');
+  assert.equal(errors.length, 1);
+  assert.equal('diagnostic' in errors[0], false,
+    'the signature mention came from the superseded attempt, not the final failure');
+});
+
+test('a final 400 without signature has no diagnostic field', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end('{"error":{"message":"zzq sentinel context overflow"}}');
+  }, 'anthropic');
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(app.requests.length, 1);
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'Provider returned HTTP 400.');
+  const errors = app.logs.filter(event => event.event === 'chat-error');
+  assert.equal(errors.length, 1);
+  assert.equal('diagnostic' in errors[0], false);
 });

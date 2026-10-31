@@ -13,7 +13,8 @@ const { createTracker } = require('./tracker.cjs');
 const { anthropicHeaders, createAnthropicAdapter, stripCacheControl, inspectToolPairing } = require('./anthropic.cjs');
 const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem, sizeBucket } = require('./state-envelope.cjs');
 const { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody } = require('./provider-request.cjs');
-const { readErrorDetail, parseEvent, events, usageSnapshot } = require('./provider-events.cjs');
+const { readErrorDetail, parseEvent, events, usageSnapshot, classifyErrorDetail } = require('./provider-events.cjs');
+const { createStreamWriter } = require('./stream-writer.cjs');
 
 // A burst of resets means a second fixed offset tends to re-collide with the
 // same edge, so the pause is drawn from half to full budget instead of being
@@ -32,6 +33,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
   let chatFinish = null;
   let finished = false;
   let usage = null;
+  let finishedResult = null;
   const getCall = (index, itemId) => {
     const key = index ?? itemIndexes.get(itemId) ?? itemId;
     if (key === undefined) {
@@ -177,7 +179,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
       }
     },
     async finish() {
-      if (finished) return [];
+      if (finished) return finishedResult;
       if (!terminal) {
         const err = new Error('Upstream stream ended without completion');
         err.code = 'upstream_stream_incomplete';
@@ -237,7 +239,8 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
       }
       await emit(stopChunk(id, tools.length ? 10 : reason, uid));
       finished = true;
-      return tools.map(tool => tool.name);
+      finishedResult = { toolNames: tools.map(tool => tool.name), toolIds: tools.map(tool => tool.id) };
+      return finishedResult;
     },
   };
 }
@@ -275,20 +278,36 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
   signal?.addEventListener('abort', abort, { once: true });
   res.on('close', close);
   if (signal?.aborted) upstreamController.abort();
+  const drainLimit = Number.isSafeInteger(timeouts?.drainMs) && timeouts.drainMs > 0
+    ? Math.min(timeouts.drainMs, 600000) : 120000;
+  let backpressureTimedOut = false;
+  const writer = createStreamWriter({ res, signal, timeoutMs: drainLimit, onTimeout: () => { backpressureTimedOut = true; } });
   const write = async chunk => {
     if (signal?.aborted || res.destroyed || res.writableEnded) throw new Error('Client closed');
     if (!res.headersSent) res.writeHead(200, { 'content-type': 'application/connect+proto', 'cache-control': 'no-store' });
-    if (!res.write(frame(chunk))) await new Promise((resolve, reject) => {
-      const clean = () => { res.off('drain', drained); res.off('close', closed); signal?.removeEventListener('abort', closed); };
-      const drained = () => { clean(); resolve(); };
-      const closed = () => { clean(); reject(new Error('Client closed')); };
-      res.once('drain', drained); res.once('close', closed); signal?.addEventListener('abort', closed, { once: true });
-    });
+    await writer.write(frame(chunk));
   };
   let status = 0;
   let classifiedCode = 'upstream_network';
+  let signatureMentioned = false;
+  // Each Response body can be consumed once, so degrade rules and the final
+  // classification share the same read per response object.
+  const errorDetails = new WeakMap();
+  const readDetail = response => {
+    let pending = errorDetails.get(response);
+    if (!pending) { pending = readErrorDetail(response); errorDetails.set(response, pending); }
+    return pending;
+  };
   const connectAttempts = [];
   const record = event => { try { log(event); } catch { /* Diagnostics cannot fail a model request. */ } };
+  const clientCancelled = () => Boolean(signal?.aborted || res.destroyed || res.writableEnded || backpressureTimedOut);
+  const finishCancelled = () => {
+    outcome = 'cancelled';
+    outcomeCode = 'client_cancelled';
+    record({ event: 'chat-aborted', model: route.model, status, ...(backpressureTimedOut ? { reason: 'backpressure-timeout' } : {}) });
+    if (!res.destroyed && !res.writableEnded) res.destroy();
+    return { status, aborted: true };
+  };
   const frames = [];
   let lastEvent = null;
   const noteFrame = event => {
@@ -446,7 +465,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       // The response body is read exactly once and shared by both degrade
       // rules — getReader() fails on a consumed stream, so a second read would
       // silently see an empty string and skip a recoverable retry.
-      const detail = await readErrorDetail(upstream);
+      const detail = await readDetail(upstream);
       if (forcedToolChoice(body) && /tool_choice/i.test(detail)) {
         const hadThinking = body.thinking !== undefined;
         // Degrading drops an injected `thinking` flag: if the provider refused
@@ -466,7 +485,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
           if (upstream.ok) {
             record({ event: 'provider-degraded', model: route.model, reason: 'thinking-disabled' });
           } else {
-            await readErrorDetail(upstream);
+            await readDetail(upstream);
             body = degradeChoice(body);
             upstream = await send(body);
             record({ event: 'provider-degraded', model: route.model, reason: 'tool-choice' });
@@ -508,14 +527,18 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
         if (upstream.ok) record({ event: 'provider-degraded', model: route.model, reason: 'max-tokens-field' });
       }
     }
-    clearTimer();
-
     status = upstream.status;
     if (!upstream.ok) {
+      // Triage only: the hint must describe the attempt that actually failed, so
+      // it is classified within the send deadline instead of at the first 400.
+      if (upstream.status === 400) {
+        try { signatureMentioned = classifyErrorDetail(await readDetail(upstream)) !== null; } catch { /* triage only */ }
+      }
       classifiedCode = 'upstream_http';
       await upstream.body?.cancel();
       throw new Error('Upstream HTTP error');
     }
+    clearTimer();
     const contentType = upstream.headers.get('content-type') || '';
     if (!upstream.body || !contentType.toLowerCase().includes('text/event-stream')) {
       classifiedCode = 'upstream_content_type';
@@ -553,7 +576,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
         : record({ event: 'state-envelope-size', model: route.model, bytes, bucket: sizeBucket(bytes) }),
       event => record(event), declaredTools);
     try {
-      const adapt = anthropic ? createAnthropicAdapter() : event => [event];
+      const adapt = anthropic ? createAnthropicAdapter({ onDiagnostic: event => record(event) }) : event => [event];
       upstream: for await (const raw of events(rawChunksWithTimeout(upstream.body))) {
         for (const event of adapt(raw)) {
           noteFrame(event);
@@ -577,7 +600,9 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
 
     let toolNames;
     try {
-      toolNames = await stream.finish();
+      const finished = await stream.finish();
+      toolNames = finished.toolNames;
+      metrics.toolsEmitted(finished.toolIds);
     } catch (err) {
       const code = err?.code;
       classifiedCode = ['upstream_invalid_tool', 'upstream_empty_output', 'upstream_text_mismatch'].includes(code) ? code : 'upstream_stream_incomplete';
@@ -592,14 +617,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     return { status, toolNames, requestId: id };
   } catch (err) {
     clearTimer();
-    const isClientCancel = signal?.aborted || res.destroyed || res.writableEnded;
-    if (isClientCancel) {
-      outcome = 'cancelled';
-      outcomeCode = 'client_cancelled';
-      record({ event: 'chat-aborted', model: route.model, status });
-      if (!res.destroyed && !res.writableEnded) res.destroy();
-      return { status, aborted: true };
-    }
+    if (clientCancelled()) return finishCancelled();
 
     // buildRequestBody throws before any response arrives, so its code never
     // passed through the stream catch — adopt it here for the error text.
@@ -629,15 +647,17 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       await write(stopChunk(id, 13, route.uid || request.modelUid));
       res.end(frame(Buffer.from('{}'), 2));
     } catch {
+      if (clientCancelled()) return finishCancelled();
       if (!res.destroyed && !res.writableEnded) res.destroy();
     }
     outcomeCode = classifiedCode;
     const transport = transportDetail(err);
-    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}), ...(transport ? { transport } : {}), ...(connectAttempts.length > 1 ? { attempts: connectAttempts } : {}), ...failureShape() });
+    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(classifiedCode === 'upstream_http' && status === 400 && signatureMentioned ? { diagnostic: 'signature-mentioned' } : {}), ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}), ...(transport ? { transport } : {}), ...(connectAttempts.length > 1 ? { attempts: connectAttempts } : {}), ...failureShape() });
     return { status, error: true, code: classifiedCode, requestId: id };
   } finally {
     try { onMetrics(metrics.finish(outcome, status, outcomeCode)); } catch {}
     clearTimer();
+    writer.dispose();
     upstreamController.abort();
     signal?.removeEventListener('abort', abort);
     res.off('close', close);

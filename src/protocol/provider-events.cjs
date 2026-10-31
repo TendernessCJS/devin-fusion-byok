@@ -8,14 +8,18 @@ async function readErrorDetail(response, limit = 4096) {
   try {
     const reader = response.body?.getReader();
     if (!reader) return '';
-    let text = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      text += Buffer.from(value).toString('utf8');
-      if (text.length >= limit) { try { await reader.cancel(); } catch { /* already drained */ } break; }
+    try {
+      let text = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += Buffer.from(value).toString('utf8');
+        if (text.length >= limit) { try { await reader.cancel(); } catch { /* already drained */ } break; }
+      }
+      return text.slice(0, limit);
+    } finally {
+      try { reader.releaseLock(); } catch { /* lock may already be released */ }
     }
-    return text.slice(0, limit);
   } catch { return ''; }
 }
 
@@ -40,26 +44,63 @@ function parseEvent(raw) {
   return { type: value.type || event, data: value };
 }
 
-async function* events(body) {
+async function* events(body, { maxBufferCharacters = MAX_SSE_BUFFER } = {}) {
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  let buffer = '';
-  for await (const chunk of body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    if (buffer.length > MAX_SSE_BUFFER) {
+  let line = '', frameLines = [], frameChars = 0;
+  // A bare CR ends a line too; when it is the last byte of a chunk the line
+  // ending may continue as CRLF into the next chunk, so a leading LF there is
+  // part of the same terminator, not an extra blank line.
+  let skipLF = false;
+  function checkSize(characters) {
+    if (characters > maxBufferCharacters) {
       const err = new Error('SSE frame too large');
       err.code = 'upstream_content_type';
       throw err;
     }
-    let match;
-    while ((match = /\r?\n\r?\n/.exec(buffer))) {
-      const raw = buffer.slice(0, match.index);
-      buffer = buffer.slice(match.index + match[0].length);
-      const event = parseEvent(raw);
-      if (event) yield event;
+  }
+  function endLine(completed) {
+    frameLines.push(completed);
+    frameChars += completed.length + 1;
+    checkSize(frameChars);
+    if (completed !== '') return null;
+    const raw = frameLines.join('\n');
+    frameLines = [];
+    frameChars = 0;
+    return parseEvent(raw);
+  }
+  for await (const chunk of body) {
+    const text = decoder.decode(chunk, { stream: true });
+    for (const ch of text) {
+      if (skipLF) {
+        skipLF = false;
+        if (ch === '\n') continue;
+      }
+      if (ch === '\r') {
+        skipLF = true;
+        const event = endLine(line);
+        line = '';
+        if (event) yield event;
+      } else if (ch === '\n') {
+        const event = endLine(line);
+        line = '';
+        if (event) yield event;
+      } else {
+        line += ch;
+        checkSize(frameChars + line.length);
+      }
     }
   }
-  buffer += decoder.decode();
-  if (buffer.trim()) { const event = parseEvent(buffer); if (event) yield event; }
+  line += decoder.decode();
+  checkSize(frameChars + line.length);
+  if (line) frameLines.push(line);
+  const raw = frameLines.join('\n');
+  if (raw.trim()) { const event = parseEvent(raw); if (event) yield event; }
+}
+
+// Whether a provider error body merely mentions signatures — a triage hint,
+// not proof of cause. Returns a fixed enum token, never the detail itself.
+function classifyErrorDetail(detail) {
+  return typeof detail === 'string' && /signature/i.test(detail) ? 'signature-mentioned' : null;
 }
 
 function usageSnapshot(data, chat) {
@@ -78,4 +119,4 @@ function usageSnapshot(data, chat) {
   return snapshot;
 }
 
-module.exports = { MAX_SSE_BUFFER, readErrorDetail, parseEvent, events, usageSnapshot };
+module.exports = { MAX_SSE_BUFFER, readErrorDetail, parseEvent, events, usageSnapshot, classifyErrorDetail };
