@@ -469,3 +469,42 @@ test('Anthropic request body maps document attachments and rejects unsupported m
   assert.equal(err?.code, 'attachment_unsupported');
   assert.equal(err?.detail, 'video');
 });
+
+test('adapter reports multi-thinking diagnostics once per response', () => {
+  const diagnostics = [];
+  const adapter = createAnthropicAdapter({ onDiagnostic: event => diagnostics.push(event) });
+  adapter({ type: 'content_block_start', data: { index: 0, content_block: { type: 'thinking' } } });
+  adapter({ type: 'content_block_delta', data: { index: 0, delta: { type: 'signature_delta', signature: 's1' } } });
+  adapter({ type: 'content_block_start', data: { index: 1, content_block: { type: 'thinking' } } });
+  adapter({ type: 'content_block_delta', data: { index: 1, delta: { type: 'signature_delta', signature: 's2' } } });
+  adapter({ type: 'message_stop', data: {} });
+  adapter({ type: 'message_stop', data: {} });
+  assert.deepEqual(diagnostics, [{ event: 'anthropic-multi-thinking', signed: 2, redacted: 0 }]);
+});
+
+test('a single signed thinking block does not report', () => {
+  const diagnostics = [];
+  const adapter = createAnthropicAdapter({ onDiagnostic: event => diagnostics.push(event) });
+  adapter({ type: 'content_block_start', data: { index: 0, content_block: { type: 'thinking' } } });
+  adapter({ type: 'content_block_delta', data: { index: 0, delta: { type: 'signature_delta', signature: 's1' } } });
+  adapter({ type: 'message_stop', data: {} });
+  assert.deepEqual(diagnostics, []);
+});
+
+test('signed and redacted thinking mixed reports both counts', () => {
+  const diagnostics = [];
+  const adapter = createAnthropicAdapter({ onDiagnostic: event => diagnostics.push(event) });
+  adapter({ type: 'content_block_start', data: { index: 0, content_block: { type: 'thinking' } } });
+  adapter({ type: 'content_block_delta', data: { index: 0, delta: { type: 'signature_delta', signature: 's1' } } });
+  adapter({ type: 'content_block_start', data: { index: 1, content_block: { type: 'redacted_thinking', data: 'opaque' } } });
+  adapter({ type: 'message_stop', data: {} });
+  assert.deepEqual(diagnostics, [{ event: 'anthropic-multi-thinking', signed: 1, redacted: 1 }]);
+});
+
+test('the default adapter shape is unchanged and never throws', () => {
+  const adapter = createAnthropicAdapter();
+  const out = adapter({ type: 'content_block_start', data: { index: 0, content_block: { type: 'thinking', thinking: 't' } } });
+  assert.equal(out[0].data.choices[0].delta.reasoning_content, 't');
+  adapter({ type: 'content_block_delta', data: { index: 0, delta: { type: 'signature_delta', signature: 's' } } });
+  assert.deepEqual(adapter({ type: 'message_stop', data: {} }), [{ type: 'done' }]);
+});

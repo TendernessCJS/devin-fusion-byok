@@ -184,9 +184,19 @@ function stripCacheControl(body) {
 // the original reason is preserved for attribution through provider-stop logs.
 const FINISH = { max_tokens: 'length', model_context_window_exceeded: 'length', refusal: 'content_filter', pause_turn: 'pause_turn' };
 
-function createAnthropicAdapter() {
+function createAnthropicAdapter({ onDiagnostic = () => {} } = {}) {
   const blocks = new Map();
   let redactedSent = false;
+  // Triage counters only: how many thinking blocks carried a signature and
+  // whether signed and redacted thinking mixed in one response.
+  const signedBlocks = new Set();
+  let redactedBlocks = 0;
+  let reported = false;
+  const reportMultiThinking = () => {
+    if (reported || (signedBlocks.size <= 1 && !(signedBlocks.size > 0 && redactedBlocks > 0))) return;
+    reported = true;
+    try { onDiagnostic({ event: 'anthropic-multi-thinking', signed: signedBlocks.size, redacted: redactedBlocks }); } catch { /* diagnostics only */ }
+  };
   const usage = { input: null, cacheRead: 0, cacheCreate: 0, output: null, thinking: null };
   const readUsage = value => {
     if (!value || typeof value !== 'object') return;
@@ -200,7 +210,7 @@ function createAnthropicAdapter() {
   const toolDelta = (type, index, call) => chunk(type, { tool_calls: [{ index, ...call }] });
   return function adapt(event) {
     const data = event.data;
-    if (event.type === 'done' || event.type === 'message_stop') return [{ type: 'done' }];
+    if (event.type === 'done' || event.type === 'message_stop') { reportMultiThinking(); return [{ type: 'done' }]; }
     if (!data || event.type === 'ping') return [];
     switch (event.type) {
       case 'message_start':
@@ -214,6 +224,7 @@ function createAnthropicAdapter() {
         // Only the first redacted block per response carries its data on the
         // signature lane; later blocks degrade to the bare marker.
         if (block.type === 'redacted_thinking') {
+          redactedBlocks++;
           if (typeof block.data === 'string' && block.data && !redactedSent) {
             redactedSent = true;
             return [chunk(event.type, { thinking_redacted: true, signature: REDACTED_PREFIX + block.data })];
@@ -230,7 +241,7 @@ function createAnthropicAdapter() {
         const index = data.index ?? 0;
         if (delta.type === 'text_delta' && delta.text) return [chunk(event.type, { content: delta.text })];
         if (delta.type === 'thinking_delta' && delta.thinking) return [chunk(event.type, { reasoning_content: delta.thinking })];
-        if (delta.type === 'signature_delta' && delta.signature) return [chunk(event.type, { signature: delta.signature })];
+        if (delta.type === 'signature_delta' && delta.signature) { signedBlocks.add(index); return [chunk(event.type, { signature: delta.signature })]; }
         if (delta.type === 'input_json_delta' && typeof delta.partial_json === 'string' && blocks.has(index)) {
           if (delta.partial_json) blocks.get(index).streamed = true;
           return delta.partial_json ? [toolDelta(event.type, index, { function: { arguments: delta.partial_json } })] : [];
