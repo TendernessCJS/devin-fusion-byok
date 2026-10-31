@@ -739,3 +739,440 @@ test('team-settings observations notify once per request and null exactly once p
   assert.equal(observations.at(-1)?.kind, 'restricted');
   assert.equal(observations.length, 9, 'a finished response never reports a trailing null');
 });
+
+const { Writable } = require('node:stream');
+const { EventEmitter: DownReq } = require('node:events');
+async function until(fn, ms, label) {
+  const deadline = Date.now() + ms;
+  while (!fn()) { if (Date.now() > deadline) throw new Error('condition not met: ' + label); await new Promise(r => setImmediate(r)); }
+}
+class StalledWritable extends Writable {
+  constructor() { super({ highWaterMark: 1 }); this.headersSent = false; this.held = []; this.calls = 0; }
+  writeHead(status) { this.headersSent = true; this.headStatus = status; }
+  _write(chunk, enc, cb) { this.calls++; this.held.push(cb); }
+}
+const rpcGetProcessInfo = '/exa.language_server_pb.LanguageServerService/GetProcessInfo';
+
+test('a blocked downstream pauses upstream but the drain watchdog still bounds the wait', async t => {
+  let upstreamClose = 0;
+  const native = await listen((req, res) => {
+    res.socket.on('close', () => upstreamClose++);
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write(Buffer.alloc(64 * 1024));
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const req = new DownReq();
+  req.method = 'POST'; req.headers = {};
+  const res = new StalledWritable();
+  t.after(() => { if (!res.destroyed) res.destroy(); });
+  forward(req, res, new URL('http://127.0.0.1:' + native.port + '/x'), {
+    body: Buffer.from('req'), rpc: rpcGetProcessInfo,
+    timeouts: { idleMs: 40, drainMs: 90 },
+    log: (event, data) => logs.push({ event, data }),
+  });
+  await until(() => res.writableNeedDrain, 3000, 'backpressure established');
+  await until(() => upstreamClose >= 1, 3000, 'drain watchdog kills the upstream socket');
+  const drains = logs.filter(l => l.event === 'forward-timeout' && l.data?.phase === 'drain');
+  assert.equal(drains.length, 1, 'exactly one drain timeout is logged');
+  assert.equal(drains[0].data.rpc, 'GetProcessInfo');
+  assert.equal(res.destroyed, true, 'headers-sent downstream is destroyed by fail()');
+});
+
+test('body idle does not fire while blocked, and re-arms after the drain', async t => {
+  let upstreamClose = 0;
+  const native = await listen((req, res) => {
+    res.socket.on('close', () => upstreamClose++);
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write(Buffer.alloc(64 * 1024));
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const req = new DownReq();
+  req.method = 'POST'; req.headers = {};
+  const res = new StalledWritable();
+  t.after(() => { if (!res.destroyed) res.destroy(); });
+  forward(req, res, new URL('http://127.0.0.1:' + native.port + '/x'), {
+    body: Buffer.from('req'), rpc: rpcGetProcessInfo,
+    timeouts: { idleMs: 60, drainMs: 5000 },
+    log: (event, data) => logs.push({ event, data }),
+  });
+  await until(() => res.writableNeedDrain && res.held.length >= 1, 3000, 'first write stalled');
+  await new Promise(r => setTimeout(r, 150));
+  assert.equal(logs.filter(l => l.event === 'forward-timeout').length, 0, 'blocked time is not upstream idle');
+  res.held.shift()();
+  res._write = (chunk, enc, cb) => cb();
+  await until(() => upstreamClose >= 1, 3000, 'body idle fires once flowing again');
+  const timeouts = logs.filter(l => l.event === 'forward-timeout');
+  assert.equal(timeouts.length, 1);
+  assert.equal(timeouts[0].data.phase, 'body', 'the post-drain stall is a body idle timeout');
+});
+
+test('upstream EOF while a write is in flight cannot cancel the drain watchdog', async t => {
+  let upstreamClose = 0;
+  const seen = { order: [], closeComplete: null };
+  const realRequest = http.request;
+  http.request = function (...args) {
+    const cb = args[args.length - 1];
+    if (typeof cb === 'function') args[args.length - 1] = upstream => {
+      upstream.on('pause', () => { seen.order.push('pause'); });
+      upstream.on('end', () => { seen.order.push('end'); });
+      upstream.on('close', () => { seen.order.push('close'); seen.closeComplete = upstream.complete; });
+      return cb(upstream);
+    };
+    return realRequest.apply(this, args);
+  };
+  t.after(() => { http.request = realRequest; });
+  const native = await listen((req, res) => {
+    res.socket.on('close', () => upstreamClose++);
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.end(Buffer.alloc(4096));
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const req = new DownReq();
+  req.method = 'POST'; req.headers = {};
+  const res = new StalledWritable();
+  t.after(() => { if (!res.destroyed) res.destroy(); });
+  forward(req, res, new URL('http://127.0.0.1:' + native.port + '/x'), {
+    body: Buffer.from('req'), rpc: rpcGetProcessInfo,
+    timeouts: { idleMs: 40, drainMs: 80 },
+    log: (event, data) => logs.push({ event, data }),
+  });
+  await until(() => seen.order.includes('pause') && seen.order.includes('end'), 3000, 'upstream paused, then ended while the tail write is in flight');
+  assert.ok(seen.order.indexOf('pause') < seen.order.indexOf('end'), 'pause precedes upstream end: ' + seen.order.join(','));
+  assert.equal(res.writableEnded, true, 'pipe ended the response');
+  assert.equal(res.writableFinished, false, 'the buffered tail is still waiting');
+  assert.equal(res.destroyed, false);
+  await until(() => res.destroyed, 3000, 'watchdog still fires after upstream EOF');
+  const drains = logs.filter(l => l.event === 'forward-timeout' && l.data?.phase === 'drain');
+  assert.equal(drains.length, 1);
+  assert.equal(seen.closeComplete, true, 'the client-side upstream close carried complete=true');
+});
+
+test('a repeated pause does not extend the first blocked wait', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let upstreamClose = 0, upstreamRef = null;
+  const realRequest = http.request;
+  http.request = function (...args) {
+    const cb = args[args.length - 1];
+    if (typeof cb === 'function') args[args.length - 1] = upstream => { upstreamRef = upstream; return cb(upstream); };
+    return realRequest.apply(this, args);
+  };
+  t.after(() => { http.request = realRequest; });
+  const native = await listen((req, res) => {
+    res.socket.on('close', () => upstreamClose++);
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write(Buffer.alloc(64 * 1024));
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const req = new DownReq();
+  req.method = 'POST'; req.headers = {};
+  const res = new StalledWritable();
+  t.after(() => { if (!res.destroyed) res.destroy(); });
+  forward(req, res, new URL('http://127.0.0.1:' + native.port + '/x'), {
+    body: Buffer.from('req'), rpc: rpcGetProcessInfo,
+    timeouts: { idleMs: 5000, drainMs: 150 },
+    log: (event, data) => logs.push({ event, data }),
+  });
+  await until(() => res.writableNeedDrain && upstreamRef, 3000, 'backpressure established');
+  t.mock.timers.tick(80);
+  upstreamRef.emit('pause');
+  upstreamRef.emit('pause');
+  t.mock.timers.tick(70);
+  await until(() => upstreamClose >= 1, 3000, 'single watchdog expiry');
+  const drains = logs.filter(l => l.event === 'forward-timeout' && l.data?.phase === 'drain');
+  assert.equal(drains.length, 1, 'expired on the original deadline — a reset would still be waiting at 230ms');
+  assert.equal(res.destroyed, true);
+});
+
+test('two real backpressure windows each get their own bounded wait', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let upstreamClose = 0;
+  const native = await listen((req, res) => {
+    res.socket.on('close', () => upstreamClose++);
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write(Buffer.alloc(256 * 1024));
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const req = new DownReq();
+  req.method = 'POST'; req.headers = {};
+  const res = new StalledWritable();
+  t.after(() => { if (!res.destroyed) res.destroy(); });
+  forward(req, res, new URL('http://127.0.0.1:' + native.port + '/x'), {
+    body: Buffer.from('req'), rpc: rpcGetProcessInfo,
+    timeouts: { idleMs: 5000, drainMs: 150 },
+    log: (event, data) => logs.push({ event, data }),
+  });
+  await until(() => res.writableNeedDrain && res.calls >= 1, 3000, 'first block');
+  t.mock.timers.tick(80);
+  assert.equal(logs.filter(l => l.event === 'forward-timeout').length, 0, 'first block still inside its budget');
+  res.held.shift()();
+  await until(() => res.calls >= 2 && res.writableNeedDrain, 3000, 'second block begins');
+  t.mock.timers.tick(70);
+  assert.equal(logs.filter(l => l.event === 'forward-timeout' && l.data?.phase === 'drain').length, 0, 'a shared stale timer would have fired by now');
+  t.mock.timers.tick(80);
+  await until(() => upstreamClose >= 1, 3000, 'the second blocked wait expires on its own budget');
+  assert.equal(logs.filter(l => l.event === 'forward-timeout' && l.data?.phase === 'drain').length, 1);
+});
+
+test('request abort, downstream error and a late drain all settle without a drain timeout', async t => {
+  for (const mode of ['aborted', 'error', 'late-drain']) {
+    let upstreamClose = 0;
+    const native = await listen((req, res) => {
+      res.socket.on('close', () => upstreamClose++);
+      res.writeHead(200, { 'content-type': 'application/octet-stream' });
+      res.write(Buffer.alloc(64 * 1024));
+    });
+    t.after(() => native.close());
+    const logs = [];
+    const req = new DownReq();
+    req.method = 'POST'; req.headers = {};
+    const res = new StalledWritable();
+    forward(req, res, new URL('http://127.0.0.1:' + native.port + '/x'), {
+      body: Buffer.from('req'), rpc: rpcGetProcessInfo,
+      timeouts: { idleMs: 40, drainMs: 60 },
+      log: (event, data) => logs.push({ event, data }),
+    });
+    await until(() => res.writableNeedDrain, 3000, mode + ': backpressure established');
+    if (mode === 'aborted') req.emit('aborted');
+    else if (mode === 'error') { res.destroy(new Error('downstream broke')); }
+    else { res.destroy(); res.emit('drain'); }
+    await until(() => upstreamClose >= 1, 3000, mode + ': upstream closed');
+    await new Promise(r => setTimeout(r, 120));
+    assert.equal(logs.filter(l => l.event === 'forward-timeout').length, 0, mode + ': nothing fires after settle');
+    assert.equal(res.listenerCount('drain'), 0, mode + ': drain listener removed');
+  }
+});
+
+test('a parallel normal request is unaffected by a blocked sibling', async t => {
+  const closes = { stall: 0, fine: 0 };
+  const native = await listen((req, res) => {
+    res.socket.on('close', () => closes[req.url === '/stall' ? 'stall' : 'fine']++);
+    if (req.url === '/stall') { res.writeHead(200); res.write(Buffer.alloc(64 * 1024)); return; }
+    res.writeHead(200); res.end('ok');
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const reqA = new DownReq(); reqA.method = 'POST'; reqA.headers = {};
+  const resA = new StalledWritable();
+  t.after(() => { if (!resA.destroyed) resA.destroy(); });
+  forward(reqA, resA, new URL('http://127.0.0.1:' + native.port + '/stall'), {
+    body: Buffer.from('a'), rpc: rpcGetProcessInfo, timeouts: { idleMs: 40, drainMs: 80 },
+    log: (event, data) => logs.push({ event, data }) });
+  const reqB = new DownReq(); reqB.method = 'POST'; reqB.headers = {};
+  const resB = new class extends Writable {
+    constructor() { super({ highWaterMark: 1 }); this.headersSent = false; this.out = []; }
+    writeHead(status) { this.headersSent = true; this.headStatus = status; }
+    _write(chunk, enc, cb) { this.out.push(chunk); cb(); }
+  }();
+  t.after(() => { if (!resB.destroyed) resB.destroy(); });
+  forward(reqB, resB, new URL('http://127.0.0.1:' + native.port + '/fine'), {
+    body: Buffer.from('b'), rpc: rpcGetProcessInfo, timeouts: { idleMs: 40, drainMs: 80 },
+    log: (event, data) => logs.push({ event, data }) });
+  await until(() => Buffer.concat(resB.out).toString() === 'ok', 3000, 'normal request completes');
+  assert.equal(resB.headStatus, 200);
+  assert.equal(resB.writableFinished, true, 'the normal response finished cleanly');
+  await until(() => closes.stall >= 1, 3000, 'blocked sibling bounded by its watchdog');
+  assert.equal(logs.filter(l => l.event === 'forward-timeout' && l.data?.phase === 'drain').length, 1);
+});
+
+test('streaming RPC forwards get the same drain bound', async t => {
+  let upstreamClose = 0;
+  const native = await listen((req, res) => {
+    res.socket.on('close', () => upstreamClose++);
+    res.writeHead(200, { 'content-type': 'application/connect+proto' });
+    res.write(Buffer.alloc(64 * 1024));
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const req = new DownReq();
+  req.method = 'POST'; req.headers = {};
+  const res = new StalledWritable();
+  t.after(() => { if (!res.destroyed) res.destroy(); });
+  forward(req, res, new URL('http://127.0.0.1:' + native.port + '/x'), {
+    body: Buffer.from('req'), rpc: '/exa.language_server_pb.LanguageServerService/StreamCascadeUpdates',
+    timeouts: { idleMs: 40, streamingIdleMs: 5000, drainMs: 80 },
+    log: (event, data) => logs.push({ event, data }),
+  });
+  await until(() => res.writableNeedDrain, 3000, 'backpressure established');
+  await until(() => upstreamClose >= 1, 3000, 'drain watchdog bounds streaming forwards too');
+  const drains = logs.filter(l => l.event === 'forward-timeout' && l.data?.phase === 'drain');
+  assert.equal(drains.length, 1);
+  assert.equal(drains[0].data.rpc, 'StreamCascadeUpdates');
+});
+
+test('a finishing downstream releases drain and finish listeners without needing close', async t => {
+  let upstreamClose = 0;
+  const native = await listen((req, res) => {
+    res.socket.on('close', () => upstreamClose++);
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.end('done-body');
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const req = new DownReq();
+  req.method = 'POST'; req.headers = {};
+  const res = new class extends Writable {
+    constructor() { super({ highWaterMark: 1, autoDestroy: false }); this.headersSent = false; this.out = []; }
+    writeHead(status) { this.headersSent = true; this.headStatus = status; }
+    _write(chunk, enc, cb) { this.out.push(chunk); cb(); }
+  }();
+  t.after(() => { if (!res.destroyed) res.destroy(); });
+  forward(req, res, new URL('http://127.0.0.1:' + native.port + '/x'), {
+    body: Buffer.from('req'), rpc: rpcGetProcessInfo,
+    timeouts: { idleMs: 40, drainMs: 60 },
+    log: (event, data) => logs.push({ event, data }),
+  });
+  await until(() => res.writableFinished, 3000, 'response finished');
+  assert.equal(Buffer.concat(res.out).toString(), 'done-body');
+  await new Promise(r => setTimeout(r, 120));
+  assert.equal(logs.filter(l => l.event === 'forward-timeout').length, 0, 'nothing fires after finish');
+  assert.equal(res.listenerCount('drain'), 0, 'drain listener removed on finish');
+  assert.equal(res.listenerCount('finish'), 0, 'finish listener removed on finish');
+});
+
+test('a buffered catalog rewrite waits for the downstream finish within the drain bound', async t => {
+  let hits = 0;
+  const native = await listen((req, res) => {
+    hits++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ clientModelConfigs: [{ modelUid: 'official', label: 'Official' }] }));
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const req = new DownReq(); req.method = 'POST'; req.headers = {};
+  const res = new StalledWritable();
+  t.after(() => { if (!res.destroyed) res.destroy(); });
+  forward(req, res, new URL('http://127.0.0.1:' + native.port + '/x'), {
+    body: Buffer.from('{}'), rpc: LS + 'GetCliModelConfigs',
+    getCatalog: () => catalog,
+    timeouts: { idleMs: 40, drainMs: 80 },
+    log: (event, data) => logs.push({ event, data }),
+  });
+  await until(() => res.writableEnded && res.calls >= 1, 3000, 'catalog rewrite issued its final write');
+  assert.equal(res.writableFinished, false, 'the rewritten payload is stalled in the downstream buffer');
+  await until(() => res.destroyed, 3000, 'the finish wait expires on the drain bound');
+  const drains = logs.filter(l => l.event === 'forward-timeout' && l.data?.phase === 'drain');
+  assert.equal(drains.length, 1);
+  assert.equal(drains[0].data.rpc, 'GetCliModelConfigs');
+  assert.equal(hits, 1, 'one upstream request, no retry');
+});
+
+test('a hung _final also hits the drain bound while a normal catalog write completes', async t => {
+  let hits = 0;
+  const native = await listen((req, res) => {
+    hits++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ clientModelConfigs: [{ modelUid: 'official', label: 'Official' }] }));
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const reqA = new DownReq(); reqA.method = 'POST'; reqA.headers = {};
+  const resA = new class extends Writable {
+    constructor() { super({ highWaterMark: 1 }); this.headersSent = false; this.out = []; }
+    writeHead(status) { this.headersSent = true; }
+    _write(chunk, enc, cb) { this.out.push(chunk); cb(); }
+    _final(cb) {}
+  }();
+  t.after(() => { if (!resA.destroyed) resA.destroy(); });
+  forward(reqA, resA, new URL('http://127.0.0.1:' + native.port + '/a'), {
+    body: Buffer.from('{}'), rpc: LS + 'GetCliModelConfigs', getCatalog: () => catalog,
+    timeouts: { idleMs: 40, drainMs: 80 },
+    log: (event, data) => logs.push({ event, data }) });
+  const reqB = new DownReq(); reqB.method = 'POST'; reqB.headers = {};
+  const resB = new class extends Writable {
+    constructor() { super({ highWaterMark: 1 }); this.headersSent = false; this.out = []; }
+    writeHead(status) { this.headersSent = true; }
+    _write(chunk, enc, cb) { this.out.push(chunk); cb(); }
+  }();
+  t.after(() => { if (!resB.destroyed) resB.destroy(); });
+  forward(reqB, resB, new URL('http://127.0.0.1:' + native.port + '/b'), {
+    body: Buffer.from('{}'), rpc: LS + 'GetCliModelConfigs', getCatalog: () => catalog,
+    timeouts: { idleMs: 40, drainMs: 80 },
+    log: (event, data) => logs.push({ event, data }) });
+  await until(() => resB.writableFinished, 3000, 'normal catalog write finishes');
+  await until(() => resA.writableEnded && resA.out.length >= 1, 3000, 'the stalled final write flushed its bytes');
+  assert.deepEqual(Buffer.concat(resA.out), Buffer.concat(resB.out),
+    'the stall sits in finish, not in truncated output');
+  const decoded = JSON.parse(Buffer.concat(resB.out).toString());
+  const uids = decoded.clientModelConfigs.map(entry => entry.modelUid);
+  for (const model of catalog.models) assert.ok(uids.includes(model.uid), 'rewritten catalog carries ' + model.uid);
+  assert.ok(uids.includes('official'), 'native entries survive the rewrite');
+  await until(() => resA.destroyed, 3000, 'hung _final is bounded by the drain wait');
+  assert.equal(logs.filter(l => l.event === 'forward-timeout' && l.data?.phase === 'drain').length, 1);
+  assert.equal(hits, 2);
+});
+
+test('a late drain cannot extend the finish wait, and early settle cleans it up', async t => {
+  let hits = 0;
+  const native = await listen((req, res) => {
+    hits++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ clientModelConfigs: [{ modelUid: 'official', label: 'Official' }] }));
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const reqA = new DownReq(); reqA.method = 'POST'; reqA.headers = {};
+  const resA = new StalledWritable();
+  t.after(() => { if (!resA.destroyed) resA.destroy(); });
+  forward(reqA, resA, new URL('http://127.0.0.1:' + native.port + '/a'), {
+    body: Buffer.from('{}'), rpc: LS + 'GetCliModelConfigs', getCatalog: () => catalog,
+    timeouts: { idleMs: 40, drainMs: 80 },
+    log: (event, data) => logs.push({ event, data }) });
+  await until(() => resA.writableEnded && resA.calls >= 1, 3000, 'final write stalled');
+  resA.emit('drain');
+  resA.emit('drain');
+  await until(() => resA.destroyed, 3000, 'injected drain events must not defer the finish bound');
+  assert.equal(logs.filter(l => l.event === 'forward-timeout' && l.data?.phase === 'drain').length, 1);
+  for (const [label, settle] of [
+    ['aborted', req => req.emit('aborted')],
+    ['error', (req, res) => res.destroy(new Error('downstream broke'))],
+    ['close', (req, res) => res.destroy()],
+  ]) {
+    const reqB = new DownReq(); reqB.method = 'POST'; reqB.headers = {};
+    const resB = new StalledWritable();
+    t.after(() => { if (!resB.destroyed) resB.destroy(); });
+    const logsB = [];
+    forward(reqB, resB, new URL('http://127.0.0.1:' + native.port + '/b'), {
+      body: Buffer.from('{}'), rpc: LS + 'GetCliModelConfigs', getCatalog: () => catalog,
+      timeouts: { idleMs: 40, drainMs: 60 },
+      log: (event, data) => logsB.push({ event, data }) });
+    await until(() => resB.writableEnded && resB.calls >= 1, 3000, label + ': final write stalled');
+    settle(reqB, resB);
+    await new Promise(r => setTimeout(r, 120));
+    assert.equal(logsB.filter(l => l.event === 'forward-timeout').length, 0, label + ': settles before the drain bound');
+    assert.equal(resB.listenerCount('drain'), 0, label + ': drain listener removed');
+    assert.equal(resB.listenerCount('finish'), 0, label + ': finish listener removed');
+  }
+});
+
+test('an aborted request during catalog transform cannot resurrect the finish wait', async t => {
+  let hits = 0;
+  const native = await listen((req, res) => {
+    hits++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ clientModelConfigs: [{ modelUid: 'official', label: 'Official' }] }));
+  });
+  t.after(() => native.close());
+  const logs = [];
+  const req = new DownReq(); req.method = 'POST'; req.headers = {};
+  const res = new StalledWritable();
+  t.after(() => { if (!res.destroyed) res.destroy(); });
+  let transformCalls = 0;
+  forward(req, res, new URL('http://127.0.0.1:' + native.port + '/x'), {
+    body: Buffer.from('{}'), rpc: LS + 'GetCliModelConfigs',
+    getCatalog: () => { transformCalls++; req.emit('aborted'); return catalog; },
+    timeouts: { idleMs: 40, drainMs: 60 },
+    log: (event, data) => logs.push({ event, data }),
+  });
+  await until(() => transformCalls === 1 && res.writableEnded, 3000, 'the transform ran and the abort settled');
+  await new Promise(r => setTimeout(r, 150));
+  assert.equal(transformCalls, 1, 'the catalog transform is actually invoked by this fixture');
+  assert.equal(logs.filter(l => l.event === 'forward-timeout').length, 0, 'no timer resurrects after the abort');
+  assert.equal(res.listenerCount('drain'), 0, 'drain listener removed by the abort');
+  assert.equal(res.listenerCount('finish'), 0, 'finish listener removed by the abort');
+  assert.equal(hits, 1);
+});

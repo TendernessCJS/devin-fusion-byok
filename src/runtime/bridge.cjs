@@ -50,6 +50,8 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
         ? Math.min(timeouts.streamingIdleMs, 2147483647)
         : Math.max(limits.body, STREAMING_IDLE_LIMIT))
     : limits.body;
+  const drainLimit = Number.isSafeInteger(timeouts.drainMs) && timeouts.drainMs > 0
+    ? Math.min(timeouts.drainMs, 600000) : 120000;
   const secure = target.protocol === 'https:';
   // The team-settings allowlist is a debounced streak on the receiving side,
   // so a failed request must be distinguishable from a quiet one: exactly one
@@ -62,18 +64,36 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
     allowedNotified = true;
     try { onAllowedUids?.(observation); } catch {}
   };
-  let connectTimer, headersTimer, bodyTimer, connectSocket, connectListener, stopped = false;
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    clearTimeout(connectTimer); clearTimeout(headersTimer); clearTimeout(bodyTimer);
+  let connectTimer, headersTimer, bodyTimer, drainTimer, connectSocket, connectListener, stopped = false;
+  let blocked = false, upstreamEnded = false, finishing = false;
+  function onDrain() {
+    if (stopped || finishing || !blocked) return;
+    blocked = false;
+    clearTimeout(drainTimer);
+    if (!upstreamEnded) armBody();
+  }
+  function onFinish() { stop(); }
+  const dropConnectListeners = () => {
     if (connectSocket && connectListener) {
       connectSocket.removeListener('connect', connectListener);
       connectSocket.removeListener('secureConnect', connectListener);
+      connectListener = null;
     }
   };
-  const armBody = () => {
+  const stop = () => {
     if (stopped) return;
+    stopped = true;
+    clearTimeout(connectTimer); clearTimeout(headersTimer); clearTimeout(bodyTimer); clearTimeout(drainTimer);
+    dropConnectListeners();
+    response.off('drain', onDrain);
+    response.off('finish', onFinish);
+  };
+  const upstreamDone = () => {
+    clearTimeout(connectTimer); clearTimeout(headersTimer); clearTimeout(bodyTimer);
+    dropConnectListeners();
+  };
+  const armBody = () => {
+    if (stopped || upstreamEnded || blocked) return;
     clearTimeout(bodyTimer);
     bodyTimer = setTimeout(() => timedOut('body'), bodyLimit);
   };
@@ -84,7 +104,7 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
     stop();
     incoming?.destroy();
     outbound.destroy();
-    if (response.destroyed || response.writableEnded) return;
+    if (response.destroyed || response.writableFinished) return;
     if (response.headersSent) response.destroy();
     else { response.writeHead(502); response.end(); }
   };
@@ -100,12 +120,18 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
     clearTimeout(connectTimer); clearTimeout(headersTimer);
     armBody();
     upstream.on('data', armBody);
-    upstream.on('pause', () => { if (response.writableNeedDrain) clearTimeout(bodyTimer); });
+    upstream.on('pause', () => {
+      if (stopped || finishing || !response.writableNeedDrain) return;
+      clearTimeout(bodyTimer);
+      if (!blocked) { blocked = true; drainTimer = setTimeout(() => timedOut('drain'), drainLimit); }
+    });
     upstream.on('resume', armBody);
-    upstream.on('end', () => clearTimeout(bodyTimer));
+    upstream.on('end', () => { upstreamEnded = true; clearTimeout(bodyTimer); });
+    response.on('drain', onDrain);
+    response.on('finish', onFinish);
     upstream.on('error', fail);
     upstream.on('aborted', fail);
-    upstream.on('close', () => { stop(); if (!upstream.complete) fail(); });
+    upstream.on('close', () => { upstreamDone(); if (!upstream.complete) fail(); });
     if (!CATALOG.test(rpc) || upstream.statusCode !== 200 || !getCatalog) {
       if (allowedTarget) notifyAllowed(null);
       response.writeHead(upstream.statusCode, { ...upstream.headers, ...cors(request) }); upstream.pipe(response); return;
@@ -137,6 +163,10 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
         delete outgoingHeaders['transfer-encoding']; outgoingHeaders['content-length'] = String(outgoing.length);
         log('catalog', { rpc: rpc.split('/').pop(), models: catalog.models.length, matrix: catalog.matrixUids?.size ?? 0, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented), ...(skipped ? { skipped } : {}) });
       } catch { log('catalog-error', { code: 'catalog_transform_failed' }); notifyAllowed(null); }
+      if (stopped) return;
+      finishing = true;
+      clearTimeout(bodyTimer); clearTimeout(drainTimer);
+      drainTimer = setTimeout(() => timedOut('drain'), drainLimit);
       response.writeHead(upstream.statusCode, outgoingHeaders); response.end(outgoing);
     } catch { fail(); }
   });
