@@ -742,6 +742,71 @@ test('rejected exact error triggers auto continue whereas arbitrary error or aut
   assert.equal(scheduler.pendingCount(), 0);
 });
 
+test('a disqualified turn records which event disqualified it', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  // Unresolved prompts keep each turn registered while the disqualifier lands.
+  const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' },
+    sendRequest() { return new Promise(() => {}); }, forwardClientRequest() {} };
+  f.api.registerConnection(connector);
+  const prompt = sessionId => { void connector.sendRequest({ method: 'session/prompt', params: { sessionId, prompt: [{ type: 'text', text: 'hi' }] } }); };
+
+  prompt('s-perm');
+  connector.forwardClientRequest({ method: 'session/request_permission', params: { sessionId: 's-perm' } });
+
+  prompt('s-state');
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId: 's-state', update: { sessionUpdate: 'state_update', state: 'requires_action' } }
+  });
+
+  prompt('s-reset');
+  void connector.sendRequest({ method: 'session/close', params: { sessionId: 's-reset' } });
+
+  const disqualified = f.logs.filter(l => l.event === 'auto-continue-disqualified');
+  assert.deepEqual(disqualified.map(l => l.data.reason), ['permission', 'state', 'reset-method'],
+    'each silent disqualifier names itself instead of surfacing later as session-gone');
+  assert.equal(disqualified[0].data.method, 'session/request_permission');
+  assert.equal(disqualified[1].data.state, 'requires_action');
+  assert.equal(disqualified[2].data.method, 'session/close');
+});
+
+test('a session_info_update or a new prompt names what disqualified the turn', async t => {
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({ isEnabled: () => true, scheduler });
+  t.after(() => handle.dispose());
+
+  const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' },
+    sendRequest() { return new Promise(() => {}); }, forwardClientRequest() {} };
+  f.api.registerConnection(connector);
+  const prompt = sessionId => { void connector.sendRequest({ method: 'session/prompt', params: { sessionId, prompt: [{ type: 'text', text: 'hi' }] } }); };
+  const info = (sessionId, meta) => connector.forwardClientRequest({
+    method: 'session/update',
+    params: { sessionId, update: { sessionUpdate: 'session_info_update', _meta: meta } }
+  });
+
+  prompt('s-action');
+  info('s-action', { 'cognition.ai/userActionRequired': 'confirm' });
+
+  prompt('s-outcome');
+  info('s-outcome', { 'cognition.ai/finishedOutcome': 'completed' });
+
+  prompt('s-again');
+  prompt('s-again');
+
+  const disqualified = f.logs.filter(l => l.event === 'auto-continue-disqualified');
+  assert.deepEqual(disqualified.map(l => l.data.reason), ['session-info', 'session-info', 'new-prompt'],
+    'the two silent paths that hid behind session-gone now name themselves');
+  assert.equal(disqualified[0].data.trigger, 'action-required');
+  assert.equal(disqualified[0].data.outcome, null);
+  assert.equal(disqualified[1].data.trigger, 'outcome');
+  assert.equal(disqualified[1].data.outcome, 'completed');
+});
+
 test('v2 requires_action interleaving and state transitions clear pending retry', async t => {
   const f = fixture();
   const scheduler = fakeScheduler();

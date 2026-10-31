@@ -42,6 +42,8 @@ const PLAN_ATTEMPT_LIMIT = 10;
 // calls does not continue either: under the same budget it must repeat.
 const CONTINUABLE_STOP = new Set(['max_tokens', 'max_turn_requests']);
 
+const SESSION_OUTCOMES = ['completed', 'stopped', 'suspended', 'expired'];
+
 const RESET_METHODS = new Set([
   'session/cancel',
   'session/load',
@@ -549,6 +551,9 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             else turn.deferred.resolve(turn.lastResult.value);
           }
           entry.sessions.delete(sessionId);
+          // Without this the only trace of a disqualified turn is a later
+          // `session-gone`, which cannot say what disqualified it.
+          report('auto-continue-disqualified', { reason: 'permission', method });
         }
         return;
       }
@@ -584,6 +589,8 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
           turn.consumed = true;
           turn.tail = '';
           entry.sessions.delete(sessionId);
+          report('auto-continue-disqualified', { reason: 'state', state: state ?? null,
+            stopReason: typeof update.stopReason === 'string' ? update.stopReason : null });
           return;
         } else if (state === 'idle') {
           if (!turn.consumed) {
@@ -621,7 +628,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
         const outcome = meta['cognition.ai/finishedOutcome'];
         const disabled = meta['cognition.ai/inputDisabledReason'];
         const actionReq = meta['cognition.ai/userActionRequired'];
-        if (['completed', 'stopped', 'suspended', 'expired'].includes(outcome) ||
+        if (SESSION_OUTCOMES.includes(outcome) ||
             (typeof disabled === 'string' && disabled) ||
             (typeof actionReq === 'string' && actionReq)) {
           cancelSessionTimer(sessionId);
@@ -632,6 +639,14 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             else turn.deferred.resolve(turn.lastResult.value);
           }
           entry.sessions.delete(sessionId);
+          // The last silent disqualifier: it both clears the turn and hides
+          // itself, so the only trace is a later `session-gone`.
+          report('auto-continue-disqualified', {
+            reason: 'session-info',
+            trigger: typeof actionReq === 'string' && actionReq ? 'action-required'
+              : typeof disabled === 'string' && disabled ? 'input-disabled' : 'outcome',
+            outcome: SESSION_OUTCOMES.includes(outcome) ? outcome : null
+          });
           return;
         }
       }
@@ -704,6 +719,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
             if (existingTurn.lastResult?.isReject) existingTurn.deferred.reject(existingTurn.lastResult.value);
             else if (existingTurn.lastResult) existingTurn.deferred.resolve(existingTurn.lastResult.value);
           }
+          report('auto-continue-disqualified', { reason: 'reset-method', method });
         }
         entry.sessions.delete(sessionId);
       }
@@ -725,6 +741,7 @@ function installAutoContinue({ nativeMainPath, isEnabled = () => false, getOptio
               if (previousTurn.lastResult.isReject) previousTurn.deferred.reject(previousTurn.lastResult.value);
               else previousTurn.deferred.resolve(previousTurn.lastResult.value);
             }
+            report('auto-continue-disqualified', { reason: 'new-prompt' });
           }
           if (enabled && !suppressed) {
             manualTurn = {
