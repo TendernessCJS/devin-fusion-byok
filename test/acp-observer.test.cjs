@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { buildCatalog } = require('../src/catalog.cjs');
+const { publicState } = require('../src/panel/manager.cjs');
 
 const source = fs.readFileSync(path.join(__dirname, '../src/runtime/host/acp-observer.cjs'), 'utf8');
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';
@@ -22,6 +24,7 @@ function fixture() {
   const module = { exports: {} };
   vm.runInNewContext(source, { module, exports: module.exports, require(name) {
     if (name === 'node:module') return { createRequire };
+    if (name === '../../catalog/payload.cjs') return require('../src/catalog/payload.cjs');
     if (name === './acp-hook.cjs') {
       const hook = { exports: {} };
       vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/runtime/host/acp-hook.cjs'), 'utf8'),
@@ -322,4 +325,33 @@ test('session/new never produces acp-turn and turn timing honours the injected c
   assert.equal(f.logs.filter(e => e.event === 'acp-turn').length, 1, 'no post-dispose turn log');
   assert.equal(handle.status.turns, 1);
   assert.deepEqual(handle.status.lastTurn, f.logs.at(-1).counts);
+});
+
+test('a real catalog session/new counts every own uid and cancels the panel drift', async () => {
+  const config = { enabled: true, inferenceServerUrl: 'http://127.0.0.1:39842',
+    providers: [{ id: 'p', name: 'P', baseUrl: 'https://p.invalid/v1', apiKey: 'k', apiFormat: 'openai',
+      models: [
+        { id: 'a', label: 'a', efforts: [], contextWindow: 128000, maxOutputTokens: 8192 },
+        { id: 'b', label: 'b', efforts: [], contextWindow: 128000, maxOutputTokens: 8192 },
+      ] }],
+    roleInclusions: { lead: [{ nativeUid: 'native-extra' }], sidekick: [{ nativeUid: 'native-extra' }] } };
+  const natives = [{ uid: 'native-extra', label: 'Native Extra', disabled: false, isModelRouter: false,
+    harnessUids: ['fusion'], fusionMetadata: [] }];
+  const catalog = buildCatalog(config, natives, null);
+  const data = { sessionId: 's', configOptions: [
+    { id: 'model', category: 'model', type: 'select', currentValue: catalog.models[0]?.uid,
+      options: catalog.models.map(model => ({ value: model.uid, name: model.uid })) },
+  ] };
+  const f = fixture();
+  f.install();
+  const conn = f.connection(Promise.resolve(data));
+  f.api.registerConnection(conn);
+  await conn.sendRequest({ method: 'session/new' });
+  await tick();
+  const counts = f.logs.at(-1).counts;
+  assert.equal(counts.ownModels, 8, '2 plain + 6 matrix uids count as ours, two of them native-lead pairs');
+  const payload = JSON.stringify(counts);
+  assert.ok(!payload.includes('dfbyok-'), 'counts carry no uid values');
+  const state = publicState(config, natives, 'unavailable', 'ready', null, null, null, counts.ownModels);
+  assert.strictEqual(state.catalogDrift, null, 'an observed count matching the emission produces no drift warning');
 });

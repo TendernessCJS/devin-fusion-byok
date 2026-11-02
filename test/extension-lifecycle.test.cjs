@@ -83,8 +83,9 @@ function fixture(t, initial = {}) {
       defaultConfig: realRequire('./config/config.cjs').defaultConfig,
       pruneRetiredKeys: realRequire('./config/config.cjs').pruneRetiredKeys,
     },
-    './catalog.cjs': { staleFusionUids: () => [],
+    './catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: () => [],
       catalogSignature: realRequire('./catalog/signature.cjs').catalogSignature,
+      ownEntriesSignature: realRequire('./catalog/signature.cjs').ownEntriesSignature,
       buildCatalog: config => ({ models: config.providers?.length
         ? [{ uid: 'dfbyok-own', label: 'own', kind: 'model' },
           { uid: 'fusion-dfbyok-selected', label: 'CPA Fusion', kind: 'matrix' },

@@ -53,7 +53,14 @@ function createCatalogPublication({ getCatalog, refreshUserStatus, isCurrent = (
   let waitingAuth = false;    // sign-out pause: a flag, not a state, so a
                               // watchdog downgrade can never re-arm auto work
 
-  const setState = (next, nextCode) => { state = next; code = nextCode; };
+  // State transitions are the only evidence the confirmation chain leaves when
+  // the native command is missing or rejected; without them a failed refresh is
+  // completely silent (a no-op attempt logs nothing at all).
+  const setState = (next, nextCode) => {
+    if (next === state && nextCode === code) return;
+    state = next; code = nextCode;
+    try { log('publication-state', { state: next, code: nextCode, signature: target?.signature ?? null }); } catch {}
+  };
 
   function pruneWindow() {
     const cutoff = now() - WINDOW_MS;
@@ -92,6 +99,9 @@ function createCatalogPublication({ getCatalog, refreshUserStatus, isCurrent = (
 
   function settle(token, ok) {
     if (inFlight !== token) return;
+    // `ok: false` with this record means the command itself failed (missing
+    // registration rejects on every call), which no other event reports.
+    try { log('publication-settle', { ok, manual: token.manual, state, code: code ?? null, signature: token.signature }); } catch {}
     inFlight = null;
     clearTimer(watchdogTimer); watchdogTimer = undefined;
     if (disposed) return;
@@ -145,6 +155,7 @@ function createCatalogPublication({ getCatalog, refreshUserStatus, isCurrent = (
       window.push(now());
     }
     const token = { signature: target.signature, manual };
+    try { log('publication-attempt', { manual, attempts: target.attempts, signature: token.signature }); } catch {}
     inFlight = token;
     clearTimer(watchdogTimer);
     watchdogTimer = setTimer(() => {
@@ -175,6 +186,10 @@ function createCatalogPublication({ getCatalog, refreshUserStatus, isCurrent = (
     try { signature = catalogSignature(getCatalog()); } catch { signature = null; }
     if (signature === null) { setState('degraded', 'signature-unavailable'); return status(); }
     const different = !target || target.signature !== signature;
+    // The entry record is what separates "the chain was never asked" from
+    // "asked but gated" — a waiting-auth or unchanged signature returns before
+    // any other observable step.
+    try { log('publication-changed', { force, different, waitingAuth, state, signature }); } catch {}
     if (different) {
       target = { signature, attempts: 0 };
       if (!waitingAuth) setState('pending');

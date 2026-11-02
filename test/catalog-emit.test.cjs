@@ -10,6 +10,10 @@ const { digest } = require('../src/catalog/identity.cjs');
 
 test('stable model identities and independent Lead/Sidekick orders survive reordering and label changes', () => {
   const reordered = config();
+  reordered.providers.forEach((provider, index) => {
+    provider.order = index;
+    provider.models.forEach((model, slot) => { model.order = slot; });
+  });
   reordered.providers.reverse();
   reordered.providers.forEach(provider => provider.models.reverse());
   const next = buildCatalog(reordered, OBSERVED_SWE);

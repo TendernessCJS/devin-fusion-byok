@@ -1,6 +1,7 @@
 'use strict';
-const { analyzeRoles, buildCatalog, buildRoleLists } = require('../catalog.cjs');
+const { analyzeRoles, buildCatalog, buildRoleLists, isOwnUid } = require('../catalog.cjs');
 const { modelSupportsImages } = require('../models/capabilities.cjs');
+const { sortByOrder } = require('../models/order.cjs');
 const { maskProxy } = require('../update/proxy-config.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 // The settings list mirrors the official picker's provider sections. The wire
@@ -31,7 +32,7 @@ function nativeVendor(id, label = '') {
   }
   return { name: OTHER_VENDOR, rank: NATIVE_VENDORS.length };
 }
-function publicState(config, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready', cliCache, allowedUids, health = null) {
+function publicState(config, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready', cliCache, allowedUids, health = null, acpOwnModels = 0) {
   const allowed = allowedUids instanceof Set ? (allowedUids.size ? allowedUids : null)
     : (Array.isArray(allowedUids) && allowedUids.length ? new Set(allowedUids) : null);
   const analysis = analyzeRoles({ ...config, enabled: true }, nativeModels, allowed);
@@ -165,9 +166,9 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
   } : null;
   return {
     enabled: config.enabled !== false,
-    providers: config.providers.map(provider => ({ id: provider.id, name: provider.name, baseUrl: provider.baseUrl,
+    providers: sortByOrder(config.providers).map(provider => ({ id: provider.id, name: provider.name, baseUrl: provider.baseUrl,
       apiFormat: provider.apiFormat, enabled: provider.enabled !== false, keyConfigured: !!provider.apiKey,
-      models: provider.models.map(model => ({ id: model.id, label: model.label || model.id, enabled: model.enabled !== false,
+      models: sortByOrder(provider.models).map(model => ({ id: model.id, label: model.label || model.id, enabled: model.enabled !== false,
         efforts: model.efforts || [], effortMode: model.effortMode || (model.efforts?.length ? 'manual' : 'auto'),
         contextWindow: model.contextWindow || 272000, maxOutputTokens: model.maxOutputTokens || Math.min(131072, model.contextWindow || 272000),
         supportsImages: modelSupportsImages(model) })) })),
@@ -176,6 +177,18 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     roleLists,
     nativeFamilies,
     modelCount: Object.keys(catalog.routes).length,
+    // The ACP directory is read once per session, so anything we emit after it
+    // was built only shows up in a new conversation. Only that direction is a
+    // problem: entries the session still lists after we stopped emitting them
+    // are already invisible, because userStatus decides what the picker shows.
+    // Warning about those sent users to start a conversation for a change that
+    // had already taken effect (2026-11-02).
+    catalogDrift: (() => {
+      const observed = Number.isFinite(acpOwnModels) && acpOwnModels > 0 ? acpOwnModels : null;
+      if (observed === null) return null;
+      const emitted = (catalog.models || []).filter(model => isOwnUid(model.uid)).length;
+      return emitted > observed ? { emitted, observed, missing: emitted - observed, needsNewSession: true } : null;
+    })(),
     fusionCount: catalog.matrixUids.size,
     lastFusion,
     cliCache: cliCache && typeof cliCache === 'object' ? cliCache : null,

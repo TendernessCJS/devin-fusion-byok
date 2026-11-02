@@ -17,7 +17,7 @@ function pageMarkup() {
 }
 
 function createSettingsView(ui) {
-  const { selection, request, run, element, byId, button, switchInput, focusTargets, scrollTargets } = ui;
+  const { selection, request, run, catalogSuccess, element, byId, button, switchInput, focusTargets, scrollTargets } = ui;
   const state = () => ui.state();
   const off = ui.off;
 
@@ -163,7 +163,7 @@ function createSettingsView(ui) {
         element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: family.label }),
           element('span', { class: 'row-sub', text: sub.join(' · ') })),
         switchInput(!family.hidden, family.variants > 1 ? '在列表中显示 ' + family.label + ' 的 ' + family.variants + ' 个变体' : '在列表中显示 ' + family.label,
-          show => run(() => request('setNativeModelHidden', { uids: family.members.map(member => member.uid), hidden: !show })), off() || family.internal === true));
+          show => run(() => request('setNativeModelHidden', { uids: family.members.map(member => member.uid), hidden: !show }), undefined, catalogSuccess), off() || family.internal === true));
     }
     if (filter === 'internal') {
       for (const family of families) container.append(nativeRow(family));

@@ -44,9 +44,11 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
   `augmentProtoList`/`augmentJsonList`/`buildRoleLists` 三处把隐藏 uid 连坐到同 `familyUid` 的全部兄弟——官方上新变体不会漏过黑名单；面板
   `family.hidden = 任一成员隐藏`，`mixed`/`部分隐藏` 状态已移除。
 - **维度 order 的稳定性是可见性命门**：picker（chat client `nr3`）按 `(dim 名, order)` 去重维度值，同 order 不同名只留先枚举到的一个，其余静默消失。
-  自定义维度值一律走 `stableOrders`（`0x10000000 + hash(name)`，同名恒同 order、跨代稳定），**禁止恢复「20+index」式顺序分配**——配置一变 order 全移，
-  陈旧条目与新条目会在同一 order 上互撞（2026-10-14 实测
-  `DeepSeek · deepseek-flash`/`Claude Haiku 5.5`/`Claude Haiku 5.5 Medium` 三名共占 order 20，BYOK lead 被隐藏）。
+  维度 order 现为**显式持久契约**：BYOK 值取 `0x20000000 + providerRank*0x10000 + modelRank*0x40 + effortSlot`，provider/model 名次来自 config 里持久化的
+  `order` 字段（缺席 = 数组序，含停用项——停用不挪动他人编号）；原生补充值仍走 `stableOrders`（`0x10000000` 段哈希），两段天然不撞。数字只在用户移动/追加时
+  变化，不再每次构建按集合重算，故**不会重蹈 2026-10-14**：当年「20+index」/按名排名都会把同一 order 发给不同名字（实测
+  `DeepSeek · deepseek-flash`/`Claude Haiku 5.5`/`Claude Haiku 5.5 Medium` 三名共占 order 20，BYOK lead 被隐藏）。面板上下箭头改写持久
+  `order`；`sortByOrder`/`nextOrder`/`normalizeOrders` 在 `src/models/order.cjs`，越界抛 `order_rank_overflow`。
 - **陈旧 emit 条目的判别指纹**：官方 fusion 条目恒带能力记录（proto field 32，含 `fusion-sidekick-*` 注册条目），我方 emit 永不写 field
   32——「`fusion-*` uid 且无 f32」即我方条目（含无 `dfbyok` 标记的 native×native 形态，`ownUid`/`matrixUids` 都抓不住它们）。
   **只有补 field 32 才会破坏该指纹；补 harness 不会**——判别只读条目自身的 f32，而 harness 在 inner message 的 f20（2026-10-16 给组合条目补 Lead

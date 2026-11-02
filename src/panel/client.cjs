@@ -94,7 +94,10 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
     notice(progress || '正在保存…');
     try {
       await action();
-      notice(success || '已保存，新对话中生效。', 'success');
+      // A function success message is resolved after the action, so it can read
+      // the state the action produced — the catalog notices depend on whether
+      // the emit still has entries the running session never saw.
+      notice((typeof success === 'function' ? success() : success) || '已保存，新对话中生效。', 'success');
       return true;
     } catch (error) {
       notice(error.message || '操作失败，请重试。', 'error');
@@ -184,6 +187,12 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
     return element('button', { type: 'button', class: 'danger', text: '删除', onclick: () => { dialog.close(); confirmDialog(title, message, onConfirm); } });
   }
 
+  // Catalog-only changes are instant for uids the running session already
+  // holds; anything new waits for a conversation. Resolving the notice after
+  // the action keeps the two apart instead of promising "即刻更新" for both.
+  const catalogSuccess = () => state?.catalogDrift
+    ? '已保存，另有 ' + state.catalogDrift.missing + ' 个模型/组合需新对话才能看到。'
+    : '已保存，目录即刻更新。';
   const ui = {
     state: () => state,
     busy: () => busy,
@@ -191,6 +200,7 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
     selection,
     request,
     run,
+    catalogSuccess,
     notice,
     remember,
     element,

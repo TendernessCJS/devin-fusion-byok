@@ -9,11 +9,13 @@ function createConfigSync({ deps, shared, changed, publish }) {
     else if (type === 'setAutoContinue' || type === 'setAutoContinueUntilPlanComplete') lifecycle.resetAutoContinue?.();
     else if (type === 'setUpdateProxy') {}
     else if (config().enabled !== false) { await shared.ensureEnabled(); await shared.reconcileSelection(); }
+    log('config-after-change', { type });
     changed();
   };
   let lastAutoError, lastAutoPlan;
   const onConfigChanged = () => {
     try {
+      log('config-watch-change');
       const currentConfig = config();
       const currentAutoError = currentConfig.autoContinueOnProviderError === true;
       const currentAutoPlan = currentConfig.autoContinueUntilPlanComplete === true;

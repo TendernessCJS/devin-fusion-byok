@@ -41,12 +41,23 @@ function collect(node, tag, predicate = () => true) {
 function panel(controlTags = {}, script = renderPanel({ nonce: 'safe' }).match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]) {
   const elements = new Map(), posts = [], listeners = [];
   let focused = true;
-  const byId = id => { if (!elements.has(id)) { const node = new Element(controlTags[id] || 'div'); node.ownerDocument = document; elements.set(id, node); } return elements.get(id); };
+  const roots = new Set();
+  const byId = id => {
+    if (!elements.has(id)) { const node = new Element(controlTags[id] || 'div'); node.ownerDocument = document; elements.set(id, node); roots.add(node); }
+    return elements.get(id);
+  };
   const document = { getElementById: byId, createTextNode: text => ({ textContent: text }),
     activeElement: null, scrollingElement: { scrollTop: 0 }, hasFocus: () => focused,
-    querySelectorAll: selector => selector.includes('main')
-      ? [...elements.values()].filter(node => ['button', 'input', 'select'].includes(node.tag) && node.attributes.class !== 'tab')
-      : [] };
+    querySelectorAll: selector => {
+      if (!selector.includes('main')) return [];
+      const found = new Set();
+      const visit = node => {
+        if (['button', 'input', 'select'].includes(node.tag) && !String(node.className || '').split(' ').includes('tab')) found.add(node);
+        for (const child of node.children || []) visit(child);
+      };
+      for (const root of roots) visit(root);
+      return [...found];
+    } };
   document.createElement = tag => {
     const node = new Element(tag);
     node.ownerDocument = document;
@@ -56,7 +67,7 @@ function panel(controlTags = {}, script = renderPanel({ nonce: 'safe' }).match(/
   vm.runInNewContext(script,
     { acquireVsCodeApi: () => ({ getState: () => ({}), setState() {}, postMessage: message => posts.push(message) }), document,
       window: { addEventListener: (name, listener) => { if (name === 'message') listeners.push(listener); } }, setTimeout: () => 0, clearTimeout() {} });
-  return { byId, posts, listeners, receive: data => { for (const listener of listeners) listener(data); },
+  return { byId, posts, listeners, document, receive: data => { for (const listener of listeners) listener(data); },
     activeElement: () => document.activeElement, scrollingElement: () => document.scrollingElement,
     setHasFocus: value => { focused = value; } };
 }
@@ -174,6 +185,18 @@ test('a model switch saves right away without a separate apply step', () => {
   toggle.listeners.change({ target: { checked: false } });
   const update = posts.find(message => message.type === 'updateModels');
   assert.deepEqual(JSON.parse(JSON.stringify(update.payload)), { providerId: 'cpa', changes: [{ id: 'saved', enabled: false }] });
+});
+
+test('a catalog notice names the entries that still need a new conversation', async () => {
+  const { byId, posts, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), catalogDrift: { emitted: 12, observed: 9, missing: 3, needsNewSession: true } } } });
+  const toggle = collect(byId('models'), 'input', node => node.attributes['aria-label'] === '启用模型 Saved')[0];
+  toggle.listeners.change({ target: { checked: false } });
+  const post = posts.find(message => message.type === 'updateModels');
+  receive({ data: { type: 'result', id: post.id, ok: true } });
+  await Promise.resolve();
+  assert.equal(textOf(byId('status')), '已保存，另有 3 个模型/组合需新对话才能看到。',
+    'the notice must not promise an instant update for entries the session never saw');
 });
 
 test('deleting a model lives in its edit dialog', () => {
@@ -652,7 +675,7 @@ test('provider selection, role/native search and fold state survive a state push
   nativeSearchBox.value = 'glm';
   nativeSearchBox.listeners.input({ target: nativeSearchBox });
   receive({ data: { type: 'state', state: two() } });
-  const selected = collect(byId('providers'), 'button', node => node.className.includes('selected'))[0];
+  const selected = collect(byId('providers'), 'div', node => node.className.includes('provider-item') && node.className.includes('selected'))[0];
   assert.match(textOf(selected), /CPB/, 'the clicked provider stays selected');
   assert.equal(collect(byId('role-lead'), 'input', node => node.attributes.type === 'search')[0].value, 'two',
     'the role search text survives');
@@ -742,4 +765,151 @@ test('the internal pill counts internal families and lists them flat without pos
   assert.equal(collect(byId('native-list'), 'details', node => node.className === 'fold').length, 0,
     'and without the internal fold');
   assert.ok(!posts.some(message => message.type === 'setNativeModelHidden'), 'filtering never posts');
+});
+
+test('provider and model rows carry move arrows that dispatch moveProvider/moveModel', async () => {
+  const { byId, posts, receive } = panel();
+  const two = () => ({ ...state(), providers: [
+    { id: 'cpa', name: 'CPA', baseUrl: 'https://cpa.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true,
+      models: [{ id: 'm1', label: 'M1', enabled: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 },
+        { id: 'm2', label: 'M2', enabled: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 }] },
+    { id: 'cpb', name: 'CPB', baseUrl: 'https://cpb.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true, models: [] }] });
+  receive({ data: { type: 'state', state: two() } });
+  const rows = collect(byId('providers'), 'div', node => node.className.includes('provider-item'));
+  assert.equal(rows.length, 2);
+  for (const row of rows) assert.equal(collect(row, 'button', b => b.className === 'move').length, 2, 'each provider row has two arrows');
+  const moves = row => collect(row, 'button', b => b.className === 'move');
+  assert.equal(moves(rows[0])[0].disabled, true, 'first provider cannot move up');
+  assert.equal(moves(rows[0])[1].disabled, false);
+  assert.equal(moves(rows[1])[0].disabled, false);
+  assert.equal(moves(rows[1])[1].disabled, true, 'last provider cannot move down');
+  moves(rows[0])[1].listeners.click();
+  { const post = posts.at(-1); assert.equal(post.type, 'moveProvider'); assert.equal(post.payload.id, 'cpa'); assert.equal(post.payload.delta, 1);
+    receive({ data: { type: 'result', id: post.id, ok: true } }); }
+  await Promise.resolve();
+  assert.equal(textOf(byId('status')), '已保存，目录即刻更新。', 'moves land instantly, no new-session wait');
+  receive({ data: { type: 'state', state: two() } });
+  collect(byId('providers'), 'button', b => b.className === 'provider-select' && textOf(b).includes('CPA'))[0].listeners.click();
+  const modelRows = collect(byId('model-list'), 'div', node => node.className === 'row');
+  const firstMoves = collect(modelRows[0], 'button', b => b.className === 'move');
+  const secondMoves = collect(modelRows[1], 'button', b => b.className === 'move');
+  assert.equal(firstMoves[0].disabled, true, 'first model cannot move up');
+  assert.equal(secondMoves[1].disabled, true, 'last model cannot move down');
+  secondMoves[0].listeners.click();
+  { const post = posts.at(-1); assert.equal(post.type, 'moveModel'); assert.equal(post.payload.providerId, 'cpa'); assert.equal(post.payload.id, 'm2'); assert.equal(post.payload.delta, -1); }
+  receive({ data: { type: 'state', state: two() } });
+  collect(byId('providers'), 'button', b => b.className === 'provider-select' && textOf(b).includes('CPA'))[0].listeners.click();
+  const search = collect(byId('models'), 'input', node => node.attributes.type === 'search')[0];
+  search.value = 'm2';
+  search.listeners.input({ target: search });
+  assert.equal(collect(byId('model-list'), 'button', b => b.className === 'move').length, 0,
+    'a filtered list renders no move arrows');
+});
+
+for (const kind of ['provider', 'model']) {
+  test(`busy locks every ${kind} arrow including dynamic no-id controls, then restores them after the result`, async () => {
+    const { byId, posts, receive } = panel();
+    const model = id => ({ id, label: id.toUpperCase(), enabled: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 });
+    const ordered = () => ({ ...state(), providers: [
+      { id: 'cpa', name: 'CPA', baseUrl: 'https://cpa.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true,
+        models: [model('m1'), model('m2')] },
+      { id: 'cpb', name: 'CPB', baseUrl: 'https://cpb.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true, models: [] }] });
+    const reordered = () => ({ ...state(), providers: [
+      { id: 'cpb', name: 'CPB', baseUrl: 'https://cpb.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true, models: [] },
+      { id: 'cpa', name: 'CPA', baseUrl: 'https://cpa.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true,
+        models: [model('m2'), model('m1')] }] });
+    const isProvider = kind === 'provider';
+    const allMoves = () => collect(byId(isProvider ? 'providers' : 'model-list'), 'button', b => b.className === 'move');
+    receive({ data: { type: 'state', state: ordered() } });
+    if (!isProvider) {
+      collect(byId('providers'), 'button', b => b.className === 'provider-select' && textOf(b).includes('CPA'))[0].listeners.click();
+    }
+    allMoves()[1].listeners.click();
+    const post = posts.at(-1);
+    assert.equal(post.type, isProvider ? 'moveProvider' : 'moveModel');
+    assert.ok(allMoves().every(node => node.disabled === true), 'busy must lock the dynamically created arrows too');
+    receive({ data: { type: 'state', state: reordered() } });
+    assert.ok(allMoves().every(node => node.disabled === true),
+      'the reordered state push the host sends before the result must not resurrect controls');
+    receive({ data: { type: 'result', id: post.id, ok: true } });
+    await Promise.resolve();
+    const restored = allMoves();
+    assert.equal(restored.length, 4);
+    assert.deepEqual(restored.map(node => node.disabled), [true, false, false, true],
+      'after the result, mid-list arrows unlock while the boundary arrows stay disabled');
+    restored[1].listeners.click();
+    const second = posts.at(-1);
+    assert.equal(second.type, isProvider ? 'moveProvider' : 'moveModel', 'a second sort works after the lock lifted');
+    receive({ data: { type: 'state', state: ordered() } });
+    receive({ data: { type: 'result', id: second.id, ok: true } });
+    await Promise.resolve();
+  });
+}
+
+test('querySelectorAll sees only live controls: detached dynamic nodes are not roots', () => {
+  const { byId, receive, document: doc } = panel();
+  const two = () => ({ ...state(), providers: [
+    { id: 'cpa', name: 'CPA', baseUrl: 'https://cpa.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true,
+      models: [{ id: 'm1', label: 'M1', enabled: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 }] }] });
+  receive({ data: { type: 'state', state: two() } });
+  const oldMoves = collect(byId('providers'), 'button', b => b.className === 'move');
+  assert.ok(oldMoves.length >= 2, 'the first render produced dynamic arrows');
+  const live = () => doc.querySelectorAll('main button:not(.tab), main input, main select');
+  assert.ok(oldMoves.every(node => live().includes(node)));
+  receive({ data: { type: 'state', state: { ...two(), providers: [] } } });
+  const now = live();
+  for (const node of oldMoves) assert.ok(!now.includes(node), 'detached arrows must drop out of lockControls');
+  receive({ data: { type: 'state', state: two() } });
+  const fresh = collect(byId('providers'), 'button', b => b.className === 'move');
+  assert.ok(fresh.length >= 2 && fresh.every(node => live().includes(node)), 'new dynamic arrows are reachable again');
+});
+
+test('the move success notice follows catalogDrift from the state push, not a static string', async () => {
+  const { byId, posts, receive } = panel();
+  const two = drift => ({ ...state(), catalogDrift: drift || null, providers: [
+    { id: 'cpa', name: 'CPA', baseUrl: 'https://cpa.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true, models: [] },
+    { id: 'cpb', name: 'CPB', baseUrl: 'https://cpb.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true, models: [] }] });
+  receive({ data: { type: 'state', state: two() } });
+  collect(byId('providers'), 'button', b => b.className === 'move')[1].listeners.click();
+  const post = posts.at(-1);
+  receive({ data: { type: 'state', state: two({ missing: 2 }) } });
+  receive({ data: { type: 'result', id: post.id, ok: true } });
+  await Promise.resolve();
+  assert.equal(textOf(byId('status')), '已保存，另有 2 个模型/组合需新对话才能看到。',
+    'a drift delivered before the result turns the notice into the pending-uids wording');
+  receive({ data: { type: 'state', state: two({ missing: 2 }) } });
+  collect(byId('providers'), 'button', b => b.className === 'move')[0].listeners.click();
+  const cleared = posts.at(-1);
+  receive({ data: { type: 'state', state: two() } });
+  receive({ data: { type: 'result', id: cleared.id, ok: true } });
+  await Promise.resolve();
+  assert.equal(textOf(byId('status')), '已保存，目录即刻更新。', 'a drift cleared mid-action restores the instant wording');
+});
+
+test('the plugin-off switch gate locks role and native toggles; internal families stay read-only while on', () => {
+  const { byId, receive } = panel();
+  const withFamilies = enabled => ({ ...state(), enabled, nativeFamilies: [
+    { id: 'f-normal', label: 'GPT-6', vendor: 'OpenAI', variants: 1, disabled: false, hidden: false, eligible: true, internal: false,
+      efforts: [], toggles: [], members: [{ uid: 'gpt-6', label: 'GPT-6' }] },
+    { id: 'f-internal', label: 'SWE-check', vendor: 'Devin', variants: 1, disabled: false, hidden: false, eligible: false, internal: true,
+      efforts: [], toggles: [], members: [{ uid: 'swe-check', label: 'SWE-check' }] }],
+    roleLists: { lead: [{ ref: { nativeUid: 'n1' }, label: 'Native One', native: true, available: true, selected: true, memberUids: ['n1'] }],
+      sidekick: [] } });
+  receive({ data: { type: 'state', state: withFamilies(false) } });
+  const roleSwitch = () => collect(byId('lead-role-list'), 'input', node => node.className === 'switch')[0];
+  const nativeSwitches = () => collect(byId('native-models'), 'input', node => node.className === 'switch');
+  assert.equal(roleSwitch().disabled, true, 'plugin off disables the role switch');
+  assert.ok(nativeSwitches().length >= 1 && nativeSwitches().every(node => node.disabled === true),
+    'plugin off disables every native family switch');
+  receive({ data: { type: 'state', state: withFamilies(true) } });
+  const pill = collect(byId('native-models'), 'button', node => node.className.includes('pill') && textOf(node).startsWith('内部'))[0];
+  assert.ok(pill, 'the internal pill exists');
+  pill.listeners.click();
+  const switches = nativeSwitches();
+  assert.ok(switches.length >= 1 && switches.every(node => node.disabled === true),
+    'internal families keep their switches rendered but read-only while the plugin is on');
+  receive({ data: { type: 'state', state: withFamilies(true) } });
+  collect(byId('native-models'), 'button', node => node.className.includes('pill') && textOf(node).startsWith('全部'))[0].listeners.click();
+  assert.ok(nativeSwitches().some(node => node.disabled === false),
+    'normal families stay operable while only internals are locked');
 });

@@ -41,6 +41,7 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     acpOwnModels: stores.acpObservation.ownModels,
   });
   stores.panel.manager = createManager({ read: config, write: (next, baseline) => updateConfig(configFile, doc => applyKeyDelta(doc, next, baseline)),
+    acpOwnModels: () => stores.acpObservation.ownModels,
     nativeModels: () => [...stores.nativeCatalog.nativeModels.values()], nativeAllowedUids: () => stores.nativeCatalog.nativeAllowedUids, refreshNativeModels: () => stores.nativeCatalog.refreshNativeModels(), nativeCatalogStatus: () => stores.nativeCatalog.nativeCatalogStatus,
     backendStatus: () => shared.backendStatus,
     autoContinueStatus: () => shared.autoContinue ? (shared.autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',

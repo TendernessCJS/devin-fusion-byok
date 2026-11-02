@@ -3,12 +3,12 @@ function pageMarkup() {
   return `
       <div class="section-head"><h2>Fusion 可选模型</h2><span id="role-count" class="hint"></span></div>
       <p id="fusion-summary" class="hint mb"></p>
-      <p class="hint mb">这里启用的模型会出现在 Devin 官方 Fusion 卡片的 Lead / Sidekick 下拉里；Lead 按系列（Effort 档位）成组，官方默认项已可用，无需手动添加。停用后模型从下拉移除，相关组合同时失效——正在使用的组合请在 Fusion 卡片里重新选择。</p>
+      <p class="hint mb">这里启用的模型会出现在 Devin 官方 Fusion 卡片的 Lead / Sidekick 下拉里；Lead 按系列（Effort 档位）成组，官方默认项已可用，无需手动添加。已在当前会话目录里的条目启用或停用即时生效；新增的模型/组合需开新对话才能看到。停用后模型从下拉移除，相关组合同时失效——正在使用的组合请在 Fusion 卡片里重新选择。</p>
       <div class="role-grid"><div id="role-lead"></div><div id="role-sidekick"></div></div>`;
 }
 
 function createFusionView(ui) {
-  const { selection, request, run, element, byId, button, switchInput, focusTargets, scrollTargets } = ui;
+  const { selection, request, run, catalogSuccess, element, byId, button, switchInput, focusTargets, scrollTargets } = ui;
   const state = () => ui.state();
   const off = ui.off;
   const roleSearch = selection.roleSearch;
@@ -62,7 +62,7 @@ function createFusionView(ui) {
             : element('span', { class: 'row-sub',
               text: 'BYOK' + ((item.variantCount || 0) > 1 ? ' · ' + item.variantCount + ' 档' : '') })),
         item.available ? switchInput(item.selected === true, '在 ' + name + ' 中启用 ' + item.label,
-          value => run(() => request('setRoleModel', { role, model: item.ref, enabled: value })), off())
+          value => run(() => request('setRoleModel', { role, model: item.ref, enabled: value }), undefined, catalogSuccess), off())
           : element('div', { class: 'actions nowrap' },
             element('span', { class: 'hint', text: confirmed ? item.reason || '不可用' : '官方目录未同步，暂无法确认' }),
             confirmed ? button('移除', () => run(() => request('forgetRoleRef', { role, model: item.ref }), '正在移除…', '已移除。'), 'quiet') : null));

@@ -1,7 +1,9 @@
 'use strict';
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { modelEfforts, modelSupportsImages } = require('../models/capabilities.cjs');
-const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, leadFamilyBase, stableOrders, groupedOrders } = require('./identity.cjs');
+const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, leadFamilyBase, stableOrders,
+  NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE, BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT } = require('./identity.cjs');
+const { sortByOrder } = require('../models/order.cjs');
 const { configFor } = require('./codec.cjs');
 const { discoverOfficialRoles, discoverAdditionalNativeRoles, buildRoleLists } = require('./roles.cjs');
 
@@ -19,21 +21,34 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   if (!['http:', 'https:'].includes(inferenceUrl.protocol) || inferenceUrl.username || inferenceUrl.password) {
     throw new Error('Invalid inference server URL');
   }
-  const providers = Array.isArray(config.providers) ? config.providers.filter(provider => provider && provider.enabled !== false) : [];
-  // Provider block ranks drive grouped dimension orders below. Rank the
-  // UNFILTERED provider list by display name — never by config position and
-  // never by the enabled filter — so toggling a provider or reordering config
-  // cannot reshuffle orders that caches and the picker already saw.
-  const providerRanks = new Map();
-  (Array.isArray(config.providers) ? config.providers : [])
-    .filter(provider => provider && typeof provider.id === 'string' && provider.id)
-    .map(provider => ({ provider, key: [String(provider.name || provider.id).toLowerCase(), String(provider.name || provider.id), provider.id] }))
-    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-    .forEach(({ provider }, rank) => providerRanks.set(provider.id, rank));
+  const rawProviders = Array.isArray(config.providers) ? config.providers : [];
+  for (const provider of rawProviders) {
+    if (provider && provider.enabled !== false && (typeof provider.id !== 'string' || !provider.id)) {
+      throw new Error('Provider id is required');
+    }
+  }
+  const allProviders = rawProviders
+    .filter(provider => provider && typeof provider.id === 'string' && provider.id);
+  const orderedProviders = sortByOrder(allProviders);
+  const providerRanks = new Map(orderedProviders.map((provider, rank) => [provider.id, rank]));
+  const modelRanks = new Map(), effortSlots = new Map();
+  for (const provider of orderedProviders) {
+    sortByOrder(Array.isArray(provider.models) ? provider.models : []).forEach((model, rank) => {
+      const key = JSON.stringify([provider.id, model?.id]);
+      modelRanks.set(key, rank);
+      const efforts = modelEfforts(model).map(effort => ({ effort, order: effortMetadata(effort).order }))
+        .sort((a, b) => a.order - b.order || (String(a.effort) < String(b.effort) ? -1 : String(a.effort) > String(b.effort) ? 1 : 0));
+      efforts.forEach(({ effort }, slot) => effortSlots.set(key + '|' + (effort ?? ''), slot));
+    });
+  }
+  // The persisted order is authoritative for BOTH surfaces: this iteration
+  // order becomes `catalog.models`, which is what the model list renders, while
+  // the ranks above become the dimension orders. A config whose array order
+  // disagrees with its orders therefore still shows one consistent sequence.
+  const providers = orderedProviders.filter(provider => provider.enabled !== false);
   const identities = new Set();
   for (const provider of providers) {
-    if (typeof provider.id !== 'string' || !provider.id) throw new Error('Provider id is required');
-    for (const model of Array.isArray(provider.models) ? provider.models : []) {
+    for (const model of sortByOrder(Array.isArray(provider.models) ? provider.models : [])) {
       if (!model || model.enabled === false) continue;
       if (typeof model.id !== 'string' || !model.id) throw new Error('Model id is required');
       const key = JSON.stringify([provider.id, model.id]);
@@ -266,64 +281,87 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
       const sideDim = sidekick.native && sidekick.dimension ? sidekick.dimension.name
         : sidekick.native ? sidekick.label
         : sidekick.familyLabel + (sidekick.effort ? ` ${effortMetadata(sidekick.effort).name}` : '');
-      if (!(lead.native && lead.leadDimension)) customLeadSlots.set(leadDim, { providerId: lead.native ? '' : lead.providerId });
+      if (!(lead.native && lead.leadDimension)) customLeadSlots.set(leadDim,
+        { providerId: lead.native ? '' : lead.providerId, key: lead.native ? '' : lead.key });
       if (!(sidekick.native && sidekick.dimension)) {
         customSideSlots.set(sideDim, {
           base: sidekick.native ? `native:${sidekick.uid}` : `byok:${sidekick.key}`,
           slot: effortMetadata(sidekick.effort).order,
           providerId: sidekick.native ? '' : sidekick.providerId,
+          key: sidekick.native ? '' : sidekick.key,
+          effort: sidekick.native ? null : (sidekick.effort ?? null),
           model: sidekick.native ? '' : sidekick.familyLabel,
         });
       }
       pairs.push({ lead, sidekick, leadDim, sideDim, uid });
     }
   }
-  // Custom dimension values take orders well above the official range. BYOK
-  // values group per provider (blocks ranked by provider NAME, never config
-  // position) and sort inside the block; native values keep hash orders, and
-  // each mechanism passes the other's assigned orders as reserved so the two
-  // never collide. Sequential orders would shift whenever the selected set
-  // changes, and stale entries kept in the CLI cache carry their old order —
-  // two different names landing on the same order make the picker drop one
-  // silently (it dedupes dimension values by order). A per-name hash offset
-  // inside each slot keeps cross-generation collisions a coincidence instead
-  // of a certainty. Native sidekick values additionally take consecutive
-  // slots inside a FAMILY (sorted by effort tier), so a model's variants stay
-  // adjacent in the dropdown instead of scattering.
-  const leadGroups = [], customNativeLeads = [];
+  // Custom dimension values take orders well above the official range. Three
+  // bands keep official < native < BYOK: native values keep hash orders in the
+  // 0x10000000 band, and BYOK values start at 0x20000000 where provider rank
+  // strides a whole 0x10000 and model rank strides 0x40 — so an inserted
+  // provider or model can never slide an already-assigned order into another
+  // value's slot. The ranks themselves come from each item's persisted order
+  // (array order for legacy configs): orders only move when the user moves an
+  // entry or appends one, so a catalog rebuild no longer reassigns numbers
+  // that caches and the picker already saw — two different names on one order
+  // make the picker drop one silently (it dedupes dimension values by order).
+  // Native sidekick values additionally take consecutive slots inside a
+  // FAMILY (sorted by effort tier), so a model's variants stay adjacent in
+  // the dropdown instead of scattering.
+  const byokOrder = (providerId, key, slot = 0) => {
+    const providerRank = providerRanks.get(providerId), modelRank = modelRanks.get(key);
+    if (providerRank === undefined || modelRank === undefined) throw new Error('order_rank_missing');
+    if (providerRank >= BYOK_PROVIDER_LIMIT || modelRank >= BYOK_MODEL_LIMIT) throw new Error('order_rank_overflow');
+    return BYOK_ORDER_BASE + providerRank * BYOK_PROVIDER_STRIDE + modelRank * BYOK_MODEL_STRIDE + slot;
+  };
+  // The three order bands must never intersect: the picker dedupes dimension
+  // values by order, so two names sharing one number make one of them vanish
+  // silently. Official Fusion values keep their own small integers, native
+  // non-Fusion values live in the 0x10000000 band, BYOK values start at
+  // 0x20000000. This guard turns a future span/base change that breaks the
+  // separation into a loud failure instead of a missing dropdown entry.
+  const officialCeiling = list => {
+    let max = -1;
+    for (const value of list || []) if (Number.isSafeInteger(value) && value > max) max = value;
+    return max;
+  };
+  const assertNativeBand = (order, ceiling) => {
+    if (!Number.isSafeInteger(order) || order < NATIVE_ORDER_BASE || order >= BYOK_ORDER_BASE || order <= ceiling) {
+      throw new Error('order_band_conflict');
+    }
+  };
+  const leadOrders = new Map(), customNativeLeads = [];
   for (const [name, v] of customLeadSlots) {
-    const rank = providerRanks.get(v.providerId);
-    if (rank === undefined) { customNativeLeads.push(name); continue; }
-    (leadGroups[rank] || (leadGroups[rank] = [])).push(name);
+    if (!v.providerId) { customNativeLeads.push(name); continue; }
+    leadOrders.set(name, byokOrder(v.providerId, v.key));
   }
-  leadGroups.forEach(names => names.sort());
-  const leadOrders = groupedOrders(leadGroups, roleSelection.reservedLeadOrders);
-  for (const [name, order] of stableOrders(customNativeLeads, [...roleSelection.reservedLeadOrders, ...leadOrders.values()]))
+  const leadCeiling = officialCeiling(roleSelection.reservedLeadOrders);
+  for (const [name, order] of stableOrders(customNativeLeads,
+    [...roleSelection.reservedLeadOrders, ...leadOrders.values()])) {
+    assertNativeBand(order, leadCeiling);
     leadOrders.set(name, order);
-  const sideByokGroups = [], sideGroups = new Map();
+  }
+  const sideGroups = new Map(), sideOrders = new Map();
+  const usedSideOrders = new Set(roleSelection.reservedSidekickOrders);
   for (const [name, v] of customSideSlots) {
-    const rank = providerRanks.get(v.providerId);
-    if (rank === undefined) {
+    if (!v.providerId) {
       if (!sideGroups.has(v.base)) sideGroups.set(v.base, []);
       sideGroups.get(v.base).push({ name, slot: v.slot });
       continue;
     }
-    (sideByokGroups[rank] || (sideByokGroups[rank] = [])).push({ name, model: v.model, slot: v.slot });
-  }
-  sideByokGroups.forEach(entries => entries.sort((a, b) => a.model < b.model ? -1 : a.model > b.model ? 1
-    : a.slot - b.slot || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)));
-  const sideOrders = new Map(), usedSideOrders = new Set(roleSelection.reservedSidekickOrders);
-  const sideByokNames = sideByokGroups.map(entries => entries.map(entry => entry.name));
-  for (const [name, order] of groupedOrders(sideByokNames, usedSideOrders)) {
+    const order = byokOrder(v.providerId, v.key, effortSlots.get(v.key + '|' + (v.effort ?? '')) ?? 0);
     usedSideOrders.add(order);
     sideOrders.set(name, order);
   }
   const sideBaseOrders = stableOrders([...sideGroups.keys()], usedSideOrders);
+  const sideCeiling = officialCeiling(roleSelection.reservedSidekickOrders);
   for (const [base, group] of sideGroups) {
     group.sort((a, b) => a.slot - b.slot || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     let order = sideBaseOrders.get(base);
     for (const { name } of group) {
       while (usedSideOrders.has(order)) order++;
+      assertNativeBand(order, sideCeiling);
       usedSideOrders.add(order);
       sideOrders.set(name, order);
     }

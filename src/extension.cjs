@@ -200,8 +200,15 @@ async function activate(context) {
   } });
   installEnable({ deps, shared });
   installCommands({ deps, shared });
+  // The two consumers are isolated: a throw in the cache probe used to abort
+  // the publication call silently, so a failed catalog refresh looked like a
+  // config change that simply produced no catalog traffic.
+  const configChanged = () => {
+    try { cacheSync.changed(); } catch (error) { log('cache-sync-error', { code: error?.code || error?.message || 'unknown' }); }
+    try { lifecycle.publication?.changed(); } catch (error) { log('publication-error', { code: error?.code || error?.message || 'unknown' }); }
+  };
   const configSync = createConfigSync({ deps, shared,
-    changed: () => { cacheSync.changed(); lifecycle.publication?.changed(); },
+    changed: configChanged,
     publish: () => shared.management.publish() });
   installPanel({ deps, shared, cacheSync, afterChange: configSync.afterChange });
   configSync.start();

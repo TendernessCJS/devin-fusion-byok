@@ -565,3 +565,37 @@ for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} c
       { key: 'Speed', order: 0, name: '', controlType: 2 }]);
   }
 });
+
+test('staleOwnEntries reports byte-drifted own entries in every payload shape', () => {
+  const { staleOwnEntries } = require('../src/catalog.cjs');
+  const ownA = cat(s(1, 'A'), s(22, 'dfbyok-pa-ma-0123456789abcdef'));
+  const ownB = cat(s(1, 'B'), s(22, 'fusion-dfbyok-pa-ma-0123456789abcdef-sidekick-pa-mb-0123456789abcdef'));
+  const official = cat(s(1, 'F3'), s(22, 'fusion-official-a-sidekick-b'));
+  const models = [{ uid: 'dfbyok-pa-ma-0123456789abcdef', raw: ownA }, { uid: 'fusion-dfbyok-pa-ma-0123456789abcdef-sidekick-pa-mb-0123456789abcdef', raw: ownB }];
+  const flat = cat(m(1, ownA), m(1, ownB), m(1, official));
+  const nested = cat(m(1, cat(s(1, 'status'), m(33, cat(m(1, ownA), m(1, ownB), m(1, official))))));
+  const bare = cat(v(1, 1), m(33, cat(m(1, ownA), m(1, ownB), m(1, official))));
+  for (const shape of [flat, nested, bare]) assert.deepEqual(staleOwnEntries(shape, { models }), []);
+  const drifted = cat(s(1, 'A'), s(22, 'dfbyok-pa-ma-0123456789abcdef'), v(99, 7));
+  const flatDrift = cat(m(1, drifted), m(1, ownB), m(1, official));
+  assert.deepEqual(staleOwnEntries(flatDrift, { models }), ['dfbyok-pa-ma-0123456789abcdef'],
+    'a same-uid entry with different bytes (e.g. a changed order) is stale');
+  assert.deepEqual(staleOwnEntries(cat(m(1, drifted), m(1, drifted)), { models }),
+    ['dfbyok-pa-ma-0123456789abcdef'], 'a drifted uid is reported once');
+  assert.deepEqual(staleOwnEntries(cat(m(1, cat(s(1, 'X'), s(22, 'swe-2-max'))), m(1, official)), { models }), [],
+    'non-own uids are never reported');
+  const orphan = cat(m(1, cat(s(1, 'G'), s(22, 'dfbyok-pa-gone-0123456789abcdef'))));
+  assert.deepEqual(staleOwnEntries(orphan, { models }), [],
+    'own uids absent from models belong to the uid-existence check, not this probe');
+  assert.deepEqual(staleOwnEntries(Buffer.from('garbage'), { models }), []);
+});
+
+test('staleOwnEntries rejects malformed options loudly', () => {
+  const { staleOwnEntries } = require('../src/catalog.cjs');
+  const flat = cat(m(1, cat(s(1, 'A'), s(22, 'dfbyok-pa-ma-0123456789abcdef'))));
+  for (const bad of [undefined, null, 'x', new Set(), [{ uid: 'x', raw: Buffer.alloc(1) }]]) {
+    assert.throws(() => staleOwnEntries(flat, bad), TypeError);
+  }
+  assert.throws(() => staleOwnEntries(flat), TypeError);
+  assert.throws(() => staleOwnEntries(flat, { models: 'x' }), TypeError);
+});

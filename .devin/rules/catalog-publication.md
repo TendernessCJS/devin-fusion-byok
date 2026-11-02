@@ -34,3 +34,27 @@ description: "Apply when changing the native auth-status catalog write, the publ
 `ModelStatusInfo.status` 只有 UNSPECIFIED/INFO/WARNING 三态 + message——**是提示徽标不是可用性白名单**。
 因此桥**不改写响应**（已列入 `KNOWN_UNCHANGED`，不报未知目录 RPC）、缺我方 uid 无功能影响。
 若哪天出现 `MODEL_STATUS_UNAVAILABLE` 之类的第四态，先取证再决定是否合成条目。
+
+## ACP `configOptions` 只在会话建立时读取（2026-11-02 实测）
+
+- agent 窗口与 Fusion 卡片的候选来自 ACP `configOptions`，它在**会话建立时**读取一次；运行期改配置不会让它重读。
+  实测：停用一家供应商 + 启用一家新供应商后，`userStatus` 发布成功（`afterOwn 189 → 1080`、`phase:applied`、`nativeApplied:true`）、
+  磁盘缓存也重写了（`cli-cache-refreshed` 三个文件），但宿主 output 的 `acp-models` 从 `02:02:42` 到 `02:06:27` 恒为
+  `models 1123 / ownModels 90 / plain 9 / fusion 81`；重载窗口后才变成 `models 1531 / ownModels 156 / plain 12 / fusion 144`。
+- **滞留层是会话目录，不是磁盘缓存**：磁盘 CLI 缓存每次配置变更都被我们重写（`cli-cache-refreshed` 三个文件，实测 `force:false`），
+  它是新的；旧的是会话内 `configOptions`。把两者混说会推出错误预期（「缓存已刷新为何还看不见」）。
+- **判据是 uid 是否已在会话目录里，不是「供应商是否被重载过」**：已在目录中的 uid，启用/停用、排序、角色白名单都即时生效
+  （改的是 userStatus 的可见性与组合）；不在目录中的 uid，无论怎么改配置都选不到，直到新会话或窗口重载。
+  反例说明粒度：一个重载时已启用的供应商，事后**新增一个模型**——那条新 uid 仍需新对话；而同一供应商下已在目录里的模型照常即时。
+  两类典型观察（2026-11-02 用户实测）：①重载前禁用、重载后启用 → 等同新增，picker 不刷新；②重载前启用、重载后禁用 → 后续开关全即时。
+- 面板用 `catalogDrift` 把这层暴露出来（`panel-state.cjs`：`catalog.models` 里 `isOwnUid` 的条数 vs `acpObservation.ownModels`），
+  **只在 `emitted > observed` 时提示**「还有 N 个模型/组合没进入当前会话」，因为只有「新增未进目录」才真需要新对话。
+  反方向（会话里还列着我们已停发的条目）**不得提示**：那些条目在 userStatus 层面已不再引用，picker 早就看不到了——
+  2026-11-02 首版按「不等即提示」实现，对「重载前启用、重载后停用」误报，把已经生效的事说成还需新对话。
+  判据是**数量**不是集合，增删相抵时不提示；观察值未建立（0）时不提示，避免误报。观察器只把数字交给面板，**uid 值不进日志**（`acp-observer.cjs` 顶部禁令）。
+- 所以面板文案按这两类分开：`已保存，新对话中生效。`（含「已导入/已添加」）用于新增、改名、改密钥、改档位；开关、隐藏、排序等目录内操作统一走
+  `catalogSuccess()`（`client.cjs`），按 `catalogDrift` **动态**取文案——无 drift 报「已保存，目录即刻更新。」，有 drift 报「另有 N 个模型/组合需新对话才能看到」，而不是静态分工。
+  计数两侧同用 `isOwnUid`：acp-observer 的 `ownModels` 与面板 `catalogDrift` 的 emit 侧都是普通 `dfbyok-*`，以及 Lead 或
+  Sidekick 任一侧属于 BYOK 的 `fusion-*`——包括 `fusion-<native>-sidekick-dfbyok-*`，均由 `isOwnUid` 判定（排除纯官方 fusion-*）。
+  **不要**把新增类也写成「即刻更新」——2026-11-02 正是这句误导致使把时序问题当成发布失败查了三轮。
+- 版本范围：以上是 **Devin 3.11.238 / macOS / 本机**的实测，不是无条件的跨版本契约。若官方改变会话建立时的目录读取时机，本条须重新取证。

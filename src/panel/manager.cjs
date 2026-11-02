@@ -5,6 +5,7 @@ const { discover: discoverModels } = require('../models/discovery.cjs');
 const { normalizeBaseUrlPath } = require('./base-url.cjs');
 const { parseProxy, maskProxy } = require('../update/proxy-config.cjs');
 const { publicState } = require('./panel-state.cjs');
+const { sortByOrder, nextOrder, normalizeOrders } = require('../models/order.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 class PanelInputError extends Error {}
 const fail = message => { throw new PanelInputError(message); };
@@ -59,13 +60,13 @@ function modelPatch(input, previous) {
   if (model.maxOutputTokens > model.contextWindow) fail('最大输出长度不能超过上下文长度。');
   return model;
 }
-function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, refreshDesktopCatalog = null, desktopCatalogStatus = () => null, nativeContract = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown', health = () => null }) {
+function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, refreshDesktopCatalog = null, desktopCatalogStatus = () => null, nativeContract = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown', health = () => null, acpOwnModels = () => 0 }) {
   let queue = Promise.resolve();
   let pendingImport;
   const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey]);
   const state = () => {
     const config = read(), status = nativeCatalogStatus();
-    const result = publicState(config, nativeModels(), autoContinueStatus(), status, cliCacheStatus(), nativeAllowedUids());
+    const result = publicState(config, nativeModels(), autoContinueStatus(), status, cliCacheStatus(), nativeAllowedUids(), undefined, acpOwnModels());
     result.nativeContract = nativeContract() || null;
     result.nativeCatalogStatus = status;
     result.backendStatus = backendStatus();
@@ -128,7 +129,11 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
           const previousName = existing.name;
           Object.assign(existing, { name, baseUrl: url, apiFormat: payload.apiFormat, apiKey });
           if (name !== previousName) for (const model of existing.models) if (model.label?.startsWith(previousName + ' · ')) model.label = name + model.label.slice(previousName.length);
-        } else config.providers.push({ id: 'provider-' + randomUUID(), name, baseUrl: url, apiFormat: payload.apiFormat, apiKey, enabled: true, models: [] });
+        } else {
+          normalizeOrders(config.providers);
+          config.providers.push({ id: 'provider-' + randomUUID(), name, baseUrl: url, apiFormat: payload.apiFormat, apiKey,
+            enabled: true, order: nextOrder(config.providers), models: [] });
+        }
         break;
       }
       case 'deleteProvider': providerAt(config, payload.id); config.providers = config.providers.filter(p => p.id !== payload.id); break;
@@ -155,9 +160,11 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         const candidates = new Map(pendingImport.models.map(model => [model.id, model]));
         if (payload.ids.some(id => !candidates.has(id))) fail('所选模型不在获取的列表中，请重新选择。');
         const existing = new Set(provider.models.map(model => model.id));
+        normalizeOrders(provider.models);
         for (const id of payload.ids) if (!existing.has(id)) {
           const candidate = candidates.get(id);
-          provider.models.push({ ...candidate, label: provider.name + ' · ' + id, enabled: true });
+          provider.models.push({ ...candidate, label: provider.name + ' · ' + id, enabled: true,
+            order: nextOrder(provider.models) });
         }
         break;
       }
@@ -176,7 +183,9 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         const provider = providerAt(config, payload.providerId), input = payload.model;
         const id = text(input?.id, '模型 ID');
         if (provider.models.some(m => m.id === id)) fail('该模型已经在列表中。');
-        provider.models.push(modelPatch(input, { id, label: id, enabled: true, efforts: [], contextWindow: 272000, maxOutputTokens: 131072, source: 'manual' }));
+        normalizeOrders(provider.models);
+        provider.models.push(modelPatch(input, { id, label: id, enabled: true, efforts: [], contextWindow: 272000,
+          maxOutputTokens: 131072, source: 'manual', order: nextOrder(provider.models) }));
         break;
       }
       case 'setNativeModelHidden': {
@@ -260,6 +269,31 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         }
         break;
       }
+      case 'moveProvider': {
+        if (payload?.delta !== -1 && payload?.delta !== 1) fail('移动方向无效。');
+        const ordered = sortByOrder(config.providers);
+        const index = ordered.findIndex(provider => provider.id === payload.id);
+        if (index < 0) fail('该供应商已不存在，请刷新面板。');
+        const target = index + payload.delta;
+        if (target < 0 || target >= ordered.length) return state();
+        normalizeOrders(config.providers);
+        const a = ordered[index], b = ordered[target];
+        [a.order, b.order] = [b.order, a.order];
+        break;
+      }
+      case 'moveModel': {
+        const provider = providerAt(config, payload.providerId);
+        if (payload?.delta !== -1 && payload?.delta !== 1) fail('移动方向无效。');
+        const ordered = sortByOrder(provider.models);
+        const index = ordered.findIndex(model => model.id === payload.id);
+        if (index < 0) fail('该模型已不存在，请刷新面板。');
+        const target = index + payload.delta;
+        if (target < 0 || target >= ordered.length) return state();
+        normalizeOrders(provider.models);
+        const a = ordered[index], b = ordered[target];
+        [a.order, b.order] = [b.order, a.order];
+        break;
+      }
       case 'setEnabled': config.enabled = boolean(payload.enabled, '启用状态'); break;
       case 'setGoalEnabled': config.goalEnabled = boolean(payload.enabled, '目标模式'); break;
       case 'setAutoContinue': config.autoContinueOnProviderError = boolean(payload.enabled, '自动继续'); break;
@@ -279,6 +313,8 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       default: fail('不支持的操作。');
     }
     pruneDanglingRoleRefs(config);
+    config.providers = sortByOrder(config.providers);
+    for (const provider of config.providers) provider.models = sortByOrder(provider.models);
     analyzedConfig = undefined; // The cases above mutated config in place.
     buildCatalog(config, observed().models, observed().allowed, roleAnalysis()); // Validate the complete model graph before committing.
     write(config, baseline);

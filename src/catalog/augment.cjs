@@ -1,7 +1,7 @@
 'use strict';
 const { parseFields, fields, str, s, m } = require('../protocol/wire.cjs');
 const { OWN_GROUP, ownUid, has, concat, expandHiddenByFamily, nativeUid } = require('./identity.cjs');
-const { rpcShape, rewriteMessage, reportFusionStatus, protoUid, protoFamilyUid, jsonKey, jsonMetadata, nativeEntries, reportNativeModels, protoPickerLabels, jsonPickerLabels } = require('./payload.cjs');
+const { rpcShape, rewriteMessage, reportFusionStatus, protoUid, protoFamilyUid, jsonKey, jsonMetadata, nativeEntries, reportNativeModels, protoPickerLabels, jsonPickerLabels, isOwnUid } = require('./payload.cjs');
 
 function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNativeModels, source) {
   const models = Array.isArray(catalog.models) ? catalog.models : [];
@@ -167,6 +167,23 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
 //     the BYOK uid digest changed with the configuration)
 //   - one of its sides was explicitly turned off for that role, because then it
 //     must stop feeding dimension values into the picker
+// Shared payload traversal for the staleness probes: the flat CLI-configs
+// list keeps its entries at the top level, the `GetUserStatusResponse`
+// envelope nests them under field 1 → 33, and the bare `UserStatus` message
+// the CLI caches keeps them at field 33 of the payload itself.
+function forEachCatalogEntry(data, visit) {
+  try {
+    for (const body of [data, ...parseFields(data).filter(field => field.number === 1 && field.wire === 2).map(field => field.value)]) {
+      visit(body);
+      try {
+        for (const list of parseFields(body).filter(field => field.number === 33 && field.wire === 2)) {
+          for (const entry of parseFields(list.value).filter(field => field.number === 1 && field.wire === 2)) visit(entry.value);
+        }
+      } catch { /* not a status envelope — the flat scan above already ran */ }
+    }
+  } catch { /* unparseable payloads simply report no stale entries */ }
+}
+
 // Callers must pass the object form `{ emitted, known, excluded }`; the
 // historical positional set implied "not emitted means stale", which deleted
 // perfectly servable combinations. A wrong argument type throws TypeError
@@ -202,16 +219,31 @@ function staleFusionUids(data, options) {
   // `UserStatus` message the CLI caches (field 1 is the `pro` boolean) keeps them
   // at field 33 of the payload itself. Scanning only the envelope made the cached
   // shape invisible, so its stale entries could never be retired.
-  try {
-    for (const body of [data, ...parseFields(data).filter(field => field.number === 1 && field.wire === 2).map(field => field.value)]) {
-      scan(body);
-      try {
-        for (const list of parseFields(body).filter(field => field.number === 33 && field.wire === 2)) {
-          for (const entry of parseFields(list.value).filter(field => field.number === 1 && field.wire === 2)) scan(entry.value);
-        }
-      } catch { /* not a status envelope — the flat scan above already ran */ }
-    }
-  } catch { /* unparseable payloads simply report no stale entries */ }
+  forEachCatalogEntry(data, scan);
+  return stale;
+}
+
+// A cached payload can hold every expected uid and still be stale: dimension
+// values (order/name) live inside the entry bytes we emit, so uid presence
+// alone cannot see an out-of-date shape. This probe compares the raw bytes of
+// each own uid found in the payload with the current emission. Uids that are
+// ours but absent from `models` are left to the existing expected-uid check —
+// retirement is a separate decision.
+function staleOwnEntries(data, options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options) || options instanceof Set) {
+    throw new TypeError('staleOwnEntries requires { models }');
+  }
+  if (!Array.isArray(options.models)) throw new TypeError('staleOwnEntries requires { models }');
+  const expected = new Map();
+  for (const model of options.models) {
+    if (typeof model?.uid === 'string' && Buffer.isBuffer(model?.raw)) expected.set(model.uid, model.raw);
+  }
+  const stale = [], seen = new Set();
+  forEachCatalogEntry(data, entry => {
+    const uid = protoUid(entry);
+    if (!isOwnUid(uid) || !expected.has(uid) || seen.has(uid)) return;
+    if (!entry.equals(expected.get(uid))) { seen.add(uid); stale.push(uid); }
+  });
   return stale;
 }
 
@@ -335,4 +367,4 @@ function augmentLocalModelChoices(data, format, catalog, skip = () => {}, retire
   } catch { skip('transform-failed'); return data; }
 }
 
-module.exports = { augmentProtoList, augmentJsonList, augmentCatalog, staleFusionUids, collectNativeModels, collectAllowedUids, augmentLocalModelChoices };
+module.exports = { augmentProtoList, augmentJsonList, augmentCatalog, staleFusionUids, staleOwnEntries, collectNativeModels, collectAllowedUids, augmentLocalModelChoices };

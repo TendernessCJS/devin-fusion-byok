@@ -37,7 +37,9 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   即生效），且 `force()` 与 `changed()` 共用 `cliCacheMs` 间隔——刷新风暴不得变成 ACP 断开风暴。Composer
   模型缺失排障时先看缓存新鲜度，backend 注入日志（`afterOwn`）证明不了 picker 侧可见性。面板「设置 → CLI 缓存 → 刷新缓存」走同一个
   `checkCliCaches({ force: true })`（`refreshCliCaches` 消息），只做原地重写、不引入新的刷新通道；`cliCacheStatus()` 把最近一次报告交给面板渲染，
-  不要在那里触发写入。**自动检查只看 uid 存在性**（`missing`/`staleProbe`），所以「uid 齐全但条目形态过时」它一律跳过——这正是 `force` 存在的理由：强制模式绕过门控、
+  不要在那里触发写入。**自动检查除 uid 存在性（`missing`/`staleProbe`）外还有一条形态比对** `staleOwnEntries`：仅当
+  `ownEntriesSignature(models)` 与上次记录不同才启用，逐字节比较缓存里我们条目的 raw 与当前 emit；**同一签名只探一次**（收敛守卫，签名仅在权威检查——`retire=true`——返回后记录；loading/unavailable 的非权威探测不消费签名）——
+  逐字节判据可能永不收敛，重复探测会变成每 3 秒重写约 1.6 MB×2。signature 不含隐藏名单（原生白名单计数实测抖动会误触发）。`force` 仍是手动兜底：强制模式绕过门控、
   直接比较 augment 后的字节，只有真差异才落盘。**重写是「比对后替换」而非盲目覆盖**：落盘前重读、要求字节与所增强的那份**完全一致**，不一致就跳过（`concurrent-write`）——否则会用旧 payload 的增强结果覆盖 CLI 刚写入的更新版本、静默丢掉它存的内容（发现过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。`.bak` 写的是**所增强的那份原始字节**（不是再次新读的、可能已属新世代的版本）。修
   emit 形态后**必须**走一次强制刷新或让配置变动触发自动重写，否则旧形态条目会一直留在缓存里（2026-10-14：信息性维度加 `order` 的修复就是这样落地的）。
   **`GetUserStatus` 有两种载荷形状，按 f1 的 wire type 判别**：响应是 `GetUserStatusResponse` 信封（f1 = `user_status` message，
@@ -105,3 +107,6 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   `loading`/`unavailable` 下 `retire:false` 硬闸禁删自有条目；retirement 只在权威态允许（`retire-withheld`）；权威首达 `nativeRevision`+1 补写。
 - 面板语义：未知代际/格式异常 = 「未处理/请更新插件」，与 `no-improvement` 的「无需重写」分开；
   health 映射：coverage 缺失或 dirState≠ok → unknown，unsupported 或写失败 → bad，legacy 不影响。
+- **窗口重载不重启 backend**（2026-11-02 实测）：重载只换扩展宿主，`runtime.log` 的 `ready` 时间与端口都不变
+  （重载前后仍是 `02:02:37 / 39842`）。判「是否重载过」看宿主 output 日志的新目录
+  `logs/<session>/windowN/exthost/output_logging_<ts>/1-Devin Fusion BYOK.log`，不要用 `ready` 或 `host-build.json`（后者停更在 0.5.6）。

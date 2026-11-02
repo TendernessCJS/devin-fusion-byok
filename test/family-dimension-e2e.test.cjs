@@ -397,3 +397,25 @@ test('a colliding family stays one Lead value; its effort variants select throug
   const highAssign = resolveAssignment({ modelRouterUid: highPick.modelUid }, json, f.catalog);
   assert.equal(highAssign.assignment.modelUid, fooUids.find(uid => f.catalog.routes[uid].effort === 'high'));
 });
+
+test('persisted order drives the rendered Sidekick/Lead dropdown sequence', { skip: !webappAvailable }, () => {
+  const ordered = buildCatalog({ enabled: true, inferenceServerUrl: 'http://127.0.0.1:39842',
+    providers: [
+      { id: 'pb', name: 'PB', baseUrl: 'https://pb.invalid/v1', apiKey: 'k', apiFormat: 'openai', order: 1,
+        models: [{ id: 'b1', label: 'b1', efforts: [], contextWindow: 128000, maxOutputTokens: 8192, order: 0 },
+          { id: 'b0', label: 'b0', efforts: [], contextWindow: 128000, maxOutputTokens: 8192, order: 1 }] },
+      { id: 'pa', name: 'PA', baseUrl: 'https://pa.invalid/v1', apiKey: 'k', apiFormat: 'openai', order: 0,
+        models: [{ id: 'a0', label: 'a0', efforts: [], contextWindow: 128000, maxOutputTokens: 8192, order: 0 }] },
+    ],
+    sidekicks: [{ providerId: 'pb', model: 'b1' }, { providerId: 'pb', model: 'b0' }, { providerId: 'pa', model: 'a0' }] },
+    OBSERVED_SWE);
+  const f = fixture(ordered);
+  const sidekick = f.fusion.dimensions.find(dimension => dimension.name === 'Sidekick');
+  const names = [...sidekick.values].map(value => value.name);
+  const own = names.filter(name => name.startsWith('PA ·') || name.startsWith('PB ·'));
+  assert.deepEqual(own, ['PA · a0', 'PB · b1', 'PB · b0'],
+    'the rendered dropdown follows persisted order, not array order');
+  const lead = f.fusion.dimensions.find(dimension => dimension.name === 'Lead');
+  const ownLeads = [...lead.values].map(value => value.name).filter(name => name.startsWith('PA ·') || name.startsWith('PB ·'));
+  assert.deepEqual(ownLeads, ['PA · a0', 'PB · b1', 'PB · b0'], 'the Lead dimension follows the same persisted order');
+});

@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createManager, publicState, PanelInputError } = require('../src/panel/manager.cjs');
-const { buildCatalog } = require('../src/catalog.cjs');
+const { buildCatalog, isOwnUid } = require('../src/catalog.cjs');
 
 const nativeSidekick = { nativeUid: 'swe-2-max', label: 'SWE-2 Max' };
 const OBSERVED_SWE = [
@@ -37,6 +37,7 @@ function memory(options = {}) {
     ...(options.nativeCatalogStatus ? { nativeCatalogStatus: options.nativeCatalogStatus } : {}),
     ...(options.refreshCliCaches ? { refreshCliCaches: options.refreshCliCaches } : {}),
     ...(options.cliCacheStatus ? { cliCacheStatus: options.cliCacheStatus } : {}),
+    ...(options.acpOwnModels ? { acpOwnModels: options.acpOwnModels } : {}),
   });
   return { manager, writes, changes, selections,
     read: () => structuredClone(config),
@@ -82,6 +83,24 @@ test('public state names the last Fusion combination the card was seen holding',
 
   const stale = publicState({ ...input, lastFusionSelection: 'fusion-gone-sidekick-gone' }, OBSERVED_SWE, 'unavailable', 'ready').lastFusion;
   assert.deepEqual(stale, { uid: 'fusion-gone-sidekick-gone', label: 'fusion-gone-sidekick-gone', source: 'unresolved' });
+});
+
+test('a session directory that disagrees with the emit is reported as drift', () => {
+  const input = fixture();
+  const emitted = buildCatalog(input, OBSERVED_SWE).models.filter(model => isOwnUid(model.uid)).length;
+  assert.equal(publicState(input, OBSERVED_SWE, 'unavailable', 'ready').catalogDrift, null,
+    'an unobserved session count makes no claim');
+  assert.equal(publicState(input, OBSERVED_SWE, 'unavailable', 'ready', null, null, null, emitted).catalogDrift, null,
+    'equal counts mean the session already holds the emit');
+  assert.deepEqual(publicState(input, OBSERVED_SWE, 'unavailable', 'ready', null, null, null, emitted - 3).catalogDrift,
+    { emitted, observed: emitted - 3, missing: 3, needsNewSession: true });
+  assert.equal(publicState(input, OBSERVED_SWE, 'unavailable', 'ready', null, null, null, emitted + 2).catalogDrift, null,
+    'entries the session still lists after we stopped emitting them are already invisible');
+});
+
+test('manager state reads the observed ACP directory through the callback', () => {
+  const m = memory({ acpOwnModels: () => 1 });
+  assert.equal(m.manager.state().catalogDrift.observed, 1);
 });
 
 test('public state carries the last CLI cache report for the settings tab', () => {
@@ -162,7 +181,7 @@ test('adding a supplier never overwrites existing providers and accepts keyless 
   await f.manager.dispatch('saveProvider', providerPayload({ id: undefined, name: 'Local', baseUrl: 'http://127.0.0.1:9123/v1/chat/completions' }));
   await f.manager.dispatch('saveProvider', providerPayload({ id: undefined, name: 'Local', baseUrl: 'https://another.invalid/v1' }));
   const next = f.read().providers;
-  assert.deepEqual(next.slice(0, 2), original);
+  assert.deepEqual(next.slice(0, 2), original.map((provider, index) => ({ ...provider, order: index })));
   assert.equal(next.length, 4);
   assert.notEqual(next[2].id, next[3].id);
   assert.match(next[2].id, /^provider-/);
@@ -177,7 +196,7 @@ test('manual models support independent display names, image support, limits, an
     supportsImages: true, contextWindow: 500000, maxOutputTokens: 32000, efforts: ['low', 'high', 'high'] } });
   const added = f.read().providers[1].models.find(m => m.id === 'manual-model');
   assert.deepEqual(added, model('manual-model', { label: 'Custom', source: 'manual', supportsImages: true,
-    contextWindow: 500000, maxOutputTokens: 32000, efforts: ['low', 'high'] }));
+    contextWindow: 500000, maxOutputTokens: 32000, efforts: ['low', 'high'], order: 1 }));
   assert.equal(f.manager.state().modelCount, 5);
   await f.manager.dispatch('addModel', { providerId: 'other', model: { id: 'manual-off', supportsImages: false } });
   assert.equal(f.read().providers[1].models.find(m => m.id === 'manual-off').supportsImages, true);
@@ -286,8 +305,8 @@ test('fetching candidates never imports or removes models; confirmation adds onl
   await f.manager.dispatch('importModels', { providerId: 'cpa', token: preview.importCandidates.token, ids: ['new-import'] });
   const next = f.read();
   assert.deepEqual(next.providers[0].models.map(m => m.id), ['lead', 'gone-import', 'manual-only', 'new-import']);
-  assert.deepEqual(next.providers[0].models[0], input.providers[0].models[0]);
-  assert.deepEqual(next.providers[0].models[2], input.providers[0].models[2]);
+  assert.deepEqual(next.providers[0].models[0], { ...input.providers[0].models[0], order: 0 });
+  assert.deepEqual(next.providers[0].models[2], { ...input.providers[0].models[2], order: 2 });
   assert.deepEqual(next.providers[1], other);
   assert.equal(f.manager.state().importCandidates, null);
   assertValidGraph(next);
@@ -835,4 +854,65 @@ test('setNativeModelHidden rejects malformed uid lists without writes', async ()
   }
   assert.deepEqual(f.read(), before);
   assert.equal(f.writes.length, 0);
+});
+
+test('new providers and models take nextOrder and moves swap adjacent orders', async () => {
+  const m = memory();
+  await m.manager.dispatch('saveProvider', providerPayload({ id: null, name: 'Third', baseUrl: 'https://third.invalid/v1', apiFormat: 'openai' }));
+  const created = m.read().providers;
+  assert.equal(created.length, 3);
+  assert.equal(created[2].name, 'Third', 'a new provider appends after the existing entries');
+  assert.equal(created[2].order, 2, 'nextOrder counts the unordered siblings implicit positions');
+  m.externalChange(config => {
+    config.providers.forEach((p, i) => { p.order = i; });
+    config.providers[0].models.forEach((model, i) => { model.order = i; });
+  });
+  const ordered = await m.manager.dispatch('moveProvider', { id: 'other', delta: -1 });
+  assert.deepEqual(ordered.providers.map(p => p.name).slice(0, 3), ['Other', 'CPA', 'Third'],
+    'other swaps with its ordered predecessor, not with Third');
+  const saved = m.read().providers;
+  assert.equal(saved[0].order, 0);
+  assert.equal(saved[1].order, 1);
+  const moved = await m.manager.dispatch('moveModel', { providerId: 'cpa', id: 'executor', delta: -1 });
+  const cpa = moved.providers.find(p => p.id === 'cpa');
+  assert.deepEqual(cpa.models.map(model => model.id), ['executor', 'lead']);
+  assert.deepEqual(m.read().providers.find(p => p.id === 'cpa').models.map(model => model.order), [0, 1]);
+});
+
+test('imported and manually added models take nextOrder', async () => {
+  const m = memory({ discover: async provider => { provider.models = [{ id: 'disc-a', label: 'disc-a' }, { id: 'disc-b' }]; } });
+  m.externalChange(config => {
+    config.providers[0].models.forEach((model, i) => { model.order = i; });
+  });
+  const ready = await m.manager.dispatch('refreshModels', { providerId: 'cpa' });
+  const token = ready.importCandidates?.token;
+  assert.ok(token, 'refresh produced an import token');
+  await m.manager.dispatch('importModels', { providerId: 'cpa', token, ids: ['disc-a', 'disc-b'] });
+  const models = m.read().providers.find(p => p.id === 'cpa').models;
+  assert.deepEqual(models.map(model => model.order), [0, 1, 2, 3], 'imports append after the existing max');
+  await m.manager.dispatch('addModel', { providerId: 'cpa', model: { id: 'manual', label: 'Manual' } });
+  assert.equal(m.read().providers.find(p => p.id === 'cpa').models.at(-1).order, 4);
+});
+
+test('move no-ops at the boundaries without writing, rejects bad deltas, and normalizes legacy lists', async () => {
+  const m = memory();
+  m.externalChange(config => {
+    config.providers.forEach((p, i) => { p.order = i; });
+    config.providers[0].models.forEach((model, i) => { model.order = i; });
+  });
+  const before = m.writes.length;
+  await m.manager.dispatch('moveProvider', { id: 'cpa', delta: -1 });
+  await m.manager.dispatch('moveProvider', { id: m.read().providers.at(-1).id, delta: 1 });
+  await m.manager.dispatch('moveModel', { providerId: 'cpa', id: 'lead', delta: -1 });
+  await m.manager.dispatch('moveModel', { providerId: 'cpa', id: 'executor', delta: 1 });
+  assert.equal(m.writes.length, before, 'boundary moves must not persist anything');
+  await assert.rejects(() => m.manager.dispatch('moveProvider', { id: 'cpa', delta: 2 }), PanelInputError);
+  await assert.rejects(() => m.manager.dispatch('moveModel', { providerId: 'cpa', id: 'lead', delta: 0 }), PanelInputError);
+  const legacy = memory();
+  await legacy.manager.dispatch('moveProvider', { id: 'other', delta: -1 });
+  const providers = legacy.read().providers;
+  assert.deepEqual(providers.map(p => p.order), [0, 1], 'first move normalizes the unordered list');
+  assert.equal(providers[0].id, 'other');
+  assert.equal(m.read().providers.find(p => p.id === 'cpa').models.find(x => x.id === 'lead').order, 0,
+    'modelPatch preserved the stored order through unrelated edits');
 });

@@ -8,7 +8,7 @@ function pageMarkup() {
 }
 
 function createModelsView(ui) {
-  const { selection, request, run, notice, remember, element, byId, button, switchInput, input, field,
+  const { selection, request, run, catalogSuccess, notice, remember, element, byId, button, switchInput, input, field,
     openDialog, finishDialog, deleteButton, focusTargets, scrollTargets, normalizeBaseUrlPath, modelEfforts } = ui;
   const state = () => ui.state();
   const busy = () => ui.busy();
@@ -22,21 +22,31 @@ function createModelsView(ui) {
       container.append(element('p', { class: 'hint', text: '还没有供应商。' }));
       return;
     }
-    for (const provider of state().providers) {
+    for (const [index, provider] of state().providers.entries()) {
       const on = provider.models.filter(model => model.enabled !== false).length;
-      container.append(element('button', {
-        type: 'button', class: 'provider-item' + (provider.id === selection.providerId ? ' selected' : ''),
-        'aria-current': provider.id === selection.providerId ? 'true' : 'false',
-        onclick: () => {
-          if (busy() || selection.providerId === provider.id) return;
-          selection.providerId = provider.id;
-          selection.modelSearch = '';
-          remember();
-          renderProviders();
-          renderModels();
-        }
-      }, element('span', { class: 'row-title', text: provider.name }),
-      element('span', { class: 'row-sub', text: provider.enabled === false ? '已停用' : on + ' 个模型' })));
+      const moveButton = (delta, label, title, disabled) => element('button', {
+        type: 'button', class: 'move', disabled,
+        'aria-label': label + '供应商 ' + provider.name, title,
+        onclick: () => run(() => request('moveProvider', { id: provider.id, delta }), undefined, catalogSuccess),
+      }, element('span', { class: 'move-glyph', text: delta < 0 ? '↑' : '↓' }));
+      container.append(element('div', {
+        class: 'provider-item' + (provider.id === selection.providerId ? ' selected' : '') },
+        element('button', {
+          type: 'button', class: 'provider-select',
+          'aria-current': provider.id === selection.providerId ? 'true' : 'false',
+          onclick: () => {
+            if (busy() || selection.providerId === provider.id) return;
+            selection.providerId = provider.id;
+            selection.modelSearch = '';
+            remember();
+            renderProviders();
+            renderModels();
+          }
+        }, element('span', { class: 'row-title', text: provider.name }),
+        element('span', { class: 'row-sub', text: provider.enabled === false ? '已停用' : on + ' 个模型' })),
+        element('div', { class: 'order-move' },
+          moveButton(-1, '上移', '上移', index === 0),
+          moveButton(1, '下移', '下移', index === state().providers.length - 1))));
     }
   }
 
@@ -56,9 +66,16 @@ function createModelsView(ui) {
         element('span', { class: 'row-sub', text: hostOf(provider.baseUrl) + ' · ' + format + (provider.keyConfigured ? '' : ' · 未填密钥') })),
       element('div', { class: 'actions' },
         switchInput(provider.enabled !== false, '启用供应商 ' + provider.name,
-          value => run(() => request('setProviderEnabled', { id: provider.id, enabled: value }))),
+          value => run(() => request('setProviderEnabled', { id: provider.id, enabled: value }), undefined, catalogSuccess)),
         button('编辑', () => providerDialog(provider), 'quiet'))));
-    if (provider.enabled === false) container.append(element('p', { class: 'warn mb', text: '已停用，这里的模型不会出现在新对话里。' }));
+    if (provider.enabled === false) container.append(element('p', { class: 'warn mb', text: '已停用，这里的模型不会出现在模型列表与 Fusion 下拉里。' }));
+    // The ACP directory is built once per session, so enabling a supplier or
+    // adding models here leaves the running conversation on the old list until
+    // a new one starts. Saying so beats leaving the user to guess why the
+    // picker looks unchanged.
+    const drift = state().catalogDrift;
+    if (drift) container.append(element('p', { class: 'warn mb',
+      text: '还有 ' + drift.missing + ' 个模型/组合没进入当前会话，开一个新对话即可看到。' }));
     const search = element('input', { type: 'search', placeholder: '搜索模型', 'aria-label': '搜索导入的模型',
       oninput: event => { selection.modelSearch = event.target.value; renderModelRows(); } });
     search.value = selection.modelSearch;
@@ -96,7 +113,7 @@ function createModelsView(ui) {
     if (models.length > 1) {
       const bulk = value => {
         const changes = models.filter(model => (model.enabled !== false) !== value).map(model => ({ id: model.id, enabled: value }));
-        if (changes.length) run(() => request('updateModels', { providerId: provider.id, changes }));
+        if (changes.length) run(() => request('updateModels', { providerId: provider.id, changes }), undefined, catalogSuccess);
       };
       const filtered = models.length < provider.models.length;
       container.append(element('div', { class: 'row compact' },
@@ -114,12 +131,21 @@ function createModelsView(ui) {
       if (variants > 1) caps.push(variants + ' 档');
       if (model.contextWindow) caps.push(fmtTokens(model.contextWindow) + ' Context');
       const sub = [name !== model.id ? model.id : '', ...caps].filter(Boolean).join(' · ');
+      const index = models.indexOf(model);
+      const moveButton = (delta, label, title, disabled) => element('button', {
+        type: 'button', class: 'move', disabled,
+        'aria-label': label + '模型 ' + name, title,
+        onclick: () => run(() => request('moveModel', { providerId: provider.id, id: model.id, delta }), undefined, catalogSuccess),
+      }, element('span', { class: 'move-glyph', text: delta < 0 ? '↑' : '↓' }));
       container.append(element('div', { class: 'row' },
         element('div', { class: 'row-main' },
           element('button', { type: 'button', class: 'link-title', text: name, 'aria-label': '编辑模型 ' + name, onclick: () => modelDialog(provider, model) }),
           sub ? element('span', { class: 'row-sub mono', text: sub }) : null),
+        selection.modelSearch.trim() ? null : element('div', { class: 'order-move' },
+          moveButton(-1, '上移', '上移', index === 0),
+          moveButton(1, '下移', '下移', index === models.length - 1)),
         switchInput(model.enabled !== false, '启用模型 ' + name,
-          value => run(() => request('updateModels', { providerId: provider.id, changes: [{ id: model.id, enabled: value }] })))));
+          value => run(() => request('updateModels', { providerId: provider.id, changes: [{ id: model.id, enabled: value }] }), undefined, catalogSuccess))));
     }
   }
 
@@ -160,7 +186,7 @@ function createModelsView(ui) {
         for (const model of visible()) if (!model.imported) selected.add(model.id);
         renderRows();
       }, 'quiet'), button('清空', () => { selected.clear(); renderRows(); }, 'quiet'), element('span', { class: 'spacer' }), count), list);
-    submit = finishDialog(dialog, form, '导入', () => request('importModels', { providerId, token: candidates.token, ids: [...selected] }), null, '已导入。');
+    submit = finishDialog(dialog, form, '导入', () => request('importModels', { providerId, token: candidates.token, ids: [...selected] }), null, '已导入，新对话中生效。');
     renderRows();
   }
 
@@ -231,7 +257,7 @@ function createModelsView(ui) {
         efforts: effortMode.value === 'auto' ? [] : [...new Set(efforts.value.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean))] };
       if (model) return request('updateModels', { providerId: provider.id, changes: [{ ...saved, supportsImages: true }] });
       return request('addModel', { providerId: provider.id, model: { ...saved, enabled: true } });
-    }, remove);
+    }, remove, model ? undefined : '已添加，新对话中生效。');
   }
 
   return {

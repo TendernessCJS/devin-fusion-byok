@@ -1,5 +1,5 @@
 'use strict';
-const { staleFusionUids, augmentCatalog } = require('../catalog.cjs');
+const { staleFusionUids, staleOwnEntries, augmentCatalog, ownEntriesSignature } = require('../catalog.cjs');
 const { defaultDir: cliCacheDir, refreshStaleCliCaches } = require('../runtime/host/cli-cache.cjs');
 const { createPickerRefresh } = require('../runtime/host/picker-refresh.cjs');
 
@@ -54,8 +54,13 @@ function installCacheSync({ deps, shared, publish }) {
         return set;
       };
       const excluded = { lead: excludedUids('lead'), sidekick: excludedUids('sidekick') };
+      const shapeSignature = ownEntriesSignature(current.models);
+      const probeShape = stores.cacheSync.ownShapeSignature !== shapeSignature;
       const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force, retire,
-        staleProbe: payload => staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded }),
+        staleProbe: payload => {
+          const fused = staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded });
+          return probeShape ? [...fused, ...staleOwnEntries(payload, { models: current.models })] : fused;
+        },
         // retireOwn mirrors the readiness gate: while the native catalog is
         // not authoritative the augmenter stays additive-only as well, so an
         // empty emit cannot strip the last own entry early.
@@ -66,6 +71,16 @@ function installCacheSync({ deps, shared, publish }) {
       // focused search box and resetting every list scroll. Record the moment
       // the outcome was established instead, and keep the previous object when
       // the outcome is unchanged (only a manual, forced check always restamps).
+      // Byte-equality is the strongest staleness check we have, but if the CLI
+      // re-encodes our entries on its own it never converges — probing every
+      // signature would mean rewriting two ~1.6 MB payloads every 3 seconds.
+      // Each signature is therefore probed exactly once; even a run with
+      // write errors stamps the signature (panel reports the failures and the
+      // manual force-refresh button remains the remedy). A non-authoritative
+      // check (retire=false) never stamps it: that probe is additive-only and
+      // must not consume the pending signature before the authoritative run
+      // can see the drift.
+      if (retire) stores.cacheSync.ownShapeSignature = shapeSignature;
       const summary = { checked: result.checked, refreshed: result.refreshed,
         skipped: result.skipped || [], errors: result.errors || [], coverage: result.coverage };
       const previous = stores.cacheSync.cliCacheReport && JSON.stringify({ checked: stores.cacheSync.cliCacheReport.checked,

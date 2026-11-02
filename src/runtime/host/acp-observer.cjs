@@ -1,6 +1,7 @@
 'use strict';
 
 const { loadAcpApi, restoreMember, createAcpRegistry } = require('./acp-hook.cjs');
+const { isOwnUid } = require('../../catalog/payload.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.acp-observer.v1');
 const METHODS = new Set(['session/new', 'session/load', 'session/resume', 'session/set_config_option']);
@@ -28,7 +29,7 @@ function modelCounts(source, rpc) {
   }
   const unique = [...new Set(values)];
   const plainModels = unique.filter(value => value.startsWith('dfbyok-')).length;
-  const fusionModels = unique.filter(value => value.startsWith('fusion-dfbyok-')).length;
+  const fusionModels = unique.filter(value => value.startsWith('fusion-') && isOwnUid(value)).length;
   return Object.freeze({ rpc, configOptions: options.length, modelSelectors, models: values.length,
     uniqueModels: unique.length, ownModels: plainModels + fusionModels, plainModels, fusionModels });
 }

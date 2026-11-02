@@ -556,7 +556,7 @@ test('matrix dimension orders are hash-stable across catalog generations', () =>
   for (const order of orders) assert.ok(order >= 0x10000000, 'custom orders stay out of the official range');
 });
 
-test('custom dimension values group per provider ranked by name, never by config position', () => {
+test('custom dimension values follow persisted order, array order for legacy configs', () => {
   const grouped = buildCatalog({
     providers: [
       { id: 'zeta', name: 'Zeta', baseUrl: 'https://zeta.invalid/v1', apiKey: 'k', apiFormat: 'openai',
@@ -586,12 +586,12 @@ test('custom dimension values group per provider ranked by name, never by config
   };
   const lead = dims('Lead');
   assert.deepEqual(lead.map(([name]) => name),
-    ['Alpha · alpha-a', 'Alpha · alpha-b', 'Zeta · zeta-a', 'Zeta · zeta-b'],
-    'providers sort by name and models sort inside the block');
+    ['Zeta · zeta-b', 'Zeta · zeta-a', 'Alpha · alpha-b', 'Alpha · alpha-a'],
+    'providers and models follow their persisted order, which defaults to array order');
   const side = dims('Sidekick');
   assert.deepEqual(side.map(([name]) => name),
-    ['Alpha · alpha-a High', 'Alpha · alpha-b Max', 'Zeta · zeta-a Max', 'Zeta · zeta-b High', 'Zeta · zeta-b Max'],
-    'inside a provider, models sort by name and effort tiers by slot order');
+    ['Zeta · zeta-b High', 'Zeta · zeta-b Max', 'Zeta · zeta-a Max', 'Alpha · alpha-b Max', 'Alpha · alpha-a High'],
+    'inside a provider, models follow persisted order and effort tiers stay adjacent by slot');
   for (const list of [lead, side]) {
     const orders = list.map(([, order]) => order);
     assert.equal(new Set(orders).size, orders.length, 'orders are unique per dimension');

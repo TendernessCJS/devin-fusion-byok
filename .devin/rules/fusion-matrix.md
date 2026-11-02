@@ -31,8 +31,11 @@ description: "Apply when changing Fusion matrix emission, Lead/Sidekick eligibil
   provider/model `key` 判、原生按 `leadFamilyBase` 判，跨档位自配对（flash High × flash Max）同样过滤；每个 BYOK Lead 的 Sidekick
   下拉因此天然少了自己那一项，与官方空洞同形。**BYOK Sidekick 按变体级发射**：官方 Sidekick 值把档位烤进值名（`Claude Sonnet 5.5 Medium`），BYOK 家族的每个
   effort 变体各成一个 Sidekick 值（`DeepSeek · deepseek-flash High`），不得再退回「每族一个代表」（那会让 subagent 只能跑 provider 默认档、且
-  `BYOK · N 档` 标注名不副实）。自定义 Sidekick 值的 order 按**族键**哈希取 base、族内按 effort 档位连续排布（picker 按 order 排下拉，
-  逐名独立哈希会把同族变体打散）；仍保留哈希序的初衷——名字到 order 的映射不随选中集合漂移，陈旧缓存条目不会顶替别的值。
+  `BYOK · N 档` 标注名不副实）。自定义 Sidekick 值的 order 由持久 `order` 名次取段（BYOK 段 `0x20000000` 起，provider/model 名次 × stride + effort 槽位）、
+  族内按 effort 档位连续排布（picker 按 order 排下拉，变体在相邻槽位不打散）；数字只在移动/追加时变化，不随选中集合漂移，陈旧缓存条目不会顶替别的值。
+  **三段 order 的段位关系由代码强制**：官方 Fusion 值（官方自填小整数，实测 Lead 1..8 / Sidekick 1..9）< 原生非 Fusion 值（`0x10000000..0x17ffffff`，哈希定位，
+  实测不随供应商启停漂移）< BYOK 值（`0x20000000` 起）。`buildCatalog` 的 `assertNativeBand` 在原生段落点不在本段、或不高于官方最大值时抛 `order_band_conflict`；
+  改 span/base 前先看它——段位相交会让两个值共用一个 order，而 picker 按 order 去重会**静默丢掉一个**。
 - **`Fast Mode` 是正交开关，不属于 Lead 身份**（真机 40 个 `(Lead 值, Effort 值)` 组合**全部**同时存在 `Fast Mode=0` 与 `=1`，两者
   Lead/Effort 值完全相同）。因此官方家族的 fast 兄弟必须**并入**官方族（`Claude Opus 5` 5 → 10 成员），不能单列成同名的第二行（旧实现产生了
   `Claude Opus 5`/`Claude Opus 5.5` 两组重复 label，用户无从分辨）。官方族因此按**档位系列**吸收成员：凡 uid 能提出档位 token 的同族基成员都并入（官方声明的

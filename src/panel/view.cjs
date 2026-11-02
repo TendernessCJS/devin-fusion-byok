@@ -107,9 +107,13 @@ function panelStyles() {
     button.pill.active { color: var(--vscode-button-foreground, #fff); background: var(--accent); border-color: var(--accent); }
     .models-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; }
     .provider-nav { display: grid; gap: 2px; }
-    button.provider-item { display: block; text-align: left; width: 100%; padding: 8px 10px; white-space: normal; color: inherit; background: transparent; border-color: transparent; }
-    button.provider-item:hover { background: var(--hover); }
-    button.provider-item.selected { background: var(--vscode-list-inactiveSelectionBackground, #37373d); }
+    .provider-item { display: flex; align-items: center; gap: 4px; border-radius: var(--radius-control); }
+    button.provider-select { flex: 1; min-width: 0; display: block; text-align: left; padding: 8px 10px; white-space: normal; color: inherit; background: transparent; border-color: transparent; }
+    .provider-item:hover { background: var(--hover); }
+    .provider-item.selected { background: var(--vscode-list-inactiveSelectionBackground, #37373d); }
+    .order-move { display: flex; flex-direction: column; }
+    .order-move button { min-height: 0; padding: 0 5px; line-height: 1.1; font-size: 11px; color: var(--muted); background: transparent; border-color: transparent; }
+    .order-move button:hover { background: var(--hover); }
     .provider-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; min-height: 28px; }
     .scroll { max-height: 440px; overflow: auto; }
     details.fold > summary { cursor: pointer; padding: 8px 14px; color: var(--muted); list-style: none; }
@@ -170,6 +174,8 @@ function panelStyles() {
       .topbar { margin: 0 calc(-1 * var(--page-x)) 16px; padding: 12px var(--page-x) 0; }
       .models-layout, .role-grid { grid-template-columns: 1fr; }
       .provider-nav { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+      .provider-nav .order-move { flex-direction: row; }
+      .provider-nav .move-glyph { display: inline-block; transform: rotate(-90deg); }
       .field-grid { grid-template-columns: 1fr; gap: 0; }
     }
   `;

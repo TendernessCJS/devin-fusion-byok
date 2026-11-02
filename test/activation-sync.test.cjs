@@ -1,8 +1,13 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { createSandboxLoader } = require('./helpers/sandbox.cjs');
+const { fields, m, s, str } = require('../src/protocol/wire.cjs');
+const realCatalog = require('../src/catalog.cjs');
+const realCache = require('../src/runtime/host/cli-cache.cjs');
 
 function cacheSyncFixture(t, { refreshResult, picker, models = [{ uid: 'm1' }] } = {}) {
   const logs = [], calls = [], publishCalls = [], executed = [], augOptions = [];
@@ -16,7 +21,8 @@ function cacheSyncFixture(t, { refreshResult, picker, models = [{ uid: 'm1' }] }
   const loader = createSandboxLoader({
     filename: path.resolve(__dirname, '../src/activation/cache-sync.cjs'),
     overrides: {
-      '../catalog.cjs': { staleFusionUids: () => new Set(),
+      '../catalog.cjs': { staleFusionUids: () => new Set(), staleOwnEntries: () => ['dfbyok-stale'],
+        ownEntriesSignature: models => 'sig-' + models.length,
         augmentCatalog: (payload, options) => { augOptions.push(options); return payload; } },
       '../runtime/host/cli-cache.cjs': {
         defaultDir: () => '/nonexistent',
@@ -99,7 +105,8 @@ test('a failing cache probe logs and keeps the previous report', t => {
   const loader = createSandboxLoader({
     filename: path.resolve(__dirname, '../src/activation/cache-sync.cjs'),
     overrides: {
-      '../catalog.cjs': { staleFusionUids: () => new Set(), augmentCatalog: payload => payload },
+      '../catalog.cjs': { staleFusionUids: () => new Set(), staleOwnEntries: () => [], ownEntriesSignature: () => 'sig',
+        augmentCatalog: payload => payload },
       '../runtime/host/cli-cache.cjs': {
         defaultDir: () => '/nonexistent',
         refreshStaleCliCaches: () => { throw Object.assign(new Error('boom'), { code: 'EACCES' }); },
@@ -265,3 +272,81 @@ test('cli-cache-deferred logs once per non-authoritative spell', t => {
   assert.equal(f.logs.filter(line => line.event === 'cli-cache-deferred').length, 2,
     'a new non-authoritative spell logs again');
 });
+
+test('the shape probe runs once per own-entries signature and stamps it after the check', t => {
+  const f = cacheSyncFixture(t);
+  f.sync.check();
+  const probe = f.calls[0].staleProbe;
+  assert.deepEqual([...probe(Buffer.alloc(0))], ['dfbyok-stale'],
+    'first signature probes own-entry bytes');
+  assert.equal(f.shared.ownShapeSignature, 'sig-1', 'the signature is recorded after the run');
+  f.sync.check();
+  assert.deepEqual([...f.calls[1].staleProbe(Buffer.alloc(0))], [],
+    'an unchanged signature skips the byte comparison entirely');
+});
+
+for (const [before, after] of [['loading', 'ready'], ['unavailable', 'empty']]) {
+  test(`a ${before} -> ${after} transition keeps the signature pending until the authoritative check`, t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-cache-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const cat = parts => Buffer.concat(parts);
+    const configFor = orders => ({ enabled: true, inferenceServerUrl: 'http://127.0.0.1:39842',
+      providers: [{ id: 'p', name: 'P', baseUrl: 'https://p.invalid/v1', apiKey: 'k', apiFormat: 'openai',
+        models: [
+          { id: 'a', label: 'a', efforts: [], contextWindow: 128000, maxOutputTokens: 8192, order: orders[0] },
+          { id: 'b', label: 'b', efforts: [], contextWindow: 128000, maxOutputTokens: 8192, order: orders[1] },
+        ] }],
+      sidekicks: [{ providerId: 'p', model: 'a' }, { providerId: 'p', model: 'b' }] });
+    const old = realCatalog.buildCatalog(configFor([0, 1]));
+    const current = realCatalog.buildCatalog(configFor([1, 0]));
+    const payload = Buffer.concat([...old.models.map(model => m(1, model.raw)),
+      m(1, cat([s(1, 'Official'), s(22, 'native-official')]))]).toString('base64');
+    const name = 'model_configs_v6.0123456789abcdef.bin';
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload }));
+    const bytesBefore = fs.readFileSync(file);
+    const shared = { cliCacheReport: null, cliCacheDeferred: false, ownShapeSignature: undefined,
+      nativeCatalogStatus: before, nativeModels: new Map() };
+    let probeCalls = 0;
+    const countedOwnEntries = (data, options) => { probeCalls++; return realCatalog.staleOwnEntries(data, options); };
+    const loader = createSandboxLoader({
+      filename: path.resolve(__dirname, '../src/activation/cache-sync.cjs'),
+      overrides: {
+        // staleFusionUids validates `known instanceof Set`, which fails across
+        // the sandbox realm boundary — the fusion probe is stubbed; this test
+        // only exercises the real own-shape path.
+        '../catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: countedOwnEntries,
+          ownEntriesSignature: realCatalog.ownEntriesSignature, augmentCatalog: realCatalog.augmentCatalog },
+        '../runtime/host/cli-cache.cjs': { defaultDir: () => dir, refreshStaleCliCaches: realCache.refreshStaleCliCaches },
+        '../runtime/host/picker-refresh.cjs': { createPickerRefresh: () => ({ prime() {}, changed() {}, dispose() {} }) },
+      },
+    });
+    t.after(() => loader.assertStubsUsed('real cache-sync fixture'));
+    const sync = loader.module.exports.installCacheSync({
+      deps: { log: () => {}, config: () => ({}), catalog: () => current,
+        vscode: { commands: { executeCommand: () => Promise.resolve() } }, context: { subscriptions: [] },
+        stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } } },
+      shared, publish: async () => {},
+    });
+    sync.check();
+    assert.equal(shared.ownShapeSignature, undefined, 'a non-authoritative check must not consume the pending signature');
+    assert.ok(bytesBefore.equals(fs.readFileSync(file)), 'a non-authoritative check leaves the bytes alone');
+    assert.equal(probeCalls, 0, 'a non-authoritative check never runs the shape probe');
+    shared.nativeCatalogStatus = after;
+    const report = sync.check();
+    assert.ok(report.refreshed.includes(name), 'the authoritative check rewrites the drifted payload');
+    assert.ok(probeCalls >= 1, 'the first authoritative check probes the shape');
+    assert.equal(shared.ownShapeSignature, realCatalog.ownEntriesSignature(current.models));
+    const stored = new Map();
+    for (const entry of fields(Buffer.from(JSON.parse(fs.readFileSync(file, 'utf8')).payload, 'base64'), 1)) {
+      stored.set(str(entry.value, 22), entry.value);
+    }
+    for (const model of current.models) {
+      assert.ok(stored.get(model.uid)?.equals(model.raw), 'stored entry ' + model.uid + ' equals the current emission');
+    }
+    const calls = probeCalls;
+    const again = sync.check();
+    assert.deepEqual(again.refreshed, [], 'an unchanged signature never rewrites');
+    assert.equal(probeCalls, calls, 'an unchanged signature never probes again');
+  });
+}
