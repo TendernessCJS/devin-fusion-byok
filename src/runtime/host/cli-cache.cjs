@@ -210,9 +210,14 @@ function ownedIn(kind, payload, expected) {
 // Supported files that fail envelope/payload validation land in `rejected`
 // instead — they are reported and left alone, never treated as ours.
 // `dir` is required so no caller can silently aim at the real user cache.
-function inspectCliCaches({ dir, expectedUids = [], staleProbe, retire = true } = {}) {
+function inspectCliCaches({ dir, expectedUids = [], staleProbe, retire = true, matrixUids = [] } = {}) {
   requireDir(dir);
-  const expected = [...new Set(expectedUids)].filter(isOwnUid);
+  // `matrixUids` admits the emitted custom native×native pairs (ours to maintain
+  // but not isOwnUid) into the expected set. File ownership below is unchanged:
+  // a payload still qualifies only through a genuine BYOK uid, so this option
+  // can never reach an all-native file of another identity.
+  const matrix = new Set(matrixUids);
+  const expected = [...new Set(expectedUids)].filter(uid => isOwnUid(uid) || matrix.has(uid));
   const entries = [], rejected = [];
   const scanned = inspect(dir);
   if (scanned.dirState !== 'ok') {
@@ -279,9 +284,9 @@ const presentUids = (kind, payload, expected) => ownedIn(kind, payload, expected
 // re-read first and must still hold the exact bytes that were augmented, so a
 // file the CLI refreshed in the meantime is left for the next pass instead of
 // losing whatever it stored.
-function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, force = false, retire = true } = {}) {
+function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, force = false, retire = true, matrixUids = [] } = {}) {
   requireDir(dir);
-  const { expected, entries, rejected, checked, coverage } = inspectCliCaches({ dir, expectedUids, staleProbe, retire });
+  const { expected, entries, rejected, checked, coverage } = inspectCliCaches({ dir, expectedUids, staleProbe, retire, matrixUids });
   const refreshed = [], errors = [];
   const skipped = rejected.map(entry => ({ name: entry.name, reason: entry.reason }));
   const canAugment = typeof augment === 'function';
@@ -321,7 +326,10 @@ function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, fo
     if (retire === false) {
       const ownBefore = validatePayload(entry.kind, payload, true);
       const after = new Set(nextCheck.uids);
-      if (ownBefore.ok && ownBefore.uids.some(uid => isOwnUid(uid) && !after.has(uid))) {
+      // Every uid present in the stored payload is protected — not just ours:
+      // an augmenter that drops a native, mixed or stale own entry while the
+      // native catalog is not authoritative is withheld entirely.
+      if (ownBefore.ok && ownBefore.uids.some(uid => !after.has(uid))) {
         skipped.push({ name: entry.name, reason: 'retire-withheld' }); continue;
       }
     }

@@ -40,7 +40,7 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   不要在那里触发写入。**自动检查除 uid 存在性（`missing`/`staleProbe`）外还有一条形态比对** `staleOwnEntries`：仅当
   `ownEntriesSignature(models)` 与上次记录不同才启用，逐字节比较缓存里我们条目的 raw 与当前 emit；**同一签名只探一次**（收敛守卫，签名仅在权威检查——`retire=true`——返回后记录；loading/unavailable 的非权威探测不消费签名）——
   逐字节判据可能永不收敛，重复探测会变成每 3 秒重写约 1.6 MB×2。signature 不含隐藏名单（原生白名单计数实测抖动会误触发）。`force` 仍是手动兜底：强制模式绕过门控、
-  直接比较 augment 后的字节，只有真差异才落盘。**重写是「比对后替换」而非盲目覆盖**：落盘前重读、要求字节与所增强的那份**完全一致**，不一致就跳过（`concurrent-write`）——否则会用旧 payload 的增强结果覆盖 CLI 刚写入的更新版本、静默丢掉它存的内容（发现过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。`.bak` 写的是**所增强的那份原始字节**（不是再次新读的、可能已属新世代的版本）。修
+  直接比较 augment 后的字节，只有真差异才落盘。显式隐藏失效见 catalog-publication.md 的 `hiddenNativeSignature`。**重写是「比对后替换」而非盲目覆盖**：落盘前重读、要求字节与所增强的那份**完全一致**，不一致就跳过（`concurrent-write`）——否则会用旧 payload 的增强结果覆盖 CLI 刚写入的更新版本、静默丢掉它存的内容（发现过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。`.bak` 写的是**所增强的那份原始字节**（不是再次新读的、可能已属新世代的版本）。修
   emit 形态后**必须**走一次强制刷新或让配置变动触发自动重写，否则旧形态条目会一直留在缓存里（2026-10-14：信息性维度加 `order` 的修复就是这样落地的）。
   **`GetUserStatus` 有两种载荷形状，按 f1 的 wire type 判别**：响应是 `GetUserStatusResponse` 信封（f1 = `user_status` message，
   模型列表在其 f33），而 CLI 落盘的缓存是**裸 `UserStatus`**（f1 = `pro` bool，模型列表直接在 payload 的 f33，实测顶层 f33 = 526 条条目 + 3
@@ -104,7 +104,8 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   真实模型 UID/允许列表中的自有条目不在 expected 时也须触发退役；缓存/auth 使用显式 retireOwn，
   空 emit 不能早退而留下最后一个已删模型。保留原生与未知字段，二次检查不得 churn。
   无 known UID 依据时不得删 native 形态组合、不得伪造空目录清空。
-  `loading`/`unavailable` 下 `retire:false` 硬闸禁删自有条目；retirement 只在权威态允许（`retire-withheld`）；权威首达 `nativeRevision`+1 补写。
+  `loading`/`unavailable` 下 `retire:false`：`preserveUnemitted` 只增不删（emit 替换、其余保留）+ 硬闸禁删**输入全部 UID**
+  （`retire-withheld`）；`expected` 接纳 `matrixUids` 但不授予文件所有权；retirement 只在权威态允许；权威首达补写。
 - 面板语义：未知代际/格式异常 = 「未处理/请更新插件」，与 `no-improvement` 的「无需重写」分开；
   health 映射：coverage 缺失或 dirState≠ok → unknown，unsupported 或写失败 → bad，legacy 不影响。
 - **窗口重载不重启 backend**（2026-11-02 实测）：重载只换扩展宿主，`runtime.log` 的 `ready` 时间与端口都不变

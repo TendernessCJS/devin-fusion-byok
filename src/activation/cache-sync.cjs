@@ -1,5 +1,5 @@
 'use strict';
-const { staleFusionUids, staleOwnEntries, augmentCatalog, ownEntriesSignature } = require('../catalog.cjs');
+const { staleFusionUids, staleOwnEntries, augmentCatalog, ownEntriesSignature, isOwnUid } = require('../catalog.cjs');
 const { defaultDir: cliCacheDir, refreshStaleCliCaches } = require('../runtime/host/cli-cache.cjs');
 const { createPickerRefresh } = require('../runtime/host/picker-refresh.cjs');
 
@@ -43,28 +43,32 @@ function installCacheSync({ deps, shared, publish }) {
       const expectedUids = current.models.map(model => model.uid);
       const emittedFusionUids = new Set(Object.keys(current.fusions || {}));
       const knownUids = new Set([...Object.keys(current.routes || {}), ...emittedFusionUids, ...stores.nativeCatalog.nativeModels.keys()]);
-      const excludedUids = role => {
-        const set = new Set();
-        for (const ref of Array.isArray(config().roleExclusions?.[role]) ? config().roleExclusions[role] : []) {
-          if (typeof ref?.nativeUid === 'string') { set.add(ref.nativeUid); continue; }
-          for (const [uid, route] of Object.entries(current.routes || {})) {
-            if (route.providerId === ref?.providerId && route.model === ref?.model) set.add(uid);
-          }
-        }
-        return set;
-      };
-      const excluded = { lead: excludedUids('lead'), sidekick: excludedUids('sidekick') };
+      // `excludedRoleUids` carries the catalog's family expansion, so a single
+      // excluded member retires every sibling uid here exactly as it does in
+      // assignment. Hand-built catalogs may lack the field — empty sets keep
+      // the old behaviour.
+      const excluded = { lead: current.excludedRoleUids?.lead || new Set(), sidekick: current.excludedRoleUids?.sidekick || new Set() };
       const shapeSignature = ownEntriesSignature(current.models);
       const probeShape = stores.cacheSync.ownShapeSignature !== shapeSignature;
-      const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force, retire,
+      // Explicit hide-list config changes must rewrite the cache once even
+      // when the own emission is byte-identical — hidden natives are removed
+      // on augment. The signature keeps only valid non-owned configured uids
+      // (deduped, sorted); hiddenFusionUids/allowlist jitter never force.
+      const hiddenSignature = JSON.stringify([...new Set(
+        (Array.isArray(config().hiddenNativeModelUids) ? config().hiddenNativeModelUids : [])
+          .filter(uid => typeof uid === 'string' && uid.length > 0 && uid.length <= 256 && !isOwnUid(uid)))].sort());
+      const effectiveForce = force || (retire && stores.cacheSync.hiddenNativeSignature !== hiddenSignature);
+      const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force: effectiveForce, retire, matrixUids: current.matrixUids,
         staleProbe: payload => {
-          const fused = staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded });
+          const fused = staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded, fastLeadUids: current.fastLeadUids, nonFastLeadUids: current.nonFastLeadUids });
           return probeShape ? [...fused, ...staleOwnEntries(payload, { models: current.models })] : fused;
         },
         // retireOwn mirrors the readiness gate: while the native catalog is
         // not authoritative the augmenter stays additive-only as well, so an
         // empty emit cannot strip the last own entry early.
-        augment: (payload, rpc, report) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current, retireOwn: retire, onSkip: report }) });
+        // `preserveUnemitted`/`retireOwn` mirror the readiness gate: while the
+        // native catalog is not authoritative the augmenter is additive-only.
+        augment: (payload, rpc, report) => augmentCatalog(payload, { rpc, format: { json: false }, catalog: current, retireOwn: retire, preserveUnemitted: !retire, onSkip: report }) });
       // The report is part of panel state, and panel state is deduplicated by
       // its JSON. Restamping `at` on every automatic check made each 3s sync
       // look like a change, so the panel re-rendered forever — killing the
@@ -80,14 +84,17 @@ function installCacheSync({ deps, shared, publish }) {
       // check (retire=false) never stamps it: that probe is additive-only and
       // must not consume the pending signature before the authoritative run
       // can see the drift.
-      if (retire) stores.cacheSync.ownShapeSignature = shapeSignature;
+      if (retire) {
+        stores.cacheSync.ownShapeSignature = shapeSignature;
+        stores.cacheSync.hiddenNativeSignature = hiddenSignature;
+      }
       const summary = { checked: result.checked, refreshed: result.refreshed,
         skipped: result.skipped || [], errors: result.errors || [], coverage: result.coverage };
       const previous = stores.cacheSync.cliCacheReport && JSON.stringify({ checked: stores.cacheSync.cliCacheReport.checked,
         refreshed: stores.cacheSync.cliCacheReport.refreshed, skipped: stores.cacheSync.cliCacheReport.skipped,
         errors: stores.cacheSync.cliCacheReport.errors, coverage: stores.cacheSync.cliCacheReport.coverage });
       if (force || previous !== JSON.stringify(summary)) stores.cacheSync.cliCacheReport = { at: new Date().toISOString(), ...summary };
-      if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed, force });
+      if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed, force: effectiveForce });
       for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });
       for (const error of result.errors || []) log('cli-cache-write-error', { name: error.name, code: error.code });
     } catch (error) { log('cli-cache-check-failed', { code: error?.code || 'unknown' }); }

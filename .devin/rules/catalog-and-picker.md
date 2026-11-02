@@ -57,7 +57,9 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
 - **清理条件必须保守：不在 emit 集合里 ≠ 陈旧**。`staleFusionUids` 的完整形态是 `{ emitted, known, excluded }`——只有「uid 拆不出
   lead/sidekick」「某一侧已不在 `known`（模型消失 / BYOK uid digest 随配置变了）」「某一侧被该角色显式排除」才判为可删。**禁止退回「不在 emitted 就删」**：我们的
   emit 集合会随原生 Sidekick 维度到达时序在 24↔155 之间波动，按缺席删除一次就静默删掉 131 条有效组合（2026-10-14 实测：`bak` 24 条 vs 现文件 155 条）。
-  角色排除仍会退休条目，否则关掉的模型会继续把自己的维度值喂进 picker。
+  角色排除仍会退休条目，否则关掉的模型会继续把自己的维度值喂进 picker。`buildCatalog` 另返回 `excludedRoleUids`（BYOK ref → 全部
+  effort routes；native ref → `memberUids` 全族扩展），`resolveAssignment` 在 fusion 确定后（命中/locked 默认/split 任一）用同集合
+  拒绝，plain routes 不受影响；**未选择 ≠ 排除**（swe-odd 类合法 split 回退仍可解析）。
   **位置式调用（`staleFusionUids(data, emittedSetOrArray)`）已退役**：它编码的正是这条被禁止的语义，留着就等于把误删开关摆在代码里等人去按（当时它还存在只为兼容 5
   处旧测试断言）。新增调用一律传对象式，且 `known` 要给出**当前真正在服务的目录**，不要图省事传 `emitted`。
   **`known` 必填且非空，缺失/空 Set/空数组/字符串一律抛 `TypeError`**（`emitted`、`excluded` 仍可省略——`excluded` 默认 `{}` 本就是保守侧，

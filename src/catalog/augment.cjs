@@ -1,9 +1,9 @@
 'use strict';
 const { parseFields, fields, str, s, m } = require('../protocol/wire.cjs');
-const { OWN_GROUP, ownUid, has, concat, expandHiddenByFamily, nativeUid } = require('./identity.cjs');
+const { OWN_GROUP, ownUid, has, concat, expandHiddenByFamily, nativeUid, isFastLeadUid } = require('./identity.cjs');
 const { rpcShape, rewriteMessage, reportFusionStatus, protoUid, protoFamilyUid, jsonKey, jsonMetadata, nativeEntries, reportNativeModels, protoPickerLabels, jsonPickerLabels, isOwnUid } = require('./payload.cjs');
 
-function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNativeModels, source) {
+function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNativeModels, source, preserveUnemitted = false) {
   const models = Array.isArray(catalog.models) ? catalog.models : [];
   const parsed = parseFields(data), existingLabels = new Set(models.map(model => model.label));
   const entries = parsed.filter(field => field.number === 1 && field.wire === 2).map(field => field.value);
@@ -14,10 +14,16 @@ function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNati
   const matrixUids = catalog.matrixUids instanceof Set ? catalog.matrixUids : new Set(catalog.matrixUids || []);
   const retainedLabels = new Set(models.map(model => model.label));
   const hiddenLabels = new Set();
+  const emittedUids = new Set(models.map(model => model.uid));
   const preserved = [];
   for (const field of parsed) {
     if (field.number === 1 && field.wire === 2) {
       const uid = protoUid(field.value), label = str(field.value, 1);
+      if (emittedUids.has(uid)) { existingLabels.add(label); continue; }
+      // Additive-only mode (non-authoritative checks): every stored entry the
+      // current emit does not replace is kept verbatim — stale own rows, mixed
+      // and native×native pairs, plain natives and unknown shapes alike.
+      if (preserveUnemitted) { if (label) retainedLabels.add(label); preserved.push(field); continue; }
       if (ownUid(uid) || matrixUids.has(uid)) { existingLabels.add(label); continue; }
       // Entries we emitted but no longer emit (config changed, uid drifted)
       // look like official fusions yet are dead weight: they keep stale
@@ -61,7 +67,7 @@ function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNati
   return concat(result);
 }
 
-function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativeModels, source) {
+function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativeModels, source, preserveUnemitted = false) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid catalog JSON');
   const models = Array.isArray(catalog.models) ? catalog.models : [];
   const modelsKey = jsonKey(data, 'clientModelConfigs', 'client_model_configs');
@@ -77,9 +83,13 @@ function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativ
   const labels = models.map(model => model.label), existingLabels = new Set(labels);
   const retainedLabels = new Set(labels);
   const hiddenLabels = new Set();
+  const emittedUids = new Set(models.map(model => model.uid));
   const kept = [];
   for (const model of existing) {
     const uid = nativeUid(model);
+    if (emittedUids.has(uid)) { existingLabels.add(model?.label); continue; }
+    // See augmentProtoList: non-authoritative runs keep every stored entry.
+    if (preserveUnemitted) { if (typeof model?.label === 'string') retainedLabels.add(model.label); kept.push(model); continue; }
     if (ownUid(uid) || matrixUids.has(uid)) { existingLabels.add(model?.label); continue; }
     if (hiddenNative.has(uid)) { if (typeof model.label === 'string') hiddenLabels.add(model.label); continue; }
     if (hiddenFusion.has(uid)) { if (typeof model.label === 'string') hiddenLabels.add(model.label); continue; }
@@ -103,7 +113,7 @@ function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativ
 }
 
 /** Accept decoded wire messages; framing/compression is exclusively the caller's responsibility. */
-function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNativeModels, onSkip, retireOwn = false } = {}) {
+function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNativeModels, onSkip, retireOwn = false, preserveUnemitted = false } = {}) {
   // Reported when the payload is left untouched for a reason the caller could
   // not infer from the bytes: silently returning the input looks exactly like
   // "nothing to do" and hid a shape mismatch that made every in-place cache
@@ -111,7 +121,7 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
   const skip = code => { try { onSkip?.(code, rpc); } catch {} };
   // `GetCliTeamSettings` carries its whole injection in the allowlist rewrite,
   // so it reports through the same channel as the catalog shapes below.
-  if (rpc === '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings') return augmentLocalModelChoices(data, format, catalog, skip, retireOwn);
+  if (rpc === '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings') return augmentLocalModelChoices(data, format, catalog, skip, retireOwn, preserveUnemitted);
   const shape = rpcShape(rpc);
   if (!shape || !catalog) return data;
   // `retireOwn` keeps the cleanup pass alive even when the emit is empty: the
@@ -121,14 +131,14 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
       typeof onFusionStatus !== 'function' && typeof onNativeModels !== 'function' && !retireOwn) return data;
   try {
     if (format.json === true) {
-      if (!shape.status) return augmentJsonList(data, catalog, shape.sorts, onFusionStatus, onNativeModels, shape.source);
+      if (!shape.status) return augmentJsonList(data, catalog, shape.sorts, onFusionStatus, onNativeModels, shape.source, preserveUnemitted);
       const statusKey = jsonKey(data, 'userStatus', 'user_status'), status = data?.[statusKey];
       if (!status || typeof status !== 'object' || Array.isArray(status)) return data;
       const configKey = jsonKey(status, 'cascadeModelConfigData', 'cascade_model_config_data');
-      return { ...data, [statusKey]: { ...status, [configKey]: augmentJsonList(status[configKey] || {}, catalog, true, onFusionStatus, onNativeModels, shape.source) } };
+      return { ...data, [statusKey]: { ...status, [configKey]: augmentJsonList(status[configKey] || {}, catalog, true, onFusionStatus, onNativeModels, shape.source, preserveUnemitted) } };
     }
     if (!Buffer.isBuffer(data)) return data;
-    if (!shape.status) return augmentProtoList(data, catalog, shape.sorts, onFusionStatus, onNativeModels, shape.source);
+    if (!shape.status) return augmentProtoList(data, catalog, shape.sorts, onFusionStatus, onNativeModels, shape.source, preserveUnemitted);
     const parsed = parseFields(data);
     const wrapped = parsed.filter(field => field.number === shape.field);
     // `GetUserStatus` has two shapes. The bridge repeats back the
@@ -143,9 +153,9 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onFusionStatus, onNat
       // `create: false` keeps a payload that merely resembles a status — the
       // malformed inputs the callers already rely on returning untouched — from
       // gaining a model list it never had.
-      return rewriteMessage(data, 33, value => augmentProtoList(value, catalog, true, onFusionStatus, onNativeModels, shape.source), false);
+      return rewriteMessage(data, 33, value => augmentProtoList(value, catalog, true, onFusionStatus, onNativeModels, shape.source, preserveUnemitted), false);
     }
-    return rewriteMessage(data, shape.field, status => rewriteMessage(status, 33, value => augmentProtoList(value, catalog, true, onFusionStatus, onNativeModels, shape.source), true));
+    return rewriteMessage(data, shape.field, status => rewriteMessage(status, 33, value => augmentProtoList(value, catalog, true, onFusionStatus, onNativeModels, shape.source, preserveUnemitted), true));
   } catch { skip('transform-failed'); return data; }
 }
 
@@ -202,6 +212,8 @@ function staleFusionUids(data, options) {
   }
   const emitted = options.emitted instanceof Set ? options.emitted : new Set(options.emitted || []);
   const excluded = options.excluded || {};
+  const fastLeadUids = options.fastLeadUids instanceof Set ? options.fastLeadUids : new Set(options.fastLeadUids || []);
+  const nonFastLeadUids = options.nonFastLeadUids instanceof Set ? options.nonFastLeadUids : new Set(options.nonFastLeadUids || []);
   const stale = [];
   const scan = buffer => {
     const uid = protoUid(buffer);
@@ -209,7 +221,7 @@ function staleFusionUids(data, options) {
     const marker = uid.lastIndexOf('-sidekick-');
     if (marker <= 'fusion-'.length) { stale.push(uid); return; }
     const leadUid = uid.slice('fusion-'.length, marker), sidekickUid = uid.slice(marker + '-sidekick-'.length);
-    if (!leadUid || !sidekickUid || leadUid.endsWith('-fast')) { stale.push(uid); return; }
+    if (!leadUid || !sidekickUid || isFastLeadUid(leadUid, fastLeadUids, nonFastLeadUids)) { stale.push(uid); return; }
     const dead = (uid, role) => !known.has(uid) || (excluded[role] instanceof Set && excluded[role].has(uid));
     if (dead(leadUid, 'lead') || dead(sidekickUid, 'sidekick')) stale.push(uid);
   };
@@ -334,7 +346,7 @@ function collectAllowedUids(data, { rpc, format = {} } = {}) {
 // The CLI intersects the model catalog with its configured choices. Register
 // only locally routed BYOK models; native choices and every other setting stay
 // byte-identical. A native Sidekick must already be in the native choice list.
-function augmentLocalModelChoices(data, format, catalog, skip = () => {}, retireOwn = false) {
+function augmentLocalModelChoices(data, format, catalog, skip = () => {}, retireOwn = false, preserveUnemitted = false) {
   if (!catalog?.models?.length && !retireOwn) return data;
   if (!catalog?.models) catalog = { models: [] };
   try {
@@ -362,6 +374,12 @@ function augmentLocalModelChoices(data, format, catalog, skip = () => {}, retire
       return ownUid(fusion.leadUid) && Object.hasOwn(catalog.routes, fusion.leadUid) &&
         (fusion.sidekickNative ? native.has(fusion.sidekickUid) : ownUid(fusion.sidekickUid) && Object.hasOwn(catalog.routes, fusion.sidekickUid));
     }).map(model => model.uid);
+    if (preserveUnemitted) {
+      // Additive-only: retain every stored choice; additions merely dedupe.
+      const added = new Set(additions);
+      if (format.json) return { ...data, [key]: [...entries.filter(uid => !added.has(uid)), ...additions] };
+      return concat([...parsed.filter(f => !(f.number === 7 && added.has(f.value.toString('utf8')))).map(f => f.raw), ...additions.map(uid => s(7, uid))]);
+    }
     if (format.json) return { ...data, [key]: [...entries.filter(uid => !isOwn(uid)), ...additions] };
     return concat([...parsed.filter(f => !(f.number === 7 && isOwn(f.value.toString('utf8')))).map(f => f.raw), ...additions.map(uid => s(7, uid))]);
   } catch { skip('transform-failed'); return data; }

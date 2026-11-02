@@ -56,3 +56,17 @@ trigger: model_decision
 去重只按 familyLabel 做不够（effort 后缀在之后追加，`Foo`+High 与 `Foo High`+无档位可撞）。另一个实测边界：
 `GetCliModelConfigs` 载荷**无排序区**（own group 不会注入），`GetCascadeModelConfigs` 才有
 `clientModelSorts`——「分组丢 uid」只在后者一类带 sorts 的 RPC 上表现。
+
+## team_settings 每 3 秒 `no-improvement` 的爆发（已知残留，非缺陷）
+
+停用某个 BYOK 供应商后，`allowedModelUids` 里会留下一批「原生 Lead × 该 BYOK Sidekick」的组合 uid。
+`inspectCliCaches` 用 `isOwnUid`（**任一侧**含 `dfbyok-` 即算我们的）判「自有但不在发射集」→ 报陈旧；
+`augmentLocalModelChoices` 的清理用 `ownUid`（只认 BYOK 作 Lead）→ 删不掉。于是每次目录同步都「有事可做」、
+改写后字节相同 → `no-improvement`，每 3 秒重试一次（2026-11-02 实测 82 条 / 5 分钟，每次读 81 KB，零写入、零报错）。
+
+实测规模：禁用 OpenAI 时 342 条 = `gpt-6.1-sol` 的 6 个 effort uid × 57 个原生 Lead；这 6 个尾缀与按
+`digest([provider.id, model.id, effort])` 重算的当前配置逐条一致，说明它们是「停用期暂时不可发射」的组合，不是作废垃圾。
+
+自愈路径：CLI 自己重新持久化白名单时按目录求交，死引用被清掉（2026-11-02 实测 f7 1487 → 1145，死引用 342 → 0），
+循环随即停止；同一现象在 2026-10-30 的旧构建上已出现（16–33 条后自行停下），所以它**不是**新版引入的回归。
+若要消除噪音，只能让陈旧判定承认「augmenter 删不掉的类别」，不要靠删 uid。

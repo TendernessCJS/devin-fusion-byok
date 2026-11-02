@@ -2,7 +2,7 @@
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { modelEfforts, modelSupportsImages } = require('../models/capabilities.cjs');
 const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, leadFamilyBase, stableOrders,
-  NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE, BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT } = require('./identity.cjs');
+  NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE, BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, isFastLeadUid } = require('./identity.cjs');
 const { sortByOrder } = require('../models/order.cjs');
 const { configFor } = require('./codec.cjs');
 const { discoverOfficialRoles, discoverAdditionalNativeRoles, buildRoleLists } = require('./roles.cjs');
@@ -146,6 +146,24 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   }
 
   const roleSelection = buildRoleLists(config, nativeModels, allowedUids, analysis);
+  // Explicit role exclusions resolve into concrete uids: a BYOK ref maps to
+  // every emitted effort route, a native ref marks its uid and then expands
+  // through the role item's memberUids so excluding any family member retires
+  // the whole family. Merely unselected uids are never treated as excluded —
+  // legitimate uid-split fallbacks like swe-odd must keep resolving.
+  const excludedRoleUids = { lead: new Set(), sidekick: new Set() };
+  for (const role of ['lead', 'sidekick']) {
+    for (const ref of Array.isArray(config.roleExclusions?.[role]) ? config.roleExclusions[role] : []) {
+      if (typeof ref?.nativeUid === 'string') { excludedRoleUids[role].add(ref.nativeUid); continue; }
+      for (const [uid, route] of Object.entries(routes)) {
+        if (route.providerId === ref?.providerId && route.model === ref?.model) excludedRoleUids[role].add(uid);
+      }
+    }
+    for (const item of roleSelection[role]) {
+      const members = item.native ? (item.memberUids || [item.ref.nativeUid]) : [];
+      if (members.some(uid => excludedRoleUids[role].has(uid))) for (const uid of members) excludedRoleUids[role].add(uid);
+    }
+  }
   const selectedLeadKeys = new Set(roleSelection.lead.filter(item => item.selected).map(item => refKey(item.ref)));
   const selectedSidekickKeys = new Set(roleSelection.sidekick.filter(item => item.selected).map(item => refKey(item.ref)));
 
@@ -162,19 +180,24 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   // `-fast` on Claude models and `-priority` on the GPT ones. Sidekicks are
   // untouched: the official Sidekick dimension has no sub-tiers, so a fast
   // sidekick uid is a legitimate value of its own.
-  const fastLeadUids = new Set();
+  const fastLeadUids = new Set(), nonFastLeadUids = new Set();
   for (const entry of Array.isArray(nativeModels) ? nativeModels : []) {
     const uid = typeof entry?.uid === 'string' ? entry.uid : '';
     if (!uid || uid.startsWith('fusion-') || ownUid(uid)) continue;
-    if ((Array.isArray(entry.fusionMetadata) ? entry.fusionMetadata : [])
-      .some(dim => dim?.key === 'Fast Mode' && dim.order !== 0)) fastLeadUids.add(uid);
+    const dims = Array.isArray(entry.fusionMetadata) ? entry.fusionMetadata : [];
+    const fast = dims.find(dim => dim?.key === 'Fast Mode');
+    if (fast && fast.order !== 0) { fastLeadUids.add(uid); continue; }
+    // Only an explicit observation counts as non-fast: a Fast Mode=0 record,
+    // or another sub-tier dimension (Speed) proving the series exists without
+    // Fast Mode. Missing metadata says nothing — the suffix fallback decides.
+    if (fast || dims.some(dim => dim?.key === 'Speed')) nonFastLeadUids.add(uid);
   }
   const selectedNativeLeadUids = new Set(), selectedNativeSidekickUids = new Set();
   for (const [role, items, set] of [['lead', roleSelection.lead, selectedNativeLeadUids], ['sidekick', roleSelection.sidekick, selectedNativeSidekickUids]]) {
     for (const item of items) {
       if (!item.selected || !item.native) continue;
       for (const uid of item.memberUids || [item.ref.nativeUid]) {
-        if (role === 'lead' && fastLeadUids.has(uid)) continue;
+        if (role === 'lead' && isFastLeadUid(uid, fastLeadUids, nonFastLeadUids)) continue;
         set.add(uid);
       }
     }
@@ -402,7 +425,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   }
   // Matrix entries lead the list, matching the order the picker saw before the
   // named-preset pipeline was retired.
-  return { models: [...matrixModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids, matrixUids, nativeHarnessUids, nativeLeadHarnessUids,
+  return { models: [...matrixModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids, matrixUids, nativeHarnessUids, nativeLeadHarnessUids, fastLeadUids, nonFastLeadUids, excludedRoleUids,
     rolePool: Object.fromEntries(Object.entries(candidates).map(([role, items]) => [role, items.map(item => ({ ref: item.ref, label: item.label, uid: item.uid }))])),
     lastFusionSelection: typeof config.lastFusionSelection === 'string' ? config.lastFusionSelection : undefined };
 }

@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createSandboxLoader } = require('./helpers/sandbox.cjs');
 const { fields, m, s, str } = require('../src/protocol/wire.cjs');
+const cat = (...parts) => Buffer.concat(parts.flat());
 const realCatalog = require('../src/catalog.cjs');
 const realCache = require('../src/runtime/host/cli-cache.cjs');
 
@@ -22,7 +23,7 @@ function cacheSyncFixture(t, { refreshResult, picker, models = [{ uid: 'm1' }] }
     filename: path.resolve(__dirname, '../src/activation/cache-sync.cjs'),
     overrides: {
       '../catalog.cjs': { staleFusionUids: () => new Set(), staleOwnEntries: () => ['dfbyok-stale'],
-        ownEntriesSignature: models => 'sig-' + models.length,
+        ownEntriesSignature: models => 'sig-' + models.length, isOwnUid: realCatalog.isOwnUid,
         augmentCatalog: (payload, options) => { augOptions.push(options); return payload; } },
       '../runtime/host/cli-cache.cjs': {
         defaultDir: () => '/nonexistent',
@@ -32,7 +33,8 @@ function cacheSyncFixture(t, { refreshResult, picker, models = [{ uid: 'm1' }] }
     },
   });
   t.after(() => loader.assertStubsUsed('cache-sync fixture'));
-  const shared = { cliCacheReport: null, nativeModels: new Map(), acpObservationSeq: 0, acpOwnModels: 0, nativeCatalogStatus: 'ready' };
+  const shared = { cliCacheReport: null, nativeModels: new Map(), acpObservationSeq: 0, acpOwnModels: 0,
+    nativeCatalogStatus: 'ready', hiddenNativeSignature: '[]' };
   const deps = {
     log: (event, data) => logs.push({ event, data }),
     config: () => ({}),
@@ -106,6 +108,7 @@ test('a failing cache probe logs and keeps the previous report', t => {
     filename: path.resolve(__dirname, '../src/activation/cache-sync.cjs'),
     overrides: {
       '../catalog.cjs': { staleFusionUids: () => new Set(), staleOwnEntries: () => [], ownEntriesSignature: () => 'sig',
+        isOwnUid: realCatalog.isOwnUid,
         augmentCatalog: payload => payload },
       '../runtime/host/cli-cache.cjs': {
         defaultDir: () => '/nonexistent',
@@ -306,7 +309,7 @@ for (const [before, after] of [['loading', 'ready'], ['unavailable', 'empty']]) 
     fs.writeFileSync(file, JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload }));
     const bytesBefore = fs.readFileSync(file);
     const shared = { cliCacheReport: null, cliCacheDeferred: false, ownShapeSignature: undefined,
-      nativeCatalogStatus: before, nativeModels: new Map() };
+      hiddenNativeSignature: '[]', nativeCatalogStatus: before, nativeModels: new Map() };
     let probeCalls = 0;
     const countedOwnEntries = (data, options) => { probeCalls++; return realCatalog.staleOwnEntries(data, options); };
     const loader = createSandboxLoader({
@@ -316,7 +319,8 @@ for (const [before, after] of [['loading', 'ready'], ['unavailable', 'empty']]) 
         // the sandbox realm boundary — the fusion probe is stubbed; this test
         // only exercises the real own-shape path.
         '../catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: countedOwnEntries,
-          ownEntriesSignature: realCatalog.ownEntriesSignature, augmentCatalog: realCatalog.augmentCatalog },
+          ownEntriesSignature: realCatalog.ownEntriesSignature, augmentCatalog: realCatalog.augmentCatalog,
+          isOwnUid: realCatalog.isOwnUid },
         '../runtime/host/cli-cache.cjs': { defaultDir: () => dir, refreshStaleCliCaches: realCache.refreshStaleCliCaches },
         '../runtime/host/picker-refresh.cjs': { createPickerRefresh: () => ({ prime() {}, changed() {}, dispose() {} }) },
       },
@@ -348,5 +352,97 @@ for (const [before, after] of [['loading', 'ready'], ['unavailable', 'empty']]) 
     const again = sync.check();
     assert.deepEqual(again.refreshed, [], 'an unchanged signature never rewrites');
     assert.equal(probeCalls, calls, 'an unchanged signature never probes again');
+  });
+}
+
+// An explicit hiddenNativeModelUids change must rewrite the cache once even
+// when the own emission is byte-identical — hidden natives are deleted on
+// augment. The signature covers only the configured list: dedupes, reordering
+// and observation-derived hiddenFusionUids/allowlist jitter never force.
+for (const before of ['loading', 'unavailable']) {
+  test(`an explicit hidden-native change forces exactly one authoritative rewrite (${before} start)`, t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-cache-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const cfg = hidden => ({ enabled: true, inferenceServerUrl: 'http://127.0.0.1:39842',
+      providers: [{ id: 'p', name: 'P', baseUrl: 'https://p.invalid/v1', apiKey: 'k', apiFormat: 'openai',
+        models: [{ id: 'a', label: 'a', efforts: [], contextWindow: 128000, maxOutputTokens: 8192 }] }],
+      hiddenNativeModelUids: hidden });
+    const hiddenSet = ['native-hide-me', 'native-hide-also'];
+    let live = cfg(hiddenSet);
+    let current = realCatalog.buildCatalog(live);
+    const nativeEntry = uid => m(1, cat([s(1, uid), s(22, uid)]));
+    const payload = Buffer.concat([...current.models.map(model => m(1, model.raw)),
+      nativeEntry('native-hide-me'), nativeEntry('native-keep')]).toString('base64');
+    const name = 'model_configs_v6.0123456789abcdef.bin';
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload }));
+    const calls = [];
+    const shared = { cliCacheReport: null, cliCacheDeferred: false, ownShapeSignature: undefined,
+      hiddenNativeSignature: undefined, nativeCatalogStatus: before, nativeModels: new Map() };
+    const loader = createSandboxLoader({
+      filename: path.resolve(__dirname, '../src/activation/cache-sync.cjs'),
+      overrides: {
+        '../catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: realCatalog.staleOwnEntries,
+          ownEntriesSignature: realCatalog.ownEntriesSignature, augmentCatalog: realCatalog.augmentCatalog,
+          isOwnUid: realCatalog.isOwnUid },
+        '../runtime/host/cli-cache.cjs': { defaultDir: () => dir,
+          refreshStaleCliCaches: options => { calls.push(options); return realCache.refreshStaleCliCaches(options); } },
+        '../runtime/host/picker-refresh.cjs': { createPickerRefresh: () => ({ prime() {}, changed() {}, dispose() {} }) },
+      },
+    });
+    t.after(() => loader.assertStubsUsed('hidden-signature fixture'));
+    const sync = loader.module.exports.installCacheSync({
+      deps: { log: () => {}, config: () => live, catalog: () => current,
+        vscode: { commands: { executeCommand: () => Promise.resolve() } }, context: { subscriptions: [] },
+        stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } } },
+      shared, publish: async () => {},
+    });
+    const uids = () => fields(Buffer.from(JSON.parse(fs.readFileSync(file, 'utf8')).payload, 'base64'), 1)
+      .filter(field => field.wire === 2).map(field => str(field.value, 22));
+
+    sync.check();
+    assert.equal(calls[0].force, false, 'a non-authoritative check never forces');
+    assert.equal(shared.hiddenNativeSignature, undefined, 'and never consumes the pending signature');
+    assert.ok(uids().includes('native-hide-me'), 'nor rewrites the payload');
+
+    shared.nativeCatalogStatus = 'ready';
+    sync.check();
+    assert.equal(calls[1].force, true, 'the first authoritative check sees the pending hide change');
+    assert.ok(!uids().includes('native-hide-me'), 'the hidden native is actually removed');
+    assert.ok(uids().includes('native-keep'), 'other natives survive');
+    assert.equal(shared.hiddenNativeSignature, JSON.stringify([...hiddenSet].sort()));
+
+    sync.check();
+    assert.equal(calls[2].force, false, 'an unchanged signature does not force again');
+    // Reordering and duplicates inside the configured list change nothing.
+    live = cfg([...hiddenSet].reverse());
+    sync.check();
+    assert.equal(calls[3].force, false, 'reordered uids do not change the signature');
+    live = cfg(['native-hide-also', 'native-hide-me', 'native-hide-me', 'native-hide-also']);
+    sync.check();
+    assert.equal(calls[4].force, false, 'duplicated uids do not change the signature');
+    live = cfg(hiddenSet);
+    sync.check();
+    assert.equal(calls[5].force, false, 'identical config stays calm');
+
+    // Observation-derived sets are not part of the signature: only the
+    // catalog's generated hiddenFusionUids or the allowed list may move.
+    current = { ...current, hiddenFusionUids: ['fusion-generated-hidden'] };
+    sync.check();
+    assert.equal(calls[6].force, false, 'generated hiddenFusionUids never force');
+    current = { ...current, hiddenFusionUids: [], nativeAllowedUids: ['native-other'] };
+    sync.check();
+    assert.equal(calls[7].force, false, 'allowlist drift never forces');
+
+    // Changing the explicit set forces exactly once, then settles.
+    live = cfg(['native-hide-me']);
+    current = { ...current, hiddenNativeModelUids: ['native-hide-me'] };
+    sync.check();
+    assert.equal(calls[8].force, true, 'a genuinely different hide set forces once');
+    assert.equal(shared.hiddenNativeSignature, JSON.stringify(['native-hide-me']));
+    const reportA = sync.check(), reportB = sync.check();
+    assert.equal(calls[9].force, false);
+    assert.equal(reportA, reportB, 'stable checks keep the same report object — no per-interval churn');
+    assert.ok(!JSON.stringify(shared.cliCacheReport).includes('native-hide'), 'uids never reach the report');
   });
 }

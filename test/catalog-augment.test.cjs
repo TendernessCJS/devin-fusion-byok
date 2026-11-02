@@ -459,6 +459,113 @@ test('staleFusionUids keeps entries whose members are merely unselected', () => 
     'a lead exclusion only retires entries that use it as a lead');
 });
 
+test('staleFusionUids marks exactly the observed fast leads, never by suffix alone', () => {
+  // Every member uid is present in `known` from a real buildCatalog, so a
+  // stale verdict can only come from the shared fast predicate — not from an
+  // unknown-member fallback that would fire even without it.
+  const meta = order => [{ key: 'Effort', order: 0, name: 'High', controlType: 1 }, { key: 'Fast Mode', order }];
+  const nativeLead = (uid, fusionMetadata) => ({ uid, label: uid, disabled: false, isModelRouter: false, harnessUids: ['h-' + uid], fusionMetadata });
+  const probe = buildCatalog(config(), [...OBSERVED_SWE,
+    nativeLead('lead-fast', meta(1)), nativeLead('lead-priority', meta(1)), nativeLead('lead-unnamed', meta(1)),
+    nativeLead('lead-clearly-fast', meta(0)), nativeLead('swe-1-6-fast', [{ key: 'Speed', order: 1 }]),
+    nativeLead('lead-plain', meta(0))]);
+  const known = new Set([...probe.nativeHarnessUids.keys(), ...Object.keys(probe.routes)]);
+  const entry = uid => cat(s(1, 'F'), s(22, uid));
+  const flat = cat(...['lead-fast', 'lead-priority', 'lead-unnamed', 'lead-clearly-fast', 'swe-1-6-fast', 'lead-plain']
+    .map(lead => m(1, entry(`fusion-${lead}-sidekick-swe-2-max`))), m(1, entry('fusion-lead-plain-sidekick-swe-1-6-fast')));
+  const opts = { emitted: new Set(), known, fastLeadUids: probe.fastLeadUids, nonFastLeadUids: probe.nonFastLeadUids };
+  assert.deepEqual([...staleFusionUids(flat, opts)].sort(),
+    ['fusion-lead-fast-sidekick-swe-2-max', 'fusion-lead-priority-sidekick-swe-2-max', 'fusion-lead-unnamed-sidekick-swe-2-max'].sort(),
+    'explicit non-fast observations (Speed series, Fast Mode=0) and fast sidekicks survive');
+});
+
+test('preserveUnemitted keeps every unemitted entry in all payload shapes', () => {
+  const probe = { ...buildCatalog(config(), OBSERVED_SWE),
+    hiddenFusionUids: ['fusion-native-a-sidekick-native-b'], hiddenNativeModelUids: ['native-hidden'] };
+  const entry = uid => m(1, cat(s(1, uid), s(22, uid)));
+  // A stale own row, a custom native×native pair, a hidden-listed native and
+  // an ordinary native must all survive an additive-only pass — hidden lists
+  // and the f32-less fusion rule may not delete while not authoritative.
+  const keep = ['dfbyok-old-plain', 'fusion-native-a-sidekick-native-b', 'native-hidden', 'native-keep'];
+  const opt = format => ({ rpc: 'GetCascadeModelConfigs', format, catalog: probe, preserveUnemitted: true });
+  const contains = (buf, uid) => fields(buf, 1).some(field => field.wire === 2 && str(field.value, 22) === uid);
+  const twice = (data, options, read) => {
+    const first = augmentCatalog(data, options), second = augmentCatalog(first, options);
+    assert.deepEqual(second, first, 'a second identical run must not churn');
+    return read(first);
+  };
+
+  // A stored entry carrying a current uid but stale bytes is replaced by the
+  // current raw exactly once — preserve mode must not double it.
+  const firstUid = probe.models[0].uid;
+  const staleTwin = m(1, cat(s(1, 'STALE LABEL'), s(22, firstUid)));
+  // Flat protobuf, carrying a real sort group so group dedup is exercised.
+  const sortGroup = m(2, cat(s(1, 'official-group'), m(2, cat(s(1, 'kept-label')))));
+  const flat = cat(...keep.map(entry), staleTwin, sortGroup);
+  const flatUids = twice(flat, opt(proto), buf => fields(buf, 1).filter(field => field.wire === 2));
+  for (const uid of keep) assert.ok(flatUids.some(field => str(field.value, 22) === uid), uid + ' preserved');
+  for (const model of probe.models) assert.ok(flatUids.some(field => str(field.value, 22) === model.uid), model.uid + ' emitted');
+  const twins = flatUids.filter(field => str(field.value, 22) === firstUid);
+  assert.equal(twins.length, 1, 'the stale same-uid entry is replaced once');
+  assert.ok(twins[0].value.equals(probe.models[0].raw), 'replacement bytes equal the current emission');
+  assert.ok(fields(twice(flat, opt(proto), x => x), 2).length >= 1, 'sort groups preserved');
+
+  // Bare UserStatus and wrapped GetUserStatusResponse.
+  const bare = cat(v(1, 1), m(33, cat(...keep.map(entry), staleTwin)));
+  const bareList = twice(bare, { rpc: lsStatus, format: proto, catalog: probe, preserveUnemitted: true },
+    buf => fields(fields(buf, 33)[0].value, 1));
+  for (const uid of keep) assert.ok(bareList.some(field => str(field.value, 22) === uid), 'bare ' + uid);
+  const wrapped = m(1, cat(v(1, 1), m(33, cat(...keep.map(entry), staleTwin))));
+  const wrappedList = twice(wrapped, { rpc: lsStatus, format: proto, catalog: probe, preserveUnemitted: true },
+    buf => fields(fields(fields(buf, 1)[0].value, 33)[0].value, 1));
+  for (const uid of keep) assert.ok(wrappedList.some(field => str(field.value, 22) === uid), 'wrapped ' + uid);
+
+  // JSON flat and JSON status.
+  const jsonModel = uid => ({ modelUid: uid, label: uid });
+  const flatJson = { clientModelConfigs: [...keep.map(jsonModel), { modelUid: firstUid, label: 'STALE' }], clientModelSorts: [] };
+  const jsonUids = twice(flatJson, opt(json), out => out.clientModelConfigs.map(model => model.modelUid));
+  for (const uid of keep) assert.ok(jsonUids.includes(uid), 'json ' + uid);
+  assert.equal(jsonUids.filter(uid => uid === firstUid).length, 1, 'json stale twin replaced once');
+  const statusJson = { user_status: { cascade_model_config_data: { client_model_configs: keep.map(jsonModel) } } };
+  const statusUids = twice(statusJson, { rpc: lsStatus, format: json, catalog: probe, preserveUnemitted: true },
+    out => out.user_status.cascade_model_config_data.client_model_configs.map(model => model.modelUid));
+  for (const uid of keep) assert.ok(statusUids.includes(uid), 'status json ' + uid);
+
+  // Team settings, proto and JSON: stored choices retained, additions dedupe,
+  // unknown fields preserved, and the rewrite itself is idempotent.
+  const teamRpc = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
+  const allowed = ['dfbyok-old-plain', 'native-allow', firstUid];
+  const team = cat(...allowed.map(uid => s(7, uid)), s(9, 'unknown-field'));
+  const teamUids = twice(team, { rpc: teamRpc, format: proto, catalog: probe, preserveUnemitted: true },
+    buf => fields(buf, 7).map(field => field.value.toString('utf8')));
+  for (const uid of ['dfbyok-old-plain', 'native-allow']) assert.ok(teamUids.includes(uid), 'allow ' + uid);
+  assert.equal(teamUids.filter(uid => uid === firstUid).length, 1, 'additions dedupe');
+  const teamOut = augmentCatalog(team, { rpc: teamRpc, format: proto, catalog: probe, preserveUnemitted: true });
+  assert.deepEqual(fields(teamOut, 9).map(field => field.value.toString('utf8')), ['unknown-field'], 'unknown fields preserved');
+  const teamJsonUids = twice({ allowed_model_uids: allowed },
+    { rpc: teamRpc, format: json, catalog: probe, preserveUnemitted: true }, out => out.allowed_model_uids);
+  for (const uid of ['dfbyok-old-plain', 'native-allow']) assert.ok(teamJsonUids.includes(uid), 'json allow ' + uid);
+});
+
+test('excludedRoleUids from a real catalog feeds the stale probe with family expansion', () => {
+  const cfg = { ...config(), roleExclusions: { lead: [{ nativeUid: 'claude-x-high' }], sidekick: [{ nativeUid: 'swe-2-max' }] } };
+  const nativeLead = uid => ({ uid, label: uid, disabled: false, isModelRouter: false, harnessUids: ['h-' + uid], fusionMetadata: [{ key: 'Effort', order: 0, name: 'High', controlType: 1 }] });
+  const probe = buildCatalog(cfg, [...OBSERVED_SWE,
+    { uid: 'fusion-claude-x-high-sidekick-swe-2-max', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'],
+      fusionMetadata: [{ key: 'Lead', order: 7, name: 'X', controlType: 3 }, { key: 'Effort', order: 3, name: 'High', controlType: 1 }, { key: 'Sidekick', order: 3, name: 'SWE-2 Max', controlType: 3 }] },
+    nativeLead('claude-x-high'), nativeLead('claude-x-low'), nativeLead('other-lead')]);
+  const known = new Set([...probe.nativeHarnessUids.keys(), ...Object.keys(probe.routes)]);
+  const entry = uid => cat(s(1, 'F'), s(22, uid));
+  const flat = cat(m(1, entry('fusion-claude-x-low-sidekick-other-lead')), m(1, entry('fusion-other-lead-sidekick-swe-2-max')),
+    m(1, entry('fusion-other-lead-sidekick-claude-x-low')));
+  // `claude-x-low` was never excluded directly — the family expansion in
+  // `excludedRoleUids` must still retire both entries it touches. The sidekick
+  // exclusion retires the middle one; the last survives on every member.
+  assert.ok(probe.excludedRoleUids.lead.has('claude-x-low'), 'family expansion reached a sibling');
+  assert.deepEqual([...staleFusionUids(flat, { emitted: new Set(), known, excluded: probe.excludedRoleUids })].sort(),
+    ['fusion-claude-x-low-sidekick-other-lead', 'fusion-other-lead-sidekick-swe-2-max'].sort());
+});
+
 test('staleFusionUids rejects non-object arguments loudly instead of deleting everything', () => {
   const { staleFusionUids } = require('../src/catalog.cjs');
   const flat = cat(m(1, cat(s(1, 'F'), s(22, 'fusion-a-sidekick-b'))));

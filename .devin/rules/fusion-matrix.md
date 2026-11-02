@@ -51,13 +51,15 @@ description: "Apply when changing Fusion matrix emission, Lead/Sidekick eligibil
   上（`['fusion'] + Lead 自带 harness`，无 harness 的 Lead 退化为 `['fusion']`），Lead 原生条目自己的 `harnessUids` 只决定它能否单独可选，
   与能否当 Fusion Lead 无关。官方 586 条组合实测 **40 条以 `harnessUids=[]` 的 `gpt-6-astra-{low,medium,high,xhigh,max}` 为 Lead**（`isModelRouter=false`、`disabled=false`），用 harness 卡 lead 会把整族挡在 Lead 列表外、设置页误标「不能作为 Fusion」。同批扫描的反证：lead/sidekick 引用 router = 0/0、引用 disabled = 0/0、**sidekick 引用无 harness = 0**——所以只有 lead 侧去掉 harness 判据，其余门禁（router/disabled/hidden、sidekick 的 harness）原样。`discoverAdditionalNativeRoles` 据此按角色分判：lead 候选 = `eligible || 官方 Lead 声明 || (官方族基 && 档位 token)`——astra `-priority` 兄弟无 harness 也并入官方族（`leadHarnessUids` 记 `['fusion']`，发射侧照旧被 `fastLeadUids` 跳过）；sidekick 候选 = `eligible || 官方 Sidekick 声明`。无官方声明、无官方族基档位 token 的无 harness 条目（`MODEL_*`/`arena-*`/`*-review` 类）照旧双假被跳过，不进角色池。
 - **fast 档 Lead 只聚合、绝不发射**（`buildCatalog` 展开 `selectedNativeLeadUids` 时跳过 `fastLeadUids` 成员；**只跳 lead 侧**，官方
-  Sidekick 维度没有子档、fast sidekick 是它自己的合法取值，实测 sidekick 段 fast 发射为 0 条）。`fastLeadUids`
-  必须**由观测的 `Fast Mode` 维度判定**（`fusionMetadata` 里 `Fast Mode != 0`），**不得按 uid 后缀判定**——同一概念上游在 Claude 上写
-  `-fast`、在 GPT 上写 `-priority`，按后缀写死会漏掉后者（实测漏 44 条）；观测驱动同时天然覆盖未来新命名，且与官方族准入规则用的是同一份证据。
+  Sidekick 维度没有子档、fast sidekick 是它自己的合法取值，实测 sidekick 段 fast 发射为 0 条）。三处判据统一收敛为
+  `isFastLeadUid(uid, observedFastUids, observedNonFastUids)`（`identity.cjs`）：**观测优先，后缀兜底**——`observedFastUids`（观测的
+  `Fast Mode != 0`）命中即 fast；`observedNonFastUids`（明确 `Fast Mode=0`，或有 `Speed` 维度且无 `Fast Mode!=0`，如 `swe-1-6-fast` 的
+  Speed 是另一个合法系列而非 Fast Mode）命中即非 fast；两者都无观测才回落 `-fast`/`-priority` 后缀。emit 过滤
+  （`selectedNativeLeadUids`）、`staleFusionUids`（`fastLeadUids`/`nonFastLeadUids` 选项）、`resolveAssignment`（fusion 最终确定后
+  统一拒绝 fast lead）共用同一判据；fast sidekick 三处都不设限。
   原因是能力缺口而非取舍：我们的矩阵条目**不写 `Fast Mode` 的 `order`**（写了就会把 Fast Mode 从官方 2 个选项涨到 3 个），于是 fast lead 条目与同档非 fast
-  双胞胎**维度元组逐字节相同**（发射 40 条即产生 40 组重复），picker 无从区分；不发射则重复组为 0。`staleFusionUids`（`leadUid.endsWith('-fast')`
-  判陈旧）与 `resolveAssignment`（同判据拒绝回退）**只认 `-fast` 拼写**，与「不发射」一致；
-  **若未来要重新发射 fast lead，必须同时补上 `Fast Mode` 的 order 才能让 picker 区分，并把这两处判据也改成观测驱动**，否则只是造重复条目或让新条目被自己的清理逻辑删掉。
+  双胞胎**维度元组逐字节相同**（发射 40 条即产生 40 组重复），picker 无从区分；不发射则重复组为 0。
+  **若未来要重新发射 fast lead，必须同时补上 `Fast Mode` 的 order 才能让 picker 区分**，否则只是造重复条目或让新条目被自己的清理逻辑删掉。
   并入成员继承官方 `leadDimension` 因此**不再为发射服务**，而是让家族聚合在「官方成员因 record 冲突被剔除、只剩这些兄弟」时仍读作官方（`buildRoleLists`
   的家族循环仍读该字段）。附注一个易误判的边界：`swe-1-6-fast`（label `SWE-1.6 Fast`）带的是 **`Speed` 开关**（不是 `Fast Mode`），
   且服务器把它算作**另一个家族**（`swe-1.6-fast` vs `swe-1.6`），故各自成行；判断「是不是 fast 开关的变体」只能看 `Fast Mode` 维度，不要按 uid 后缀或 label

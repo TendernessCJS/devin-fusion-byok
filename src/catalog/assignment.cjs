@@ -1,6 +1,6 @@
 'use strict';
 const { parseFields, s, m } = require('../protocol/wire.cjs');
-const { has, ownUid, concat, SIDEKICK_HARNESSES } = require('./identity.cjs');
+const { has, ownUid, concat, SIDEKICK_HARNESSES, isFastLeadUid } = require('./identity.cjs');
 const { defaultFusion } = require('./payload.cjs');
 
 function assignmentUid(data, format, field, camel, snake) {
@@ -37,7 +37,7 @@ function resolveAssignment(data, format = {}, catalog, lockedFusionUids) {
       const marker = typeof uid === 'string' ? uid.lastIndexOf('-sidekick-') : -1;
       if (marker > 'fusion-'.length && uid.startsWith('fusion-')) {
         const leadUid = uid.slice('fusion-'.length, marker), sidekickUid = uid.slice(marker + '-sidekick-'.length);
-        if (sidekickUid && !leadUid.endsWith('-fast')) {
+        if (sidekickUid) {
           const leadNative = !ownUid(leadUid), sidekickNative = !ownUid(sidekickUid);
           fusion = { uid, label: uid, leadUid, sidekickUid, leadNative, sidekickNative,
             ...(leadNative ? { leadHarnessUids: catalog?.nativeLeadHarnessUids?.get(leadUid) } : {}),
@@ -46,6 +46,14 @@ function resolveAssignment(data, format = {}, catalog, lockedFusionUids) {
       }
     }
     if (!fusion) return null;
+    // A fast lead can never resolve regardless of how the fusion was found:
+    // emitted, locked-default redirect or uid-split fallback all land here.
+    // Fast sidekicks stay legitimate — the official dimension has no tiers.
+    if (isFastLeadUid(fusion.leadUid, catalog?.fastLeadUids, catalog?.nonFastLeadUids)) return null;
+    // Explicit role exclusions veto the combination regardless of which path
+    // found it; the plain routes stay live, so in-flight requests are not cut.
+    if (catalog?.excludedRoleUids?.lead?.has(fusion.leadUid) ||
+        catalog?.excludedRoleUids?.sidekick?.has(fusion.sidekickUid)) return null;
     const modelUid = leadRouter ? fusion.sidekickUid : fusion.leadUid;
     if (leadRouter) {
       if (fusion.sidekickNative) {

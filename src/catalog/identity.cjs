@@ -103,6 +103,19 @@ function normalizeAllowedUids(allowedUids) {
   if (allowedUids instanceof Set) return allowedUids.size ? allowedUids : null;
   return Array.isArray(allowedUids) && allowedUids.length ? new Set(allowedUids) : null;
 }
+// A lead uid is fast when the observed Fast Mode dimension says so
+// (`observedFastUids`), or — absent any explicit observation — its suffix
+// marks it (-fast on Claude, -priority on GPT). An explicit non-fast
+// observation wins over the suffix guess: `swe-1-6-fast`'s Speed variant is a
+// legitimate series, not Fast Mode. Shared by the emission filter, the stale
+// probe and assignment so all three agree on what must never resolve.
+// Sidekicks are never fast-gated.
+function isFastLeadUid(uid, observedFastUids, observedNonFastUids) {
+  if (typeof uid !== 'string') return false;
+  if (observedFastUids?.has(uid)) return true;
+  if (observedNonFastUids?.has(uid)) return false;
+  return uid.endsWith('-fast') || uid.endsWith('-priority');
+}
 function nativeUid(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return '';
   const camel = entry.modelUid, snake = entry.model_uid;
@@ -113,4 +126,4 @@ function nativeUid(entry) {
 module.exports = { OWN_GROUP, SIDEKICK_HARNESSES, ownUid, has, digest, slug, concat, positive, refKey,
   NATIVE_ORDER_BASE, NATIVE_ORDER_SPAN, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE,
   BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, stableOrders,
-  NATIVE_EFFORT_SUFFIX, leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, NATIVE_LABEL_SUFFIX, leadFamilyLabel, effortMetadata, expandHiddenByFamily, normalizeAllowedUids, nativeUid };
+  NATIVE_EFFORT_SUFFIX, leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, NATIVE_LABEL_SUFFIX, leadFamilyLabel, effortMetadata, expandHiddenByFamily, normalizeAllowedUids, nativeUid, isFastLeadUid };

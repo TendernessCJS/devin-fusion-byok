@@ -5,7 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { CACHE_NAME, MAX_CACHE_BYTES, inspectCliCacheCoverage, inspectCliCaches, refreshStaleCliCaches } = require('../src/runtime/host/cli-cache.cjs');
-const { buildCatalog, augmentCatalog, staleFusionUids } = require('../src/catalog.cjs');
+const { buildCatalog, augmentCatalog, staleFusionUids, isOwnUid } = require('../src/catalog.cjs');
+const { fields, str } = require('../src/protocol/wire.cjs');
+const { config: fixtureConfig, OBSERVED_SWE } = require('./helpers/catalog-fixtures.cjs');
 const { s, v, m } = require('../src/protocol/wire.cjs');
 const cat = (...parts) => Buffer.concat(parts.flat());
 
@@ -782,4 +784,88 @@ test('retire:false refuses the all-own empty retirement entirely', () => {
   assert.deepEqual(result.refreshed, [], 'zero-byte retirement requires authority');
   assert.ok(fs.readFileSync(path.join(dir, name)).equals(before));
   assert.ok(!fs.existsSync(path.join(dir, name + '.bak')));
+});
+
+// A cold (non-authoritative) check must be strictly additive: every stored uid
+// — stale own rows, custom native×native pairs, plain natives — is preserved
+// while the new emit joins. When the catalog becomes authoritative the full
+// matrix is restored, including pairs admitted only through `matrixUids`.
+test('refresh preserves all uids while cold and restores the matrix when authoritative', () => {
+  const dir = tmpdir();
+  const name = 'model_configs_v5.aaaaaaaaaaaaaaaa.bin';
+  const storedUids = () => fields(Buffer.from(readCache(dir, name).envelope.payload, 'base64'), 1)
+    .filter(field => field.wire === 2).map(field => str(field.value, 22));
+  const writeEntries = (fileName, entries) => fs.writeFileSync(path.join(dir, fileName),
+    JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload: cat(...entries).toString('base64') }));
+  const run = (catalog, retire, extra = {}) => refreshStaleCliCaches({ dir,
+    expectedUids: catalog.models.map(model => model.uid), staleProbe: () => [], retire,
+    matrixUids: catalog.matrixUids,
+    augment: (payload, rpc, report) => augmentCatalog(payload,
+      { rpc, format: { json: false }, catalog, retireOwn: retire, preserveUnemitted: !retire, onSkip: report }), ...extra });
+
+  // Real emission: every BYOK role ref is excluded, the custom native lead ×
+  // native sidekick pair is selected explicitly — the emitted
+  // `fusion-native-a-sidekick-native-b` is ours to maintain yet is not own.
+  const byokRefs = fixtureConfig().providers.flatMap(provider =>
+    provider.models.map(model => ({ providerId: provider.id, model: model.id })));
+  const pair = 'fusion-native-a-sidekick-native-b';
+  const cfg = extras => ({ ...fixtureConfig(),
+    roleInclusions: { lead: [{ nativeUid: 'native-a' }], sidekick: [{ nativeUid: 'native-b' }] },
+    roleExclusions: { lead: byokRefs, sidekick: byokRefs }, ...extras });
+  const natives = [
+    { uid: 'native-a', label: 'NA', disabled: false, isModelRouter: false, harnessUids: ['h-a'] },
+    { uid: 'native-b', label: 'NB', disabled: false, isModelRouter: false, harnessUids: ['h-b'] }];
+  const old = buildCatalog(cfg(), natives);
+  assert.equal(isOwnUid(pair), false, 'the custom native×native pair is not an own uid');
+  assert.ok(old.matrixUids.has(pair));
+
+  // Cold: the config gained a BYOK model (excluded in both roles, plain model
+  // still emits) but the natives are unseen — every stored uid must survive.
+  const cold = buildCatalog(cfg({ providers: [...fixtureConfig().providers,
+    { id: 'added', name: 'Added', models: [{ id: 'new-plain', label: 'New Plain', contextWindow: 32000, maxOutputTokens: 64000 }] }],
+    roleExclusions: { lead: [...byokRefs, { providerId: 'added', model: 'new-plain' }],
+      sidekick: [...byokRefs, { providerId: 'added', model: 'new-plain' }] } }), []);
+  assert.ok(!cold.matrixUids.has(pair), 'the pair is not emitted while natives are unseen');
+  writeEntries(name, [...old.models.map(model => m(1, model.raw)), modelEntry('native-1'), modelEntry('native-2')]);
+  let res = run(cold, false);
+  assert.equal(res.refreshed.length, 1, 'the cold pass writes the additions');
+  for (const uid of [pair, 'native-1', 'native-2', ...old.models.map(model => model.uid)]) {
+    assert.ok(storedUids().includes(uid), uid + ' preserved while cold');
+  }
+  for (const model of cold.models) assert.ok(storedUids().includes(model.uid), model.uid + ' joined');
+  res = run(cold, false);
+  assert.equal(res.refreshed.length, 0, 'stable after convergence');
+
+  // An augmenter that drops any stored uid — native or not — is withheld.
+  res = run(cold, false, { force: true, augment: payload =>
+    cat(...fields(payload, 1).filter(field => str(field.value, 22) !== 'native-1').map(field => field.raw)) });
+  assert.equal(res.refreshed.length, 0);
+  assert.ok(res.skipped.some(skip => skip.reason === 'retire-withheld'), 'the hard gate protects non-own uids too');
+  assert.ok(storedUids().includes('native-1'), 'the withheld write never landed');
+
+  // Causal contrast for `matrixUids`: delete only the pair. Without the option
+  // it is invisible to `expected`, so nothing is even reported missing; with
+  // it the authoritative pass restores exactly that entry.
+  const ready = buildCatalog(cfg(), natives);
+  writeEntries(name, [...ready.models.filter(model => model.uid !== pair).map(model => m(1, model.raw)),
+    modelEntry('native-1'), modelEntry('native-2')]);
+  const blind = inspectCliCaches({ dir, expectedUids: ready.models.map(model => model.uid), retire: true });
+  assert.deepEqual(blind.entries.find(entry => entry.name === name)?.missing || [], [],
+    'without matrixUids the deleted pair is invisible — nothing missing to rewrite');
+  res = run(ready, true);
+  assert.equal(res.refreshed.length, 1);
+  assert.ok(storedUids().includes(pair), 'the pair is restored through matrixUids');
+  const fileAfter = readCache(dir, name).raw;
+  const bakAfter = fs.existsSync(path.join(dir, name + '.bak')) ? fs.readFileSync(path.join(dir, name + '.bak')) : null;
+  res = run(ready, true);
+  assert.equal(res.refreshed.length, 0, 'a repeat authoritative check does not churn');
+  assert.deepEqual(readCache(dir, name).raw, fileAfter, 'main file untouched');
+  if (bakAfter) assert.ok(fs.readFileSync(path.join(dir, name + '.bak')).equals(bakAfter), '.bak untouched');
+
+  // An all-native file never gains write eligibility from matrixUids alone.
+  const foreign = 'model_configs_v5.cccccccccccccccc.bin';
+  writeEntries(foreign, [modelEntry('native-1'), modelEntry('native-2')]);
+  const beforeForeign = readCache(dir, foreign).raw;
+  res = run(ready, true);
+  assert.deepEqual(readCache(dir, foreign).raw, beforeForeign, 'no BYOK marker, no rewrite');
 });

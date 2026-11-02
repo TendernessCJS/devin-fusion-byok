@@ -533,6 +533,117 @@ test('fast-mode fusion uids are refused outright instead of downgraded', () => {
   assert.equal(resolveAssignment({ modelRouterUid: `fusion-${byokLead}-sidekick-` }, json, probe), null);
 });
 
+test('a fast lead is refused whatever its spelling, on every resolution path', () => {
+  const meta = order => [{ key: 'Effort', order: 0, name: 'High', controlType: 1 }, { key: 'Fast Mode', order }];
+  const combo = (uid, index) => ({ uid: `fusion-${uid}-sidekick-swe-2-max`, label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'],
+    fusionMetadata: [{ key: 'Lead', order: 20 + index, name: 'N' + index, controlType: 3 }, { key: 'Effort', order: 3, name: 'High', controlType: 1 },
+      { key: 'Sidekick', order: 3, name: 'SWE-2 Max', controlType: 3 }] });
+  const leads = [
+    // Each fast spelling flagged by the observed Fast Mode dimension itself.
+    nativeLead('nova-claude-high-fast', 'Nova Fast', meta(1)),
+    nativeLead('nova-gpt-high-priority', 'Nova Fast', meta(1)),
+    nativeLead('nova-unnamed', 'Nova Fast', meta(1)),
+    // Explicit non-fast observations must beat the -fast suffix guess:
+    // `swe-1-6-fast`'s Speed is another legitimate series, not Fast Mode.
+    nativeLead('nova-clearly-fast', 'Nova', meta(0)),
+    nativeLead('swe-1-6-fast', 'SWE 1.6 Fast', [{ key: 'Speed', order: 1 }]),
+    nativeLead('nova-plain-high', 'Nova', meta(0))];
+  const probe = buildCatalog(config(), [...OBSERVED_SWE, ...leads, ...leads.map((lead, index) => combo(lead.uid, index))]);
+  assert.deepEqual(['nova-claude-high-fast', 'nova-gpt-high-priority', 'nova-unnamed']
+    .map(uid => probe.fastLeadUids.has(uid)), [true, true, true], 'the observed dimension flags every spelling');
+  for (const uid of ['nova-clearly-fast', 'swe-1-6-fast']) assert.ok(probe.nonFastLeadUids.has(uid), uid);
+  // Real emission coverage: fast leads never emit, explicit non-fast leads do.
+  const matrix = probe.models.filter(model => model.kind === 'matrix').map(model => model.uid);
+  for (const lead of ['nova-claude-high-fast', 'nova-gpt-high-priority', 'nova-unnamed'])
+    assert.ok(!matrix.some(uid => uid.startsWith(`fusion-${lead}-sidekick-`)), lead + ' must not emit');
+  assert.ok(matrix.some(uid => uid.startsWith('fusion-nova-clearly-fast-sidekick-')), 'the non-fast suffix twin still emits');
+
+  for (const format of [proto, json]) {
+    const input = uid => format.json ? { modelRouterUid: uid } : cat(s(2, uid));
+    const sideInput = uid => format.json ? { fusionLeadRouterUid: uid } : s(6, uid);
+    for (const lead of ['nova-claude-high-fast', 'nova-gpt-high-priority', 'nova-unnamed']) {
+      // Without the shared predicate every one of these splits resolves:
+      // harnesses and the swe-2-max sidekick are all real observations.
+      assert.equal(resolveAssignment(input(`fusion-${lead}-sidekick-swe-2-max`), format, probe), null, lead + ' lead');
+      assert.equal(resolveAssignment(sideInput(`fusion-${lead}-sidekick-swe-2-max`), format, probe), null, lead + ' sidekick');
+    }
+    // Explicit non-fast observations win over the suffix and resolve.
+    for (const lead of ['nova-clearly-fast', 'swe-1-6-fast', 'nova-plain-high']) {
+      const output = resolveAssignment(input(`fusion-${lead}-sidekick-swe-2-max`), format, probe);
+      const assigned = format.json ? output.assignment.modelUid : str(getNested(output, 1), 2);
+      assert.equal(assigned, lead, lead + ' resolves');
+    }
+    // A fast sidekick stays legitimate in both directions' fused uid.
+    assert.ok(resolveAssignment(sideInput('fusion-nova-plain-high-sidekick-swe-1-6-fast'), format, probe), 'fast sidekick');
+    // A genuinely fast-observed sidekick (`Fast Mode=1` in the metadata) must
+    // still resolve — the fast predicate never applies to the sidekick role.
+    assert.ok(resolveAssignment(sideInput('fusion-nova-plain-high-sidekick-nova-claude-high-fast'), format, probe), 'observed-fast sidekick');
+    assert.ok(resolveAssignment(input('fusion-nova-plain-high-sidekick-nova-claude-high-fast'), format, probe), 'observed-fast sidekick, lead direction');
+  }
+
+  // The locked-official redirect lands on the same final guard: flag the real
+  // default's BYOK lead and the redirected assignment must fail closed. The
+  // unflagged control proves the default itself is servable, so the refusal is
+  // caused by the predicate, not by defaultFusion rejecting the entry.
+  const fallback = Object.values(probe.fusions).find(fusion => fusion.sidekickNative === false);
+  const locked = new Set(['fusion-official-locked']);
+  const servable = { ...probe, lastFusionSelection: fallback.uid };
+  assert.ok(resolveAssignment(s(2, 'fusion-official-locked'), proto, servable, locked), 'control: unflagged default resolves');
+  const badDefault = { ...servable, fastLeadUids: new Set([...probe.fastLeadUids, fallback.leadUid]) };
+  for (const format of [proto, json]) {
+    const input = format.json ? { modelRouterUid: 'fusion-official-locked' } : s(2, 'fusion-official-locked');
+    assert.equal(resolveAssignment(input, format, badDefault, locked), null, 'locked redirect respects the fast guard');
+  }
+});
+
+test('explicit role exclusions refuse every resolution path but keep plain routes', () => {
+  const cfg = { ...config(), roleExclusions: {
+    lead: [{ providerId: 'cpa', model: 'grok-4.6' }, { nativeUid: 'claude-x-high' }],
+    sidekick: [{ nativeUid: 'swe-2-max' }] } };
+  const natives = [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X')];
+  const probe = buildCatalog(cfg, [...OBSERVED_SWE, ...natives]);
+  const grokUids = Object.keys(probe.routes).filter(uid => probe.routes[uid].model === 'grok-4.6');
+  assert.equal(grokUids.length, 2, 'both effort routes exist and stay live');
+  for (const uid of grokUids) assert.ok(probe.excludedRoleUids.lead.has(uid), uid + ' mapped by the BYOK ref');
+  // Excluding one member of an official effort family retires every sibling.
+  const family = ['claude-x-low', 'claude-x-medium', 'claude-x-high', 'claude-x-xhigh', 'claude-x-max'];
+  for (const uid of family) assert.ok(probe.excludedRoleUids.lead.has(uid), uid + ' expanded through memberUids');
+  assert.ok(probe.excludedRoleUids.sidekick.has('swe-2-max'));
+  assert.ok(!probe.excludedRoleUids.lead.has('swe-odd'), 'unselected is not excluded');
+
+  for (const format of [proto, json]) {
+    const input = uid => format.json ? { modelRouterUid: uid } : cat(s(2, uid));
+    const sideInput = uid => format.json ? { fusionLeadRouterUid: uid } : s(6, uid);
+    for (const uid of grokUids) {
+      assert.equal(resolveAssignment(input(`fusion-${uid}-sidekick-swe-odd`), format, probe), null, uid + ' lead veto');
+      assert.equal(resolveAssignment(sideInput(`fusion-${uid}-sidekick-swe-odd`), format, probe), null, uid + ' sidekick direction');
+    }
+    // Every family member is refused, not just the exact excluded uid.
+    for (const uid of family) assert.equal(resolveAssignment(input(`fusion-${uid}-sidekick-swe-odd`), format, probe), null, uid);
+    assert.equal(resolveAssignment(input(`fusion-swe-odd-sidekick-swe-2-max`), format, probe), null, 'sidekick veto');
+    // Unselected-but-legitimate and ordinary pairs still resolve.
+    const byokSide = Object.keys(probe.routes).find(uid => !grokUids.includes(uid));
+    assert.ok(resolveAssignment(input(`fusion-swe-odd-sidekick-${byokSide}`), format, probe), 'swe-odd fallback survives');
+    const plain = Object.values(probe.fusions).find(fusion => !grokUids.includes(fusion.leadUid) && fusion.sidekickUid !== 'swe-2-max');
+    assert.ok(resolveAssignment(input(plain.uid), format, probe), 'unrelated pairs unaffected');
+  }
+
+  // Locked-official redirect hits the same veto: build the default from real
+  // routes, then exclude its lead — the control resolves, the excluded rejects.
+  const sideRoute = Object.keys(probe.routes).find(uid => !grokUids.includes(uid));
+  const fake = `fusion-${grokUids[0]}-sidekick-${sideRoute}`;
+  const base = { ...probe, lastFusionSelection: fake,
+    fusions: { ...probe.fusions, [fake]: { uid: fake, label: 'F', leadUid: grokUids[0], sidekickUid: sideRoute, leadNative: false, sidekickNative: false } } };
+  const locked = new Set(['fusion-official-locked']);
+  const control = { ...base, excludedRoleUids: { lead: new Set(), sidekick: new Set() } };
+  assert.ok(resolveAssignment(s(2, 'fusion-official-locked'), proto, control, locked), 'control: unexcluded default resolves');
+  for (const format of [proto, json]) {
+    const input = format.json ? { modelRouterUid: 'fusion-official-locked' } : s(2, 'fusion-official-locked');
+    assert.equal(resolveAssignment(input, format, base, locked), null, 'excluded default refused after redirect');
+  }
+});
+
+
 test('matrix dimension orders are hash-stable across catalog generations', () => {
   const sweX = { uid: 'swe-x', label: 'SWE-X', disabled: false, isModelRouter: false, harnessUids: [] };
   const withX = buildCatalog(config(), [...OBSERVED_SWE, sweX,

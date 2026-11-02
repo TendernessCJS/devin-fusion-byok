@@ -83,7 +83,7 @@ function fixture(t, initial = {}) {
       defaultConfig: realRequire('./config/config.cjs').defaultConfig,
       pruneRetiredKeys: realRequire('./config/config.cjs').pruneRetiredKeys,
     },
-    './catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: () => [],
+    './catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: () => [], isOwnUid: realRequire('./catalog/payload.cjs').isOwnUid,
       catalogSignature: realRequire('./catalog/signature.cjs').catalogSignature,
       ownEntriesSignature: realRequire('./catalog/signature.cjs').ownEntriesSignature,
       buildCatalog: config => ({ models: config.providers?.length

@@ -47,6 +47,9 @@ description: "Apply when changing the native auth-status catalog write, the publ
   （改的是 userStatus 的可见性与组合）；不在目录中的 uid，无论怎么改配置都选不到，直到新会话或窗口重载。
   反例说明粒度：一个重载时已启用的供应商，事后**新增一个模型**——那条新 uid 仍需新对话；而同一供应商下已在目录里的模型照常即时。
   两类典型观察（2026-11-02 用户实测）：①重载前禁用、重载后启用 → 等同新增，picker 不刷新；②重载前启用、重载后禁用 → 后续开关全即时。
+- **显式隐藏配置触发一次独立缓存失效**：`cache-sync` 把 `config.hiddenNativeModelUids` 去重排序成 `hiddenNativeSignature`，仅在权威检查
+  后记录；与上一记录不同则 `effectiveForce` 强刷一次（augment 删隐藏原生条目，unhide 同样失效一次但字节恢复靠上游），观测派生的
+  `hiddenFusionUids`/allowlist 抖动不参与该签名，uid 值不进日志。
 - 面板用 `catalogDrift` 把这层暴露出来（`panel-state.cjs`：`catalog.models` 里 `isOwnUid` 的条数 vs `acpObservation.ownModels`），
   **只在 `emitted > observed` 时提示**「还有 N 个模型/组合没进入当前会话」，因为只有「新增未进目录」才真需要新对话。
   反方向（会话里还列着我们已停发的条目）**不得提示**：那些条目在 userStatus 层面已不再引用，picker 早就看不到了——
