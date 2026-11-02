@@ -96,3 +96,4 @@ description: "Apply when changing Fusion matrix emission, Lead/Sidekick eligibil
   协议系」只是最像的解释，也可能是统一的 provider adapter），没有证据，不要当定论。**不要再从系统提示词或 App bundle 反推 harness**：桌面 App bundle 与 CLI
   二进制里 `strawberry-pancake` **零出现**（纯服务端标识符、内部代号无字面语义），压缩落盘摘要里的 `MESSAGE 0/1 - System`（真实系统提示）中 "harness" 计数为
   **0**。
+- **BYOK 不可用条目不进角色列表**：供应商或模型停用时 `buildRoleLists` 跳过该 ref 但仍标记 seen（否则死引用循环把它捡回成假行），停用只在模型页管理；原生不可用行只来自死引用，「移除」只在那里有效（BYOK 死引用由 `pruneDanglingRoleRefs` 清）。

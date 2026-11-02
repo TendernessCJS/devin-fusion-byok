@@ -931,3 +931,33 @@ test('emitted fusion entries always carry fusion and never a sidekick harness', 
       `matrix entry ${uid} must not fall back to the sidekick harness pool`);
   }
 });
+
+test('unavailable BYOK entries (disabled provider or model) never reach the role lists', () => {
+  const cfg = off => ({ providers: [
+    { id: 'on', name: 'On', baseUrl: 'https://on.invalid/v1', apiKey: 'k', apiFormat: 'openai', enabled: true,
+      models: [{ id: 'a', label: 'a', efforts: [], contextWindow: 128000, maxOutputTokens: 8192, enabled: true },
+               { id: 'b', label: 'b', efforts: [], contextWindow: 128000, maxOutputTokens: 8192, enabled: false }] },
+    { id: 'off', name: 'Off', baseUrl: 'https://off.invalid/v1', apiKey: 'k', apiFormat: 'openai', enabled: off,
+      models: [{ id: 'x', label: 'x', efforts: [], contextWindow: 128000, maxOutputTokens: 8192, enabled: true }] }],
+    roleExclusions: { lead: [{ providerId: 'off', model: 'x' }], sidekick: [] },
+    roleInclusions: { lead: [], sidekick: [{ providerId: 'off', model: 'x' }] } });
+  const key = (providerId, model) => JSON.stringify(['provider', providerId, model]);
+  const refs = list => list.map(item => item.ref?.providerId ? JSON.stringify(['provider', item.ref.providerId, item.ref.model]) : JSON.stringify(item.ref));
+  const disabled = cfg(false), roles = buildRoleLists(disabled, []);
+  for (const list of [roles.lead, roles.sidekick]) {
+    assert.ok(!refs(list).includes(key('off', 'x')), 'a disabled provider contributes no row at all');
+    assert.ok(!refs(list).includes(key('on', 'b')), 'a disabled model contributes no row at all');
+    assert.ok(!list.some(item => item.reason === '当前未在可用列表中' && !item.native),
+      'no shadow dead-ref row replaces the skipped BYOK entries');
+  }
+  const onA = roles.lead.find(item => item.ref?.providerId === 'on' && item.ref?.model === 'a');
+  assert.equal(onA?.available, true);
+  assert.equal(onA?.selected, true, 'an enabled model keeps its default selection semantics');
+  const enabled = buildRoleLists(cfg(true), []);
+  assert.ok(refs(enabled.lead).includes(key('off', 'x')),
+    'the same ref reappears once the provider is enabled again');
+  const deadNative = buildRoleLists({ providers: [], roleExclusions: { lead: [{ nativeUid: 'gone-uid' }], sidekick: [] } }, []);
+  const dead = deadNative.lead.find(item => item.ref?.nativeUid === 'gone-uid');
+  assert.equal(dead?.available, false);
+  assert.equal(dead?.reason, '当前未在可用列表中', 'native dead refs still render the removal row');
+});

@@ -394,22 +394,29 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
       const available = providerEnabled && model.enabled !== false;
       const variantCount = Array.isArray(model.efforts) && model.efforts.length ? model.efforts.length : 1;
 
+      // An unavailable BYOK row is never rendered: its 移除 button would
+      // forgetRoleRef, which only clears roleInclusions/roleExclusions while
+      // the row itself comes from config.providers[].models — forgetting a
+      // ref cannot remove an enumeration row, and dangling BYOK refs are
+      // already auto-pruned by manager.pruneDanglingRoleRefs, so the only
+      // rows that can legitimately offer 移除 are native dead references.
+      // The key is still marked as seen below: without that, the dead-ref
+      // loops later on would pick the same ref up as a fake unavailable row
+      // whose 移除 button does nothing.
       if (!seenLeadKeys.has(key)) {
         seenLeadKeys.add(key);
-        leadList.push({
+        if (available) leadList.push({
           ref, label, native: false, variantCount,
-          available, selected: available && roleSelected(ref, leadRefs, true),
-          defaultSelected: available,
-          ...(available ? {} : { disabled: true, reason: providerEnabled ? '已在模型列表中停用' : '供应商已停用' }),
+          available, selected: roleSelected(ref, leadRefs, true),
+          defaultSelected: true,
         });
       }
       if (!seenSidekickKeys.has(key)) {
         seenSidekickKeys.add(key);
-        sidekickList.push({
+        if (available) sidekickList.push({
           ref, label, native: false, variantCount,
-          available, selected: available && roleSelected(ref, sidekickRefs, true),
-          defaultSelected: available,
-          ...(available ? {} : { disabled: true, reason: providerEnabled ? '已在模型列表中停用' : '供应商已停用' }),
+          available, selected: roleSelected(ref, sidekickRefs, true),
+          defaultSelected: true,
         });
       }
     }

@@ -146,8 +146,9 @@ test('a disabled provider or model is never selected and never pooled', () => {
   off.providers[0].models[0].enabled = false;
   const roles = buildRoleLists(off, []);
   const row = roles.lead.find(item => item.ref.model === 'a');
-  assert.equal(row.available, false);
-  assert.equal(row.selected, false);
+  assert.equal(row, undefined, 'a disabled model contributes no lead row at all');
+  assert.equal(roles.sidekick.find(item => item.ref.model === 'a'), undefined,
+    'a disabled model contributes no sidekick row at all');
   const catalog = buildCatalog(off, []);
   assert.equal(catalog.rolePool.lead.some(item => item.ref.model === 'a'), false);
   assert.equal(catalog.rolePool.sidekick.some(item => item.ref.model === 'a'), false);
