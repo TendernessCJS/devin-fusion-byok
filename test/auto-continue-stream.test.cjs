@@ -41,8 +41,8 @@ test('input-state cancellation settles queued v1 results exactly once', { timeou
   }
 });
 
-test('native rejection obeys the latest input state before scheduling', { timeout: 2000 }, async t => {
-  for (const cleared of [false, true]) await t.test(cleared ? 'cleared' : 'held', async t => {
+test('native rejection schedules regardless of the latest input state', { timeout: 2000 }, async t => {
+  for (const flagged of [false, true]) await t.test(flagged ? 'flagged' : 'unflagged', async t => {
     const f = fixture();
     const scheduler = fakeScheduler();
     const handle = f.install({ isEnabled: () => true, scheduler });
@@ -53,21 +53,25 @@ test('native rejection obeys the latest input state before scheduling', { timeou
       sendRequest() { sends++; return new Promise((_, reject) => { rejectNative = reject; }); },
       forwardClientRequest() {} };
     f.api.registerConnection(connector);
-    const info = value => connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 'held',
+    const info = value => connector.forwardClientRequest({ method: 'session/update', params: { sessionId: 's-flag',
       update: { sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': value } } } });
     const wrapped = connector.sendRequest({ method: 'session/prompt',
-      params: { sessionId: 'held', prompt: [{ type: 'text', text: 'go' }] } });
+      params: { sessionId: 's-flag', prompt: [{ type: 'text', text: 'go' }] } });
     const settled = assert.rejects(wrapped, error => error === failure);
-    info('waiting');
-    if (cleared) info('');
+    if (flagged) info('waiting');
     rejectNative(failure);
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(scheduler.pendingCount(), cleared ? 1 : 0);
+    assert.equal(scheduler.pendingCount(), 1, 'input-state flags are diagnostics, not a gate');
     const evaluation = f.logs.filter(entry => entry.event === 'auto-continue-evaluated').at(-1).data;
-    assert.equal(evaluation.decision, cleared ? 'error-retry' : 'stop');
-    assert.equal(evaluation.reason, cleared ? null : 'session-info');
-    if (cleared) info('waiting');
+    assert.equal(evaluation.decision, 'error-retry');
+    assert.equal(evaluation.reason, null);
+    // Once the continue is queued, a fresh client question withdraws it and
+    // settles the caller with the original native rejection.
+    info('waiting');
     await settled;
+    const disqualified = f.logs.filter(entry => entry.event === 'auto-continue-disqualified');
+    assert.deepEqual(disqualified.map(entry => [entry.data.reason, entry.data.trigger]),
+      [['session-info', 'action-required']]);
     scheduler.advance(60000);
     assert.equal(sends, 1);
     assert.equal(scheduler.pendingCount(), 0);
@@ -837,11 +841,14 @@ test('a disqualified turn records which event disqualified it', async t => {
   void connector.sendRequest({ method: 'session/close', params: { sessionId: 's-reset' } });
 
   const disqualified = f.logs.filter(l => l.event === 'auto-continue-disqualified');
-  assert.deepEqual(disqualified.map(l => l.data.reason), ['permission', 'state', 'reset-method'],
+  assert.deepEqual(disqualified.map(l => l.data.reason), ['state', 'reset-method'],
     'each silent disqualifier names itself instead of surfacing later as session-gone');
-  assert.equal(disqualified[0].data.method, 'session/request_permission');
-  assert.equal(disqualified[1].data.state, 'requires_action');
-  assert.equal(disqualified[2].data.method, 'session/close');
+  assert.equal(disqualified[0].data.state, 'requires_action');
+  assert.equal(disqualified[1].data.method, 'session/close');
+  const observed = f.logs.filter(l => l.event === 'auto-continue-permission-observed');
+  assert.deepEqual(observed.map(l => [l.data.method, l.data.queued]),
+    [['session/request_permission', false]],
+    'a mid-turn permission request is observed, not a disqualifier');
 });
 
 test('a session_info_update or a new prompt names what disqualified the turn', async t => {
@@ -919,7 +926,54 @@ test('a cleared userActionRequired no longer voids the turn', { timeout: 1000 },
   assert.equal(f.logs.some(l => l.event === 'auto-continue-disqualified'), false);
 });
 
-test('userActionRequired still gates a continuation while it is set', { timeout: 1000 }, async t => {
+test('input-state flags set mid-turn never gate a completed turn', { timeout: 2000 }, async t => {
+  for (const field of ['userActionRequired', 'inputDisabledReason']) {
+    await t.test(field, async t => {
+      const f = fixture();
+      const scheduler = fakeScheduler();
+      const handle = f.install({
+        isEnabled: () => true,
+        getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+        scheduler
+      });
+      t.after(() => handle.dispose());
+      let promptCount = 0;
+      const connector = {
+        agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+        sendRequest(req) {
+          if (req.method === 'session/prompt') { promptCount++; return Promise.resolve({ stopReason: 'max_turn_requests' }); }
+          return Promise.resolve({});
+        },
+        forwardClientRequest() {}
+      };
+      f.api.registerConnection(connector);
+      connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-flag', prompt: [{ type: 'text', text: 'do' }] } });
+      connector.forwardClientRequest({
+        method: 'session/update',
+        params: { sessionId: 's-flag', update: { sessionUpdate: 'session_info_update', _meta: { [`cognition.ai/${field}`]: 'waiting' } } }
+      });
+      connector.forwardClientRequest({
+        method: 'session/update',
+        params: { sessionId: 's-flag', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial answer' } } }
+      });
+      await new Promise(r => setImmediate(r));
+      assert.equal(scheduler.pendingCount(), 1, 'a mid-turn UI flag is evidence the user was asked, not a terminal state');
+      scheduler.advance(2000);
+      assert.equal(promptCount, 2);
+      assert.equal(f.logs.filter(l => l.event === 'auto-continue-fired').length, 1);
+      const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+      assert.equal(evaluated.at(-1).data.decision, 'plan-retry');
+      assert.equal(evaluated.at(-1).data.reason, null);
+      assert.equal(f.logs.some(l => l.event === 'auto-continue-disqualified'), false);
+    });
+  }
+});
+
+test('a mid-turn permission request is observed but does not void the turn', { timeout: 1000 }, async t => {
+  // Regression for the real-world hit: the client asked for AcceptEdits mid-
+  // turn, the extension voided the turn, and the eventual max_turn_requests
+  // could not continue. A client prompt is mid-turn evidence, not a terminal
+  // state — the user answers it and the turn keeps running.
   const f = fixture();
   const scheduler = fakeScheduler();
   const handle = f.install({
@@ -938,23 +992,21 @@ test('userActionRequired still gates a continuation while it is set', { timeout:
     forwardClientRequest() {}
   };
   f.api.registerConnection(connector);
-  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-held', prompt: [{ type: 'text', text: 'do' }] } });
+  connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-perm-mid', prompt: [{ type: 'text', text: 'do' }] } });
+  connector.forwardClientRequest({ method: 'session/request_permission', params: { sessionId: 's-perm-mid' } });
   connector.forwardClientRequest({
     method: 'session/update',
-    params: { sessionId: 's-held', update: { sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'confirm' } } }
-  });
-  connector.forwardClientRequest({
-    method: 'session/update',
-    params: { sessionId: 's-held', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial answer' } } }
+    params: { sessionId: 's-perm-mid', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial answer' } } }
   });
   await new Promise(r => setImmediate(r));
-  assert.equal(scheduler.pendingCount(), 0, 'never prompt the model while the client is still asking the user');
+  const observed = f.logs.filter(l => l.event === 'auto-continue-permission-observed');
+  assert.deepEqual(observed.map(l => [l.data.method, l.data.queued]), [['session/request_permission', false]]);
+  assert.equal(f.logs.some(l => l.event === 'auto-continue-disqualified'), false,
+    'a permission prompt answered mid-turn is not a disqualifier');
+  assert.equal(scheduler.pendingCount(), 1, 'the completed truncation still earns a continuation');
   scheduler.advance(2000);
-  assert.equal(promptCount, 1);
-  const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
-  assert.equal(evaluated.at(-1).data.decision, 'stop');
-  assert.equal(evaluated.at(-1).data.reason, 'session-info', 'the gate names itself instead of looking like a completed turn');
-  assert.equal(evaluated.at(-1).data.retryDisallowed, false, 'the turn is held, not permanently disqualified');
+  assert.equal(promptCount, 2);
+  assert.equal(f.logs.filter(l => l.event === 'auto-continue-fired').length, 1);
 });
 
 test('an ineligible turn does not blame the input-state gate', { timeout: 1000 }, async t => {
@@ -1836,8 +1888,8 @@ test('terminal state_update settles a queued v2 acknowledgement', { timeout: 200
   assert.equal(settlements, 1);
 });
 
-test('session-info reason requires held to be the deciding gate', { timeout: 5000 }, async t => {
-  for (const held of [false, true]) for (const withText of [false, true]) {
+test('input-state flags do not change resolve-path attribution', { timeout: 5000 }, async t => {
+  for (const flagged of [false, true]) for (const withText of [false, true]) {
     const f = fixture();
     const scheduler = fakeScheduler();
     const handle = f.install({ isEnabled: () => true, scheduler,
@@ -1851,25 +1903,27 @@ test('session-info reason requires held to be the deciding gate', { timeout: 500
     const update = value => connector.forwardClientRequest({
       method: 'session/update', params: { sessionId: 's', update: value } });
     connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's', prompt: [{ type: 'text', text: 'hi' }] } });
-    if (held) update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
+    if (flagged) update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
     if (withText) update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } });
     await new Promise(r => setImmediate(r));
     const ev = f.logs.find(l => l.event === 'auto-continue-evaluated');
-    if (!held && withText) {
-      assert.equal(ev?.data?.decision, 'plan-retry');
-      assert.equal(scheduler.pendingCount(), 1);
+    if (withText) {
+      assert.equal(ev?.data?.decision, 'plan-retry', `flagged=${flagged} text=${withText}`);
+      assert.equal(ev?.data?.reason, null, `flagged=${flagged} text=${withText}`);
+      assert.equal(scheduler.pendingCount(), 1, `flagged=${flagged} text=${withText}`);
     } else {
-      const expectedReason = held && withText ? 'session-info' : 'truncated-empty';
-      assert.equal(ev?.data?.decision, 'stop', `held=${held} text=${withText}`);
-      assert.equal(ev?.data?.reason, expectedReason, `held=${held} text=${withText}`);
-      assert.equal(scheduler.pendingCount(), 0);
+      assert.equal(ev?.data?.decision, 'stop', `flagged=${flagged} text=${withText}`);
+      assert.equal(ev?.data?.reason, 'truncated-empty', `flagged=${flagged} text=${withText}`);
+      assert.equal(scheduler.pendingCount(), 0, `flagged=${flagged} text=${withText}`);
     }
+    assert.equal(f.logs.some(l => l.event === 'auto-continue-disqualified'), false,
+      `flagged=${flagged} text=${withText}: a running turn is never disqualified by the flag`);
     assert.equal(sends, 1);
   }
 });
 
-test('attribution of a stalled or progressed plan under held', { timeout: 5000 }, async t => {
-  for (const [held, progressed] of [[true, false], [true, true], [false, false]]) {
+test('attribution of a stalled or progressed plan ignores input-state flags', { timeout: 5000 }, async t => {
+  for (const progressed of [false, true]) {
     const f = fixture();
     const scheduler = fakeScheduler();
     const handle = f.install({ isEnabled: () => true, scheduler,
@@ -1890,31 +1944,33 @@ test('attribution of a stalled or progressed plan under held', { timeout: 5000 }
     const update = value => connector.forwardClientRequest({
       method: 'session/update', params: { sessionId: 's', update: value } });
     const wrapped = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's', prompt: [{ type: 'text', text: 'hi' }] } });
-    let settled = 0; wrapped.then(() => settled++, () => settled++);
+    wrapped.then(() => {}, () => {});
     update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } });
     update({ sessionUpdate: 'plan', entries: [{ content: 'step', status: 'pending' }] });
     await new Promise(r => setImmediate(r));
-    assert.equal(scheduler.pendingCount(), 1, `held=${held} progressed=${progressed}: plan continuation queued`);
+    assert.equal(scheduler.pendingCount(), 1, `progressed=${progressed}: plan continuation queued`);
     scheduler.advance(5000);
     await new Promise(r => setImmediate(r));
     assert.equal(sends, 2, 'the auto prompt fired once');
     update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'more' } });
     if (progressed) update({ sessionUpdate: 'plan', entries: [{ content: 'step', status: 'completed' }, { content: 'next', status: 'pending' }] });
-    if (held) update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
+    // Mid-turn UI flag: recorded, but never the deciding factor.
+    update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
     releaseSecond({ stopReason: 'max_turn_requests' });
     await new Promise(r => setImmediate(r));
     const last = f.logs.filter(l => l.event === 'auto-continue-evaluated').pop();
-    assert.equal(last?.data?.decision, 'stop', `held=${held} progressed=${progressed}`);
-    const expected = held ? (progressed ? 'session-info' : null) : null;
-    assert.equal(last?.data?.reason, expected, `held=${held} progressed=${progressed}`);
+    assert.equal(last?.data?.decision, progressed ? 'plan-retry' : 'stop', `progressed=${progressed}`);
+    assert.equal(last?.data?.reason, null, `progressed=${progressed}`);
+    assert.equal(scheduler.pendingCount(), progressed ? 1 : 0, `progressed=${progressed}`);
     assert.equal(f.logs.filter(l => l.event === 'auto-continue-stopped' && l.data?.reason === 'plan-no-progress').length,
-      !held && !progressed ? 1 : 0, `held=${held} progressed=${progressed}: plan-no-progress count`);
+      progressed ? 0 : 1, `progressed=${progressed}: plan-no-progress count`);
+    assert.equal(f.logs.some(l => l.event === 'auto-continue-disqualified'), false, `progressed=${progressed}`);
     assert.equal(sends, 2);
   }
 });
 
-test('v2 idle uses the same deciding-gate attribution', { timeout: 5000 }, async t => {
-  for (const held of [false, true]) for (const withText of [false, true]) {
+test('v2 idle attribution ignores input-state flags', { timeout: 5000 }, async t => {
+  for (const flagged of [false, true]) for (const withText of [false, true]) {
     const f = fixture();
     const scheduler = fakeScheduler();
     const handle = f.install({ isEnabled: () => true, scheduler,
@@ -1928,26 +1984,28 @@ test('v2 idle uses the same deciding-gate attribution', { timeout: 5000 }, async
     const update = value => connector.forwardClientRequest({
       method: 'session/update', params: { sessionId: 's', update: value } });
     connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's', prompt: [{ type: 'text', text: 'hi' }] } });
-    if (held) update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
+    if (flagged) update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
     update({ sessionUpdate: 'agent_message', messageId: 'm1', content: withText ? [{ type: 'text', text: 'partial' }] : [] });
     update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_tokens' });
     await new Promise(r => setImmediate(r));
     const ev = f.logs.find(l => l.event === 'auto-continue-evaluated');
-    if (!held && withText) {
-      assert.equal(ev?.data?.decision, 'plan-retry', `v2 held=${held} text=${withText}`);
-      assert.equal(scheduler.pendingCount(), 1);
+    if (withText) {
+      assert.equal(ev?.data?.decision, 'plan-retry', `v2 flagged=${flagged} text=${withText}`);
+      assert.equal(ev?.data?.reason, null, `v2 flagged=${flagged} text=${withText}`);
+      assert.equal(scheduler.pendingCount(), 1, `v2 flagged=${flagged} text=${withText}`);
     } else {
-      const expectedReason = held && withText ? 'session-info' : 'truncated-empty';
-      assert.equal(ev?.data?.decision, 'stop', `v2 held=${held} text=${withText}`);
-      assert.equal(ev?.data?.reason, expectedReason, `v2 held=${held} text=${withText}`);
-      assert.equal(scheduler.pendingCount(), 0);
+      assert.equal(ev?.data?.decision, 'stop', `v2 flagged=${flagged} text=${withText}`);
+      assert.equal(ev?.data?.reason, 'truncated-empty', `v2 flagged=${flagged} text=${withText}`);
+      assert.equal(scheduler.pendingCount(), 0, `v2 flagged=${flagged} text=${withText}`);
     }
+    assert.equal(f.logs.some(l => l.event === 'auto-continue-disqualified'), false,
+      `v2 flagged=${flagged} text=${withText}: a running turn is never disqualified by the flag`);
     assert.equal(sends, 1);
   }
 });
 
 test('v2 idle stalled-plan attribution mirrors resolve', { timeout: 5000 }, async t => {
-  for (const [held, progressed] of [[true, false], [true, true], [false, false]]) {
+  for (const progressed of [false, true]) {
     const f = fixture();
     const scheduler = fakeScheduler();
     const handle = f.install({ isEnabled: () => true, scheduler,
@@ -1965,21 +2023,109 @@ test('v2 idle stalled-plan attribution mirrors resolve', { timeout: 5000 }, asyn
     update({ sessionUpdate: 'plan', entries: [{ content: 'step', status: 'pending' }] });
     update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' });
     await new Promise(r => setImmediate(r));
-    assert.equal(scheduler.pendingCount(), 1, `v2 held=${held} progressed=${progressed}: plan continuation queued`);
+    assert.equal(scheduler.pendingCount(), 1, `v2 progressed=${progressed}: plan continuation queued`);
     scheduler.advance(5000);
     await new Promise(r => setImmediate(r));
     assert.equal(sends, 2, 'the v2 auto prompt fired once');
     update({ sessionUpdate: 'agent_message', messageId: 'm2', content: [{ type: 'text', text: 'more' }] });
     if (progressed) update({ sessionUpdate: 'plan', entries: [{ content: 'step', status: 'completed' }, { content: 'next', status: 'pending' }] });
-    if (held) update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
+    // Mid-turn UI flag: recorded, but never the deciding factor.
+    update({ sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'waiting' } });
     update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' });
     await new Promise(r => setImmediate(r));
     const last = f.logs.filter(l => l.event === 'auto-continue-evaluated').pop();
-    assert.equal(last?.data?.decision, 'stop', `v2 held=${held} progressed=${progressed}`);
-    const expected = held ? (progressed ? 'session-info' : null) : null;
-    assert.equal(last?.data?.reason, expected, `v2 held=${held} progressed=${progressed}`);
+    assert.equal(last?.data?.decision, progressed ? 'plan-retry' : 'stop', `v2 progressed=${progressed}`);
+    assert.equal(last?.data?.reason, null, `v2 progressed=${progressed}`);
+    assert.equal(scheduler.pendingCount(), progressed ? 1 : 0, `v2 progressed=${progressed}`);
     assert.equal(f.logs.filter(l => l.event === 'auto-continue-stopped' && l.data?.reason === 'plan-no-progress').length,
-      !held && !progressed ? 1 : 0, `v2 held=${held} progressed=${progressed}: plan-no-progress count`);
+      progressed ? 0 : 1, `v2 progressed=${progressed}: plan-no-progress count`);
+    assert.equal(f.logs.some(l => l.event === 'auto-continue-disqualified'), false, `v2 progressed=${progressed}`);
     assert.equal(sends, 2);
   }
+});
+
+test('v2 idle evaluates once whether it lands before or after the ack', { timeout: 3000 }, async t => {
+  for (const kind of ['error', 'plan']) for (const idleFirst of [true, false])
+    await t.test(`${kind}/${idleFirst ? 'idle-before-ack' : 'ack-before-idle'}`, async t => {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({ isEnabled: () => true, scheduler,
+      getOptions: () => ({ onProviderError: true, untilPlanComplete: true }) });
+    t.after(() => handle.dispose());
+    let sends = 0, resolveAck;
+    const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 2,
+      sendRequest(req) {
+        sends++;
+        if (sends === 1) return new Promise(resolve => { resolveAck = resolve; });
+        return Promise.resolve({ acknowledgment: true });
+      },
+      forwardClientRequest() {} };
+    f.api.registerConnection(connector);
+    const update = value => connector.forwardClientRequest({
+      method: 'session/update', params: { sessionId: 's-v2-ord', update: value } });
+    const ack = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-v2-ord', prompt: [{ type: 'text', text: 'go' }] } });
+    let settlements = 0;
+    ack.then(() => settlements++, () => settlements++);
+    update({ sessionUpdate: 'agent_message', messageId: 'm1', content: [{ type: 'text',
+      text: kind === 'error' ? 'Provider response could not be completed.' : 'partial answer' }] });
+    const idle = () => update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' });
+    if (idleFirst) idle();
+    resolveAck({ acknowledgment: true });
+    await new Promise(r => setImmediate(r));
+    if (!idleFirst) idle();
+    idle(); // duplicate idle must not evaluate or queue again
+    await new Promise(r => setImmediate(r));
+    const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+    assert.equal(evaluated.length, 1);
+    assert.equal(evaluated[0].data.decision, kind === 'error' ? 'error-retry' : 'plan-retry');
+    assert.equal(scheduler.pendingCount(), 1);
+    scheduler.advance(2000);
+    assert.equal(f.logs.filter(l => l.event === 'auto-continue-fired').length, 1);
+    assert.equal(sends, 2, 'the auto prompt fired once');
+    await ack;
+    assert.equal(settlements, 1);
+    });
+});
+
+test('a late native result cannot schedule a retry for a dead turn', { timeout: 2000 }, async t => {
+  for (const mode of ['cancel', 'new-prompt']) await t.test(mode, async t => {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    const handle = f.install({ isEnabled: () => true, scheduler });
+    t.after(() => handle.dispose());
+    const resolvers = [];
+    let sends = 0;
+    const connector = { agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: 1,
+      sendRequest(req) { if (req.method === 'session/prompt') sends++; return new Promise(r => { resolvers.push(r); }); },
+      forwardClientRequest() {} };
+    f.api.registerConnection(connector);
+    const update = value => connector.forwardClientRequest({
+      method: 'session/update', params: { sessionId: 's-late', update: value } });
+    const wrapped = connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-late', prompt: [{ type: 'text', text: 'go' }] } });
+    let settlements = 0;
+    const settled = wrapped.then(value => { settlements++; return { value }; }, error => { settlements++; return { error }; });
+    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Provider response could not be completed.' } });
+    if (mode === 'cancel') {
+      void connector.sendRequest({ method: 'session/cancel', params: { sessionId: 's-late' } });
+    } else {
+      void connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-late', prompt: [{ type: 'text', text: 'next' }] } });
+    }
+    // The native result lands late, after the turn is already dead.
+    resolvers[0]({ stopReason: 'max_turn_requests' });
+    const result = await settled;
+    assert.deepEqual(result, { value: { stopReason: 'max_turn_requests' } }, 'the late result still settles its caller once');
+    await new Promise(r => setImmediate(r));
+    assert.equal(f.logs.filter(l => l.event === 'auto-continue-evaluated').at(-1).data.decision, 'untracked');
+    assert.equal(f.logs.some(l => l.event === 'auto-continue-scheduled'), false, 'a dead turn never schedules');
+    if (mode === 'new-prompt') {
+      resolvers[1]({ stopReason: 'end_turn' });
+      await new Promise(r => setImmediate(r));
+      assert.equal(f.logs.filter(l => l.event === 'auto-continue-evaluated').at(-1).data.decision, 'stop',
+        'the newer turn evaluates on its own and is not deleted by the stale result');
+    }
+    scheduler.advance(60000);
+    assert.equal(sends, mode === 'cancel' ? 1 : 2);
+    assert.equal(f.logs.some(l => l.event === 'auto-continue-fired'), false);
+    assert.equal(settlements, 1);
+  });
 });

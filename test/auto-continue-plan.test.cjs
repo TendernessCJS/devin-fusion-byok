@@ -261,6 +261,76 @@ test('incoming permission request disallows retry and clears pending timer', { t
   assert.equal(res.stopReason, 'max_turn_requests');
 });
 
+test('a queued continuation is withdrawn when the client asks the user', { timeout: 1000 }, async t => {
+  // Input-state flags are mid-turn evidence while the turn runs, but once a
+  // continue is queued the flag withdraws it and settles with the original
+  // result instead of firing another prompt under the user's question.
+  const f = fixture();
+  const scheduler = fakeScheduler();
+  const handle = f.install({
+    isEnabled: () => true,
+    getOptions: () => ({ onProviderError: false, untilPlanComplete: true }),
+    scheduler
+  });
+  t.after(() => handle.dispose());
+
+  let promptCount = 0;
+  const connector = {
+    agentId: 'devin-cli',
+    bundled: true,
+    location: { kind: 'local' },
+    protocolVersion: 1,
+    sendRequest(req) {
+      if (req.method === 'session/prompt') {
+        promptCount++;
+        connector.forwardClientRequest({ method: 'session/update',
+          params: { sessionId: req.params.sessionId,
+            update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } } } });
+      }
+      return Promise.resolve({ stopReason: 'max_turn_requests' });
+    },
+    forwardClientRequest() {}
+  };
+  f.api.registerConnection(connector);
+
+  const p = connector.sendRequest({
+    method: 'session/prompt',
+    params: { sessionId: 's-info-queued', prompt: [{ type: 'text', text: 'run' }] }
+  });
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-info-queued',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [{ content: 'Step', status: 'pending' }]
+      }
+    }
+  });
+
+  await new Promise(r => setImmediate(r));
+  assert.equal(scheduler.pendingCount(), 1);
+
+  connector.forwardClientRequest({
+    method: 'session/update',
+    params: {
+      sessionId: 's-info-queued',
+      update: { sessionUpdate: 'session_info_update', _meta: { 'cognition.ai/userActionRequired': 'confirm' } }
+    }
+  });
+
+  assert.equal(scheduler.pendingCount(), 0);
+  const res = await p;
+  assert.equal(res.stopReason, 'max_turn_requests');
+  const disqualified = f.logs.filter(l => l.event === 'auto-continue-disqualified');
+  assert.equal(disqualified.length, 1);
+  assert.equal(disqualified[0].data.reason, 'session-info');
+  assert.equal(disqualified[0].data.trigger, 'action-required');
+  scheduler.advance(60000);
+  assert.equal(promptCount, 1);
+});
+
 test('transient HTTP 429 retries whereas 401 does not', { timeout: 1000 }, async t => {
   const f = fixture();
   const scheduler = fakeScheduler();

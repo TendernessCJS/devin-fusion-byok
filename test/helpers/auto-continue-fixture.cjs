@@ -22,7 +22,9 @@ function fixture() {
   };
   const module = { exports: {} };
 
-  vm.runInNewContext(source, {
+  // The pure decision function is not exported by production code; the vm
+  // completion value hands it to tests without touching the real exports.
+  const decideContinuation = vm.runInNewContext(source + '\n;decideContinuation;', {
     module,
     exports: module.exports,
     setTimeout,
@@ -50,7 +52,8 @@ function fixture() {
 
   return { api, originalRegister, registrations, disposable, logs, install,
     matchesProviderError: module.exports.matchesProviderError,
-    matchesTerminalBlocker: module.exports.matchesTerminalBlocker };
+    matchesTerminalBlocker: module.exports.matchesTerminalBlocker,
+    decideContinuation };
 }
 
 function fakeScheduler() {

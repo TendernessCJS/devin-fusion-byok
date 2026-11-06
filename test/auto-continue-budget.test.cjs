@@ -34,6 +34,56 @@ test('TRANSIENT_HTTP_RE requires end of string: recovered suffix does not retry'
   assert.equal(f.matchesProviderError('Provider returned HTTP 429. and more text'), false);
 });
 
+test('insufficient balance is a terminal blocker and never a retry candidate', () => {
+  const f = fixture();
+  assert.equal(f.matchesTerminalBlocker('Provider account has insufficient balance.'), true);
+  assert.equal(f.matchesProviderError('Provider account has insufficient balance.'), false);
+});
+
+test('an insufficient-balance tail never schedules a retry', { timeout: 1000 }, async t => {
+  for (const version of [1, 2]) {
+    const f = fixture();
+    const scheduler = fakeScheduler();
+    let promptCount = 0;
+    const handle = f.install({
+      isEnabled: () => true,
+      getOptions: () => ({ onProviderError: true, untilPlanComplete: true }),
+      scheduler
+    });
+    t.after(() => handle.dispose());
+
+    const connector = {
+      agentId: 'devin-cli', bundled: true, location: { kind: 'local' }, protocolVersion: version,
+      sendRequest(req) {
+        if (req.method === 'session/prompt') promptCount++;
+        return Promise.resolve(version === 1 ? { stopReason: 'max_turn_requests' } : {});
+      },
+      forwardClientRequest() {}
+    };
+    f.api.registerConnection(connector);
+    const update = value => connector.forwardClientRequest({
+      method: 'session/update', params: { sessionId: 's-quota', update: value }
+    });
+    connector.sendRequest({ method: 'session/prompt', params: { sessionId: 's-quota', prompt: [{ type: 'text', text: 'hi' }] } });
+    if (version === 1) {
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial Provider account has insufficient balance.' } });
+    } else {
+      update({ sessionUpdate: 'agent_message', messageId: 'm1', content: [{ type: 'text', text: 'partial Provider account has insufficient balance.' }] });
+      update({ sessionUpdate: 'state_update', state: 'idle', stopReason: 'max_turn_requests' });
+    }
+    await new Promise(r => setImmediate(r));
+    assert.equal(scheduler.pendingCount(), 0, `v${version}: quota exhaustion is terminal, not a retry chain`);
+    const evaluated = f.logs.filter(l => l.event === 'auto-continue-evaluated');
+    assert.equal(evaluated.length, 1, `v${version}`);
+    assert.equal(evaluated[0].data.decision, 'stop', `v${version}`);
+    assert.equal(evaluated[0].data.reason, null, `v${version}`);
+    assert.equal(evaluated[0].data.terminalBlocker, true, `v${version}`);
+    assert.equal(f.logs.some(l => l.event === 'auto-continue-scheduled'), false, `v${version}`);
+    scheduler.advance(60000);
+    assert.equal(promptCount, 1, `v${version}: no new prompt, not even via the plan chain`);
+  }
+});
+
 test('provider error retries stop after five sends and settle the v1 turn', { timeout: 1000 }, async t => {
   const f = fixture();
   const scheduler = fakeScheduler();
