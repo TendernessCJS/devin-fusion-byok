@@ -722,6 +722,98 @@ test('upstream errors expose HTTP status without body, prompt or credentials', a
   assert.equal(JSON.stringify(app.logs).includes('User message'), false);
 });
 
+test('a 429 whose body names quota exhaustion reports the balance text', async t => {
+  const metrics = [];
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(429, { 'content-type': 'application/json' });
+    res.end('{"error":{"code":"insufficient_quota","message":"zzq sentinel quota body"}}');
+  }, 'openai-responses', {}, value => metrics.push(value));
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(app.requests.length, 1);
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'Provider account has insufficient balance.');
+  const errors = app.logs.filter(entry => entry.event === 'chat-error');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, 'upstream_quota');
+  assert.equal(errors[0].diagnostic, 'quota-exhausted', 'the quota verdict names itself in the record');
+  assert.equal(metrics.at(-1).code, 'upstream_quota');
+  assert.equal(JSON.stringify(app.logs).includes('insufficient_quota'), false, 'the marker never reaches the log');
+  assert.equal(JSON.stringify(app.logs).includes('zzq sentinel'), false, 'the error body never reaches the log');
+});
+
+test('a plain rate-limit 429 keeps upstream_http and its status text', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(429, { 'content-type': 'application/json' });
+    res.end('{"error":{"code":"rate_limit_exceeded","message":"zzq sentinel rate body"}}');
+  });
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'Provider returned HTTP 429.');
+  const errors = app.logs.filter(entry => entry.event === 'chat-error');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, 'upstream_http');
+  assert.equal('diagnostic' in errors[0], false, 'a rate-limit 429 is not a quota verdict');
+  assert.equal(JSON.stringify(app.logs).includes('zzq sentinel'), false, 'the error body never reaches the log');
+});
+
+test('a 429 whose structured code is insufficient_quota beats rate-limit wording', async t => {
+  const sentinel = 'zzq sentinel rate-worded quota';
+  const metrics = [];
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(429, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { code: 'insufficient_quota', type: 'rate_limit_error', message: `${sentinel} per minute, retry-after 30` } }));
+  }, 'openai-responses', {}, value => metrics.push(value));
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'Provider account has insufficient balance.');
+  assert.equal(app.requests.length, 1);
+  const errors = app.logs.filter(entry => entry.event === 'chat-error');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, 'upstream_quota');
+  assert.equal(errors[0].diagnostic, 'quota-exhausted');
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].code, 'upstream_quota');
+  assert.equal(JSON.stringify(app.logs).includes(sentinel), false, 'the error body never reaches the log');
+});
+
+test('a 402 verdicts on the status line without waiting for the body', { timeout: 10000 }, async t => {
+  const metrics = [];
+  let upstreamClosed = false;
+  const app = await bridge(t, async (req, res) => {
+    res.on('close', () => { upstreamClosed = true; });
+    res.writeHead(402);
+    res.flushHeaders();
+    // Body never arrives: t.after closes the server and ends this response.
+  }, 'openai-responses', { firstResponseMs: 10000, idleMs: 10000, retryDeadlineMs: 0 }, value => metrics.push(value));
+  const responseBody = fetch(app.url).then(response => response.arrayBuffer());
+  let timer;
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('verdict deadline exceeded')), 1500); });
+  let output;
+  try {
+    output = unpack(Buffer.from(await Promise.race([responseBody, deadline])));
+  } finally {
+    clearTimeout(timer);
+  }
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'Provider account has insufficient balance.');
+  const errors = app.logs.filter(entry => entry.event === 'chat-error');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, 'upstream_quota');
+  assert.equal(errors[0].diagnostic, 'quota-exhausted');
+  assert.equal(app.requests.length, 1);
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].code, 'upstream_quota');
+  for (let i = 0; i < 200 && !upstreamClosed; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(upstreamClosed, true, 'the cancelled upstream response is released');
+});
+
+test('a bare 402 reports insufficient balance without a body marker', async t => {
+  const app = await bridge(t, async (req, res) => { res.writeHead(402); res.end('zzq sentinel billing page'); });
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(app.requests.length, 1);
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'Provider account has insufficient balance.');
+  const errors = app.logs.filter(entry => entry.event === 'chat-error');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, 'upstream_quota');
+  assert.equal(JSON.stringify(app.logs).includes('zzq sentinel'), false, 'the error body never reaches the log');
+});
+
 test('a thinking-mode refusal of a forced tool_choice retries once with auto', async t => {
   let call = 0;
   const app = await bridge(t, async (req, res) => {
@@ -1579,7 +1671,8 @@ test('chat-error logs the shape of a top-level error frame without leaking conte
   });
   await (await fetch(app.url)).arrayBuffer();
   const errorLog = app.logs.find(entry => entry.event === 'chat-error');
-  assert.equal(errorLog.code, 'upstream_stream_error');
+  assert.equal(errorLog.code, 'upstream_quota');
+  assert.equal(errorLog.diagnostic, 'quota-exhausted');
   assert.equal(errorLog.failFrame, 'error');
   assert.equal(errorLog.errorCode, 'insufficient_quota');
   assert.equal(errorLog.errorType, 'api_error');
@@ -1587,6 +1680,62 @@ test('chat-error logs the shape of a top-level error frame without leaking conte
   const serialized = JSON.stringify(app.logs);
   assert.equal(serialized.includes('secret'), false);
   assert.equal(serialized.includes('User message'), false);
+});
+
+test('insufficient_quota promotes to upstream_quota from every stream error shape', async t => {
+  const sentinel = 'quota-private-sentinel';
+  const shapes = {
+    'top-level frame code': event({ type: 'error', code: 'insufficient_quota', message: sentinel, param: null, sequence_number: 1 }),
+    'error.error.code': event({ type: 'error', error: { code: 'insufficient_quota', type: 'api_error', message: sentinel } }),
+    'response.error.code': event({ type: 'response.failed', response: { status: 'failed', error: { code: 'insufficient_quota', message: sentinel } } }),
+  };
+  for (const [name, frame] of Object.entries(shapes)) {
+    await t.test(name, async st => {
+      const metrics = [];
+      const app = await bridge(st, async (req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write(event({ type: 'response.created', response: {} }));
+        res.end(frame);
+      }, 'openai-responses', {}, value => metrics.push(value));
+      const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+      assert.equal(output.messages.map(message => str(message, 3)).join(''), 'Provider account has insufficient balance.');
+      const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+      assert.equal(errorLog.code, 'upstream_quota');
+      assert.equal(errorLog.diagnostic, 'quota-exhausted');
+      assert.equal(errorLog.errorCode, 'insufficient_quota');
+      assert.equal(metrics.at(-1).code, 'upstream_quota');
+      assert.equal(JSON.stringify(app.logs).includes(sentinel), false, 'the error body never reaches the log');
+    });
+  }
+});
+
+test('a stream error frame without a provider code stays upstream_stream_error', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'response.created', response: {} }));
+    res.write(event({ type: 'error', error: { type: 'overloaded_error' } }));
+    res.end();
+  });
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'Provider response could not be completed.');
+  const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_stream_error');
+  assert.equal('diagnostic' in errorLog, false);
+});
+
+test('a chat stream error frame carrying insufficient_quota promotes to upstream_quota', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [{ delta: { content: 'partial' } }] }));
+    res.write('data: {"error":{"code":"insufficient_quota"}}\n\n');
+    res.end('data: [DONE]\n\n');
+  }, 'openai');
+  const output = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(output.messages.map(message => str(message, 3)).join(''), 'partialProvider account has insufficient balance.');
+  const errorLog = app.logs.find(entry => entry.event === 'chat-error');
+  assert.equal(errorLog.code, 'upstream_quota');
+  assert.equal(errorLog.diagnostic, 'quota-exhausted');
+  assert.equal(errorLog.errorCode, 'insufficient_quota');
 });
 
 test('chat-error drops non-enumeration values but keeps the failing frame', async t => {

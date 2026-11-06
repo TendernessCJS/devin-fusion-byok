@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { events, parseEvent, classifyErrorDetail } = require('../src/protocol/provider-events.cjs');
+const { events, parseEvent, classifyErrorDetail, classifyQuotaDetail } = require('../src/protocol/provider-events.cjs');
 
 async function* body(...chunks) { for (const chunk of chunks) yield typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk; }
 async function collect(chunks, options) {
@@ -107,6 +107,39 @@ test('classifyErrorDetail returns only the enum token or null', () => {
   const result = classifyErrorDetail(noisy);
   assert.equal(result, 'signature-mentioned');
   assert.ok(!result.includes('x'), 'the enum never carries detail text');
+});
+
+test('classifyQuotaDetail returns only the enum token or null', () => {
+  for (const detail of [
+    '{"error":{"code":"insufficient_quota"}}',
+    '{"code":"insufficient_quota"}',
+    '{"error":{"code":"insufficient_quota","type":"rate_limit_error","message":"Rate limited, retry-after 30, per minute"}}',
+    'Insufficient Balance',
+    'insufficient credit balance',
+    '{"error":{"message":"Your daily usage quota has been exhausted."}}',
+    'out of credit'
+  ]) assert.equal(classifyQuotaDetail(detail), 'quota-exhausted', detail);
+  for (const detail of [
+    '{"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for requests"}}',
+    'Reached message rate limit, please slow down',
+    '{"error":{"code":429,"message":"Quota exceeded for quota metric \'generate_content_free_tier_requests\', limit: 15, per minute"}}',
+    'Reached message rate limit for this model. Please try again later. Resets in: 3h0m0s',
+    '{"error":"internal"}',
+    'context length exceeded',
+    'insufficient context window',
+    'You exceeded your current quota, please check your plan and billing details',
+    'Your credit balance is too low to access the Anthropic API.',
+    '余额不足，请充值',
+    'null',
+    '[]',
+    '{not json',
+    undefined,
+    '',
+    { code: 'insufficient_quota' }
+  ]) assert.equal(classifyQuotaDetail(detail), null, JSON.stringify(detail));
+  const result = classifyQuotaDetail('z'.repeat(5000) + 'insufficient_quota');
+  assert.equal(result, 'quota-exhausted');
+  assert.ok(!result.includes('z'), 'the enum never carries detail text');
 });
 
 test('oversized EOF tails and unfinished lines obey the frame limit', async () => {

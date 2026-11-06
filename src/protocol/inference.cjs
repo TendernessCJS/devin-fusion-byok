@@ -13,7 +13,7 @@ const { createTracker } = require('./tracker.cjs');
 const { anthropicHeaders, createAnthropicAdapter, stripCacheControl, inspectToolPairing } = require('./anthropic.cjs');
 const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem, sizeBucket } = require('./state-envelope.cjs');
 const { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody } = require('./provider-request.cjs');
-const { readErrorDetail, parseEvent, events, usageSnapshot, classifyErrorDetail } = require('./provider-events.cjs');
+const { readErrorDetail, parseEvent, events, usageSnapshot, classifyErrorDetail, classifyQuotaDetail } = require('./provider-events.cjs');
 const { createStreamWriter } = require('./stream-writer.cjs');
 
 // A burst of resets means a second fixed offset tends to re-collide with the
@@ -101,6 +101,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
       if (!data || data.error) {
         const err = new Error('Upstream stream error');
         err.code = 'upstream_stream_error';
+        err.providerCode = providerErrorCode(data);
         throw err;
       }
       const container = chat ? data : data.response;
@@ -174,6 +175,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
         case 'error': {
           const err = new Error('Upstream response failed');
           err.code = 'upstream_stream_error';
+          err.providerCode = providerErrorCode(data);
           throw err;
         }
       }
@@ -247,6 +249,7 @@ function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onState
 
 // Only enumerations reach the log: messages can carry prompt text, host names and tokens.
 const enumValue = value => typeof value === 'string' && /^[A-Za-z_$][\w$]{0,47}$/.test(value) ? value : null;
+const providerErrorCode = data => enumValue(data?.error?.code) || enumValue(data?.response?.error?.code) || enumValue(data?.code);
 // SSE frame names are lowercase vocabulary (`response.output_text.delta`), so the dot is
 // allowed only here and only in that shape.
 const frameName = value => typeof value === 'string' && value.length <= 64 && /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)*$/.test(value) ? value : null;
@@ -290,6 +293,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
   let status = 0;
   let classifiedCode = 'upstream_network';
   let signatureMentioned = false;
+  let quotaExhausted = false;
   // Each Response body can be consumed once, so degrade rules and the final
   // classification share the same read per response object.
   const errorDetails = new WeakMap();
@@ -325,7 +329,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     const failFrame = frameName(lastEvent?.type);
     if (failFrame) fields.failFrame = failFrame;
     // A Responses `error` event carries `code` at the top level, not under `error`.
-    const errorCode = enumValue(providerError?.code) || enumValue(data?.code);
+    const errorCode = providerErrorCode(data);
     if (errorCode) fields.errorCode = errorCode;
     const errorType = enumValue(providerError?.type);
     if (errorType) fields.errorType = errorType;
@@ -531,10 +535,20 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     if (!upstream.ok) {
       // Triage only: the hint must describe the attempt that actually failed, so
       // it is classified within the send deadline instead of at the first 400.
-      if (upstream.status === 400) {
-        try { signatureMentioned = classifyErrorDetail(await readDetail(upstream)) !== null; } catch { /* triage only */ }
+      // Quota/credit exhaustion is reported as 402 — the status alone decides,
+      // so the body is never awaited — or as a 400/429 whose body names it; the
+      // body is read once (readDetail is memoised per response) and only ever
+      // reduced to a flag — the detail itself is never logged.
+      quotaExhausted = upstream.status === 402;
+      if (upstream.status === 400 || upstream.status === 429) {
+        try {
+          const detail = await readDetail(upstream);
+          if (upstream.status === 400) signatureMentioned = classifyErrorDetail(detail) !== null;
+          quotaExhausted = classifyQuotaDetail(detail) !== null;
+        } catch { /* triage only */ }
       }
-      classifiedCode = 'upstream_http';
+      classifiedCode = quotaExhausted ? 'upstream_quota' : 'upstream_http';
+      clearTimer();
       await upstream.body?.cancel();
       throw new Error('Upstream HTTP error');
     }
@@ -623,8 +637,11 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     // passed through the stream catch — adopt it here for the error text.
     if (err?.code === 'attachment_unsupported') classifiedCode = 'attachment_unsupported';
     if (err?.code === 'request_empty_content') classifiedCode = 'request_empty_content';
+    if (classifiedCode === 'upstream_stream_error' && err?.providerCode === 'insufficient_quota') classifiedCode = 'upstream_quota';
     let errorText = 'Provider response could not be completed.';
-    if (classifiedCode === 'upstream_timeout') {
+    if (classifiedCode === 'upstream_quota') {
+      errorText = 'Provider account has insufficient balance.';
+    } else if (classifiedCode === 'upstream_timeout') {
       const budget = status ? idleLimit : firstResponseLimit;
       const shown = budget >= 1000 ? `${Math.round(budget / 1000)}s` : `${budget}ms`;
       errorText = `Provider response timed out after ${shown}.`;
@@ -652,7 +669,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     }
     outcomeCode = classifiedCode;
     const transport = transportDetail(err);
-    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(classifiedCode === 'upstream_http' && status === 400 && signatureMentioned ? { diagnostic: 'signature-mentioned' } : {}), ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}), ...(transport ? { transport } : {}), ...(connectAttempts.length > 1 ? { attempts: connectAttempts } : {}), ...failureShape() });
+    record({ event: 'chat-error', model: route.model, status, code: classifiedCode, requestId: id, ...(classifiedCode === 'upstream_http' && status === 400 && signatureMentioned ? { diagnostic: 'signature-mentioned' } : {}), ...(classifiedCode === 'upstream_quota' ? { diagnostic: 'quota-exhausted' } : {}), ...(typeof err?.detail === 'string' && err.detail ? { detail: err.detail } : {}), ...(transport ? { transport } : {}), ...(connectAttempts.length > 1 ? { attempts: connectAttempts } : {}), ...failureShape() });
     return { status, error: true, code: classifiedCode, requestId: id };
   } finally {
     try { onMetrics(metrics.finish(outcome, status, outcomeCode)); } catch {}

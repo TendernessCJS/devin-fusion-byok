@@ -62,8 +62,13 @@ DeepSeek Anthropic provider 的 4816 条记录中有 8 条非 success；当时�
 
 重试面（该次未开启，随后由用户开启 `autoContinueOnProviderError`）：
 
-- 超时现在有专属文案 `Provider response timed out after <预算>s/ms`（`src/protocol/inference.cjs` 按 `status` 选 `firstResponseLimit` 或 `idleLimit`）；`upstream_stream_error` / `upstream_stream_incomplete` / `upstream_network` 仍走通用文案 `Provider response could not be completed.`。两类文案都被 `src/runtime/host/auto-continue.cjs` 匹配为可重试目标（`TARGET_ERROR` + `TIMEOUT_RE`）；终止判定 `TERMINAL_BLOCKER_RE` 只匹配 `Provider returned HTTP 4xx/5xx.` 与格式类错误，所以这两类文案**都会**被自动重试。匹配失败只在 tail 末尾 400 字符含「provider response」时记 `auto-continue-miss`（只记 `reason`/`tailLength`/布尔量/`stopReason`，绝不记正文），据此区分 `tail-mismatch`/`session-suppressed`/`retry-disallowed`/`reject-mismatch`。
+- 超时现在有专属文案 `Provider response timed out after <预算>s/ms`（`src/protocol/inference.cjs` 按 `status` 选 `firstResponseLimit` 或 `idleLimit`）；`upstream_stream_error` / `upstream_stream_incomplete` / `upstream_network` 仍走通用文案 `Provider response could not be completed.`。两类文案都被 `src/runtime/host/auto-continue.cjs` 匹配为可重试目标（`TARGET_ERROR` + `TIMEOUT_RE`）；终止判定 `TERMINAL_BLOCKER_RE` 匹配 `Provider returned HTTP 4xx/5xx.`、格式类错误与 `Provider account has insufficient balance.`，所以这两类文案**都会**被自动重试。匹配失败只在 tail 末尾 400 字符含「provider response」时记 `auto-continue-miss`（只记 `reason`/`tailLength`/布尔量/`stopReason`，绝不记正文），据此区分 `tail-mismatch`/`session-suppressed`/`retry-disallowed`/`reject-mismatch`。
 - 预算：`ERROR_ATTEMPT_LIMIT = 5`、`ERROR_WINDOW_MS = 10 min`，超出即停止，不会无限重试。
+- 配额/余额不足单独归类为 `upstream_quota`，回显固定文案 `Provider account has insufficient balance.`，判定顺序：
+  1. **HTTP 402 直判、不等正文**（`readDetail` 不被调用，延迟 body 不会拖慢终态）；
+  2. **HTTP 400/429** 读一次 body 分类：先试 `JSON.parse` 结构化精确白名单（`error.code`/`code` 精确等于 `insufficient_quota` → 配额，`type`/`message` 里的限流词不挡）；**未命中精确白名单 code 时**正文启发式限流优先——`rate limit`/`too many requests`/`retry-after`/`per minute` 等先短路返回 null（否则 Gemini 每分钟限流的 `Quota exceeded … per minute` 会被误判成余额不足），之后才试配额模式（逐字来自 `.refs/WindsurfAPI/src/devin-connect.js` 的 `classifyUpstreamError` QUOTA 分支：`insufficient…`、`out of …`、`(credit|quota|balance|allowance|usage)…(exceeded|exhausted|depleted|used up)`、`on.?demand…`、`running out of…`，含真机补上的 `…quota has been exhausted` body；唯一改写是 `insufficient…` 由无界 `.*` 收紧为 ≤40 字符且不跨 `.`；早期加的 `credit balance is too low` 与中文 `余额不足` 已移除，无本项目实测依据）；400 同时保留签名取证；
+  3. **流内帧三处位置**都取 `data.error.code || data.response.error.code || data.code` 写入 `err.providerCode`，精确等于 `insufficient_quota` 时提升 `upstream_stream_error` → `upstream_quota`（chat 与 responses 路径相同），其它 code 与无 code 的帧维持 `upstream_stream_error`。
+  隐私与预算不变：响应体只归约成**布尔标记**，原文不落日志、不进文案；命中时 `chat-error` 带 `diagnostic: 'quota-exhausted'`；该类错误在 `TERMINAL_BLOCKER_RE` 内 **0 次自动重试**；响应体无标记的限流类 429 仍是 `upstream_http`，照常可重试 5 次。边界：启发式来自参考实现 + 合成测试，**本项目尚无真实 quota 样本**；流内路径实机 0 次命中、仅测试覆盖，真机出现再扩表白名单。
 
 ## 供应商侧首字节前连接失败的有界重试（Devin 3.11.216 / CLI 3000.11.216）
 
