@@ -3,14 +3,19 @@ const http = require('node:http');
 const https = require('node:https');
 const wire = require('../protocol/wire.cjs');
 const { augmentCatalog, collectNativeModels, collectAllowedUids } = require('../catalog.cjs');
-function countOwn(value, depth = 0) {
-  if (depth > 7) return 0;
+// Own uids are the only place this marker appears in a catalog payload, so a
+// byte scan of the decoded body counts exactly what the old tree walk counted
+// (measured equal: 207 on a 902KB GetCliModelConfigs body) at 0.31ms instead of
+// 244ms — and this runs twice before the response is written.
+const OWN_MARKER = Buffer.from('dfbyok-');
+function countOwn(value) {
   if (Buffer.isBuffer(value)) {
-    if (/^(?:fusion-)?dfbyok-/.test(value.toString('utf8'))) return 1;
-    try { return wire.parseFields(value).filter(f => f.wire === 2).reduce((n, f) => n + countOwn(f.value, depth + 1), 0); } catch { return 0; }
+    let count = 0, index = 0;
+    while ((index = value.indexOf(OWN_MARKER, index)) !== -1) { count++; index += OWN_MARKER.length; }
+    return count;
   }
   if (typeof value === 'string') return /^(?:fusion-)?dfbyok-/.test(value) ? 1 : 0;
-  if (value && typeof value === 'object') return Object.values(value).reduce((n, v) => n + countOwn(v, depth + 1), 0);
+  if (value && typeof value === 'object') return Object.values(value).reduce((n, v) => n + countOwn(v), 0);
   return 0;
 }
 const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server_pb\.ApiServerService|seat_management_pb\.SeatManagementService)\/(?:GetUserStatus|GetCliModelConfigs|GetCascadeModelConfigs|GetCommandModelConfigs)(?:ForSite)?$|^\/exa\.seat_management_pb\.SeatManagementService\/GetCliTeamSettings$/;
@@ -25,11 +30,14 @@ const CATALOG_LIKE = /(?:Model|Models|ModelConfig|ModelConfigs|Catalog)/;
 // missing BYOK uid has no functional effect and nothing is reported.
 const KNOWN_UNCHANGED = new Set(['GetModelStatuses']);
 // Server-push RPCs (all long-lived pushes are Stream*/HandleStreaming*) sit
-// idle between events by design, so the 120s body idle budget would kill them
-// mid-stream. They get a 30-minute floor instead; connect/headers stay fast.
+// idle between events by design, so no body idle limit applies to them: the
+// response is piped straight through without buffering and a client close
+// destroys the upstream, so an idle ceiling buys nothing and only kills
+// legitimate streams (316 forward-timeout events over 3 days, ~30min cycle,
+// all phase=body on StreamCascadePanelReactiveUpdates). `streamingIdleMs`
+// remains an explicit override for injected timeouts. connect/headers stay fast.
 const TEAM_SETTINGS_RPC = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
 const STREAMING_RPC = /\/exa\.[a-z_]+\.[A-Za-z]+Service\/(?:Stream[A-Za-z]*|HandleStreaming[A-Za-z]*)$/;
-const STREAMING_IDLE_LIMIT = 30 * 60 * 1000;
 function cors(request) {
   const origin = request.headers.origin;
   return origin && /^(?:vscode-file:\/\/vscode-app|vscode-webview:\/\/[^/]+|https?:\/\/(?:[a-z0-9.-]+\.)?localhost(?::\d+)?)$/.test(origin)
@@ -45,11 +53,9 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
   for (const [key, name] of [[timeouts.connectMs, 'connect'], [timeouts.firstResponseMs, 'headers'], [timeouts.idleMs, 'body']]) {
     if (Number.isInteger(key) && key > 0 && key <= 2147483647) limits[name] = key;
   }
-  const bodyLimit = STREAMING_RPC.test(rpc)
-    ? (Number.isInteger(timeouts.streamingIdleMs) && timeouts.streamingIdleMs > 0
-        ? Math.min(timeouts.streamingIdleMs, 2147483647)
-        : Math.max(limits.body, STREAMING_IDLE_LIMIT))
-    : limits.body;
+  const streamingIdle = Number.isInteger(timeouts.streamingIdleMs) && timeouts.streamingIdleMs > 0
+    ? Math.min(timeouts.streamingIdleMs, 2147483647) : null;
+  const bodyLimit = STREAMING_RPC.test(rpc) ? streamingIdle : limits.body;
   const drainLimit = Number.isSafeInteger(timeouts.drainMs) && timeouts.drainMs > 0
     ? Math.min(timeouts.drainMs, 600000) : 120000;
   const secure = target.protocol === 'https:';
@@ -93,6 +99,7 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
     dropConnectListeners();
   };
   const armBody = () => {
+    if (bodyLimit === null) return;
     if (stopped || upstreamEnded || blocked) return;
     clearTimeout(bodyTimer);
     bodyTimer = setTimeout(() => timedOut('body'), bodyLimit);

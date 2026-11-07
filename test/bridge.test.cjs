@@ -355,6 +355,26 @@ test('the catalog log reports the mirrored combination count', async t => {
   assert.equal(Object.hasOwn(entry[1], 'presets'), false, 'the retired preset counter is gone from the log');
 });
 
+test('the catalog log counts every own marker occurrence in the emitted bytes', async t => {
+  const events = [];
+  const native = await listen((req, res) => { res.writeHead(200, { 'content-type': 'application/proto' }); res.end(wire.s(7, 'swe-2-medium')); });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]) });
+  t.after(() => bridge.close());
+  const response = await request(bridge.port, LS + 'GetCliModelConfigs');
+  assert.equal(response.status, 200);
+  const entry = events.find(([event]) => event === 'catalog');
+  assert.ok(entry, 'a catalog RPC emits the catalog log event');
+  // The byte scan must agree with what the augmented payload actually carries:
+  // count the marker in the emitted response bytes and compare directly.
+  const marker = Buffer.from('dfbyok-');
+  let expected = 0, index = 0;
+  while ((index = response.body.indexOf(marker, index)) !== -1) { expected++; index += marker.length; }
+  assert.ok(expected > 0, 'the augmented payload must carry own entries');
+  assert.equal(entry[1].beforeOwn, 0, 'the upstream payload has no own markers');
+  assert.equal(entry[1].afterOwn, expected, 'afterOwn counts exactly the markers in the emitted bytes');
+});
+
 test('forward returns 502 when the upstream accepts but never sends headers', async t => {
   const events = [];
   const native = await listen((req, res) => { req.socket.on('close', () => res.destroy()); });
@@ -653,6 +673,40 @@ test('a streaming RPC idles past the regular body budget and still completes', a
   assert.equal(outcome.value.status, 200);
   assert.equal(outcome.value.body.toString(), 'first-chunklast-chunk', 'the response completes intact after the idle gap');
   assert.deepEqual(events.filter(([event]) => event === 'forward-timeout'), []);
+});
+
+test('a streaming RPC without an explicit streaming idle carries no body idle limit at all', async t => {
+  const events = [];
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write('first-chunk');
+    setTimeout(() => res.end('last-chunk'), 200);
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+    timeouts: { connectMs: 5000, firstResponseMs: 5000, idleMs: 40 } });
+  t.after(() => bridge.close());
+  const outcome = await settleWithin(request(bridge.port, '/exa.x_pb.XService/StreamCascadePanelReactiveUpdates'));
+  assert.ok(!outcome.timeout, 'a server-push stream must not be killed by the ordinary idle budget');
+  assert.equal(outcome.value.status, 200);
+  assert.equal(outcome.value.body.toString(), 'first-chunklast-chunk', 'the response completes intact after the idle gap');
+  assert.deepEqual(events.filter(([event]) => event === 'forward-timeout'), []);
+});
+
+test('an explicit streamingIdleMs still bounds a silent stream', async t => {
+  const events = [];
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.write('first-chunk');
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog, log: (event, data) => events.push([event, data]),
+    timeouts: { connectMs: 5000, firstResponseMs: 5000, idleMs: 40, streamingIdleMs: 40 } });
+  t.after(() => bridge.close());
+  const outcome = await settleWithin(request(bridge.port, '/exa.x_pb.XService/StreamCascadePanelReactiveUpdates'));
+  assert.ok(!outcome.timeout, 'a stalled stream must not hang the request');
+  assert.ok(outcome.error, 'the downstream connection is destroyed after the idle budget');
+  assert.deepEqual(events.filter(([event]) => event === 'forward-timeout').map(([, data]) => data.phase), ['body']);
 });
 
 test('the same idle gap still times out on a non-streaming path', async t => {

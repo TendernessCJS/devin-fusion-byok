@@ -11,7 +11,10 @@ const USER_STATUS_RPC = '/exa.language_server_pb.LanguageServerService/GetUserSt
 // Diagnostic only: raw marker occurrences. A uid appears once per model entry
 // and again inside sort groups, so this signals presence, not entry count.
 function ownMarkers(buffer) {
-  return (buffer.toString('latin1').match(/(?:fusion-)?dfbyok-/g) || []).length;
+  const marker = Buffer.from('dfbyok-');
+  let count = 0, index = 0;
+  while ((index = buffer.indexOf(marker, index)) !== -1) { count++; index += marker.length; }
+  return count;
 }
 
 // The new agent window's picker filters ACP configOptions against the stored
