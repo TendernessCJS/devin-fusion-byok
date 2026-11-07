@@ -20,10 +20,8 @@ function findRipgrep(env = process.env) {
   const candidates = [
     env.FUSION_FAST_CONTEXT_RG,
     ...String(env.PATH || '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, binary)),
-    '/Applications/Devin.app/Contents/Resources/app/node_modules/@vscode/ripgrep/bin/rg',
-    '/Applications/Devin.app/Contents/Resources/app/node_modules.asar.unpacked/@vscode/ripgrep/bin/rg',
-    // Newer Devin builds ship ripgrep-universal with per-architecture folders.
-    `/Applications/Devin.app/Contents/Resources/app/node_modules/@vscode/ripgrep-universal/bin/darwin-${process.arch}/rg`,
+    // Devin 3.12.17 ships ripgrep-universal unpacked, per-architecture.
+    `/Applications/Devin.app/Contents/Resources/app/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/darwin-${process.arch}/rg`,
   ];
   const found = candidates.find(file => file && path.isAbsolute(file) && existsSync(file));
   if (!found) throw new Error('ripgrep_unavailable');

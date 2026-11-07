@@ -228,10 +228,18 @@ test('a cached drift keeps reporting drift on every later activation', async () 
 
 test('a missing required marker on the desktop bundle reports drift', async () => {
   const { extensionPath, cacheFile, files } = fakeApp({
-    desktopMarkers: ALL_DESKTOP.filter(m => m !== 'devin.refreshUserStatus') });
+    desktopMarkers: ALL_DESKTOP.filter(m => m !== 'cascade_model_config_data') });
   const result = await checkNativeContract({ extensionPath, cacheFile });
   assert.equal(result.status, 'drift');
-  assert.deepEqual(result.missing.desktop, ['devin.refreshUserStatus']);
+  assert.deepEqual(result.missing.desktop, ['cascade_model_config_data']);
+});
+
+test('the deleted refreshUserStatus marker is informational, not drift', async () => {
+  const { extensionPath, cacheFile, files } = fakeApp({
+    desktopMarkers: ALL_DESKTOP.filter(m => m !== 'devin.refreshUserStatus') });
+  const result = await checkNativeContract({ extensionPath, cacheFile });
+  assert.equal(result.status, 'ok', '3.12.17 dropped the command: its absence is the steady state');
+  assert.deepEqual(result.informational.desktop, ['devin.refreshUserStatus']);
 });
 
 test('a missing chat bundle is drift, not unavailable', async () => {

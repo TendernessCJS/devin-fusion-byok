@@ -19,7 +19,7 @@ const REQUIRED = {
   // lacking "Model" — so the drift must be caught here.
   ls: ['exa.language_server_pb.LanguageServerService', 'exa.api_server_pb.ApiServerService',
     'exa.seat_management_pb.SeatManagementService', 'cascade_model_config_data', 'GetUserJwt', 'GetWebSearchResults'],
-  desktop: ['devin.refreshUserStatus', 'cascade_model_config_data'],
+  desktop: ['cascade_model_config_data'],
   chat: ['cognition.ai/auth', 'cognition.ai/subagent_context'],
   // The ACP client bundle we wrap: session/update kinds, the method names our
   // hooks key on, the _meta keys we emit, and the local connector's
@@ -33,7 +33,9 @@ const REQUIRED = {
 const INFORMATIONAL = {
   cli: ['model_configs_v6', 'max_turn_requests', 'end_turn', 'refusal', 'assignment_jwt'],
   ls: ['GetUserStatus', 'GetCliModelConfigsForSite', 'GetCascadeModelConfigsForSite', 'GetCommandModelConfigsForSite', 'assignment_jwt', 'GetModelStatuses'],
-  desktop: [],
+  // devin.refreshUserStatus was deleted in 3.12.17 and the extension no longer
+  // calls it; absence is the steady state, presence on older builds is trivia.
+  desktop: ['devin.refreshUserStatus'],
   chat: ['cognition.ai/finishedOutcome', 'cognition.ai/abort', 'cognition.ai/clientMessageId'],
   acp: ['plan_removed', '_session/elicitation', 'session/archive', '_cognition.ai/session/archive', 'ext/method']
 };
@@ -44,7 +46,7 @@ const SIZE_CAP = 400 * 1024 * 1024;
 // Bump whenever the marker tables or probe semantics change: cached verdicts
 // are keyed on probe, otherwise an old 'ok' would be reused forever and new
 // markers would never be scanned.
-const PROBE_VERSION = 6;
+const PROBE_VERSION = 7;
 
 const ARTIFACT_KEYS = ['cli', 'ls', 'desktop', 'chat', 'acp'];
 const APP_ANCHOR = path.join('out', 'vs', 'workbench', 'workbench.desktop.main.js');

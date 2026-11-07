@@ -23,7 +23,10 @@ async function teardown(lifecycle, { restore = false } = {}) {
     // Deactivating makes the wrapper inert before the LS bridge dispose runs;
     // it must not depend on that bridge being alive.
     try { auth.deactivate?.(); } catch {}
-    if (restore && typeof lifecycle.nativeRefresh === 'function') {
+    if (restore && typeof lifecycle.nativeRefresh !== 'function') {
+      verdict.code = 'refresh-unavailable';
+      lifecycle.log?.('desktop-catalog-restore', { code: verdict.code });
+    } else if (restore) {
       let drained = false;
       try { drained = typeof auth.drain === 'function' ? await auth.drain({ timeoutMs: 10000 }) : true; } catch { drained = false; }
       if (drained && typeof auth.restore === 'function') {

@@ -44,9 +44,9 @@ function checkInjectionHealth({ enabled = true, backendStatus, bridgeState, brid
   // The desktop catalog is 'ok' only while the current emit has a confirmed
   // native commit; unconfirmed, logged-out and unchecked states are unknown.
   const catalogState = desktopCatalog === 'ready' ? 'ok'
-    : (desktopCatalog === 'degraded' || desktopCatalog === 'unsupported') ? 'bad' : 'unknown';
+    : desktopCatalog === 'degraded' ? 'bad' : 'unknown';
   const catalogHint = desktopCatalog === 'degraded' ? '桌面模型目录同步失败：在面板点「刷新模型目录」，仍失败时查看输出通道。'
-    : desktopCatalog === 'unsupported' ? '当前环境不支持桌面目录发布。'
+    : desktopCatalog === 'unsupported' ? '当前 Devin 版本没有桌面目录刷新入口，未做原生发布确认；本机目录仍由桥拦截投递。'
     : '桌面模型目录尚未确认：在面板点「刷新模型目录」触发一次提交。';
   items.push({ id: 'catalog', label: '桌面目录', state: catalogState, hint: catalogHint });
   const acpState = acpObserved > 0 ? (acpOwnModels > 0 ? 'ok' : 'bad') : 'unknown';

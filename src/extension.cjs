@@ -184,7 +184,8 @@ async function activate(context) {
     log('error', { code: safe.code }); vscode.window.showErrorMessage('Fusion BYOK：' + safe.message);
   } };
   lifecycle.log = log;
-  lifecycle.nativeRefresh = () => vscode.commands.executeCommand('devin.refreshUserStatus');
+  // 3.12.17 has no devin.refreshUserStatus command, so the publication chain has
+  // no emitter: it settles unsupported instead of failing against a dead command.
   const createPublication = () => require('./activation/catalog-publication.cjs').createCatalogPublication({
     getCatalog: catalog, refreshUserStatus: lifecycle.nativeRefresh,
     isCurrent: () => live(lifecycle, config),

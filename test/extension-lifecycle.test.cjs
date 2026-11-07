@@ -885,7 +885,7 @@ test('activation wires the injection health snapshot into panel state', async t 
     'the sandboxed manager crosses realms, so compare the id list as a string');
 });
 
-test('enable installs the auth hook with the event contract and publishes through one refresh command', async t => {
+test('enable installs the auth hook with the event contract while the catalog settles unsupported', async t => {
   const f = fixture(t);
   await f.activate(f.context);
   await f.settle();
@@ -894,38 +894,54 @@ test('enable installs the auth hook with the event contract and publishes throug
   for (const key of ['isEnabled', 'onNativeModels', 'onPublication', 'getCatalog']) {
     assert.equal(typeof options[key], 'function', key + ' is wired');
   }
-  assert.equal(f.executed().filter(command => command === 'devin.refreshUserStatus').length, 1,
-    'the first publication issues exactly one coalesced refresh — the bare executeCommand call is gone');
-  // Until the hook reports a matching applied signature the catalog stays unconfirmed.
+  assert.equal(f.executed().filter(command => command === 'devin.refreshUserStatus').length, 0,
+    '3.12.17 removed the desktop command — the publication chain has nothing to emit');
+  // The publication settles unsupported: the health surface stays neutral
+  // (unconfirmed) instead of a permanent failure or an unverified green.
   const manager = realRequire('./panel/manager.cjs').createManager(f.managerOptions());
   const catalogState = () => manager.state().health.items.find(item => item.id === 'catalog').state;
-  assert.equal(catalogState(), 'unknown', 'pending publication is unverified, not green');
+  assert.equal(catalogState(), 'unknown',
+    'no emitter is the steady state on 3.12.17, reported as unconfirmed rather than a failure');
   const { catalogSignature } = require('../src/catalog.cjs');
   options.onPublication({ phase: 'applied', callId: 1, signature: catalogSignature(options.getCatalog()) });
-  assert.equal(catalogState(), 'ok', 'a confirmed applied signature is the only green path');
+  assert.equal(catalogState(), 'unknown', 'a confirmed signature cannot green a publication with no emitter');
 });
 
-test('the disable command serializes teardown and runs the bounded passthrough restore', async t => {
+test('the removed desktop refresh command leaves the catalog unsupported and never spends a publication attempt', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  const catalogStatus = f.managerOptions().desktopCatalogStatus();
+  assert.equal(catalogStatus?.state, 'unsupported', 'the publication starts unsupported instead of pending');
+  assert.equal(catalogStatus?.code, 'refresh-unavailable', 'the cause is the missing command, not a failed refresh');
+  assert.equal(f.logs.filter(line => line.includes('publication-attempt')).length, 0,
+    'an unsupported publication must not burn the confirmation budget');
+  assert.equal(f.executed().filter(command => command === 'devin.refreshUserStatus').length, 0,
+    'no refresh is issued for a command the host does not have');
+});
+
+test('disable reports refresh-unavailable and skips restore now that the desktop refresh command is gone', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  await f.commands.get('devinFusionByok.disable')();
+  assert.equal(f.restoreCalls().length, 0, 'restore cannot probe through a command the host lacks');
+  assert.ok(f.logs.some(line => line.includes('desktop-catalog-restore') && line.includes('refresh-unavailable')),
+    'the exact missing-command verdict is logged, never claimed as restored');
+  assert.deepEqual(f.notices.filter(text => text.startsWith('Fusion BYOK 已停用')),
+    ['Fusion BYOK 已停用，连接设置已恢复；桌面模型目录恢复尚未确认。'],
+    'ok stays false, so the notice must not read as fully recovered');
+});
+
+test('the disable command serializes teardown across concurrent invocations', async t => {
   const f = fixture(t);
   await f.activate(f.context);
   await f.settle();
   const disable = f.commands.get('devinFusionByok.disable');
   await Promise.all([disable(), disable()]);
-  assert.equal(f.notices.filter(text => text === 'Fusion BYOK 已停用，原生连接已恢复。').length, 1,
+  assert.equal(f.notices.filter(text => text.startsWith('Fusion BYOK 已停用')).length, 1,
     'concurrent disable invocations share one teardown');
-  assert.equal(f.restoreCalls().length, 1, 'explicit disable runs exactly one passthrough verification');
-  assert.equal(typeof f.restoreCalls()[0].command, 'function');
   assert.ok(f.authDisposed() >= 1, 'the hook is removed after the restore attempt');
-});
-
-test('a passthrough restore that still sees own entries is logged unverified, never claimed', async t => {
-  const f = fixture(t);
-  f.setAuthRestore({ ok: false, code: 'restore-unverified' });
-  await f.activate(f.context);
-  await f.settle();
-  await f.commands.get('devinFusionByok.disable')();
-  assert.ok(f.logs.some(line => line.includes('desktop-catalog-restore') && line.includes('restore-unverified')),
-    'an unverified restore is recorded, not reported as recovered');
 });
 
 test('a normal unload disposes the hook without firing a restore refresh', async t => {
@@ -961,9 +977,10 @@ test('external enabled=false through the watcher shares the same serialized disa
   fs.writeFileSync(f.configFile, JSON.stringify(config));
   await f.watchers[0]();
   await f.settle();
-  assert.equal(f.notices.filter(text => text === 'Fusion BYOK 已停用，原生连接已恢复。').length, 1,
-    'the watcher path now runs the same restore+report disable as the command');
-  assert.equal(f.restoreCalls().length, 1, 'external disable also verifies the stored catalog');
+  assert.deepEqual(f.notices.filter(text => text.startsWith('Fusion BYOK 已停用')),
+    ['Fusion BYOK 已停用，连接设置已恢复；桌面模型目录恢复尚未确认。'],
+    'the watcher path runs the same disable-and-report flow as the command');
+  assert.equal(f.restoreCalls().length, 0, 'external disable hits the same missing-command verdict');
 });
 
 test('an LS bridge dispose failure still removes the auth and ACP wrappers', async t => {
@@ -974,17 +991,6 @@ test('an LS bridge dispose failure still removes the auth and ACP wrappers', asy
   await assert.rejects(f.deactivate(), /ls teardown boom/);
   assert.ok(f.authDisposed() >= 1, 'the auth hook is removed even though the bridge dispose threw');
   assert.ok(f.acpDisposed() >= 1, 'the ACP wrapper is removed even though the bridge dispose threw');
-});
-
-test('an unverified catalog restore reports the partial outcome, never unconditional success', async t => {
-  const f = fixture(t);
-  f.setAuthRestore({ ok: false, code: 'restore-unverified' });
-  await f.activate(f.context);
-  await f.settle();
-  await f.commands.get('devinFusionByok.disable')();
-  assert.deepEqual(f.notices.filter(text => text.startsWith('Fusion BYOK 已停用')),
-    ['Fusion BYOK 已停用，连接设置已恢复；桌面模型目录恢复尚未确认。'],
-    'an unverified restore must not read as fully recovered');
 });
 
 test('a bridge dispose failure still restores owned settings before the error surfaces', async t => {
@@ -1008,20 +1014,18 @@ test('ensureEnabled waits out an in-flight disable before reinstalling', async t
   await f.activate(f.context);
   await f.settle();
   assert.equal(f.authOptions().length, 1);
-  // Gate the passthrough restore so the disable is provably still running when
-  // the external enable path fires through the real watcher callback.
-  let release;
-  f.setAuthRestore(new Promise(resolve => { release = () => resolve({ ok: true, code: 'restored' }); }));
+  // Gate the owned-settings restore inside teardown so the disable is provably
+  // still running when the external enable path fires through the real watcher.
+  const gate = f.gateSettingsUpdate('agentEnv'); t.after(() => gate.release());
   const pending = f.commands.get('devinFusionByok.disable')();
-  await f.settle(10);
-  assert.equal(f.restoreCalls().length, 1, 'the restore probe is armed inside the gated disable');
+  await gate.started;
   f.managerOptions().write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: true });
   // The watcher path awaits ensureEnabled internally; awaiting it here would
   // deadlock against the gated restore, so it is fired and let to queue.
   const enabling = f.managerOptions().afterChange('setEnabled');
   await f.settle(5);
   assert.equal(f.authOptions().length, 1, 'the pending enable cannot install while the disable owns teardown');
-  release();
+  gate.release();
   await pending;
   await enabling;
   await f.settle();

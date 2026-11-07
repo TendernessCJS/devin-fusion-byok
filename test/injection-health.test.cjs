@@ -37,7 +37,8 @@ test('each signal independently reports bad', () => {
     coverage: { dirState: 'ok', supported: 2, legacy: [], unsupported: [{ name: 'model_configs_v9.abcd.bin', generation: 9 }] } } }),
     'cache'), 'bad', 'an unsupported cache generation is a real problem, not a clean bill');
   assert.equal(stateOf(checkInjectionHealth({ ...healthy, desktopCatalog: 'degraded' }), 'catalog'), 'bad');
-  assert.equal(stateOf(checkInjectionHealth({ ...healthy, desktopCatalog: 'unsupported' }), 'catalog'), 'bad');
+  assert.equal(stateOf(checkInjectionHealth({ ...healthy, desktopCatalog: 'unsupported' }), 'catalog'), 'unknown',
+    '3.12.17 dropped the refresh command, so unsupported is the steady state, not a failure');
   assert.equal(stateOf(checkInjectionHealth({ ...healthy, acpOwnModels: 0 }), 'acp'), 'bad',
     'a session was observed but none of our models appear in it');
   for (const bad of [checkInjectionHealth({ ...healthy, backendStatus: 'stopped' }),

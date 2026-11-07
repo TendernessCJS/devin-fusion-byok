@@ -146,26 +146,49 @@ function loadGroupSorter(root) {
 function loadModelCatalogMapper(root) {
   const bundle = webappBundle(root, 'mapModelCatalog:()=>');
   if (!bundle) throw new Error('installed Devin model-catalog mapper bundle not found');
+  const source = bundle.source;
+  const dir = path.dirname(bundle.file);
   // The bundle is a single minified line: strip ESM syntax by pattern.
-  const body = bundle.source.replace(/import\{[^}]*\}from"[^"]*";/g, '').replace(/export\{[^}]*\};?\s*$/, '');
-  const context = {
-    console, e: fn => fn, t: value => value,
-    u: { UNSPECIFIED: 0, WINDSURF: 1, OPENAI: 2, ANTHROPIC: 3, GOOGLE: 4, XAI: 5, DEEPSEEK: 6,
-      MOONSHOT: 7, QWEN: 8, ZAI: 9, MINIMAX: 10, NVIDIA: 11, THINKING_MACHINES: 12, META: 13 },
-    c: { UNSPECIFIED: 0, LOW: 1, MEDIUM: 2, HIGH: 3, FREE: 4 },
-    r: { FRH: 0, IL4: 1, IL5: 2, IL6: 3, ITAR: 4 },
-    l: { OPENAI: 1 }, o: () => {},
-    s: { UNSPECIFIED: 0, STATIC_CREDIT: 1, API: 2, BYOK: 3, ACU_TOKEN: 4, ACU_CREDIT: 5 },
-    i: { UNSPECIFIED: 0, COST: 1, COST_FUZZY: 2, COST_UNIT: 3, TEXT: 4 },
-    n: { UNSPECIFIED: 0, HIGHLIGHT: 1 },
-    d: { UNSPECIFIED: 0, ARENA: 1, BATTLE_GROUP_ONLY: 2, MODEL_ROUTER: 3, QUICK_REVIEW: 4,
-      MIMIC: 5, HIDDEN_TOOL: 6, COMPACTOR: 7, MODERN_AGENT_CHAT: 8 },
-    a: {},
-  };
+  const body = source.replace(/import\{[^}]*\}from"[^"]*";/g, '').replace(/export\{[^}]*\};?\s*$/, '');
+  // Every minified letter was re-shuffled in 3.12.17, so import bindings are
+  // resolved against each imported module's own export record instead of a
+  // hard-coded context. rolldown-runtime keeps positional stubs; pb modules
+  // get their real enum tables — anything else is a callable opaque stub.
+  const context = { console };
+  const bindingName = spec => (spec.match(/^(\S+)\s+as\s+(\S+)$/) || [, spec, spec]);
+  const opaque = () => new Proxy(function () {}, { get: (_, key) => (typeof key === 'symbol' ? undefined : 0) });
+  for (const imp of source.matchAll(/import\{([^}]*)\}from"([^"]+)";/g)) {
+    const bindings = imp[1].split(',').map(spec => spec.trim()).filter(Boolean);
+    if (/rolldown-runtime/.test(imp[2])) {
+      bindings.forEach((spec, index) => { context[bindingName(spec)[2]] = index === 0 ? (fn => fn) : (value => value); });
+      continue;
+    }
+    const pb = fs.readFileSync(path.join(dir, imp[2]), 'utf8');
+    const exportBlocks = [...pb.matchAll(/export\{([^}]*)\};?/g)];
+    const exported = {};
+    if (exportBlocks.length) {
+      for (const part of exportBlocks[exportBlocks.length - 1][1].split(',')) {
+        const m = part.trim().match(/^(\S+)\s+as\s+(\S+)$/);
+        if (m) exported[m[2]] = m[1];
+      }
+    }
+    const tables = {};
+    for (const m of pb.matchAll(/([\w$]+)=function\(e\)\{return\s*((?:e\[e\.[\w$]+=\d+\]=`[^`]*`,?)+)/g)) {
+      const table = {};
+      for (const p of m[2].matchAll(/e\[e\.([\w$]+)=(\d+)\]/g)) table[p[1]] = Number(p[2]);
+      if (Object.keys(table).length) tables[m[1]] = table;
+    }
+    for (const spec of bindings) {
+      const m = bindingName(spec);
+      const internal = exported[m[1]];
+      context[m[2]] = (internal && tables[internal]) || opaque();
+    }
+  }
   // The enum maps sit behind a lazy initializer (rolldown pattern); the export
   // record is lazy too: `mapModelCatalog: () => C` — one call unwraps each.
   const init = required(body.match(/function (\w+)\(\)\{return\(\1=\w+\(\(\(\)=>\{\w+\(\),T=\{/), 'mapper enum initializer');
-  return vm.runInNewContext(`${body};${init[1]}();f`, context).mapModelCatalog();
+  const record = required(body.match(/var (\w+)=\w+\(\{mapModelCatalog:\(\)=>/), 'mapper export record');
+  return vm.runInNewContext(`${body};${init[1]}();${record[1]}`, context).mapModelCatalog();
 }
 
 // The family pipeline lives in one app-initial bundle. Minified names change
@@ -210,7 +233,7 @@ function loadFamilyPipeline(root) {
   resolved.Gt = required(source.match(new RegExp(`function (\\w+)\\(e,t\\)\\{let\\{families:\\w+\\}=${grouping[1]}\\(t\\?\\?e\\)`)), 'grouped picker input')[1];
   // Dimension selection with prefix fallback: reads the current model's orders
   // through the collector, then walks back over the earlier dimensions.
-  resolved.Ut = required(source.match(/function (\w+)\(e,t,n,r\)\{let \w+=\w+\(t,e\.dimensions\),\w+=e\.dimensions\[n\]/), 'dimension selection')[1];
+  resolved.Ut = required(source.match(/function ([\w$]+)\(e,t,n,r\)\{let \w+=\w+\(t,e\.dimensions\),\w+=e\.dimensions\[n\]/), 'dimension selection')[1];
   const start = source.indexOf(grouping[0]);
   const rowsStart = source.indexOf(`function ${resolved.Kt}(`);
   if (!(start >= 0 && rowsStart > start)) throw new Error('installed Devin family pipeline range');
