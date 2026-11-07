@@ -25,3 +25,20 @@ test('AGENTS.md indexes every rule volume', () => {
     .filter(name => !index.includes(`.devin/rules/${name}`));
   assert.deepEqual(unindexed, [], 'a volume missing from the index cannot be read at the moment it is needed');
 });
+
+// A volume without frontmatter registers as `manual`: `devin rules list` shows it,
+// but the model can never decide to load it, so every "何时必读" claim in AGENTS.md
+// becomes unfalsifiable. Measured 2026-11-07: three volumes were in this state.
+test('every rule volume declares a trigger and a description', () => {
+  const offenders = [];
+  for (const file of ruleVolumes()) {
+    const head = fs.readFileSync(file, 'utf8').slice(0, 600);
+    const frontmatter = head.match(/^---\n([\s\S]*?)\n---\n/);
+    if (!frontmatter) { offenders.push(path.basename(file) + ' (no frontmatter)'); continue; }
+    const keys = [...frontmatter[1].matchAll(/^([a-z_]+):/gm)].map(match => match[1]);
+    const missing = ['trigger', 'description'].filter(key => !keys.includes(key));
+    if (missing.length) offenders.push(path.basename(file) + ' (missing ' + missing.join(', ') + ')');
+  }
+  assert.deepEqual(offenders, [],
+    'without frontmatter the loader registers the volume as manual, so the agent can never load it on its own');
+});

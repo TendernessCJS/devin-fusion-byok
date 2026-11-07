@@ -15,13 +15,13 @@ description: "Apply when changing self-update behaviour or the release contract 
   形式（`releaseInfo()` 会做严格相等校验）。`npm run package` 按 `name-version` 命名，与之一致。
 - tag 必须是 `v<major>.<minor>.<patch>` 形式的三段纯数字 semver（`v` 可省略）；draft 与 prerelease 一律不被接受。
 - 资产必须带 GitHub 自动计算的 `digest`（`sha256:` + 64 位十六进制）且大小 ≤ 50 MiB，否则 `installable=false`，面板只提供「打开发布页面」。
-- 插件内 `package.json` 的 `version` 必须严格小于 Release 版本才会提示更新，发布前记得 bump。
+- 提示更新的条件是本地 `package.json` 的 `version` 严格小于 Release 版本；版本不变式与 bump 流程见 `upstream-fork-release.md`。
 - 面板「最新正式版」的唯一来源是 `REPOSITORY` 常量（已固定为 `TendernessCJS/devin-fusion-byok`），比的是**本 fork** 的 Release；
   不要用 `gh release list` 的输出判断最新版——本仓库裸 `gh` 解析到 `upstream`（见 `upstream-fork-release.md`），读到的是上游 Release。
 - 一键安装仅在 macOS 且 `<appRoot>/bin/devin-desktop` 存在时可用（`createUpdateHost` 里的 `supported` 判断）；其他情况
   `canInstall=false`，只能手动下载 vsix。
 - 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经
-  `src/update/proxy-transport.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。（`src/proxy.cjs` 仅保留同名兼容导出，供旧验收脚本使用。）
+  `src/update/proxy-transport.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。`src/proxy.cjs` 兼容门面已删除，生产与测试一律直接 require `update/proxy-config.cjs`、`update/proxy-transport.cjs`、`network/direct-fetch.cjs`。
   **不要改成读 `http.proxy` 设置或 `HTTPS_PROXY`/`http_proxy`/`ALL_PROXY` 环境变量**——那会全局生效，把内网 HTTPS 地址也送去代理。
   **也不要依赖扩展宿主被打过补丁的 `fetch`**：Devin 启动时会把 `globalThis.fetch` 换成 `@vscode/proxy-agent` 的代理感知版本（读 VS Code 的
   `http.proxy` / `http.noProxy`，`http.proxySupport` 默认 `override`），那也是全局的，同样会波及内网地址——配置 `updateProxy` 时走

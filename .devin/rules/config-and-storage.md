@@ -1,3 +1,8 @@
+---
+trigger: model_decision
+description: "改 config.json 读写、面板提交、损坏恢复或受管设置写入串行边界时必读"
+---
+
 # 配置与存储纪律
 
 `config.json`（`<globalStorage>/local.devin-fusion-byok/config.json`）是唯一权威配置。

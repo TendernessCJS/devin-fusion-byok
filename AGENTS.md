@@ -21,7 +21,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 - **不放宽现有安全校验**：Origin 一律 403、控制令牌用 `timingSafeEqual`、webview 只用 `createElement`/`textContent`。
 - **backend 代码禁用动态 require**——`sourceId()` 的哈希输入是加载期从字面量 require 图自动推导的，动态 specifier 会让推导直接抛错、backend 起不来。
 - **不要让任何人「恢复」`message_nodes` 按 `message_id` 反查归属**（实测 31 秒全表扫描）；归属只查 `tool_call_state`。
-- **不要恢复任何 picker 刷新命令**（`lightCommands` 必须保持 `[]`；曾导致每 5–35 秒重载整个窗口）。
+- **不要恢复任何 picker 刷新命令**（曾导致每 5–35 秒重载整个窗口；守护在 `test/architecture.test.cjs` 的 `reloadAcpConnections` 禁令）。
 - **CLI 缓存绝不改名、绝不写 `.stale`**（v6 实测会自愈、v1–v5 不会，自愈时机不可依赖；改名仍可能把 picker 打空）；`model_configs*` 可写性按文件内容判定，不按代际白名单——合法信封的未来代际照常重写。
 - **日志禁止**写入 `apiKey`、控制令牌、`authorization` 头、对话正文。
 - **永不向 `upstream` 推送**；`origin` 才是推送目标。
@@ -31,6 +31,8 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 下面两类卷都**不常驻**：`devin rules list` 里无论 `trigger: glob` 还是 `trigger: model_decision`，规则都只登记为
   **`agent-decidable`**（按模型判断注入，**不保证加载**）。所以「漏读会安静地做错」的知识不能靠「放在哪个文件」保证送达，
   索引必须给出**何时必读**——这也是上面「为什么不把约束留在本文件里」的同一组实测约束逼出来的结论。
+  **缺 frontmatter 的卷登记为 `manual`**（模型永远选不中它，索引里的「何时必读」就成了不可执行的声明），
+  `test/rule-budget.test.cjs` 硬拦缺 `trigger`/`description` 的卷。
 
 **体积纪律**：每卷必须 < 16,384 字节，超限部分静默丢弃。`test/rule-budget.test.cjs`（`npm test` 的一部分）会硬拦超限卷与「新卷没进本索引」，所以别在这里维护体积快照——它必然过期，判据以测试为准。接近上限时**先拆卷再加内容**：把「实测依据/排障判据」移成 `<主题>-forensics.md`，契约卷留一条指向与禁令（`runtime-and-injection.md` ↔ `runtime-forensics.md` 是范例）。拆卷是**逐字搬运 + 不加新论断**，只补指针句。拆卷后**必须**跑 `node scripts/rule-split-check.cjs <拆卷前commit> <旧卷> [新卷…]`——退出码非 0 即有 bullet 丢失，不得提交；刻意重写的 bullet 用 `--allow=<归一化 key 子串>` 豁免并在提交信息里说明。该脚本同时拦「整条丢失」与「bullet 还在但内容缩水 >20%」，两类豁免语法相同。事故依据：2026-10-27 拆 `runtime-and-injection.md` 漏做此核对，丢了 4 条约束（安全校验禁令、`assignment_jwt` 契约、backend 转发目标、`injection-health` 宿主约束），`npm test` 与 rule-budget 全绿却无人报警。
 

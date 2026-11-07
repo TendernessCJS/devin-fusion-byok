@@ -50,8 +50,7 @@ Devin 私有接口依赖、ACP/LS 注入、backend 生命周期与关闭、日�
   于是**信号变成空操作**，进程只能 SIGKILL（2026-10-14 实测：必须 `kill -9` 才清掉孤儿 backend）。现在前两段用 `drainTimeoutMs`（5 s）兜底，第三段
   **单独用 `socketCloseTimeoutMs`（1 s）**——它只等连接消失、不与请求工作重叠，共用 5 s 会把每次交班的不可用窗口拖满 5 秒；超时后先 `getConnections`
   采样连接数、再 `closeAllConnections()` 强制收尾并继续走到 `stopped`，保证「关得掉、也杀得掉」。**不要退回无上限等待**，也不要只在超时日志里记录而不强制关闭。
-- **流式 RPC 不接受 120s body 空闲超时**：`/exa.<pkg>.<Name>Service/Stream*` 与 `.../HandleStreaming*` 是长连接推送，事件间隔按分钟计（实测 120s 空闲判据每约 102s 误杀一次
-  `StreamCascade*ReactiveUpdates`）。这类路径的 body 计时器只用 30 分钟兜底（`bridge.cjs` 的 `STREAMING_RPC`/`STREAMING_IDLE_LIMIT`，上限防 socket 泄漏）；
+- **流式 RPC 不设 body 空闲上限**：`/exa.<pkg>.<Name>Service/Stream*` 与 `.../HandleStreaming*` 是长连接推送，事件间隔按分钟计——body 空闲上限换不到保护，只会误杀（3 天 316 次 `forward-timeout`、全部 `phase=body`、约 30 分钟周期、均在 `StreamCascade*ReactiveUpdates`；响应是 pipe 直通不缓冲、客户端断开即 destroy upstream）。`streamingIdleMs` 仅作显式覆盖（测试注入用）；
   `connect`/`headers` 计时器**不变**——不把「上游不可达」拖成永久挂起。改 `forward` 时不得退回对推送流施加普通 idle 超时，也不得放宽前两个阶段的快速失败。
 
 ## 架构审查结论（2026-10-26 实测；耦合清单，不是待办清单）

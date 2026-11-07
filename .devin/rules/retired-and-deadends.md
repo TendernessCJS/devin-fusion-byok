@@ -105,3 +105,5 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
 - **`installed-renderer.cjs` 旧 chat-client 半区**（`loadFamilyPicker`/`loadAcpPicker`/`loadGroupSorter`/`legacyAvailable`/`rendererFile`/`load`）：判据**零消费者 + 版本实测**——四者无引用，且 3.12.17 的 `windsurf-chat-client/index.js` 里 `familyUid`/`catalogMisses` 命中数为 0。webapp bundle 探测仍是唯一探测面。
 - **`cli-cache.cjs` 的 `CACHE_RPC` 表**：判据**零消费者**——且表内含已不存在的 `model_configs_v5` 条目；`rpcFor`/`CACHE_PREFIX_RPC` 保留（生产在用）。
 - **若 Devin 恢复 `devin.refreshUserStatus`**：从 git 历史恢复上述删除（2026-11-07 前的版本含完整实现与测试），不要凭记忆重写。
+- **`src/runtime/host/picker-refresh.cjs`（95 行 + 13 个用例）**：判据**运行期效果为零**——生产硬编码 `lightCommands: []` 使 `run()` 无条件返回，`force()` 全仓零调用。`reloadAcpConnections` 禁令改由 `test/architecture.test.cjs` 守卫（`src/**` 不得出现该字面量）。
+- **6 个死函数（同日删除）**：`catalog/payload.cjs` 的 `protoSidekick`/`jsonSidekick`、`goal/store.cjs` 的 `removeCapability`/`removeCapabilitiesForGoal`、`models/order.cjs` 的 `rankMap`、`panel/goal-view.cjs` 服务端 `statusText`（goalScript 模板内同名客户端函数保留）。判据：**定义后全仓零引用**（交叉扫描确认）。

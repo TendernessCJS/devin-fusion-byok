@@ -18,23 +18,21 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   `clear()` 之前拦它：视图非空时**保留已发布条目**、只把 `nativeCatalogStatus` 置为 `unavailable`，并走一次 `commit({ bumpRevision: false })`（面板要看到
   「无法连接插件本地服务」，但视图没变就不该推进 revision），同时打 `native-refresh-retained`。否则后端换进程的那几秒会把已发布条目清成 0、picker 显示「没有模型」（实测数字见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。**`empty` 必须继续清空**——陈旧条目清理依赖它，一起保护掉会让陈旧条目永久留存。冷启动不受此保护（首帧视图本来就空，无可保留）；
   也不要为此让宿主去读 `native-cache.json`，那会造出第二个 cache 读者。
-- 原生目录由空变有（或目录签名变化）→ 触发 `pickerRefresh.changed()`；**当前线上不接任何刷新命令**（`lightCommands: []`，且
-  `createPickerRefresh` 的**默认值本身就是 `[]`**——历史上默认值曾是 `['devin.reloadAcpConnections']`、只有生产显式传空才安全，
-  任何一处漏传就会重新引入风暴，因此默认值必须是安全的那一侧）：实测的风暴与影响见 `.devin/rules/native-observation-and-cli-cache-forensics.md`。数据正确性完全由 cli-cache 原地刷新兜底，新会话读到的是新 payload；
+- 原生目录由空变有（或目录签名变化）→ 触发 CLI 缓存检查；**picker 刷新模块已删除**——它曾靠 `devin.reloadAcpConnections`，实测会断开全部 ACP 连接并在 5–35s 内引发窗口重载（风暴实测见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。该禁令现由 `test/architecture.test.cjs` 的守卫保证（`src/**` 不得出现 `reloadAcpConnections`）。数据正确性完全由 cli-cache 原地刷新兜底，新会话读到的是新 payload；
   **不得回退到 `devin.newConversation` 之类开会话的命令**，重新接命令前必须先在真机确认其不会断开 ACP。另一嫌疑（`saveReceipt` 往安装目录写 POINTERS）的叙述见 `.devin/rules/native-observation-and-cli-cache-forensics.md`；不得往
   `context.extensionPath` 里新增任何周期性/激活期写文件。
 
 - `augmentLocalModelChoices` 的门控是「Fusion 需要其原生 uid 出现在字段 7 允许列表里、普通 BYOK 不需要」——盲窗（原生观测为空）下 Fusion 整组被丢而普通
   BYOK 全留，现象会被误读成「非 Fusion 模型缺失」，排障时先看这里而不是重查目录生成。
-- CLI 的模型选择器是「`~/.cache/devin/cli/` 的按身份持久缓存（`user_status`/`model_configs_v5`/`team_settings` 的
+- CLI 的模型选择器是「`~/.cache/devin/cli/` 的按身份持久缓存（`user_status`/`model_configs_v<代际>`（本机当前 v6）/`team_settings` 的
   `.<digest>.bin` JSON 信封，payload 为 base64 proto）∩ 白名单」；配置改动会改普通模型 uid（digest 含
   `provider.id`/`model.id`/`effort`），缓存陈旧期普通条目整批丢失，而镜像的 `fusion-<lead>-sidekick-<side>` 条目只要两侧 uid 未变就仍能命中。
   `src/runtime/host/cli-cache.cjs` 按「payload 含 `dfbyok` 判定我方身份、含 dfbyok 但缺当前 uid 判定陈旧」**原地重写 payload**：改写前先按
   `CACHE_PREFIX_RPC`/`rpcFor` 映射缓存名→RPC 路径、经 `augmentCatalog` 重算，且新 payload 必须「不丢任何已出现的期望 uid 且字节有变化」才落盘（否则 `no-improvement`
   跳过——允许净缩，清陈旧也是改进）；落盘前把原始字节写到 `<file>.bak`（原子写、`0o600`；**每次重写都覆盖，只保留最近一次**，不是首次重写前的原件），envelope 的
   `version`/`identity_digest`/`fetched_at_secs` 原样保留。**绝不改名、绝不写 `.stale`**：改名/删除**不能**当刷新手段（删除与改写的实验过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。不碰无 dfbyok 标记的其他身份文件；仅在重写到
-  `model_configs` 时才经 `pickerRefresh.force()` 让 picker 重取（`team_settings`/`user_status` 由 CLI 自身节奏重拉、无需断 ACP
-  即生效），且 `force()` 与 `changed()` 共用 `cliCacheMs` 间隔——刷新风暴不得变成 ACP 断开风暴。Composer
+  `model_configs` 的可见性由重写字节本身保证（`team_settings`/`user_status` 由 CLI 自身节奏重拉、无需断 ACP
+  即生效）——不存在也不许复活任何 picker 刷新命令。Composer
   模型缺失排障时先看缓存新鲜度，backend 注入日志（`afterOwn`）证明不了 picker 侧可见性。面板「设置 → CLI 缓存 → 刷新缓存」走同一个
   `checkCliCaches({ force: true })`（`refreshCliCaches` 消息），只做原地重写、不引入新的刷新通道；`cliCacheStatus()` 把最近一次报告交给面板渲染，
   不要在那里触发写入。**自动检查除 uid 存在性（`missing`/`staleProbe`）外还有一条形态比对** `staleOwnEntries`：仅当

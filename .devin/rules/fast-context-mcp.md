@@ -1,3 +1,8 @@
+---
+trigger: model_decision
+description: "改 Fast Context 工具/开关/凭据/SSRF 边界，或外部 MCP 报 unauthenticated/upstream_error 时必读"
+---
+
 # Fast Context MCP（fast-context）
 
 `src/fast-context/` —— 把检索能力以 stdio MCP 暴露给外部 harness 的唯一模块。四个工具：`code_search`、`web_search`、`web_read_url`、`fast_context_status`；别名 `fast_context_search → code_search` 兼容旧提示词，**不要删**。

@@ -1,3 +1,8 @@
+---
+trigger: model_decision
+description: "改探针标记表或缓存判定，或排查「Devin 升级后插件静默失效」时必读"
+---
+
 # 原生契约漂移探针（native-contract）
 
 `src/activation/native-contract.cjs` —— 只读自检：Devin 升级后私有 ACP 契约（RPC 名、protobuf 字段、缓存代际、stopReason 枚举、bundle 字符串）可能变化而测试仍全绿，探针让升级**自报漂移**而非依赖人肉逆向。
@@ -12,8 +17,8 @@
   | `chat` | `<app>/out/vs/workbench/windsurf-chat-client/index.js` | 同上 |
   | `acp` | `<app>/extensions/windsurf/dist/extension.js` | **drift**，记 `artifact-missing` |
   plist = `<app>/../../Info.plist`（即 `Contents/Info.plist`），正则取 `CFBundleShortVersionString`，取不到记 null。缺失语义两档的理由：bundle 被改名/拆分 = 集成面**无法验证**，必须让人看见而非安静跳过。
-- **两级标记**：`REQUIRED` 缺失即 drift——cli `GetCliModelConfigs`/`GetUserStatus`/`GetCliTeamSettings`；ls 三个服务命名空间（见下条）+`cascade_model_config_data`/`GetUserJwt`/`GetWebSearchResults`（后两个支撑外部 Fast Context MCP）；desktop `cascade_model_config_data`；chat `cognition.ai/auth`（目录发布 `nativeApplied` 依赖桌面读它）+`cognition.ai/subagent_context`；acp `state_update`/`plan_update`/`available_commands_update`/`config_option_update`/`session/set_config_option`/`cognition.ai/clientMessageId`/`cognition.ai/isOptimistic`/`reconnectingMaxDelay`（最后一个是本地 connector 崩溃的唯一可观测状态，改名即失明）。`INFORMATIONAL` 缺失只记录——cli `model_configs_v6`/`max_turn_requests`/`end_turn`/`refusal`/`assignment_jwt`；ls `GetUserStatus`/`GetCliModelConfigsForSite`/`GetCascadeModelConfigsForSite`/`GetCommandModelConfigsForSite`/`assignment_jwt`/`GetModelStatuses`（`GetModelStatuses` 结论见 `catalog-and-picker.md`；`*ForSite` 未触发见 `retired-and-deadends.md`）；desktop `devin.refreshUserStatus`（3.12.17 起官方删除该命令，插件已不再调用，缺失是稳态而非漂移）；chat `cognition.ai/finishedOutcome`/`cognition.ai/abort`/`cognition.ai/clientMessageId`；acp `plan_removed`/`_session/elicitation`/`session/archive`/`_cognition.ai/session/archive`/`ext/method`。代际与枚举会演进，**误报比漏报更伤**。
-- **服务命名空间是唯一无声失效面，2026-10-28 起进 REQUIRED（`PROBE_VERSION` 6）**：桥的 `CATALOG` 正则（`src/runtime/bridge.cjs`）按**完整方法路径**匹配，路径里的三个命名空间
+- **两级标记**：`REQUIRED` 缺失即 drift——cli `GetCliModelConfigs`/`GetUserStatus`/`GetCliTeamSettings`；ls 三个服务命名空间（见下条）+`cascade_model_config_data`/`GetUserJwt`/`GetWebSearchResults`（后两个支撑外部 Fast Context MCP）；desktop `cascade_model_config_data`；chat `cognition.ai/auth` + `cognition.ai/subagent_context`（后者真在用：`context-state`/`auto-continue`/`goal` 都读该 `_meta`；`cognition.ai/auth` 当前**无消费者**，原理由随发布确认链一起消失，是否降级为 INFORMATIONAL 尚未决策——降级须 `PROBE_VERSION` +1）；acp `state_update`/`plan_update`/`available_commands_update`/`config_option_update`/`session/set_config_option`/`cognition.ai/clientMessageId`/`cognition.ai/isOptimistic`/`reconnectingMaxDelay`（最后一个是本地 connector 崩溃的唯一可观测状态，改名即失明）。`INFORMATIONAL` 缺失只记录——cli `model_configs_v6`/`max_turn_requests`/`end_turn`/`refusal`/`assignment_jwt`；ls `GetUserStatus`/`GetCliModelConfigsForSite`/`GetCascadeModelConfigsForSite`/`GetCommandModelConfigsForSite`/`assignment_jwt`/`GetModelStatuses`（`GetModelStatuses` 结论见 `catalog-and-picker.md`；`*ForSite` 未触发见 `retired-and-deadends.md`）；desktop `devin.refreshUserStatus`（3.12.17 起官方删除该命令，插件已不再调用，缺失是稳态而非漂移）；chat `cognition.ai/finishedOutcome`/`cognition.ai/abort`/`cognition.ai/clientMessageId`；acp `plan_removed`/`_session/elicitation`/`session/archive`/`_cognition.ai/session/archive`/`ext/method`。代际与枚举会演进，**误报比漏报更伤**。
+- **服务命名空间是唯一无声失效面，2026-10-28 起进 REQUIRED（当时 `PROBE_VERSION` 6，现为 7）**：桥的 `CATALOG` 正则（`src/runtime/bridge.cjs`）按**完整方法路径**匹配，路径里的三个命名空间
   `exa.language_server_pb.LanguageServerService` / `exa.api_server_pb.ApiServerService` / `exa.seat_management_pb.SeatManagementService` 一旦改名，后果是三层同时静默：
   桥不拦截（BYOK 从 picker 消失）→ 运行期未知上报**不报**（它只报方法名含 `Model|ModelConfig|Catalog` 的，`GetUserStatus` 不含）→ 探针原先不含服务名，仍报 `ok`。
   三个名字在 ls 产物里均实测存在（`ls/desktop/acp` 亦含前两个与第三个），所以设卡不会误报。诊断口径：面板「更新/契约」显示 drift 时先看 `missing.ls` 里是不是这三个之一——是则说明 Devin 换了命名空间，**拦截正则必须同步改**，不是简单加白名单。

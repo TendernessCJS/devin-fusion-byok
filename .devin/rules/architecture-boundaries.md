@@ -30,20 +30,19 @@ description: "Apply when changing module ownership, the src/runtime partition, p
 - **扩展宿主编排层在 `src/activation/`**（自 725 行 `extension.cjs` 拆出，16 个 `.cjs`）：`errors`（RuntimeError/`safeError` + 叶子 `models/discovery-error.cjs`）、`settings`（`globalSetting`）、`backend-handshake`
   （`ensureBackend` + 局部 `pause`/`compareVersion`）、`catalog-sync`（原生目录观测/推送）、`effective-origin`（解析原生派生链：
   LS `--api_server_url` → portal → 默认，含收敛窗口）、`managed-settings`（受管设置写入的 `critical()` 闸门）、`enable`
-  （受管设置写入 + LS 注入 + startNativeSync）、`commands`（命令注册、Fusion 选择与 `disable` 恢复）、`panel-install`（状态栏/面板控制器）、`host-identity`（宿主构建身份）、`native-contract`（只读探针）、`liveness`（`live`/`superseded` 判据）、`cache-sync`/`config-sync`（pickerRefresh、CLI 缓存检查、配置监听/afterChange）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`
+  （受管设置写入 + LS 注入 + startNativeSync）、`commands`（命令注册、Fusion 选择与 `disable` 恢复）、`panel-install`（状态栏/面板控制器）、`host-identity`（宿主构建身份）、`native-contract`（只读探针）、`liveness`（`live`/`superseded` 判据）、`cache-sync`/`config-sync`（CLI 缓存检查、配置监听/afterChange）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`
   被测试与 `package.json` 依赖**。这些文件在扩展宿主运行、**不能进 backend 的 require 闭包**（否则宿主代码被算进重启哈希）。
   拆分时的硬约束：共享可变槽必须放进显式传递的 `shared` 对象，**不得**改成模块级单例（跨 activate 串状态）；
   `enableQueue`/`reconcileQueue` 这类序列化队列留在各自工厂闭包内；`generation`/abort 判据一处都不能少。
   改激活流程前先确认入口：全仓 **5 个入口**中 3 个（`fast-context/server.cjs`、`goal/report.cjs`、`lifecycle/uninstall.cjs`）
   从 `extension.cjs` 的 require 图走不到（清单见 `retired-and-deadends.md`）。
 - **`src/runtime/` 按「谁运行」分区，判据是路径不是文件名**：根目录只留 backend 进程与两侧共享的 8 个模块（`backend.cjs`、`backend-control.cjs`、`bridge.cjs`、`contract.cjs`、`native-cache.cjs`、`port.cjs`、`source-identity.cjs`、`upstream-origin.cjs`——`upstream-origin.cjs` 是 `origin` 校验与 `DEFAULT_UPSTREAM` 的实现，激活侧与 backend 共用），**只在扩展宿主运行的模块一律放 `src/runtime/host/`**。`test/architecture.test.cjs` 按三层判据强制：`src/runtime/` 内部用根目录 8 文件白名单（fail-closed），宿主模块一律进 `host/`；`src/` 顶层用目录级 deny-list（`BACKEND_FORBIDDEN_DIRS`）；**混合目录只能在 `BACKEND_FORBIDDEN_FILES` 按文件名排除**——目前只有 `models/`（`capabilities`/`native-entry` 在 backend 闭包内、`discovery*.cjs` 是宿主专用，目录级规则表达不了）。另有顶层 allow-list 守卫：新宿主侧顶层目录必须显式加进允许集合。放错方向的代价是把「只在宿主生效」的代码算进重启哈希（并让宿主模块被当 backend 代码改动）。
-- **三个根级门面的规矩**：
+- **两个根级门面的规矩**：
 
   | 门面 | 生产引用 | 护栏 |
   | --- | --- | --- |
   | `src/catalog.cjs` | **有**，`src/extension.cjs:7` 直接 require | 无专门测试；它是 catalog 子系统的对外入口 |
-  | `src/update.cjs` | 无 | 有测试保证它保持纯门面（只转出 `update/updater.cjs`） |
-  | `src/proxy.cjs` | 无 | 有测试保证**生产模块不得 require 它** |
+  | `src/update.cjs` | **有**，`src/activation/panel-install.cjs` `require('../update.cjs').createUpdateHost` | 有测试保证它保持纯门面（只转出 `update/updater.cjs`） |
 
   新加门面前先确认它属于哪一类，别让「兼容门面」被生产代码依赖。
 - **`src/runtime/host/injection-health.cjs` 是宿主侧模块、不得被 backend require**：只有 `activation/panel-install.cjs` require 它，结果经共享槽以

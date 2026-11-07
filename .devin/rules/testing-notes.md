@@ -22,7 +22,7 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   调度竞态（`missing-report` 误杀 `disabled` 状态）。需要扩范围时先确认真实语义是哪一侧。
 - 每个 fixture 结束要调 `assertStubsUsed()`（`t.after` 里或独立用例）：桩键拼错、或某个桩因为重构而不再被命中，都要能红——否则「桩写了但没接线」和
   「桩正确」长得一模一样，这类失效正是把 11 个桩键从字面量改成路径匹配时最容易被引入的。
-- **装载器改造引入的 realm 保真度变化已逐处核过（2026-10-18）**：非桩模块（`goal/controller.cjs`、`panel/controller.cjs`、`picker-refresh.cjs`、
+- **装载器改造引入的 realm 保真度变化已逐处核过（2026-10-18）**：非桩模块（`goal/controller.cjs`、`panel/controller.cjs`、
   `catalog/augment.cjs` 等）现在运行在 VM realm 内，此前是真实 realm。全仓 17 处 `instanceof` 分两类，**都不构成隐患**：① 两侧同 realm（如
   `activation/errors.cjs` 的 `RuntimeError`、`catalog/*` 之间的 Set）——抽出的模块与它在沙箱内创建的 Set/实例同处一个 realm；② 落在被桩替换的模块里
   （`panel/manager.cjs` 的 `allowedUids instanceof Set` 在 fixture 里从不真跑）。**但规则仍然成立**：任何**由测试构造、传入沙箱**的对象（如
