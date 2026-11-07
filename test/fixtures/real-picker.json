@@ -1,6 +1,6 @@
 {
-  "cacheTime": "2026-09-16T16:01:47.469Z",
-  "source": "sanitized real cache subset for 0.3.11 picker verification",
+  "cacheTime": "2026-11-07T04:37:41.165Z",
+  "source": "sanitized real cache subset for 3.12.17 (CLI 3000.12.17) picker verification, captured 2026-11-07",
   "natives": [
     {
       "uid": "claude-fable-5-1-medium",
@@ -59,6 +59,7 @@
       "label": "SWE-2 High",
       "disabled": 0,
       "harnesses": [
+        "swe-1p6-exec",
         "swe-1p6",
         "swe-1p5"
       ],
@@ -68,6 +69,11 @@
           "key": "Reasoning Effort",
           "order": 1,
           "name": "High"
+        },
+        {
+          "key": "Fast Mode",
+          "order": 0,
+          "name": ""
         }
       ]
     },
@@ -84,6 +90,7 @@
       "label": "GPT-5.6 Sol High Thinking",
       "disabled": 0,
       "harnesses": [
+        "gpt-5p6-codex",
         "gpt-5p6"
       ],
       "router": 0,
@@ -110,6 +117,7 @@
       "label": "GPT-5.6 Sol High Thinking Fast",
       "disabled": 0,
       "harnesses": [
+        "gpt-5p6-codex",
         "gpt-5p6"
       ],
       "router": 0,
@@ -136,6 +144,7 @@
       "label": "GPT-5.6 Luna High Thinking",
       "disabled": 0,
       "harnesses": [
+        "gpt-5p6-codex",
         "gpt-5p6"
       ],
       "router": 0,
@@ -162,6 +171,7 @@
       "label": "GPT-5.6 Luna High Thinking Fast",
       "disabled": 0,
       "harnesses": [
+        "gpt-5p6-codex",
         "gpt-5p6"
       ],
       "router": 0,
@@ -188,6 +198,7 @@
       "label": "SWE-2 Medium",
       "disabled": 0,
       "harnesses": [
+        "swe-1p6-exec",
         "swe-1p6",
         "swe-1p5"
       ],
@@ -197,6 +208,11 @@
           "key": "Reasoning Effort",
           "order": 0,
           "name": "Medium"
+        },
+        {
+          "key": "Fast Mode",
+          "order": 0,
+          "name": ""
         }
       ]
     },
@@ -214,6 +230,11 @@
           "key": "Reasoning Effort",
           "order": 2,
           "name": "Max"
+        },
+        {
+          "key": "Fast Mode",
+          "order": 0,
+          "name": ""
         }
       ]
     },
@@ -262,7 +283,7 @@
       "family": [
         {
           "key": "Lead",
-          "order": 1,
+          "order": 3,
           "name": "Claude Fable 5.1"
         },
         {
@@ -299,7 +320,7 @@
       "family": [
         {
           "key": "Lead",
-          "order": 1,
+          "order": 3,
           "name": "Claude Fable 5.1"
         },
         {
@@ -309,7 +330,7 @@
         },
         {
           "key": "Sidekick",
-          "order": 4,
+          "order": 6,
           "name": "GPT-5.6 Luna High"
         },
         {
@@ -336,7 +357,7 @@
       "family": [
         {
           "key": "Lead",
-          "order": 1,
+          "order": 3,
           "name": "Claude Fable 5.1"
         },
         {
@@ -346,7 +367,7 @@
         },
         {
           "key": "Sidekick",
-          "order": 4,
+          "order": 6,
           "name": "GPT-5.6 Luna High"
         },
         {
@@ -373,7 +394,7 @@
       "family": [
         {
           "key": "Lead",
-          "order": 1,
+          "order": 3,
           "name": "Claude Fable 5.1"
         },
         {
@@ -383,7 +404,7 @@
         },
         {
           "key": "Sidekick",
-          "order": 6,
+          "order": 8,
           "name": "GLM-5.2 High"
         },
         {
@@ -404,13 +425,14 @@
       "disabled": 0,
       "harnesses": [
         "fusion",
+        "gpt-5p6-codex",
         "gpt-5p6"
       ],
       "router": 1,
       "family": [
         {
           "key": "Lead",
-          "order": 3,
+          "order": 6,
           "name": "GPT-5.6 Sol"
         },
         {
@@ -420,7 +442,7 @@
         },
         {
           "key": "Sidekick",
-          "order": 6,
+          "order": 8,
           "name": "GLM-5.2 High"
         },
         {
@@ -447,7 +469,7 @@
       "family": [
         {
           "key": "Lead",
-          "order": 1,
+          "order": 3,
           "name": "Claude Fable 5.1"
         },
         {
@@ -457,7 +479,7 @@
         },
         {
           "key": "Sidekick",
-          "order": 5,
+          "order": 7,
           "name": "GPT-5.6 Sol High"
         },
         {
@@ -484,7 +506,7 @@
       "family": [
         {
           "key": "Lead",
-          "order": 1,
+          "order": 3,
           "name": "Claude Fable 5.1"
         },
         {
@@ -494,7 +516,7 @@
         },
         {
           "key": "Sidekick",
-          "order": 5,
+          "order": 7,
           "name": "GPT-5.6 Sol High"
         },
         {
@@ -521,7 +543,7 @@
       "family": [
         {
           "key": "Lead",
-          "order": 1,
+          "order": 3,
           "name": "Claude Fable 5.1"
         },
         {
@@ -551,6 +573,7 @@
       "label": "Fusion Sidekick (SWE-2 Medium)",
       "disabled": 0,
       "harnesses": [
+        "swe-1p6-exec",
         "swe-1p6",
         "swe-1p5"
       ],
@@ -562,6 +585,7 @@
       "label": "Fusion Sidekick (GPT-5.6 Luna High Thinking Fast)",
       "disabled": 0,
       "harnesses": [
+        "gpt-5p6-codex",
         "gpt-5p6"
       ],
       "router": 1,
@@ -579,7 +603,7 @@
       "family": [
         {
           "key": "Lead",
-          "order": 1,
+          "order": 3,
           "name": "Claude Fable 5.1"
         },
         {

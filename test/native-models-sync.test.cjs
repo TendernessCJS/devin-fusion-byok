@@ -68,7 +68,7 @@ test('readNativeModels returns the backend observed catalog with dimensions inta
   const luna = result.models.find(entry => entry.uid === 'gpt-5-6-luna-high');
   assert.deepEqual(luna?.sidekickDimension, undefined, 'plain natives carry no dimension');
   const official = result.models.find(entry => entry.uid === 'fusion-claude-fable-5-1-medium-sidekick-gpt-5-6-luna-high');
-  assert.deepEqual(official.sidekickDimension, { order: 4, name: 'GPT-5.6 Luna High', fastModeOrder: 0 });
+  assert.deepEqual(official.sidekickDimension, { order: 6, name: 'GPT-5.6 Luna High', fastModeOrder: 0 });
   assert.ok(result.models.length >= 19, 'all sanitized upstream records are exposed');
   assert.equal(result.models.some(entry => entry.uid === 'dfbyok-provider-3490cae1-c564-42ae-afe9-cfba2b5-gpt-6-astra-801ca1a9934850b2'), false,
     'own models are excluded from native observations');
@@ -162,13 +162,13 @@ test('createManager.ready hydrates panel state from a synced backend with zero L
   const built = buildCatalog(saved, backendModels);
   const luna = Object.values(built.fusions).find(fusion => fusion.sidekickUid === 'gpt-5-6-luna-high');
   assert.ok(luna, 'the synced native Sidekick is mirrored once its harness is known');
-  assert.deepEqual(luna.sidekickHarnessUids, ['gpt-5p6'], 'the mirrored combination uses the synced native harness');
+  assert.deepEqual(luna.sidekickHarnessUids, ['gpt-5p6-codex', 'gpt-5p6'], 'the mirrored combination uses the synced native harness');
   assert.ok(state.fusionCount > 0, 'the mirrored combinations are reported to the panel');
   const lead = built.rolePool.lead.find(item => item.ref.providerId);
   const created = await manager.dispatch('setRoleModel', { role: 'lead', enabled: true, model: lead.ref });
   assert.ok(created.roleLists.lead.some(item => item.ref.providerId === lead.ref.providerId && item.selected));
   const fresh = buildCatalog(JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8')), backendModels);
-  assert.deepEqual(Object.values(fresh.fusions).find(fusion => fusion.sidekickUid === 'gpt-5-6-luna-high').sidekickHarnessUids, ['gpt-5p6']);
+  assert.deepEqual(Object.values(fresh.fusions).find(fusion => fusion.sidekickUid === 'gpt-5-6-luna-high').sidekickHarnessUids, ['gpt-5p6-codex', 'gpt-5p6']);
   assert.ok(!JSON.stringify(state).includes('fixture-secret'), 'no credentials leak into public state');
   const roleLists = buildRoleLists(saved, backendModels);
   assert.ok(roleLists.lead.some(r => (r.memberUids || [r.ref.nativeUid]).includes('claude-fable-5-1-medium')), 'Claude Lead is present from backend observations');

@@ -385,7 +385,7 @@ test('sanitized real catalog entries yield canonical orders and exact harnesses 
   const records = collectNativeModels(cat(...[...fixture.natives, ...fixture.fusions].map(record => m(1, entry(record)))),
     { rpc: 'GetCliModelConfigs', format: proto });
   const result = buildCatalog(config(), records);
-  const expected = { 'swe-2-medium': 1, 'swe-2-high': 2, 'gpt-5-6-luna-high': 4, 'gpt-5-6-sol-high': 5, 'glm-5-2': 6 };
+  const expected = { 'swe-2-medium': 1, 'swe-2-high': 2, 'gpt-5-6-luna-high': 6, 'gpt-5-6-sol-high': 7, 'glm-5-2': 8 };
   const models = result.models.filter(model => model.kind === 'matrix');
   for (const [uid, order] of Object.entries(expected)) {
     const fusion = models.find(model => result.fusions[model.uid]?.sidekickUid === uid);
@@ -394,7 +394,7 @@ test('sanitized real catalog entries yield canonical orders and exact harnesses 
     const dims = Object.fromEntries(fusion.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
     assert.equal(dims.Sidekick.order, order, uid + ' is emitted under its canonical order');
   }
-  assert.deepEqual(result.fusions[models.find(model => result.fusions[model.uid]?.sidekickUid === 'gpt-5-6-luna-high').uid].sidekickHarnessUids, ['gpt-5p6']);
+  assert.deepEqual(result.fusions[models.find(model => result.fusions[model.uid]?.sidekickUid === 'gpt-5-6-luna-high').uid].sidekickHarnessUids, ['gpt-5p6-codex', 'gpt-5p6']);
   assert.deepEqual(result.fusions[models.find(model => result.fusions[model.uid]?.sidekickUid === 'glm-5-2').uid].sidekickHarnessUids, ['strawberry-pancake']);
   assert.equal(result.sidekicks.find(item => item.uid === 'gpt-5-6-luna-high-priority'), undefined,
     'the -priority twin is never bound through ambiguous suffixes');
