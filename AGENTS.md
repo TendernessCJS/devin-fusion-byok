@@ -43,13 +43,16 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/runtime-and-injection.md` | 改 ACP/LS 注入、backend 生命周期与关闭、日志、用户设置写入、重试预算或安全校验（模块归属、`protocol/` 与 `activation/` 职责、`SOURCE_FILES` 见下一条 `architecture-boundaries.md`） |
 | `.devin/rules/architecture-boundaries.md` | 改模块归属、`src/runtime` 分区、`protocol/` 职责、根门面或 `architecture.test.cjs` 守卫时必读——模块拓扑与依赖守卫的实测描述 |
 | `.devin/rules/runtime-forensics.md` | **排查「注入/目录改写改了没生效」时必读**——api server 凭据优先级、`agentEnv` 只覆盖主 agent、日志归属（宿主 channel vs `runtime.log`）、连接按 pid 判、桥的 gzip 体积 |
+| `.devin/rules/architecture-forensics.md` | **改模块归属/激活耦合、`host-builds` 快照读法或 LS/ACP 注入边界时必读**——2026-10-26 架构审查的耦合度量与出厂产物核对证据 |
 | `.devin/rules/auto-continue-forensics.md` | **排查「该续没续」或改 `auto-continue.cjs` 资格判定时必读**——2026-10-31 `session-info` 永久取消资格的真机时间线与修复依据、两个观测事件的字段、残留待定项 |
 | `.devin/rules/upstream-routing.md` | **排查「转发打到了哪里」或推送没生效时必读**——upstream origin 契约与校验、原生派生链与收敛窗口、激活期推送失败的 identity 分级、`upstream-push` / `upstream-origin` / `upstream-push.json` 三个观测落点 |
 | `.devin/rules/fusion-matrix.md` | 改 Fusion 矩阵 emit 规则、Lead/Sidekick 资格与命名、harness、Fast Mode |
 | `.devin/rules/catalog-and-picker.md` | 改 picker 可见性契约、角色白名单、陈旧条目判定与清理、推送门控、`nativeFamilies`、维度 order |
+| `.devin/rules/catalog-allowlist.md` | 改 allowlist 三态判定、双通道去抖或 restricted→unrestricted 提交时机时必读 |
 | `.devin/rules/catalog-publication.md` | 改原生 `auth-status` 目录写入（原地改写/观测）或 `GetModelStatuses` 处理时必读；发布确认链已于 3.12.17 整链删除，卷内同时是退役记录 |
 | `.devin/rules/context-and-compaction.md` | 改声明的上下文窗口（ModelInfo `f4`/`maxTokens`）、或怀疑「是不是扩展触发了压缩」 |
 | `.devin/rules/native-observation-and-cli-cache.md` | 改原生目录观测与缓存、CLI 缓存原地重写、配置键分类清理 |
+| `.devin/rules/cli-cache-generations.md` | 改 CLI 缓存写入资格、代际判定、coverage 与 health 映射时必读 |
 | `.devin/rules/native-observation-and-cli-cache-forensics.md` | 排查 picker 风暴/缓存实验/裸形状事故依据时必读（实测证据，非契约） |
 | `.devin/rules/native-contract-probe.md` | 改探针标记表、缓存判定，或排查「Devin 升级后插件静默失效」时必读 |
 | `.devin/rules/fast-context-mcp.md` | 改 Fast Context 工具/开关/凭据/SSRF 边界，或外部 MCP 报 `unauthenticated`/`upstream_error` 时必读 |
@@ -68,6 +71,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/provider-endpoint-latency.md` | **排查首响慢、`upstream_timeout`/`upstream_stream_error`，或要动超时预算时必读**——响应头探针、历史统计口径与超时路径的证据边界 |
 | `.devin/rules/provider-sdk-parity.md` | **判断某个 provider 线格式字段是否合法、该不该发，或更新 `.refs` 里的 SDK 时必读**——SDK 基线版本与更新方式、我们发送字段的合法性对照、原生无法表达因此刻意不发的字段、以及「REA 管不到 provider 线格式」的判据 |
 | `.devin/rules/testing-notes.md` | 写或调测试 |
+| `.devin/rules/testing-baselines.md` | 改契约基线 commit、合成场景矩阵或守卫覆盖边界时必读 |
 | `.devin/rules/retired-and-deadends.md` | 清理配置键、审「这段代码还活着吗」、疑惑旧字段为何还在 |
 | `.devin/rules/audit-residuals.md` | **想"修"某个看着像漏洞/漏做的取舍前必读**——已核残余（DNS 不校验、`ownsSession` fail-closed、`finish_reason` 缺失落 end_turn、config 恢复依赖 `.bak`、panel 运行时未取证）与已排除怀疑（unzip 穿越、SQL 注入、rg 参数注入） |
 | `.devin/rules/acp-protocol-fields.md` | 改 `src/protocol/*` 的 protobuf 字段号、核对原生请求/响应/用量字段 |

@@ -70,14 +70,5 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
 
 - **上下文压缩（声明窗口 `f4`/`maxTokens` 是唯一杠杆、压缩由 CLI 云端调度、四项排障信号）已分卷到 `context-and-compaction.md`**：那一卷含三次自我推翻的定论与实验样本，**改声明窗口或怀疑「扩展触发了压缩」前必读**，不要在这里凭印象重推阈值。
 
-## allowlist 三态与 restricted→unrestricted 链路
-
-`collectAllowedUids` 返回三态：`{kind:'restricted',uids}` / `{kind:'unrestricted'}` / `null`（非该 RPC 或形状坏）。
-proto3 repeated 无法区分「存在但空」与「不存在」，**空是弱信号**，**两条通道各自 N=3 去抖**：
-宿主 `observeAllowedUids` 与 backend 原始观测 `onObservedAllowedUids`（`allowedEmptyStreak`）都要连续 3 次
-unrestricted 才翻转，反向 restricted 单次立即恢复；**从未建立受限权威的宿主不因空 streak 翻转，只能经
-backend 冷启动回显采纳**。bridge 对 GetCliTeamSettings **每请求恰好通知一次**，任何失败（非 200/坏 JSON/
-断连/超时/客户端取消）通知 `null` 并打断连续计数。**确认提交（control POST / 已去抖判定）直调
-`onAllowedUids` 立即生效并重置原始空计数，不再等 3**；unrestricted 时 `allowedUids` 为空仍要推，但
-models 必须非空（空 payload 不推），POST 的模式校验在 ingest 之前。旧缓存缺 `allowedMode` 键=restricted。
+- allowlist 三态与 restricted→unrestricted 放行链路见 `catalog-allowlist.md`。
 - **桌面 auth 目录写入与 `GetModelStatuses` 结论已分卷到 `catalog-publication.md`**：`windsurfAuth.setAuthStatus` 的原地改写契约在那一卷，**改 `auth-status` 前必读**。发布确认链（`catalog-publication.cjs`、预算/看门狗/停用恢复）已随 3.12.17 删除 `devin.refreshUserStatus` 整链退役，勿重建，历史见该卷与 `retired-and-deadends.md`。

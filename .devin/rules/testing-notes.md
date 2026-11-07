@@ -62,7 +62,7 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   **唯一**凭据来源，CLI 不读本地 REPL 凭据与 env 里的 key。
 - **架构反例必须调用真实违规谓词并精确断言 `source -> target`**：endsWith/子串匹配或自造判定函数会让「删掉守卫」照样绿，等于没有反例。
 - **传输取消用例的判据是「请求到达目标阶段 + 服务端 socket 实际 close」**：不用固定 sleep 触发 abort，也不只断言 reject——要条件等待到 `slowHits`/`closes` 递增。
-- `test/fixtures/real-picker.json` 是 **0.3.11 时期**真实 picker 响应的快照（文件名不再带版本，来源记在这里）；更新它必须说明取自哪个版本。
+- `test/fixtures/real-picker.json` 是 **Devin 3.12.17 / CLI 3000.12.17** 真实 picker 响应的快照，捕获于 2026-11-07（文件名不再带版本，来源记在这里）；更新它必须说明取自哪个版本。
 - 读 `test/fixtures/**` 一律用 `__dirname` 拼绝对路径，禁止 CWD 相对路径（曾导致从其他目录单跑 ENOENT）。
 
 ## installed-renderer 双能力探测（批次 C 后）
@@ -77,18 +77,4 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   新字段（ModelInfo f26、ChatMessagePrompt f22、ModelUsageStats f13、GetChatMessageRequest f28）只登记。
   opt/repeated 只认 `!0`/`true`、`!1`/`false` 与缺席——其他字面量/表达式必须 fail；仅 assets 目录缺失可 skip。
 
-## 源码形状守卫的覆盖边界
-
-`architecture.test.cjs` 的写者守卫识别 `=`/`??=`/`||=`/`&&=`、复合赋值（`+=` 等）、`++`/`--`、`delete holder.slot`、方法变异（`set/delete/clear/push/add/splice`）。但它是**源码形状**判定、不是语义分析：`(x => x)()` 之类旁路不覆盖——注释与测试名都不得宣称「完全封闭」。
-
-- 反证必须对**真实源码文本做回退**（`reverted(from, to)` 整段替换后跑守卫），不要只喂人造行首样例——`installTimeCaptures` 曾因 `^` 行首锚定漏掉行内属性位置的真实捕获。
-- **前瞻与 `\s*` 的顺序是坑**：`:\s*(?!...)` 里 `\s*` 能回退到 0、让前瞻落在空格字符上，合法箭头包装会被误报；`\s*` 要收进前瞻内部。这个坑在本仓同一守卫上踩过两次。
-- 夹具陷阱：`extension-lifecycle.test.cjs` 的沙盒把 `src/activation/*` 的 `setTimeout` 换成 0ms 来实现快速重试；`managed-settings.cjs` 已**从该替换中排除**——否则 5 s drain 预算会塌成 0ms、drain 恒走超时分支，R1 用例会「因为错误的原因变绿」。新加依赖计时预算的 activation 模块时先核对 `shareGlobals` 的覆盖面。
-
-## 固定报文契约基线
-
-`node --test test/provider-wire-contract.test.cjs`：52 个合成场景（17 场景 × 3 协议 + 1 无断点对照）的 `buildRequestBody` 输出与 `test/fixtures/provider-wire-contract.json`（基线 commit `04dc73d`，A–E 批次之前的默认报文）逐字段 deepEqual。场景构造在 `test/fixtures/provider-wire-cases.cjs`，字面量不得「优化」。**新批次不得重新生成基线来「修绿」**：与基线不一致意味着默认报文被改动，必须停下定位；有意变更须逐场景说明理由并显式改 JSON。该测试不依赖 `.refs`、不联网。
-
-## 终态与预算契约矩阵
-
-`node --test test/inference-contract.test.cjs`：三协议终态（正常/截断/refusal/错误帧/无终态 EOF/非法工具 JSON/只有思考/只有签名标记/终态后帧）+ 预算（降级重发不套连接重试、多字段 400 只走首分支、Anthropic 强制选择最多三发、首头/空闲/背压/暂停期取消各只发一次）。每个用例同时断言客户端 ACP 帧、monitor 单次结算与**上游真实请求次数**——`received.length` 由测试自己的服务端统计，不得改成被测代码内部的计数。期望值按契约写死，实现改动导致失败时先判断是实现漂移还是契约变更；不得把 `expect` 调成当前实际输出来「修绿」。
+- 源码形状守卫覆盖边界、固定报文契约基线与终态/预算契约矩阵见 `testing-baselines.md`。
