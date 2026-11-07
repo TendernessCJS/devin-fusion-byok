@@ -10,15 +10,9 @@ const cat = (...parts) => Buffer.concat(parts.flat());
 const realCatalog = require('../src/catalog.cjs');
 const realCache = require('../src/runtime/host/cli-cache.cjs');
 
-function cacheSyncFixture(t, { refreshResult, picker, models = [{ uid: 'm1' }] } = {}) {
+function cacheSyncFixture(t, { refreshResult, models = [{ uid: 'm1' }] } = {}) {
   const logs = [], calls = [], publishCalls = [], executed = [], augOptions = [];
   const result = refreshResult || { checked: 1, refreshed: [], skipped: [], errors: [] };
-  const tracker = picker || {
-    primed: 0, changedCalls: 0, disposed: 0,
-    prime() { this.primed += 1; },
-    changed() { this.changedCalls += 1; },
-    dispose() { this.disposed += 1; },
-  };
   const loader = createSandboxLoader({
     filename: path.resolve(__dirname, '../src/activation/cache-sync.cjs'),
     overrides: {
@@ -29,7 +23,6 @@ function cacheSyncFixture(t, { refreshResult, picker, models = [{ uid: 'm1' }] }
         defaultDir: () => '/nonexistent',
         refreshStaleCliCaches: options => { calls.push(options); augOptions.length = 0; return { ...result, callsOptions: options }; },
       },
-      '../runtime/host/picker-refresh.cjs': { createPickerRefresh: () => tracker },
     },
   });
   t.after(() => loader.assertStubsUsed('cache-sync fixture'));
@@ -44,7 +37,7 @@ function cacheSyncFixture(t, { refreshResult, picker, models = [{ uid: 'm1' }] }
     stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } },
   };
   const sync = loader.module.exports.installCacheSync({ deps, shared, publish: async () => { publishCalls.push(1); } });
-  return { sync, shared, tracker, logs, calls, augOptions, publishCalls, executed, subscriptions: deps.context.subscriptions };
+  return { sync, shared, logs, calls, augOptions, publishCalls, executed, subscriptions: deps.context.subscriptions };
 }
 
 test('an empty catalog still runs the check so recognized stale own entries can retire', t => {
@@ -56,13 +49,9 @@ test('an empty catalog still runs the check so recognized stale own entries can 
   assert.deepEqual(report.coverage, coverage, 'the report carries the directory coverage through to the panel');
 });
 
-test('the picker signature tracker is primed and registered without a panel', t => {
+test('cache sync wires no picker refresh commands or subscriptions', t => {
   const f = cacheSyncFixture(t);
-  assert.equal(f.tracker.primed, 1);
-  assert.equal(f.subscriptions.length, 1);
-  assert.equal(f.shared.pickerRefresh, f.tracker);
-  f.shared.pickerRefresh.dispose();
-  assert.equal(f.tracker.disposed, 1);
+  assert.equal(f.subscriptions.length, 0);
   assert.deepEqual(f.executed, [], 'cache sync wires no light refresh commands');
 });
 
@@ -84,10 +73,9 @@ test('a forced check always restamps the report', t => {
   assert.equal(f.calls[1].force, true);
 });
 
-test('changed() nudges the picker refresh and re-runs the check', t => {
+test('changed() re-runs the check', t => {
   const f = cacheSyncFixture(t);
   f.sync.changed();
-  assert.equal(f.tracker.changedCalls, 1);
   assert.equal(f.calls.length, 1);
 });
 
@@ -114,7 +102,6 @@ test('a failing cache probe logs and keeps the previous report', t => {
         defaultDir: () => '/nonexistent',
         refreshStaleCliCaches: () => { throw Object.assign(new Error('boom'), { code: 'EACCES' }); },
       },
-      '../runtime/host/picker-refresh.cjs': { createPickerRefresh: () => f.tracker },
     },
   });
   t.after(() => loader.assertStubsUsed('failing cache-sync fixture'));
@@ -322,7 +309,6 @@ for (const [before, after] of [['loading', 'ready'], ['unavailable', 'empty']]) 
           ownEntriesSignature: realCatalog.ownEntriesSignature, augmentCatalog: realCatalog.augmentCatalog,
           isOwnUid: realCatalog.isOwnUid },
         '../runtime/host/cli-cache.cjs': { defaultDir: () => dir, refreshStaleCliCaches: realCache.refreshStaleCliCaches },
-        '../runtime/host/picker-refresh.cjs': { createPickerRefresh: () => ({ prime() {}, changed() {}, dispose() {} }) },
       },
     });
     t.after(() => loader.assertStubsUsed('real cache-sync fixture'));
@@ -387,7 +373,6 @@ for (const before of ['loading', 'unavailable']) {
           isOwnUid: realCatalog.isOwnUid },
         '../runtime/host/cli-cache.cjs': { defaultDir: () => dir,
           refreshStaleCliCaches: options => { calls.push(options); return realCache.refreshStaleCliCaches(options); } },
-        '../runtime/host/picker-refresh.cjs': { createPickerRefresh: () => ({ prime() {}, changed() {}, dispose() {} }) },
       },
     });
     t.after(() => loader.assertStubsUsed('hidden-signature fixture'));

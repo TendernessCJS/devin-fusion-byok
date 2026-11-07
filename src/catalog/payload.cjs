@@ -177,10 +177,6 @@ function extractSidekickDimension(entries) {
   return { order: sidekick.order, name: sidekick.name, fastModeOrder: fastMode ? fastMode.order : 0 };
 }
 
-function protoSidekick(entry) {
-  return extractSidekickDimension(protoFusionMetadata(entry));
-}
-
 function jsonAliasValue(object, camel, snake) {
   const hasCamel = has(object, camel), hasSnake = has(object, snake);
   if (hasCamel && hasSnake && JSON.stringify(object[camel]) !== JSON.stringify(object[snake])) return { conflict: true };
@@ -355,10 +351,6 @@ function isOwnUid(uid) {
   return uid.slice('fusion-'.length).split('-sidekick-').some(part => part.startsWith('dfbyok-'));
 }
 
-function jsonSidekick(entry) {
-  return extractSidekickDimension(jsonFusionMetadata(entry));
-}
-
 function nativeEntries(entries, isJson, source, pickerLabels) {
   const seen = [];
   for (const entry of entries) {
@@ -447,4 +439,4 @@ function jsonPickerLabels(payload) {
   return labels.size ? labels : null;
 }
 
-module.exports = { OBSERVE_SOURCE, rpcShape, rewriteMessage, validateProtoCatalog, isOwnUid, reportFusionStatus, protoUid, metaFamilyUid, protoFamilyUid, protoDisabled, protoMetadata, CANONICAL_FAMILY_KEYS, protoFusionMetadata, extractSidekickDimension, protoSidekick, jsonAliasValue, jsonMetadata, jsonFusionMetadata, jsonSidekick, nativeEntries, reportNativeModels, defaultFusion, jsonKey, protoPickerLabels, jsonPickerLabels };
+module.exports = { OBSERVE_SOURCE, rpcShape, rewriteMessage, validateProtoCatalog, isOwnUid, reportFusionStatus, protoUid, metaFamilyUid, protoFamilyUid, protoDisabled, protoMetadata, CANONICAL_FAMILY_KEYS, protoFusionMetadata, extractSidekickDimension, jsonAliasValue, jsonMetadata, jsonFusionMetadata, nativeEntries, reportNativeModels, defaultFusion, jsonKey, protoPickerLabels, jsonPickerLabels };

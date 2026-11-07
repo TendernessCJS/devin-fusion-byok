@@ -105,6 +105,17 @@ test('the src tree has no file-level require cycles', () => {
     'the CLI launcher is the only file allowed an unresolvable require — outside the backend closure');
 });
 
+test('no src file may name devin.reloadAcpConnections', () => {
+  // The command drops every ACP connection on execution — users see "ACP
+  // connection closed" and a window reload follows by ~5-35s (observed
+  // 2026-10-14). The picker stays correct through the in-place CLI cache
+  // rewrite, so nothing may ever call it.
+  for (const file of srcFiles()) {
+    assert.equal(fs.readFileSync(file, 'utf8').includes('reloadAcpConnections'), false,
+      rel(file) + ' must not invoke the connection-killing picker refresh command');
+  }
+});
+
 test('backend boundary guards fail on a host/UI edge injected in memory', () => {
   const backendFile = path.join(srcRoot, 'runtime/backend.cjs');
   const overlay = createSourceGraph({

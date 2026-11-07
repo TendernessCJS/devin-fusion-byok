@@ -1,23 +1,14 @@
 'use strict';
 const { staleFusionUids, staleOwnEntries, augmentCatalog, ownEntriesSignature, isOwnUid } = require('../catalog.cjs');
 const { defaultDir: cliCacheDir, refreshStaleCliCaches } = require('../runtime/host/cli-cache.cjs');
-const { createPickerRefresh } = require('../runtime/host/picker-refresh.cjs');
 
 function installCacheSync({ deps, shared, publish }) {
-  const { config, vscode, context, log, catalog, stores } = deps;
-  stores.cacheSync.pickerRefresh = createPickerRefresh({ log,
-    // devin.reloadAcpConnections drops every ACP connection on execution —
-    // users see "ACP connection closed" and a conversation-area reload, and a
-    // window reload follows it by ~5-35s (observed 2026-10-14). The in-place
-    // CLI cache rewrite already guarantees what the next session reads, so no
-    // command is wired in here; keep the module for signature tracking/tests.
-    lightCommands: [],
-    executeCommand: command => vscode.commands.executeCommand(command),
-    readModels: () => catalog().models,
-    observe: () => stores.acpObservation.seq,
-    applied: token => stores.acpObservation.seq > token && stores.acpObservation.ownModels > 0 });
-  stores.cacheSync.pickerRefresh.prime();
-  context.subscriptions.push(stores.cacheSync.pickerRefresh);
+  const { config, log, catalog, stores } = deps;
+  // No picker refresh command is wired anywhere: the desktop's ACP reconnect
+  // command drops every ACP connection on execution — users see "ACP
+  // connection closed" and a window reload follows by ~5-35s (observed
+  // 2026-10-14). The in-place CLI cache rewrite already guarantees what the
+  // next session reads; test/architecture.test.cjs guards the ban.
   // The CLI intersects its picker with per-identity caches under
   // ~/.cache/devin/cli; a cache written before a config change keeps the old
   // uid digests and drops the affected entries. Only v6 is rebuilt after a
@@ -100,7 +91,7 @@ function installCacheSync({ deps, shared, publish }) {
     } catch (error) { log('cli-cache-check-failed', { code: error?.code || 'unknown' }); }
     return stores.cacheSync.cliCacheReport;
   };
-  const changed = () => { stores.cacheSync.pickerRefresh?.changed?.(); check(); };
+  const changed = () => check();
   // Manual counterpart of the automatic check: the panel button exists so a
   // user whose picker looks stale can force the rewrite now instead of waiting
   // for the next config change or native sync. It is forced because the

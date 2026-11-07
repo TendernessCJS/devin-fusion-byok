@@ -304,13 +304,6 @@ function removeCapabilitiesExcept(root, { id, run }) {
   }
   return removed;
 }
-function removeCapabilitiesForGoal(root, id) {
-  let removed = 0;
-  for (const { name } of capabilitiesOfGoal(root, id)) {
-    if (removeFile(path.join(capabilitiesDirectory(root), name))) removed++;
-  }
-  return removed;
-}
 function removeCapabilitiesForRun(root, run) {
   const cleanRun = runId(run);
   if (!cleanRun) return 0;
@@ -346,10 +339,6 @@ function readCapability(root, token) {
   if (record.schemaVersion !== SCHEMA_VERSION || !goalId(record.id) || !runId(record.runId) ||
       !identifier(record.sessionId) || !Number.isSafeInteger(record.revision) || record.revision < 1) return null;
   return { ...record, token: clean };
-}
-function removeCapability(root, token) {
-  const clean = capabilityToken(token);
-  return clean ? removeFile(capabilityFile(root, clean)) : false;
 }
 function writeReport(root, run, payload) {
   const clean = runId(run);
@@ -435,7 +424,7 @@ module.exports = {
   safeReadDirectory, readJsonFile, writeAtomic, publishExclusive, removeFile, listDirectory, normalizeEvidence,
   normalizeObjective, normalizeCriteria, normalizeReason, normalizeMaxRuns, normalizeRetryPolicy, isReportStatus, isGoalStatus,
   validGoalRecord, readGoal, scanGoals, scanHistory, listGoals, readGoalById, writeGoal, archiveGoal,
-  issueCapability, readCapability, removeCapability, removeCapabilitiesExcept, removeCapabilitiesForGoal,
+  issueCapability, readCapability, removeCapabilitiesExcept,
   removeCapabilitiesForRun, writeReport, readReport, removeReport, isProcessAlive, readOwnership, acquireOwnership,
   releaseOwnership, MAX_GOALS, MAX_HISTORY
 };

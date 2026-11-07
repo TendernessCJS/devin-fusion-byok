@@ -20,13 +20,6 @@ const REASON_LABELS = {
   permission: '等待权限确认', 'session-inactive': '会话已结束或不可用', disconnected: '连接已断开',
   interrupted: '运行被中断', suspended: '已挂起', accepted: '已由用户验收', achieved: '模型已提交完成证据'
 };
-function statusText(goal) {
-  const base = STATUS_LABELS[goal.status] || goal.status;
-  if (goal.locked) return base + '（该会话由另一个窗口占用，本窗口不可操作）';
-  const reason = goal.reason ? REASON_LABELS[goal.reason] || goal.reason : '';
-  return reason ? base + ' · ' + reason : base;
-}
-
 function goalScript() {
   return `${domHelpersSource()}const vscode=acquireVsCodeApi();let state=null,errorText='',notice='',sessions=[],selectedSession='';
 const STATUS_LABELS=${JSON.stringify(STATUS_LABELS)},REASON_LABELS=${JSON.stringify(REASON_LABELS)},SESSION_LABELS=${JSON.stringify(SESSION_LABELS)};
@@ -181,4 +174,4 @@ function createGoalUi({ vscode, context, controller, isEnabled = () => true, isT
   return handle;
 }
 
-module.exports = { createGoalUi, goalHtml, goalScript, statusText, STATUS_LABELS, SESSION_LABELS, REASON_LABELS };
+module.exports = { createGoalUi, goalHtml, goalScript, STATUS_LABELS, SESSION_LABELS, REASON_LABELS };

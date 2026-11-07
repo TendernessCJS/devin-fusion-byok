@@ -28,9 +28,4 @@ function nextOrder(list) {
 function normalizeOrders(list) {
   sortByOrder(list).forEach((item, index) => { item.order = index; });
 }
-function rankMap(list, keyOf) {
-  const map = new Map();
-  sortByOrder(list).forEach((item, rank) => map.set(keyOf(item), rank));
-  return map;
-}
-module.exports = { ORDER_MAX, orderOf, sortByOrder, nextOrder, normalizeOrders, rankMap };
+module.exports = { ORDER_MAX, orderOf, sortByOrder, nextOrder, normalizeOrders };
