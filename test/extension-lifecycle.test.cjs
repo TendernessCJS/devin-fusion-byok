@@ -24,13 +24,11 @@ function fixture(t, initial = {}) {
   const state = new Map(Object.entries(initial.state || {})), commands = new Map(), logs = [], notices = [], watchers = [], preferenceListeners = [];
   const updates = [], bridges = [];
   let disposed = 0, installed = 0, managerOptions, autoContinueOptions, warningResult;
-  const cacheChecks = [], executed = [], authOptions = [], restoreCalls = [];
-  let authDisposed = 0, authRestoreResult = { ok: true, code: 'restored' }, acpDisposed = 0, bridgeDisposeError = null;
+  const cacheChecks = [], executed = [], authOptions = [];
+  let authDisposed = 0, acpDisposed = 0, bridgeDisposeError = null;
   const authHandle = {
     deactivated: 0,
     deactivate() { this.deactivated += 1; },
-    drain: () => Promise.resolve(true),
-    restore: options => { restoreCalls.push(options); return Promise.resolve(authRestoreResult); },
     dispose() { authDisposed += 1; },
     status: { state: 'observing', calls: 0, rewrites: 0 },
   };
@@ -173,8 +171,8 @@ function fixture(t, initial = {}) {
     setWarningResult: value => { warningResult = value; },
     firePreference: (key = 'devin.acp.agentPreferences') => Promise.all(preferenceListeners.map(fn => fn({ affectsConfiguration: name => name === key }))),
     cacheChecks: () => cacheChecks,
-    executed: () => executed, authOptions: () => authOptions, restoreCalls: () => restoreCalls,
-    authDisposed: () => authDisposed, setAuthRestore: value => { authRestoreResult = value; },
+    executed: () => executed, authOptions: () => authOptions,
+    authDisposed: () => authDisposed,
     acpDisposed: () => acpDisposed, setBridgeDisposeError: error => { bridgeDisposeError = error; },
     settle: async (ticks = 20) => { for (let index = 0; index < ticks; index++) await next(); },
     remoteCalls: () => remoteCalls,
@@ -880,57 +878,39 @@ test('activation wires the injection health snapshot into panel state', async t 
   const manager = realRequire('./panel/manager.cjs').createManager(f.managerOptions());
   const health = manager.state().health;
   assert.ok(health && Array.isArray(health.items), 'panel state carries the health snapshot');
-  assert.equal(health.items.length, 6, 'backend, bridge, env, cache, catalog and acp are always reported');
-  assert.equal(health.items.map(item => item.id).join(','), 'backend,bridge,env,cache,catalog,acp',
+  assert.equal(health.items.length, 5, 'backend, bridge, env, cache and acp are always reported');
+  assert.equal(health.items.map(item => item.id).join(','), 'backend,bridge,env,cache,acp',
     'the sandboxed manager crosses realms, so compare the id list as a string');
 });
 
-test('enable installs the auth hook with the event contract while the catalog settles unsupported', async t => {
+test('enable installs the auth hook with the event contract and no desktop refresh exists', async t => {
   const f = fixture(t);
   await f.activate(f.context);
   await f.settle();
   assert.equal(f.authOptions().length, 1, 'the auth-status hook is installed once');
   const options = f.authOptions()[0];
-  for (const key of ['isEnabled', 'onNativeModels', 'onPublication', 'getCatalog']) {
+  for (const key of ['isEnabled', 'onNativeModels', 'getCatalog']) {
     assert.equal(typeof options[key], 'function', key + ' is wired');
   }
   assert.equal(f.executed().filter(command => command === 'devin.refreshUserStatus').length, 0,
-    '3.12.17 removed the desktop command — the publication chain has nothing to emit');
-  // The publication settles unsupported: the health surface stays neutral
-  // (unconfirmed) instead of a permanent failure or an unverified green.
+    '3.12.17 removed the desktop command — nothing may try to emit it');
+  assert.equal(f.logs.filter(line => line.includes('publication')).length, 0,
+    'the publication confirmation chain is gone with the command');
+  // The health surface no longer carries a desktop catalog item at all.
   const manager = realRequire('./panel/manager.cjs').createManager(f.managerOptions());
-  const catalogState = () => manager.state().health.items.find(item => item.id === 'catalog').state;
-  assert.equal(catalogState(), 'unknown',
-    'no emitter is the steady state on 3.12.17, reported as unconfirmed rather than a failure');
-  const { catalogSignature } = require('../src/catalog.cjs');
-  options.onPublication({ phase: 'applied', callId: 1, signature: catalogSignature(options.getCatalog()) });
-  assert.equal(catalogState(), 'unknown', 'a confirmed signature cannot green a publication with no emitter');
+  assert.equal(manager.state().health.items.some(item => item.id === 'catalog'), false,
+    'no catalog item without an emitter to confirm it');
 });
 
-test('the removed desktop refresh command leaves the catalog unsupported and never spends a publication attempt', async t => {
-  const f = fixture(t);
-  await f.activate(f.context);
-  await f.settle();
-  const catalogStatus = f.managerOptions().desktopCatalogStatus();
-  assert.equal(catalogStatus?.state, 'unsupported', 'the publication starts unsupported instead of pending');
-  assert.equal(catalogStatus?.code, 'refresh-unavailable', 'the cause is the missing command, not a failed refresh');
-  assert.equal(f.logs.filter(line => line.includes('publication-attempt')).length, 0,
-    'an unsupported publication must not burn the confirmation budget');
-  assert.equal(f.executed().filter(command => command === 'devin.refreshUserStatus').length, 0,
-    'no refresh is issued for a command the host does not have');
-});
-
-test('disable reports refresh-unavailable and skips restore now that the desktop refresh command is gone', async t => {
+test('disable reports the settings restored and never touches a desktop restore', async t => {
   const f = fixture(t);
   await f.activate(f.context);
   await f.settle();
   await f.commands.get('devinFusionByok.disable')();
-  assert.equal(f.restoreCalls().length, 0, 'restore cannot probe through a command the host lacks');
-  assert.ok(f.logs.some(line => line.includes('desktop-catalog-restore') && line.includes('refresh-unavailable')),
-    'the exact missing-command verdict is logged, never claimed as restored');
+  assert.ok(!f.logs.some(line => line.includes('desktop-catalog-restore')),
+    'no restore verdict exists without a refresh command to probe through');
   assert.deepEqual(f.notices.filter(text => text.startsWith('Fusion BYOK 已停用')),
-    ['Fusion BYOK 已停用，连接设置已恢复；桌面模型目录恢复尚未确认。'],
-    'ok stays false, so the notice must not read as fully recovered');
+    ['Fusion BYOK 已停用，连接设置已恢复。']);
 });
 
 test('the disable command serializes teardown across concurrent invocations', async t => {
@@ -941,31 +921,17 @@ test('the disable command serializes teardown across concurrent invocations', as
   await Promise.all([disable(), disable()]);
   assert.equal(f.notices.filter(text => text.startsWith('Fusion BYOK 已停用')).length, 1,
     'concurrent disable invocations share one teardown');
-  assert.ok(f.authDisposed() >= 1, 'the hook is removed after the restore attempt');
+  assert.ok(f.authDisposed() >= 1, 'the hook is removed by the teardown');
 });
 
-test('a normal unload disposes the hook without firing a restore refresh', async t => {
+test('a normal unload disposes the hook without firing a refresh', async t => {
   const f = fixture(t);
   await f.activate(f.context);
   await f.settle();
   const refreshes = f.executed().length;
   await f.deactivate();
-  assert.equal(f.restoreCalls().length, 0, 'deactivate never starts a network verification');
   assert.equal(f.executed().length, refreshes, 'deactivate issues no refresh commands');
   assert.ok(f.authDisposed() >= 1);
-});
-
-test('hook events arriving after teardown cannot revive the publication', async t => {
-  const f = fixture(t);
-  await f.activate(f.context);
-  await f.settle();
-  const options = f.authOptions()[0];
-  await f.deactivate();
-  const refreshes = f.executed().length;
-  options.onPublication({ phase: 'applied', callId: 1, signature: 'late' });
-  options.onPublication({ phase: 'cleared', callId: 2 });
-  await f.settle();
-  assert.equal(f.executed().length, refreshes, 'late hook events are inert');
 });
 
 test('external enabled=false through the watcher shares the same serialized disable path', async t => {
@@ -978,9 +944,8 @@ test('external enabled=false through the watcher shares the same serialized disa
   await f.watchers[0]();
   await f.settle();
   assert.deepEqual(f.notices.filter(text => text.startsWith('Fusion BYOK 已停用')),
-    ['Fusion BYOK 已停用，连接设置已恢复；桌面模型目录恢复尚未确认。'],
+    ['Fusion BYOK 已停用，连接设置已恢复。'],
     'the watcher path runs the same disable-and-report flow as the command');
-  assert.equal(f.restoreCalls().length, 0, 'external disable hits the same missing-command verdict');
 });
 
 test('an LS bridge dispose failure still removes the auth and ACP wrappers', async t => {
@@ -1005,7 +970,7 @@ test('a bridge dispose failure still restores owned settings before the error su
   assert.equal(f.globals.agentEnv['devin-cli'].KEEP, 'user-value', 'user-owned values survive');
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, RECEIPT))).changes.length, 0,
     'the receipt is fully discharged');
-  assert.ok(!f.notices.includes('Fusion BYOK 已停用，原生连接已恢复。'),
+  assert.ok(!f.notices.some(text => text.startsWith('Fusion BYOK 已停用，连接设置已恢复')),
     'a teardown error must not be masked as a clean restore');
 });
 
@@ -1033,23 +998,16 @@ test('ensureEnabled waits out an in-flight disable before reinstalling', async t
   assert.equal(f.authDisposed(), 1, 'the old generation handle is disposed, the new one alive');
 });
 
-test('an event from the previous generation hook cannot move the new publisher', async t => {
+test('a re-enable replaces the previous generation hook exactly once', async t => {
   const f = fixture(t);
   await f.activate(f.context);
   await f.settle();
-  const first = f.authOptions()[0];
   await f.commands.get('devinFusionByok.disable')();
   f.managerOptions().write({ ...JSON.parse(fs.readFileSync(f.configFile)), enabled: true });
   await f.managerOptions().afterChange('setEnabled');
   await f.settle();
-  assert.equal(f.authOptions().length, 2);
-  const { catalogSignature } = realRequire('./catalog/signature.cjs');
-  const before = f.authOptions().length;
-  first.onPublication({ phase: 'applied', callId: 9, signature: catalogSignature(first.getCatalog()) });
-  await f.settle();
-  assert.equal(f.authOptions().length, before, 'the stale handle emits into a pinned closure');
-  // The new generation's hook remains the live one: its events alone decide.
-  assert.equal(f.authDisposed(), 1);
+  assert.equal(f.authOptions().length, 2, 'the new generation installs exactly one fresh hook');
+  assert.equal(f.authDisposed(), 1, 'the old generation handle is disposed, the new one alive');
 });
 test('disable waits for an in-flight managed settings write before restoring', async t => {
   const f = fixture(t);

@@ -67,9 +67,8 @@ description: "Apply when writing or debugging tests — the installed-renderer s
 
 ## installed-renderer 双能力探测（批次 C 后）
 
-- `test/helpers/installed-renderer.cjs` 分 legacy / webapp 两套：`legacyAvailable`（旧
-  `windsurf-chat-client/index.js`）与 `webappAvailable`（`devin-webapp-host/assets` 目录存在）。
-  webapp 用例 skip **只依据 `webappAvailable`**，不再看旧 renderer 文件。
+- `test/helpers/installed-renderer.cjs` 只探 webapp 一套：`webappAvailable`（`devin-webapp-host/assets` 目录存在）。
+  webapp 用例 skip **只依据 `webappAvailable`**。旧 chat-client 半区已随 3.12.17 删除（`familyUid`/`catalogMisses` 在旧 bundle 0 命中）。
 - 安装根可用参数或 `DFBYOK_TEST_APP_ROOT` 覆盖，默认 `/Applications/Devin.app/Contents/Resources/app`；
   assets listing 与文件内容按 root 缓存。仅 assets 目录不存在可 skip；目录存在但候选缺失、重复、
   不可读或锚点漂移必须 fail-loud，不得在能力探测阶段把解析失败转成 unavailable。

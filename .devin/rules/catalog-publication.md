@@ -1,32 +1,25 @@
 ---
 trigger: model_decision
-description: "Apply when changing the native auth-status catalog write, the publication confirmation chain (catalog-publication.cjs), deactivation/drain recovery, or GetModelStatuses handling."
+description: "Apply when changing the native auth-status catalog write (windsurfAuth.setAuthStatus rewrite + observation), or GetModelStatuses handling. The publication confirmation chain was deleted with Devin 3.12.17 — this file also records what was retired and why."
 ---
 
-# 目录写入与发布确认（catalog-publication）
+# 目录写入（catalog-publication，已退役记录 + 仍有效契约）
 
-`windsurfAuth.setAuthStatus` 原地改写、`catalog-publication.cjs` 的发布确认预算与 watchdog、注销/停用恢复判据、`GetModelStatuses` 结论。（自 `catalog-and-picker.md` 拆出，内容逐字未改。）
+`windsurfAuth.setAuthStatus` 原地改写与观测、`GetModelStatuses` 结论仍有效；发布确认链已于
+**2026-11-07 随 Devin 3.12.17 删除 `devin.refreshUserStatus` 命令而整链删除**——`catalog-publication.cjs`、
+面板「刷新模型目录」按钮、注入健康检查的 `catalog` 项、停用时的 drain/restore 验证全部移除。
+**不要再重建该链**：命令不存在就没有确认发射器，任何"恢复"都无从验证。
 
-## 桌面 auth 目录面与发布确认（Devin 3.11.216 / CLI 3000.11.216）
+## 桌面 auth 目录面（仍有效契约）
 
 - **写入面**：新 agent 窗口 picker 把 configOptions 与 `userStatus.cascadeModelConfigData` 按 UID 求交；
   交集缺失条目进 `catalogMisses` 被丢弃。`windsurfAuth.setAuthStatus` 的
   `userStatusProtoBinaryBase64` 是裸 `UserStatus`（模型列表在 f33），`auth-status.cjs` 在该调用处原地改写，
   与 CLI 缓存改写共用 `augmentCatalog`（LS 桥看到的则是 f1→f33 信封，`collectNativeModels` 同判别读两形）。
-- **发布确认链**：`catalog-publication.cjs` 是唯一协调者——内容签名变化 → 1500ms 合并 →
-  `devin.refreshUserStatus`（同时最多一个在途）。**命令完成 ≠ 确认**：只有 hook 回报的
-  `applied`（已验证实际输出、带匹配签名）才可把该 emit 置 `ready`；跟踪 callId、未完成提交和启用世代，
-  旧提交迟到必须保守撤销确认并按预算修复，不能把旧世代事件交给新协调器。命令锁仅由该命令 settle 释放，
-  hook 确认不能提前释放；settle 后等确认 5s，自动尝试未确认再等 5s 按预算重试；
-  手工尝试未确认只降级，不派生自动重试；未验证写入（nativeApplied）须撤销旧 ready。
-  10s watchdog 只降级不释放锁，每签名最多 2 次、滚动 60s 最多 6 次自动尝试；
-  `cleared`（注销/空 payload）→ `waiting-auth`，配置变化不解除暂停，旧调用成功也不能复活确认。
-  在途期间目录又变 → settle 后立即发新签名（拒绝也不丢新目标）；手工 force 合并未发意图、
-  取消旧自动计时器、绕过成功签名去重，但仍排队且不重置自动预算；注销暂停独立于 watchdog 状态。
-- **停用恢复**：显式停用先 `deactivate()`（透传且仍观察）→ `drain(≤10s)` → 一次透传刷新验证
-  新的非空、合法目录提交不含我方条目；注销/畸形/超时/未排空/有残余均不得判恢复成功，不回放、不登出。
-  连接设置恢复与目录恢复分别报告；目录未确认不得展示无条件恢复成功。LS 清理失败也不能跳过 owned-settings 恢复。
-  面板「刷新模型目录」只走 `publication.changed({force:true})`，不复用会断 ACP 的旧 picker 刷新。
+- **该拦截点现在只有三个职责**：重写 stored userStatus 供 picker 使用、`collect`+`onNativeModels` 观测原生
+  条目回喂目录同步、反向观测本扩展条目（`isOwnUid` 计数进 `status`）。重写产物必须经 `verify` 证明
+  emit 真的在字节里（每条目标 uid 命中其 raw 条目、隐藏 uid 不存活）；无法验证时**原样透传**，
+  不重写、不抛错、不改 Promise 身份。`deactivate()` 后透传，`dispose()` 恢复原方法。
 
 ## `GetModelStatuses` 结论（3.11.228 取证）
 
@@ -38,7 +31,7 @@ description: "Apply when changing the native auth-status catalog write, the publ
 ## ACP `configOptions` 只在会话建立时读取（2026-11-02 实测）
 
 - agent 窗口与 Fusion 卡片的候选来自 ACP `configOptions`，它在**会话建立时**读取一次；运行期改配置不会让它重读。
-  实测：停用一家供应商 + 启用一家新供应商后，`userStatus` 发布成功（`afterOwn 189 → 1080`、`phase:applied`、`nativeApplied:true`）、
+  实测：停用一家供应商 + 启用一家新供应商后，`userStatus` 发布成功（`afterOwn 189 → 1080`）、
   磁盘缓存也重写了（`cli-cache-refreshed` 三个文件），但宿主 output 的 `acp-models` 从 `02:02:42` 到 `02:06:27` 恒为
   `models 1123 / ownModels 90 / plain 9 / fusion 81`；重载窗口后才变成 `models 1531 / ownModels 156 / plain 12 / fusion 144`。
 - **滞留层是会话目录，不是磁盘缓存**：磁盘 CLI 缓存每次配置变更都被我们重写（`cli-cache-refreshed` 三个文件，实测 `force:false`），

@@ -360,18 +360,17 @@ test('unknown cache generations are reported as unhandled, never as up to date',
   const v9report = textOf(byId('cache-report'));
   assert.match(v9report, /检测到兼容缓存 v9/);
   assert.match(v9report, /检测到新代际 v9，格式兼容，可动态处理/);
-  // All three segments — check result, generation, desktop catalog — share one
-  // line joined by the same separator the header status row uses.
-  receive({ data: { type: 'state', state: { ...state(), desktopCatalog: { state: 'ready' }, cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 1,
+  // The check result and generation segments share one line joined by the
+  // same separator the header status row uses.
+  receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 1,
     refreshed: [], skipped: [], errors: [], coverage: { dirState: 'ok', supported: 1, legacy: [], unsupported: [],
       generations: [{ generation: 6, name: 'model_configs_v6.0011223344556677.bin', fetchedAt: 1, own: true }],
       current: { generation: 6, name: 'model_configs_v6.0011223344556677.bin', fetchedAt: 1 }, dynamic: false } } } } });
   const merged = textOf(byId('cache-report'));
   const segments = merged.split(' · ');
-  assert.equal(segments.length, 3, merged);
+  assert.equal(segments.length, 2, merged);
   assert.equal(segments[0], '检查了 1 个文件，内容已是最新');
   assert.equal(segments[1], '检测到兼容缓存 v6');
-  assert.equal(segments[2], '原生目录已提交');
   receive({ data: { type: 'state', state: { ...state(), cliCache: { at: '2026-10-14T12:00:00.000Z', checked: 0,
     refreshed: [], skipped: [], errors: [], coverage: { dirState: 'unreadable', supported: 0, legacy: [], unsupported: [] } } } } });
   assert.match(textOf(byId('cache-report')), /不可读/);
@@ -387,12 +386,12 @@ test('the auto-continue heading lives inside the same card as its two switches',
   assert.equal(collect(card, 'div', node => node.className === 'setting').length, 2, 'both switches share the card');
 });
 
-test('the cache group exposes one toolbar with a primary and a secondary button', () => {
+test('the cache group exposes one toolbar with the refresh button', () => {
   const html = renderPanel({ nonce: 'safe' });
   const toolbar = html.match(/<div class="cache-toolbar">([\s\S]*?)<\/div>/);
   assert.ok(toolbar, 'the cache group carries a single .cache-toolbar');
   assert.match(toolbar[1], /<button id="refresh-cache" type="button">刷新缓存<\/button>/);
-  assert.match(toolbar[1], /<button id="refresh-desktop-catalog" type="button" class="secondary">刷新模型目录<\/button>/);
+  assert.doesNotMatch(toolbar[1], /refresh-desktop-catalog/, 'the desktop catalog refresh left with the publication chain');
   assert.equal(html.match(/id="cache-report"/g).length, 1, 'the aggregated report is a single node');
   assert.doesNotMatch(html, /id="cache-generation"|id="desktop-catalog-report"/,
     'the generation and catalog lines are merged into #cache-report');

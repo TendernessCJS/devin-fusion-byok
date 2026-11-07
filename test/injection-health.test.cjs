@@ -10,7 +10,6 @@ const healthy = {
   expectedEnv: 'http://127.0.0.1:39842',
   cliCache: { checked: 3, refreshed: [], skipped: [], errors: [],
     coverage: { dirState: 'ok', supported: 3, legacy: [], unsupported: [] } },
-  desktopCatalog: 'ready',
   acpObserved: 2,
   acpOwnModels: 4,
 };
@@ -20,7 +19,7 @@ const stateOf = (result, id) => result.items.find(item => item.id === id)?.state
 test('every signal ok yields an all-ok verdict with the fixed item order', () => {
   const result = checkInjectionHealth(healthy);
   assert.equal(result.ok, true);
-  assert.deepEqual(ids(result), ['backend', 'bridge', 'env', 'cache', 'catalog', 'acp']);
+  assert.deepEqual(ids(result), ['backend', 'bridge', 'env', 'cache', 'acp']);
   assert.ok(result.items.every(item => item.state === 'ok'));
   assert.ok(result.items.every(item => typeof item.label === 'string' && typeof item.hint === 'string'));
 });
@@ -36,9 +35,6 @@ test('each signal independently reports bad', () => {
   assert.equal(stateOf(checkInjectionHealth({ ...healthy, cliCache: { checked: 1, refreshed: [], skipped: [], errors: [],
     coverage: { dirState: 'ok', supported: 2, legacy: [], unsupported: [{ name: 'model_configs_v9.abcd.bin', generation: 9 }] } } }),
     'cache'), 'bad', 'an unsupported cache generation is a real problem, not a clean bill');
-  assert.equal(stateOf(checkInjectionHealth({ ...healthy, desktopCatalog: 'degraded' }), 'catalog'), 'bad');
-  assert.equal(stateOf(checkInjectionHealth({ ...healthy, desktopCatalog: 'unsupported' }), 'catalog'), 'unknown',
-    '3.12.17 dropped the refresh command, so unsupported is the steady state, not a failure');
   assert.equal(stateOf(checkInjectionHealth({ ...healthy, acpOwnModels: 0 }), 'acp'), 'bad',
     'a session was observed but none of our models appear in it');
   for (const bad of [checkInjectionHealth({ ...healthy, backendStatus: 'stopped' }),
@@ -52,7 +48,7 @@ test('unknown states keep the overall verdict ok', () => {
     backendStatus: 'starting', bridgeState: 'connecting', envValue: healthy.envValue,
     expectedEnv: healthy.expectedEnv, cliCache: null, acpObserved: 0,
   });
-  assert.deepEqual(pending.items.map(item => item.state), ['unknown', 'unknown', 'ok', 'unknown', 'unknown', 'unknown']);
+  assert.deepEqual(pending.items.map(item => item.state), ['unknown', 'unknown', 'ok', 'unknown', 'unknown']);
   assert.equal(pending.ok, true);
   assert.equal(stateOf(checkInjectionHealth({ ...healthy, backendStatus: undefined }), 'backend'), 'unknown');
   assert.equal(stateOf(checkInjectionHealth({ ...healthy, bridgeState: 'waiting' }), 'bridge'), 'unknown');
@@ -66,16 +62,12 @@ test('unknown states keep the overall verdict ok', () => {
   assert.equal(stateOf(checkInjectionHealth({ ...healthy, cliCache: { checked: 0, refreshed: [], skipped: [], errors: [],
     coverage: { dirState: 'ok', supported: 1, legacy: [{ name: 'model_configs.bin', generation: 1 }], unsupported: [] } } }),
     'cache'), 'ok', 'historical leftover files are informational only');
-  for (const desktopCatalog of [undefined, 'pending', 'waiting-auth']) {
-    assert.equal(stateOf(checkInjectionHealth({ ...healthy, desktopCatalog }), 'catalog'), 'unknown',
-      'an unconfirmed or logged-out catalog is unverified, not green: ' + desktopCatalog);
-  }
 });
 
 test('a disabled plugin reports every signal unknown and still ok', () => {
   const result = checkInjectionHealth({ ...healthy, enabled: false, backendStatus: 'stopped', bridgeState: 'error', envValue: null });
   assert.equal(result.ok, true);
-  assert.deepEqual(ids(result), ['backend', 'bridge', 'env', 'cache', 'catalog', 'acp']);
+  assert.deepEqual(ids(result), ['backend', 'bridge', 'env', 'cache', 'acp']);
   assert.ok(result.items.every(item => item.state === 'unknown'));
 });
 

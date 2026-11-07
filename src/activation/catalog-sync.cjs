@@ -26,7 +26,7 @@ function installCatalogSync({ deps, shared, onChange }) {
   // which made that counter under-report.
   const commit = ({ bumpRevision }) => {
     if (lifecycle.activationDisposed) return Promise.resolve();
-    if (bumpRevision) { stores.nativeCatalog.nativeRevision += 1; lifecycle.publication?.changed(); }
+    if (bumpRevision) { stores.nativeCatalog.nativeRevision += 1; }
     if (stores.nativeCatalog.nativeModels.size !== stores.nativeCatalog.nativeSyncSize) { stores.nativeCatalog.nativeSyncSize = stores.nativeCatalog.nativeModels.size; log('native-sync', { count: stores.nativeCatalog.nativeSyncSize }); }
     const published = Promise.resolve(onChange?.()).catch(() => {});
     stores.nativeCatalog.pushToBackend();

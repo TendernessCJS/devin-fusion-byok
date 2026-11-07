@@ -22,7 +22,7 @@ const srcFiles = () => {
 
 const BACKEND_FORBIDDEN_DIRS = ['activation', 'panel', 'goal', 'fast-context', 'lifecycle', 'network', 'update'];
 const BACKEND_FORBIDDEN_FILES = [
-  'models/discovery.cjs', 'models/discovery-error.cjs', 'update.cjs', 'proxy.cjs',
+  'models/discovery.cjs', 'models/discovery-error.cjs', 'update.cjs',
   'extension.cjs',
 ];
 const BACKEND_RUNTIME_ROOT = [
@@ -245,7 +245,7 @@ const DISCOVERY = path.join('models', 'discovery.cjs');
 const discoveryViolations = graph => {
   const closure = closureOf(graph, DISCOVERY);
   return closure
-    .filter(file => file !== DISCOVERY && (file === 'proxy.cjs' || file.startsWith('update' + path.sep)))
+    .filter(file => file !== DISCOVERY && file.startsWith('update' + path.sep))
     .map(file => DISCOVERY + ' -> ' + file)
     .concat(vscodeEdges(graph, DISCOVERY, closure));
 };
@@ -269,16 +269,6 @@ test('network/ and update/ keep their dependency ceilings, and proxy-config stay
   for (const entry of [path.join('panel', 'manager.cjs'), path.join('panel', 'panel-state.cjs')])
     assert.ok(closureOf(graph, entry).includes(path.join('update', 'proxy-config.cjs')),
       entry + ' reads proxy configuration only');
-});
-
-test('no production module requires the proxy.cjs facade', () => {
-  const graph = createSourceGraph();
-  const facade = path.join(srcRoot, 'proxy.cjs');
-  for (const file of srcFiles()) {
-    if (file === facade) continue;
-    assert.ok(!graph.depsOf(file, { tolerateDynamic: true }).deps.includes(facade),
-      rel(file) + ' must import the new module paths, not the compatibility facade');
-  }
 });
 
 const injectedGraph = (patched, specifier) => {
@@ -305,7 +295,7 @@ for (const { patched, specifier, expect } of [
   { patched: path.join('network', 'client-request.cjs'), specifier: '../panel/manager.cjs', expect: path.join('panel', 'manager.cjs') },
   { patched: path.join('network', 'direct-fetch.cjs'), specifier: 'vscode', expect: 'vscode' },
   { patched: path.join('update', 'proxy-transport.cjs'), specifier: '../panel/manager.cjs', expect: path.join('panel', 'manager.cjs') },
-  { patched: path.join('update', 'download.cjs'), specifier: '../proxy.cjs', expect: 'proxy.cjs' },
+  { patched: path.join('network', 'direct-fetch.cjs'), specifier: '../update/proxy-transport.cjs', expect: path.join('update', 'proxy-transport.cjs') },
 ]) {
   test(`the layering guard rejects an injected ${patched} -> ${expect} edge`, () => {
     const violations = [...networkViolations(injectedGraph(patched, specifier)),
@@ -321,12 +311,11 @@ test('the leaf guard rejects an injected proxy-config -> direct-fetch edge', () 
     'proxy-config must stop being a leaf once it depends on a transport');
 });
 
-test('the discovery guard rejects an injected discovery -> proxy.cjs edge', () => {
-  const overlay = injectedGraph(DISCOVERY, '../proxy.cjs');
-  // The facade re-exports the update modules, so this edge also drags them in;
-  // the point is that the violation is reported from discovery's own entry.
-  assert.ok(discoveryViolations(overlay).includes(DISCOVERY + ' -> proxy.cjs'),
-    'discovery reaching the facade must be reported from its own entry');
+test('the discovery guard rejects an injected discovery -> update/proxy-config.cjs edge', () => {
+  const overlay = injectedGraph(DISCOVERY, '../update/proxy-config.cjs');
+  // The point is that the violation is reported from discovery's own entry.
+  assert.ok(discoveryViolations(overlay).includes(DISCOVERY + ' -> ' + path.join('update', 'proxy-config.cjs')),
+    'discovery reaching an update module must be reported from its own entry');
 });
 
 test('the network ceiling covers every file the directory listing returns', () => {

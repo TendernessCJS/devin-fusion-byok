@@ -97,3 +97,11 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   会进 `catalog-unknown.json`，那正是「新面启用」的信号，不要为「收据干净」加白名单。
 - **strings 层不可解两项**：`max_turn_requests` 数值上限、CLI 实际读哪份缓存身份——都需结构分析（Ghidra + JDK，本机未装）。兜底：「按枚举处理 + 请求数纪律」与「面板双身份自有计数」。
 - **方法论**：可疑字符串按「读者 / schema 注册 / 真实赋值」三步定性，不要直接推成能力位。
+
+## 2026-11-07 退役登记：Devin 3.12.17 断供后的整链删除
+
+- **发布确认链**：`src/activation/catalog-publication.cjs`（协调器）+ `lifecycle.publication`/`createPublication`/`onPublication` 事件面 + 面板「刷新模型目录」按钮 + 注入健康检查 `catalog` 项 + 停用路径的 `drain`/`restore` 验证（`teardown` 的 `{restore}` 形参、`desktop-catalog-restore` 日志、`auth-status.cjs` 的 `emittedOwnUids`/`restoreProbe`/`drainWaiters`/`hasField32`/`isResidual` 与 passthrough 残余扫描）。判据：**版本实测**——3.12.17 全包 3257 个 JS 文件里 `devin.refreshUserStatus` 命令 0 命中，确认链永久停在 `unsupported`，再无发射器可挂。auth-status 的重写 + `collect`/`onNativeModels` 观测 + `shadowed`/`deactivate`/`dispose` 保留——picker 改写面仍活着。
+- **`src/proxy.cjs` compatibility facade**：判据**零消费者**——生产与测试均直接 require `update/proxy-config.cjs`、`update/proxy-transport.cjs`、`network/direct-fetch.cjs`。
+- **`installed-renderer.cjs` 旧 chat-client 半区**（`loadFamilyPicker`/`loadAcpPicker`/`loadGroupSorter`/`legacyAvailable`/`rendererFile`/`load`）：判据**零消费者 + 版本实测**——四者无引用，且 3.12.17 的 `windsurf-chat-client/index.js` 里 `familyUid`/`catalogMisses` 命中数为 0。webapp bundle 探测仍是唯一探测面。
+- **`cli-cache.cjs` 的 `CACHE_RPC` 表**：判据**零消费者**——且表内含已不存在的 `model_configs_v5` 条目；`rpcFor`/`CACHE_PREFIX_RPC` 保留（生产在用）。
+- **若 Devin 恢复 `devin.refreshUserStatus`**：从 git 历史恢复上述删除（2026-11-07 前的版本含完整实现与测试），不要凭记忆重写。

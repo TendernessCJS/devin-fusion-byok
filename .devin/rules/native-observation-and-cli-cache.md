@@ -30,7 +30,7 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   `.<digest>.bin` JSON 信封，payload 为 base64 proto）∩ 白名单」；配置改动会改普通模型 uid（digest 含
   `provider.id`/`model.id`/`effort`），缓存陈旧期普通条目整批丢失，而镜像的 `fusion-<lead>-sidekick-<side>` 条目只要两侧 uid 未变就仍能命中。
   `src/runtime/host/cli-cache.cjs` 按「payload 含 `dfbyok` 判定我方身份、含 dfbyok 但缺当前 uid 判定陈旧」**原地重写 payload**：改写前先按
-  `CACHE_RPC` 映射缓存名→RPC 路径、经 `augmentCatalog` 重算，且新 payload 必须「不丢任何已出现的期望 uid 且字节有变化」才落盘（否则 `no-improvement`
+  `CACHE_PREFIX_RPC`/`rpcFor` 映射缓存名→RPC 路径、经 `augmentCatalog` 重算，且新 payload 必须「不丢任何已出现的期望 uid 且字节有变化」才落盘（否则 `no-improvement`
   跳过——允许净缩，清陈旧也是改进）；落盘前把原始字节写到 `<file>.bak`（原子写、`0o600`；**每次重写都覆盖，只保留最近一次**，不是首次重写前的原件），envelope 的
   `version`/`identity_digest`/`fetched_at_secs` 原样保留。**绝不改名、绝不写 `.stale`**：改名/删除**不能**当刷新手段（删除与改写的实验过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。不碰无 dfbyok 标记的其他身份文件；仅在重写到
   `model_configs` 时才经 `pickerRefresh.force()` 让 picker 重取（`team_settings`/`user_status` 由 CLI 自身节奏重拉、无需断 ACP
@@ -40,7 +40,7 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   不要在那里触发写入。**自动检查除 uid 存在性（`missing`/`staleProbe`）外还有一条形态比对** `staleOwnEntries`：仅当
   `ownEntriesSignature(models)` 与上次记录不同才启用，逐字节比较缓存里我们条目的 raw 与当前 emit；**同一签名只探一次**（收敛守卫，签名仅在权威检查——`retire=true`——返回后记录；loading/unavailable 的非权威探测不消费签名）——
   逐字节判据可能永不收敛，重复探测会变成每 3 秒重写约 1.6 MB×2。signature 不含隐藏名单（原生白名单计数实测抖动会误触发）。`force` 仍是手动兜底：强制模式绕过门控、
-  直接比较 augment 后的字节，只有真差异才落盘。显式隐藏失效见 catalog-publication.md 的 `hiddenNativeSignature`。**重写是「比对后替换」而非盲目覆盖**：落盘前重读、要求字节与所增强的那份**完全一致**，不一致就跳过（`concurrent-write`）——否则会用旧 payload 的增强结果覆盖 CLI 刚写入的更新版本、静默丢掉它存的内容（发现过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。`.bak` 写的是**所增强的那份原始字节**（不是再次新读的、可能已属新世代的版本）。修
+  直接比较 augment 后的字节，只有真差异才落盘。显式隐藏失效的 `hiddenNativeSignature` 机制在 `src/activation/cache-sync.cjs`，语义见 `catalog-and-picker.md`。**重写是「比对后替换」而非盲目覆盖**：落盘前重读、要求字节与所增强的那份**完全一致**，不一致就跳过（`concurrent-write`）——否则会用旧 payload 的增强结果覆盖 CLI 刚写入的更新版本、静默丢掉它存的内容（发现过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。`.bak` 写的是**所增强的那份原始字节**（不是再次新读的、可能已属新世代的版本）。修
   emit 形态后**必须**走一次强制刷新或让配置变动触发自动重写，否则旧形态条目会一直留在缓存里（2026-10-14：信息性维度加 `order` 的修复就是这样落地的）。
   **`GetUserStatus` 有两种载荷形状，按 f1 的 wire type 判别**：响应是 `GetUserStatusResponse` 信封（f1 = `user_status` message，
   模型列表在其 f33），而 CLI 落盘的缓存是**裸 `UserStatus`**（f1 = `pro` bool，模型列表直接在 payload 的 f33，实测顶层 f33 = 526 条条目 + 3

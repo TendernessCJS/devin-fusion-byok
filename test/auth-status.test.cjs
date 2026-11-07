@@ -17,7 +17,7 @@ const modelEntry = uid => m(1, cat(s(1, uid), s(22, uid)));
 const statusPayload = (...uids) => cat(v(1, 1), m(33, cat(uids.map(modelEntry))));
 
 function fixture({ augmentResult, collectResult, catalog = { models: [] }, enabled = true, payload = statusPayload('native-1') } = {}) {
-  const paths = [], logs = [], calls = [], publications = [], natives = [];
+  const paths = [], logs = [], calls = [], natives = [];
   const api = { setAuthStatus(...args) { calls.push({ thisArg: this, args }); return 'native-result'; } };
   const augmentCalls = [];
   const augmentCatalog = augmentResult || ((data, options) => {
@@ -31,10 +31,9 @@ function fixture({ augmentResult, collectResult, catalog = { models: [] }, enabl
     assert.equal(name, 'vscode'); return { windsurfAuth: api };
   }; };
   const module = { exports: {} };
-  vm.runInNewContext(source, { Buffer, setTimeout, clearTimeout, module, exports: module.exports, require(name) {
+  vm.runInNewContext(source, { Buffer, module, exports: module.exports, require(name) {
     if (name === 'node:module') return { createRequire };
     if (name === '../../catalog.cjs') return { augmentCatalog, collectNativeModels, catalogSignature, validateProtoCatalog: realCatalog.validateProtoCatalog, isOwnUid: realCatalog.isOwnUid };
-    if (name === '../../protocol/wire.cjs') return { parseFields };
     if (name === './native-models.cjs') return { isUpstreamUid };
     if (name === './acp-hook.cjs') {
       const hook = { exports: {} };
@@ -48,12 +47,11 @@ function fixture({ augmentResult, collectResult, catalog = { models: [] }, enabl
     nativeMainPath: NATIVE_MAIN, getCatalog: () => catalog,
     log: (event, fields) => logs.push({ event, fields }),
     isEnabled: () => enabled,
-    onNativeModels: entries => natives.push(entries),
-    onPublication: event => publications.push(event), ...options });
+    onNativeModels: entries => natives.push(entries), ...options });
   const status = extra => ({
     apiKey: 'key', apiServerUrl: 'https://server.codeium.com',
     userStatusProtoBinaryBase64: payload.toString('base64'), ...extra });
-  return { api, paths, logs, calls, publications, natives, augmentCalls, install, status, payload };
+  return { api, paths, logs, calls, natives, augmentCalls, install, status, payload };
 }
 
 test('rewrites the stored userStatus payload through augmentCatalog and preserves call semantics', () => {
@@ -127,276 +125,112 @@ test('dispose restores the native method and detaches the handle', () => {
   handle.dispose();
 });
 
-test('every call reports attempt before the native method and applied after it settles', async () => {
-  const f = fixture();
-  const deferred = {};
-  let release;
-  f.api.setAuthStatus = function (...args) { f.calls.push({ thisArg: this, args });
-    if (deferred.once) return new Promise(resolve => { release = () => resolve(deferred.once()); });
-    return 'native-result'; };
-  const handle = f.install();
-  const input = f.status();
-  f.api.setAuthStatus(input);
-  assert.deepEqual(f.publications.map(e => e.phase), ['attempt', 'applied'], 'sync return confirms synchronously');
-  assert.equal(f.publications[0].callId, 1);
-  assert.equal(typeof f.publications[0].signature, 'string');
-  deferred.once = () => 'ok';
-  const pending = f.api.setAuthStatus(input);
-  assert.equal(f.publications.at(-1).phase, 'attempt');
-  assert.equal(f.publications.at(-1).callId, 2);
-  release();
-  await pending;
-  assert.equal(f.publications.at(-1).phase, 'applied');
-  assert.equal(f.publications.at(-1).callId, 2);
-  // Events carry only a callId, the emit signature and a nativeApplied flag —
-  // never a payload, auth object or error detail.
-  for (const event of f.publications) {
-    const expected = event.phase === 'attempt' ? ['callId', 'phase', 'signature']
-      : ['callId', 'nativeApplied', 'phase', 'signature'];
-    assert.deepEqual(Object.keys(event).sort(), expected.sort());
-    if (event.phase !== 'attempt') assert.equal(typeof event.nativeApplied, 'boolean');
-  }
-  handle.dispose();
-});
-
-test('rejection and sync throw report failed without changing the original semantics', async () => {
-  const f = fixture();
-  const boom = new Error('native boom');
-  let mode = 'reject';
-  f.api.setAuthStatus = (...args) => { f.calls.push({ thisArg: f.api, args });
-    if (mode === 'reject') return Promise.reject(boom);
-    throw boom; };
-  f.install();
-  const input = f.status();
-  const rejected = f.api.setAuthStatus(input);
-  await assert.rejects(rejected, boom);
-  assert.equal(f.publications.at(-1).phase, 'failed');
-  assert.equal(f.publications.at(-1).code, 'native-call-failed');
-  mode = 'throw';
-  assert.throws(() => f.api.setAuthStatus(input), boom);
-  assert.equal(f.publications.at(-1).phase, 'failed');
-  assert.equal(f.publications.at(-1).code, 'native-call-failed');
-  await Promise.resolve(); // flush the observed rejection handlers
-});
-
-test('a null or payload-less write reports cleared and retires confirmation', () => {
-  const f = fixture();
-  f.install();
-  f.api.setAuthStatus(null);
-  // Events come from the vm realm, so compare fields rather than deepEqual.
-  assert.equal(f.publications.length, 2);
-  assert.deepEqual(f.publications.map(e => [e.phase, e.callId, e.signature]),
-    [['cleared', 1, null], ['applied', 1, null]],
-    'a logout clears earlier confirmation, then the native call still settles');
-  f.api.setAuthStatus({ apiKey: 'key' });
-  assert.equal(f.publications.at(-2).phase, 'cleared');
-  assert.equal(f.publications.at(-1).phase, 'applied');
-  assert.equal(f.calls.length, 2, 'the native method still runs on logout');
-  assert.equal(f.augmentCalls.length, 0, 'nothing is collected or rewritten on logout');
-});
-
 test('observed upstream entries feed back before the emit snapshot; own combos are filtered', () => {
   const f = fixture({
     catalog: { models: [], matrixUids: new Set(['fusion-swe-a-sidekick-swe-b']) },
     collectResult: () => [
       { uid: 'swe-new' }, { uid: 'dfbyok-own' }, { uid: 'fusion-swe-a-sidekick-swe-b' }, { uid: 'fusion-dfbyok-emitted' }],
   });
-  const sigs = [];
   let catalogUsed;
-  const originalGet = f.install;
   f.install({ onNativeModels: entries => f.natives.push(entries),
     getCatalog: () => { const c = { models: [], matrixUids: new Set(['fusion-swe-a-sidekick-swe-b']) };
-      catalogUsed = c; return c; },
-    onPublication: event => f.publications.push(event) });
+      catalogUsed = c; return c; } });
   assert.equal(f.calls.length, 0);
   f.api.setAuthStatus(f.status());
   assert.deepEqual(f.natives.flat().map(e => e.uid), ['swe-new'],
     'upstream uids pass; own uids and emitted matrix combinations are filtered');
 });
 
-test('a disabled generation passes calls through unaugmented and unsigned', () => {
+test('a disabled generation passes calls through unaugmented', () => {
   const f = fixture({ enabled: false });
   f.install();
-  f.api.setAuthStatus(f.status());
+  const input = f.status();
+  const result = f.api.setAuthStatus(input);
+  assert.equal(result, 'native-result');
   assert.equal(f.augmentCalls.length, 0, 'isEnabled false means passthrough');
-  assert.equal(f.publications[0].signature, null);
-  assert.equal(f.publications[0].phase, 'attempt');
-  assert.equal(f.publications[1].phase, 'applied');
+  assert.equal(f.calls[0].args[0], input, 'the call is forwarded untouched');
 });
 
-test('deactivate switches to passthrough; drain waits for tracked calls; restore verdict follows the passthrough payload', async () => {
+test('deactivate switches the wrapper to passthrough until dispose', () => {
   const f = fixture();
-  let release;
-  f.api.setAuthStatus = function (...args) { f.calls.push({ thisArg: this, args });
-    return new Promise(resolve => { release = () => resolve('ok'); }); };
+  const original = f.api.setAuthStatus;
   const handle = f.install();
-  const pending = f.api.setAuthStatus(f.status());
   handle.deactivate();
   assert.equal(handle.status.state, 'passthrough');
-  let drained;
-  const wait = handle.drain({ timeoutMs: 5000 }).then(v => { drained = v; });
-  release(); await pending; await wait;
-  assert.equal(drained, true);
-  const residualInput = { userStatusProtoBinaryBase64: statusPayload('dfbyok-residual').toString('base64') };
-  const verdict = handle.restore({ command: () => { f.api.setAuthStatus(residualInput); return Promise.resolve(); } });
-  release(); await verdict.then(v => assert.equal(v.code, 'restore-unverified'));
-  const clean = { userStatusProtoBinaryBase64: statusPayload('native-9').toString('base64') };
-  const verdict2 = handle.restore({ command: () => { f.api.setAuthStatus(clean); return Promise.resolve(); } });
-  release(); await verdict2.then(v => { assert.equal(v.ok, true); assert.equal(v.code, 'restored'); });
-  // Structural failures can never be claimed either.
-  for (const bad of [Buffer.from('not-proto-at-all'), statusPayload('dfbyok-still-here')]) {
-    const outcome = handle.restore({ command: () => { f.api.setAuthStatus({ userStatusProtoBinaryBase64: bad.toString('base64') }); return Promise.resolve(); } });
-    release(); await outcome.then(v => assert.equal(v.ok, false));
-  }
+  const input = f.status();
+  const result = f.api.setAuthStatus(input);
+  assert.equal(result, 'native-result', 'the original return value is preserved');
+  assert.equal(f.calls.at(-1).args[0], input, 'a deactivated wrapper forwards the call untouched');
+  assert.equal(f.augmentCalls.length, 0, 'no rewrite runs while deactivated');
   handle.dispose();
+  assert.equal(f.api.setAuthStatus, original);
 });
 
-test('an unverifiable or shapeless payload never signs an applied event', () => {
+test('a payload the augmentation cannot verify passes through unrewritten', () => {
   // v(1,1) alone is legal protobuf but carries no f33 model list: the
-  // augmentation cannot prove the emit landed, so the call settles 'failed'
-  // with a stable code instead of 'applied' — the native method still ran.
+  // augmentation cannot produce verifiable bytes, so the call is forwarded
+  // untouched instead of rewritten — the native method still ran.
   const f = fixture({ payload: v(1, 1) });
   f.install();
-  f.api.setAuthStatus(f.status());
+  const input = f.status();
+  const result = f.api.setAuthStatus(input);
+  assert.equal(result, 'native-result');
   assert.equal(f.calls.length, 1, 'the native method still executes');
-  assert.deepEqual(f.publications.map(e => [e.phase, e.code]),
-    [['attempt', undefined], ['failed', 'shape-unrecognized']]);
-  assert.equal(f.publications[1].signature, null, 'an unverified emit is never signed');
-  const diagnostic = f.logs.find(entry => entry.event === 'auth-status-publication').fields;
-  assert.equal(diagnostic.phase, 'failed', 'the log reports the same unverified verdict as the publisher');
-  assert.equal(diagnostic.signature, null);
-  assert.equal(diagnostic.nativeApplied, true, 'native acknowledgement alone is not emit verification');
+  assert.equal(f.calls[0].args[0], input, 'an unverifiable emit is never rewritten');
 });
 
-test('a skipping or throwing transform settles as failed, never applied', () => {
-  for (const [name, augmentResult, code] of [
-    ['skip', (data, options) => { options.onSkip?.('shape-unrecognized'); return data; }, 'shape-unrecognized'],
-    ['throw', () => { throw new Error('catalog unavailable'); }, 'transform-failed'],
+test('a skipping or throwing transform falls back to the untouched call', () => {
+  for (const [name, augmentResult] of [
+    ['skip', (data, options) => { options.onSkip?.('shape-unrecognized'); return data; }],
+    ['throw', () => { throw new Error('catalog unavailable'); }],
   ]) {
     const f = fixture({ augmentResult });
     f.install();
-    f.api.setAuthStatus(f.status());
-    assert.deepEqual(f.publications.map(e => [e.phase, e.code]),
-      [['attempt', undefined], ['failed', code]], name);
+    const input = f.status();
+    const result = f.api.setAuthStatus(input);
+    assert.equal(result, 'native-result', name + ': the original return value is preserved');
     assert.equal(f.calls.length, 1, name + ': native call preserved');
+    assert.equal(f.calls[0].args[0], input, name + ': forwarded untouched, not rewritten');
   }
 });
 
-test('an idempotent verified payload still confirms with the signature', () => {
+test('an idempotent verified payload passes through unrewritten', () => {
   // A payload that already contains the emit is verified as legitimate:
   // unchanged bytes are not a failure when the emit is provably inside them.
   const ownRaw = cat(s(1, 'own'), s(22, 'dfbyok-own-x'));
   const f = fixture({
     catalog: { models: [{ uid: 'dfbyok-own-x', label: 'own', raw: ownRaw }] },
   });
-  f.install();
-  const emitted = f.calls;
+  const handle = f.install();
   f.api.setAuthStatus(f.status());
   const rewritten = f.calls[0].args[0];
   assert.notEqual(rewritten, f.status(), 'the first call is augmented');
+  assert.equal(handle.status.rewrites, 1);
   // Replay the emitted bytes: the rewrite is idempotent, so the second call
-  // forwards them untouched yet still confirms — verification, not equality,
-  // is what earned the applied event.
+  // forwards them untouched.
   f.api.setAuthStatus(rewritten);
   assert.equal(f.calls[1].args[0], rewritten, 'unchanged verified bytes pass through untouched');
-  assert.deepEqual(f.publications.map(e => e.phase), ['attempt', 'applied', 'attempt', 'applied']);
-  assert.equal(typeof f.publications[3].signature, 'string');
-  assert.equal(f.publications[3].signature, f.publications[1].signature);
+  assert.equal(handle.status.rewrites, 1, 'an idempotent payload is not rewritten twice');
 });
 
-test('an emit missing a target entry or keeping a hidden uid never confirms', () => {
-  const missing = cat(s(1, 'other'), s(22, 'dfbyok-other'));
+test('an emit missing a target entry or keeping a hidden uid is never rewritten', () => {
   const f = fixture({
     catalog: { models: [{ uid: 'dfbyok-own-x', label: 'own', raw: cat(s(1, 'own'), s(22, 'dfbyok-own-x')) }] },
     augmentResult: () => statusPayload('dfbyok-other'),
   });
   f.install();
-  f.api.setAuthStatus(f.status());
-  assert.equal(f.publications.at(-1).phase, 'failed');
-  assert.equal(f.publications.at(-1).code, 'emit-unverified');
+  const input = f.status();
+  f.api.setAuthStatus(input);
+  assert.equal(f.calls[0].args[0], input, 'a payload missing a target entry is forwarded untouched');
 
   const hidden = fixture({
     catalog: { models: [], hiddenNativeModelUids: ['native-hidden'] },
     augmentResult: () => statusPayload('native-hidden'),
   });
   hidden.install();
-  hidden.api.setAuthStatus(hidden.status());
-  assert.equal(hidden.publications.at(-1).phase, 'failed');
-  assert.equal(hidden.publications.at(-1).code, 'emit-unverified');
-});
-
-test('restore verdicts: null, malformed, residual, rejected and timed-out probes are all unverified', async () => {
-  const f = fixture();
-  // The native original itself chooses the outcome, so every probe travels
-  // through the real wrapper.
-  let behavior = 'resolve';
-  f.api.setAuthStatus = function (...args) { f.calls.push({ thisArg: this, args });
-    if (behavior === 'reject') return Promise.reject(new Error('native fail'));
-    if (behavior === 'resolve') return Promise.resolve('native-result');
-    return 'native-result'; };
-  const handle = f.install();
-  handle.deactivate();
-  // Payload-less call: unverified.
-  let verdict = await handle.restore({ command: () => { f.api.setAuthStatus(null); return Promise.resolve(); } });
-  assert.equal(verdict.ok, false);
-  // Malformed bytes: unverified.
-  verdict = await handle.restore({ command: () => {
-    f.api.setAuthStatus({ userStatusProtoBinaryBase64: Buffer.from('junk').toString('base64') });
-    return Promise.resolve();
-  } });
-  assert.equal(verdict.ok, false);
-  // Rejected native call: the wrapper sees the native failure and the probe
-  // resolves unverified without waiting for the timeout.
-  behavior = 'reject';
-  verdict = await handle.restore({ command: () => {
-    f.api.setAuthStatus({ userStatusProtoBinaryBase64: statusPayload('native-1').toString('base64') }).catch(() => {});
-    return Promise.resolve();
-  }, timeoutMs: 5000 });
-  assert.equal(verdict.ok, false);
-  // No call at all within the bound: timeout.
-  verdict = await handle.restore({ command: () => Promise.resolve(), timeoutMs: 20 });
-  await new Promise(resolve => setTimeout(resolve, 40));
-  assert.equal((await verdict).code, 'restore-timeout');
-  handle.dispose();
-});
-
-test('a passthrough payload containing an emitted matrix uid still counts as residual', async () => {
-  // Emit once so the handle records the matrix uid, then deactivate: a
-  // passthrough payload still carrying that f32-less fusion entry is residual.
-  // A fusion combination whose components carry no dfbyok marker at all is
-  // still ours while it lacks the official f32 capability record.
-  const uid = 'fusion-native-lead-a-sidekick-native-b';
-  const matrixRaw = cat(s(1, 'combo'), s(22, uid));
-  const f = fixture({
-    catalog: { models: [{ uid, label: 'combo', raw: matrixRaw }], matrixUids: new Set([uid]) },
-  });
-  f.api.setAuthStatus = (...args) => { f.calls.push({ thisArg: f.api, args }); return 'native-result'; };
-  const handle = f.install();
-  f.api.setAuthStatus(f.status());
-  handle.deactivate();
-  const residual = { userStatusProtoBinaryBase64: statusPayload(uid).toString('base64') };
-  const verdict = await handle.restore({ command: () => { f.api.setAuthStatus(residual); return Promise.resolve(); } });
-  assert.equal(verdict.ok, false, 'a stored emitted fusion uid is still ours');
-  // The same uid arriving WITH the official f32 record is a native entry —
-  // history of emitting it must not condemn it.
-  const official = { userStatusProtoBinaryBase64:
-    cat(v(1, 1), m(33, m(1, cat(s(1, 'combo'), s(22, uid), s(32, 'x'))))).toString('base64') };
-  const verdict2 = await handle.restore({ command: () => { f.api.setAuthStatus(official); return Promise.resolve(); } });
-  assert.equal(verdict2.ok, true, 'an f32-bearing entry is native, never residual');
-  handle.dispose();
-});
-
-test('drain reports false when dispose interrupts the wait', async () => {
-  const f = fixture();
-  let release;
-  f.api.setAuthStatus = function (...args) { f.calls.push({ thisArg: this, args });
-    return new Promise(resolve => { release = resolve; }); };
-  const handle = f.install();
-  f.api.setAuthStatus(f.status());
-  const drained = handle.drain({ timeoutMs: 10000 });
-  handle.dispose();
-  assert.equal(await drained, false, 'dispose wakes the wait but never claims a drain');
-  release();
+  const hiddenInput = hidden.status();
+  hidden.api.setAuthStatus(hiddenInput);
+  assert.equal(hidden.calls[0].args[0], hiddenInput, 'a payload keeping a hidden uid is forwarded untouched');
 });
 
 test('validator edge cases: malformed status shapes are refused on the real helper', () => {
@@ -431,52 +265,12 @@ test('isOwnUid honours real own prefixes and never a mid-string marker', () => {
   assert.equal(isOwnUid('fusion-dfbyok-a-sidekick-native-b'), true);
 });
 
-test('a native write that fulfilled but could not be verified revokes ready through a real publisher', async () => {
-  const { createCatalogPublication } = require('../src/activation/catalog-publication.cjs');
-  const { catalogSignature } = require('../src/catalog/signature.cjs');
-  let clock = 0;
-  const timers = [], commands = [];
-  const clockApi = {
-    now: () => clock,
-    set: (fn, ms) => { const t = { fn, at: clock + ms }; timers.push(t); return t; },
-    clear: t => { const i = timers.indexOf(t); if (i >= 0) timers.splice(i, 1); },
-  };
-  const advance = ms => { clock += ms;
-    for (;;) { timers.sort((a, b) => a.at - b.at); const t = timers[0];
-      if (!t || t.at > clock) break; timers.shift(); t.fn(); } };
-  const micro = () => Promise.resolve();
-  const ownRaw = cat(s(1, 'own'), s(22, 'dfbyok-own-x'));
-  const catalog = { models: [{ uid: 'dfbyok-own-x', label: 'own', raw: ownRaw }] };
-  const pub = createCatalogPublication({ getCatalog: () => catalog,
-    refreshUserStatus: () => { commands.push(1); return Promise.resolve(); },
-    clock: clockApi, log: () => {} });
-  const f = fixture({ catalog });
-  f.install({ onPublication: event => pub.observe(event) });
-  pub.changed();
-  advance(1500); await micro();
-  assert.equal(commands.length, 1);
-  // The real wrapper emits attempt+applied for a verified emit: ready.
-  f.api.setAuthStatus(f.status());
-  await micro();
-
-  // A payload the emit cannot verify lands anyway: failed+nativeApplied —
-  // the coordinator must stop claiming the store holds our emit and repair.
-  f.api.setAuthStatus({ userStatusProtoBinaryBase64: v(1, 1).toString('base64') });
-  await micro();
-  assert.equal(pub.status().state, 'pending');
-  assert.equal(pub.status().code, 'stale-commit');
-  assert.equal(commands.length, 2, 'the current target is repaired inside the budget');
-});
-
-test('a native promise settling after dispose never emits another publication event', async () => {
+test('a promise returned by the native method keeps its identity through the wrapper', async () => {
   const f = fixture();
-  let release;
-  f.api.setAuthStatus = function (...args) { f.calls.push({ thisArg: this, args });
-    return new Promise(resolve => { release = resolve; }); };
-  const handle = f.install();
-  f.api.setAuthStatus(f.status());
-  assert.equal(f.publications.length, 1, 'attempt emitted');
-  handle.dispose();
-  release(); await Promise.resolve(); await Promise.resolve();
-  assert.equal(f.publications.length, 1, 'a post-dispose settle is inert');
+  const pending = Promise.resolve('late-result');
+  f.api.setAuthStatus = function (...args) { f.calls.push({ thisArg: this, args }); return pending; };
+  f.install();
+  const returned = f.api.setAuthStatus(f.status());
+  assert.equal(returned, pending, 'the original promise identity is preserved');
+  assert.equal(await returned, 'late-result');
 });

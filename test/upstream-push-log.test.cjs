@@ -287,21 +287,6 @@ for (const [label, failure] of [
   });
 }
 
-test('publication is cleared by teardown and rebuilt on the next enable', async t => {
-  const { teardown } = require('../src/activation/teardown.cjs');
-  const f = fixture(t, { effective: { origin: 'https://custom.example.com', source: 'ls-arg' } });
-  await f.shared.ensureEnabled();
-  await f.settle();
-  assert.ok(f.lifecycle.publication, 'enable wires the injected factory');
-  f.lifecycle.activationDisposed = true;
-  await teardown(f.lifecycle);
-  assert.equal(f.lifecycle.publication, undefined, 'teardown disposes and clears the slot');
-  f.lifecycle.activationDisposed = false;
-  await f.shared.ensureEnabled();
-  await f.settle();
-  assert.ok(f.lifecycle.publication, 'the next enable rebuilds publication via ??=');
-});
-
 // The wait between attempts must be interruptible: an abort that lands inside
 // the pause is exactly the superseding trigger, and firing the next attempt
 // would push a target whose generation is already dead.

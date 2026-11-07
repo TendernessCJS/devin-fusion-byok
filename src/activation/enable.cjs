@@ -254,36 +254,17 @@ function installEnable({ deps, shared }) {
       });
       if (lifecycle.upstreamSubscription) context.subscriptions.push(lifecycle.upstreamSubscription);
     }
-    // The publication coordinator owns every refresh of the stored desktop
-    // catalog; the hook only reports what each native call actually carried.
-    // The factory is provided once by extension.cjs and injected via deps —
-    // `??=` stays because disable() disposes and clears the slot, so a later
-    // enable must rebuild it.
-    lifecycle.publication ??= deps.createPublication();
-    // Pin the publisher this generation's events belong to: a previous
-    // hook's late native settle must never confirm a newer coordinator.
-    const publisher = lifecycle.publication;
-    const publish = event => {
-      if (generation !== lifecycle.activationGeneration || lifecycle.publication !== publisher) return;
-      try { publisher?.observe(event); } catch {}
-    };
     try {
       lifecycle.authStatus?.dispose?.();
       lifecycle.authStatus = installAuthStatusInjection({ nativeMainPath: nativeMain, getCatalog: catalog, log,
         isEnabled: () => !superseded(lifecycle, config, generation) && !lifecycle.activationDisposed,
-        onNativeModels: entries => { try { stores.nativeCatalog.observeNativeModels?.(entries); } catch {} },
-        onPublication: publish });
+        onNativeModels: entries => { try { stores.nativeCatalog.observeNativeModels?.(entries); } catch {} } });
       // A foreign wrapper that won the method after our install leaves the hook
-      // deaf — surface it as the same degraded state as a missing hook instead
-      // of waiting for the watchdog to notice.
-      if (lifecycle.authStatus?.shadowed?.()) publish({ phase: 'failed', code: 'hook-unavailable' });
-      // The stored authStatus was written before this hook existed (or by a
-      // window where it is absent); the first publication republishes the
-      // merged catalog instead of waiting for the next scheduled native write.
-      publisher?.changed();
+      // deaf; there is no publication status to degrade anymore, so the only
+      // channel left is the output-channel event.
+      if (lifecycle.authStatus?.shadowed?.()) log('auth-status-shadowed');
     } catch {
       log('auth-status-injection-unavailable');
-      publish({ phase: 'failed', code: 'hook-unavailable' });
     }
     try { if (nativeMain) { lifecycle.acpObserver?.dispose?.(); lifecycle.acpObserver = installAcpObserver({ nativeMainPath: nativeMain, log, onModels: counts => { stores.acpObservation.seq++; stores.acpObservation.ownModels = counts.ownModels; } }); } }
     catch { log('acp-observer-error'); }

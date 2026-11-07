@@ -36,7 +36,6 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     envValue: (() => { try { return vscode.workspace.getConfiguration('devin.acp').get('agentEnv')?.['devin-cli']?.WINDSURF_API_SERVER_URL ?? null; } catch { return null; } })(),
     expectedEnv: 'http://127.0.0.1:' + PORT,
     cliCache: stores.cacheSync.cliCacheReport,
-    desktopCatalog: lifecycle.publication?.status()?.state,
     acpObserved: stores.acpObservation.seq,
     acpOwnModels: stores.acpObservation.ownModels,
   });
@@ -46,8 +45,6 @@ function installPanel({ deps, shared, cacheSync, afterChange }) {
     backendStatus: () => shared.backendStatus,
     autoContinueStatus: () => shared.autoContinue ? (shared.autoContinue.status().connections > 0 ? 'attached' : 'waiting') : 'unavailable',
     refreshCliCaches: () => cacheSync.refresh(), cliCacheStatus: () => stores.cacheSync.cliCacheReport,
-    refreshDesktopCatalog: async () => { lifecycle.publication?.changed({ force: true }); await shared.management?.publish(); },
-    desktopCatalogStatus: () => lifecycle.publication?.status() || null,
     nativeContract: () => lifecycle.nativeContract || null,
     health: readHealth,
     selectFusion: uid => shared.saveFusionChoice(uid),

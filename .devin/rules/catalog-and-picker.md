@@ -80,4 +80,4 @@ backend 冷启动回显采纳**。bridge 对 GetCliTeamSettings **每请求恰�
 断连/超时/客户端取消）通知 `null` 并打断连续计数。**确认提交（control POST / 已去抖判定）直调
 `onAllowedUids` 立即生效并重置原始空计数，不再等 3**；unrestricted 时 `allowedUids` 为空仍要推，但
 models 必须非空（空 payload 不推），POST 的模式校验在 ingest 之前。旧缓存缺 `allowedMode` 键=restricted。
-- **桌面 auth 目录写入、发布确认链与停用恢复、`GetModelStatuses` 结论已分卷到 `catalog-publication.md`**：`windsurfAuth.setAuthStatus` 的原地改写、`catalog-publication.cjs` 的确认预算/看门狗/注销与停用恢复判据都在那一卷，**改发布确认或 `auth-status` 前必读**，不要在本文里重推预算数字。
+- **桌面 auth 目录写入与 `GetModelStatuses` 结论已分卷到 `catalog-publication.md`**：`windsurfAuth.setAuthStatus` 的原地改写契约在那一卷，**改 `auth-status` 前必读**。发布确认链（`catalog-publication.cjs`、预算/看门狗/停用恢复）已随 3.12.17 删除 `devin.refreshUserStatus` 整链退役，勿重建，历史见该卷与 `retired-and-deadends.md`。

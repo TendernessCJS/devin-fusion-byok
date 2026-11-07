@@ -7,10 +7,10 @@
 // The result feeds panel state, which is deduplicated by JSON.stringify: every
 // field must be fully determined by the inputs — no timestamps, no counters,
 // nothing that changes between identical calls.
-function checkInjectionHealth({ enabled = true, backendStatus, bridgeState, bridgeHook, envValue, expectedEnv, cliCache, desktopCatalog, acpObserved = 0, acpOwnModels = 0 } = {}) {
+function checkInjectionHealth({ enabled = true, backendStatus, bridgeState, bridgeHook, envValue, expectedEnv, cliCache, acpObserved = 0, acpOwnModels = 0 } = {}) {
   const items = [];
   if (enabled === false) {
-    for (const [id, label] of [['backend', '后台服务'], ['bridge', '目录桥'], ['env', '推理入口'], ['cache', 'CLI 缓存'], ['catalog', '桌面目录'], ['acp', '会话模型']]) {
+    for (const [id, label] of [['backend', '后台服务'], ['bridge', '目录桥'], ['env', '推理入口'], ['cache', 'CLI 缓存'], ['acp', '会话模型']]) {
       items.push({ id, label, state: 'unknown', hint: '插件已停用。' });
     }
     return { ok: true, items };
@@ -41,14 +41,6 @@ function checkInjectionHealth({ enabled = true, backendStatus, bridgeState, brid
     : unchecked ? 'CLI 缓存尚未检查或缓存目录不可读：在面板点「刷新缓存」执行一次检查。'
     : 'CLI 缓存写入失败：在面板点「刷新缓存」，仍失败时查看输出通道。';
   items.push({ id: 'cache', label: 'CLI 缓存', state: cacheState, hint: cacheHint });
-  // The desktop catalog is 'ok' only while the current emit has a confirmed
-  // native commit; unconfirmed, logged-out and unchecked states are unknown.
-  const catalogState = desktopCatalog === 'ready' ? 'ok'
-    : desktopCatalog === 'degraded' ? 'bad' : 'unknown';
-  const catalogHint = desktopCatalog === 'degraded' ? '桌面模型目录同步失败：在面板点「刷新模型目录」，仍失败时查看输出通道。'
-    : desktopCatalog === 'unsupported' ? '当前 Devin 版本没有桌面目录刷新入口，未做原生发布确认；本机目录仍由桥拦截投递。'
-    : '桌面模型目录尚未确认：在面板点「刷新模型目录」触发一次提交。';
-  items.push({ id: 'catalog', label: '桌面目录', state: catalogState, hint: catalogHint });
   const acpState = acpObserved > 0 ? (acpOwnModels > 0 ? 'ok' : 'bad') : 'unknown';
   items.push({ id: 'acp', label: '会话模型', state: acpState,
     hint: '会话已建立但没观测到本插件的模型条目：新建对话；仍无则重新加载窗口。' });

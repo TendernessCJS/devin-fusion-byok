@@ -6,10 +6,9 @@ function pageMarkup() {
       <div id="settings-general"></div>
       <details id="native-group" class="group"><summary>官方模型显示<span id="native-count" class="hint"></span></summary><div class="group-body" id="native-models"></div></details>
       <details id="cache-group" class="group"><summary>CLI 缓存<span id="cache-hint" class="hint"></span></summary><div class="group-body">
-        <p class="hint mb">缓存按账号身份区分，存于 <code class="cmd">~/.cache/devin/cli</code>。下拉少条目或有已删模型时点「刷新缓存」原地重写：原件另存 <code class="cmd">.bak</code>（只留最近一份），主文件不改名、不删除。「刷新模型目录」重新提交给桌面端，以原生确认为准。</p>
+        <p class="hint mb">缓存按账号身份区分，存于 <code class="cmd">~/.cache/devin/cli</code>。下拉少条目或有已删模型时点「刷新缓存」原地重写：原件另存 <code class="cmd">.bak</code>（只留最近一份），主文件不改名、不删除。</p>
         <div class="cache-toolbar">
           <button id="refresh-cache" type="button">刷新缓存</button>
-          <button id="refresh-desktop-catalog" type="button" class="secondary">刷新模型目录</button>
         </div>
         <p class="hint" id="cache-report"></p>
       </div></details>
@@ -262,11 +261,6 @@ function createSettingsView(ui) {
       segments.push('原生契约可能已变化：' + missing +
         (contract.appVersion ? '（Devin ' + contract.appVersion + '）' : ''));
     }
-    const status = state().desktopCatalog;
-    const catalogText = !status || typeof status !== 'object' ? '' :
-      ({ ready: '原生目录已提交', pending: '原生目录尚未确认', 'waiting-auth': '等待账号登录',
-        degraded: '原生目录同步失败', unsupported: '当前环境不支持目录发布' })[status.state] || '';
-    if (catalogText) segments.push(catalogText);
     detail.textContent = segments.join(' · ');
   }
 
@@ -274,7 +268,6 @@ function createSettingsView(ui) {
     render() { renderSettings(); renderNative(); renderCache(); },
     bind() {
       byId('refresh-cache').addEventListener('click', () => run(() => request('refreshCliCaches'), '正在刷新缓存…', '缓存已检查。'));
-      byId('refresh-desktop-catalog').addEventListener('click', () => run(() => request('refreshDesktopCatalog'), '正在刷新模型目录…', '已触发提交，以原生确认为准。'));
     },
   };
 }

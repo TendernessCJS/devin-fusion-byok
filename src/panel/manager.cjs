@@ -60,7 +60,7 @@ function modelPatch(input, previous) {
   if (model.maxOutputTokens > model.contextWindow) fail('最大输出长度不能超过上下文长度。');
   return model;
 }
-function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, refreshDesktopCatalog = null, desktopCatalogStatus = () => null, nativeContract = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown', health = () => null, acpOwnModels = () => 0 }) {
+function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, nativeContract = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown', health = () => null, acpOwnModels = () => 0 }) {
   let queue = Promise.resolve();
   let pendingImport;
   const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey]);
@@ -70,7 +70,6 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
     result.nativeContract = nativeContract() || null;
     result.nativeCatalogStatus = status;
     result.backendStatus = backendStatus();
-    result.desktopCatalog = desktopCatalogStatus();
     result.health = health();
     const provider = config.providers.find(p => p.id === pendingImport?.providerId);
     result.importCandidates = provider && signature(provider) === pendingImport.signature ? {
@@ -87,12 +86,6 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       if (read().enabled === false) fail('请先启用 Fusion BYOK 再刷新缓存。');
       if (typeof refreshCliCaches !== 'function') fail('当前环境不支持手动刷新缓存。');
       await refreshCliCaches();
-      return state();
-    }
-    if (type === 'refreshDesktopCatalog') {
-      if (read().enabled === false) fail('请先启用 Fusion BYOK 再刷新模型目录。');
-      if (typeof refreshDesktopCatalog !== 'function') fail('当前环境不支持刷新模型目录。');
-      await refreshDesktopCatalog();
       return state();
     }
     let config = read();

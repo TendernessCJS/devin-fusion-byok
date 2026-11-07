@@ -126,12 +126,9 @@ function installCommands({ deps, shared }) {
       if (!drained) log('managed-settings-drain-timeout');
       // Owned settings restore must run even when the LS bridge dispose threw —
       // a broken bridge can never orphan the user's environment values.
-      let verdict;
-      try { verdict = await teardown(lifecycle, { restore: true }); }
+      try { await teardown(lifecycle); }
       finally { await restoreOwnedSettings({ keepReceipt: drained === false }); }
-      if (drained) vscode.window.showInformationMessage(verdict?.ok
-        ? 'Fusion BYOK 已停用，原生连接已恢复。'
-        : 'Fusion BYOK 已停用，连接设置已恢复；桌面模型目录恢复尚未确认。');
+      if (drained) vscode.window.showInformationMessage('Fusion BYOK 已停用，连接设置已恢复。');
       else vscode.window.showWarningMessage('Fusion BYOK 已停用，但设置写入等待超时；恢复尚未确认，已保留恢复记录，请稍后重试停用。');
     })().finally(() => { disablePromise = null; shared.disablePromise = undefined; });
     // Exposed so ensureEnabled can wait out an in-flight restore instead of

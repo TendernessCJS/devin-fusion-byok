@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const net = require('node:net');
 const { Duplex } = require('node:stream');
-const { parseProxy, tunnel, proxyRequestBytes } = require('../src/proxy.cjs');
+const { parseProxy } = require('../src/update/proxy-config.cjs');
+const { tunnel, proxyRequestBytes } = require('../src/update/proxy-transport.cjs');
 const update = require('../src/update.cjs');
 const updateUrl = require('../src/update/url-policy.cjs');
 
@@ -181,7 +182,7 @@ test('request paths never touch the request/get functions patched by the extensi
 });
 
 test('maskProxy hides credentials and echoes credential-free proxies verbatim', () => {
-  const { maskProxy } = require('../src/proxy.cjs');
+  const { maskProxy } = require('../src/update/proxy-config.cjs');
   assert.equal(maskProxy(' http://127.0.0.1:7897 '), 'http://127.0.0.1:7897');
   assert.equal(maskProxy('https://proxy.internal'), 'https://proxy.internal');
   assert.equal(maskProxy('http://user:s3cret@127.0.0.1:7897'), 'http://***@127.0.0.1:7897');
@@ -190,17 +191,6 @@ test('maskProxy hides credentials and echoes credential-free proxies verbatim', 
   for (const value of ['not a url', '', '   ', 42, null, undefined]) assert.equal(maskProxy(value), '');
 });
 
-test('src/proxy.cjs stays a pure compatibility facade over the new modules', () => {
-  const facade = require('../src/proxy.cjs');
-  const config = require('../src/update/proxy-config.cjs');
-  const transport = require('../src/update/proxy-transport.cjs');
-  const direct = require('../src/network/direct-fetch.cjs');
-  assert.equal(facade.parseProxy, config.parseProxy);
-  assert.equal(facade.maskProxy, config.maskProxy);
-  assert.equal(facade.tunnel, transport.tunnel);
-  assert.equal(facade.proxyRequestBytes, transport.proxyRequestBytes);
-  assert.equal(facade.directFetch, direct.directFetch);
-});
 
 test('proxyRequestBytes enforces length, redirect and abort contracts end to end', async () => {
   const target = http.createServer((req, res) => {

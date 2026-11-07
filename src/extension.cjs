@@ -28,9 +28,8 @@ const { createRemoteSupport, describeError, probeRemoteSupport } = require('./ac
 // Shared lifecycle state across activate/teardown/deactivate.
 const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
   cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
-  connection: undefined, acpObserver: undefined, authStatus: undefined, publication: undefined,
-  remoteSupport: undefined,
-  nativeRefresh: undefined, log: undefined, runtimeWaitAbort: undefined,
+  connection: undefined, acpObserver: undefined, authStatus: undefined,
+  remoteSupport: undefined, log: undefined, runtimeWaitAbort: undefined,
   restoreOnHostDisable: undefined,
   activationGeneration: 0, reconcileHalted: true, activationDisposed: true };
 
@@ -184,14 +183,7 @@ async function activate(context) {
     log('error', { code: safe.code }); vscode.window.showErrorMessage('Fusion BYOK：' + safe.message);
   } };
   lifecycle.log = log;
-  // 3.12.17 has no devin.refreshUserStatus command, so the publication chain has
-  // no emitter: it settles unsupported instead of failing against a dead command.
-  const createPublication = () => require('./activation/catalog-publication.cjs').createCatalogPublication({
-    getCatalog: catalog, refreshUserStatus: lifecycle.nativeRefresh,
-    isCurrent: () => live(lifecycle, config),
-    log });
-  const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run, stores, managedSettings, createPublication };
-  lifecycle.publication = createPublication();
+  const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run, stores, managedSettings };
   const cacheSync = installCacheSync({ deps, shared, publish: () => shared.management?.publish() });
   installCatalogSync({ deps, shared, onChange: () => {
     const published = Promise.resolve(shared.management?.publish()).catch(() => {});
@@ -201,12 +193,8 @@ async function activate(context) {
   } });
   installEnable({ deps, shared });
   installCommands({ deps, shared });
-  // The two consumers are isolated: a throw in the cache probe used to abort
-  // the publication call silently, so a failed catalog refresh looked like a
-  // config change that simply produced no catalog traffic.
   const configChanged = () => {
     try { cacheSync.changed(); } catch (error) { log('cache-sync-error', { code: error?.code || error?.message || 'unknown' }); }
-    try { lifecycle.publication?.changed(); } catch (error) { log('publication-error', { code: error?.code || error?.message || 'unknown' }); }
   };
   const configSync = createConfigSync({ deps, shared,
     changed: configChanged,

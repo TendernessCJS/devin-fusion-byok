@@ -21,12 +21,6 @@ const { parseFields } = require('../../protocol/wire.cjs');
 const { validateProtoCatalog, isOwnUid } = require('../../catalog/payload.cjs');
 
 const CACHE_NAME = /^(user_status|team_settings)\.[0-9a-f]{16}\.bin$/;
-const CACHE_RPC = {
-  user_status: '/exa.language_server_pb.LanguageServerService/GetUserStatus',
-  model_configs_v5: '/exa.language_server_pb.LanguageServerService/GetCliModelConfigs',
-  model_configs_v6: '/exa.language_server_pb.LanguageServerService/GetCliModelConfigs',
-  team_settings: '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings',
-};
 // Every model_configs* filename is a write candidate — v6 is simply the
 // generation this CLI currently creates (deleting them all brought back only
 // v6, measured 2026-10-24). Writability is decided by the file contents, not
@@ -385,5 +379,5 @@ function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, fo
   return { checked, refreshed, skipped, errors, coverage };
 }
 
-module.exports = { CACHE_NAME, CACHE_RPC, MAX_CACHE_BYTES, defaultDir, rpcFor,
+module.exports = { CACHE_NAME, MAX_CACHE_BYTES, defaultDir, rpcFor,
   inspectCliCacheCoverage, inspectCliCaches, refreshStaleCliCaches };
