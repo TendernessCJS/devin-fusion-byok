@@ -72,6 +72,11 @@ description: "Apply when writing or debugging tests — the installed-renderer s
 - 安装根可用参数或 `DFBYOK_TEST_APP_ROOT` 覆盖，默认 `/Applications/Devin.app/Contents/Resources/app`；
   assets listing 与文件内容按 root 缓存。仅 assets 目录不存在可 skip；目录存在但候选缺失、重复、
   不可读或锚点漂移必须 fail-loud，不得在能力探测阶段把解析失败转成 unavailable。
+- **`test/goal-idle-regression.test.cjs` 的旧 ACP 模块 skip 缺口已补齐**（初检 2026-11-09 发现）：它曾硬编码
+  `node_modules/@exa/windsurf-acp/index.cjs`，本机 3.12.28 中该旧路径不存在即 skip。现经 `test/helpers/installed-acp.cjs`
+  按唯一 export 锚点从 `dist/extension.js` 抽取真实谓词（含 $ 的 minify 名不写死）与其依赖函数，仅 root 缺席才 skip，
+  锚点缺失/重复/形状不支持 fail-loud；两份真实 bundle 变异验证证明断言有牙。
+  明细见 `docs/devin-3.12.28-review.md`。
 - `native-field-contract.test.cjs` 从 webapp assets 的 protobuf-es `newFieldList` 锁定实际消费字段的
   号/名/kind/scalar T/repeated/opt，及关键 message/enum 引用的完整 typeName（import→export 递归解析）；
   新字段（ModelInfo f26、ChatMessagePrompt f22、ModelUsageStats f13、GetChatMessageRequest f28）只登记。

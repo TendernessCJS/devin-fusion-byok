@@ -180,6 +180,11 @@ Devin 的模型选择器读的是 CLI 在 `~/.cache/devin/cli` 下的按身份�
 - 思考档位按模型 ID 规则提供，不是对供应商能力的检测。
 - 一键更新和“重启 Devin”目前仅支持 macOS。
 
+## 当前版本验证
+
+- 本机 macOS + Devin **3.12.28** × 插件 0.6.6：静态核对与自动测试（1748 例 / 0 失败）通过，非端到端验收。
+- 初检披露的 ACP 旧路径 skip 缺口已用「从当前 bundle 抽取真实谓词」补齐；本轮未新增兼容层、未修改 Devin 本体。明细见 [`docs/devin-3.12.28-review.md`](docs/devin-3.12.28-review.md)。
+
 ## 开发
 
 ```bash
