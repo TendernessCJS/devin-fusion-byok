@@ -5,9 +5,7 @@ description: "Apply when changing the native auth-status catalog write (windsurf
 
 # 目录写入（catalog-publication，已退役记录 + 仍有效契约）
 
-`windsurfAuth.setAuthStatus` 原地改写与观测、`GetModelStatuses` 结论仍有效。发布确认链已于 **2026-11-07 随
-Devin 3.12.17 删除 `devin.refreshUserStatus` 而整链删除**（清单与判据见 `retired-and-deadends.md`）：命令不存在就
-没有确认发射器，任何"恢复"都无从验证，**不要再重建该链**。
+`windsurfAuth.setAuthStatus` 原地改写与观测、`GetModelStatuses` 结论仍有效。发布确认链已随 2026-11-07 的 Devin 3.12.17 整链删除（无 `devin.refreshUserStatus` 即无确认发射器，**不要重建**；清单与判据见 `retired-and-deadends.md`）。
 
 ## 桌面 auth 目录面（仍有效契约）
 

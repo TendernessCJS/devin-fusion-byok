@@ -34,7 +34,7 @@ description: "Apply when changing native catalog observation or its cache, CLI c
   `model_configs` 的可见性由重写字节本身保证（`team_settings`/`user_status` 由 CLI 自身节奏重拉、无需断 ACP
   即生效）——不存在也不许复活任何 picker 刷新命令。Composer
   模型缺失排障时先看缓存新鲜度，backend 注入日志（`afterOwn`）证明不了 picker 侧可见性。面板「设置 → CLI 缓存 → 刷新缓存」走同一个
-  `checkCliCaches({ force: true })`（`refreshCliCaches` 消息），只做原地重写、不引入新的刷新通道；`cliCacheStatus()` 把最近一次报告交给面板渲染，
+  `inspectCliCaches({ force: true })`（`refreshCliCaches` 消息），只做原地重写、不引入新的刷新通道；`cliCacheStatus()` 把最近一次报告交给面板渲染，
   不要在那里触发写入。**自动检查除 uid 存在性（`missing`/`staleProbe`）外还有一条形态比对** `staleOwnEntries`：仅当
   `ownEntriesSignature(models)` 与上次记录不同才启用，逐字节比较缓存里我们条目的 raw 与当前 emit；**同一签名只探一次**（收敛守卫，签名仅在权威检查——`retire=true`——返回后记录；loading/unavailable 的非权威探测不消费签名）——
   逐字节判据可能永不收敛，重复探测会变成每 3 秒重写约 1.6 MB×2。signature 不含隐藏名单（原生白名单计数实测抖动会误触发）。`force` 仍是手动兜底：强制模式绕过门控、

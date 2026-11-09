@@ -68,9 +68,9 @@ tail -c +<偏移> <bundle> | head -c 600
 
 ## 外部独立实现互证（dwgx/WindsurfAPI）
 
-另一份**独立逆向**落在同一组字段号上：`dwgx/WindsurfAPI`（本地克隆 `.refs/WindsurfAPI`，2026-10-31 更新至 tag `v3.141.592658`，commit `08a750d1`；上一版是 `272429d3` / v3.141.592657）是 CLI → `server.codeium.com` 的上游 Connect-RPC 代理，与我们客户端侧实现逆的是同一批 `exa.api_server_pb`/`exa.chat_pb` 消息。该仓没有 `.proto`，字段号写在手写的 `parseFields` 与注释里（`src/devin-connect-catalog.js` 顶部 `F_*` 常量）。
+另一份**独立逆向**落在同一组字段号上：`dwgx/WindsurfAPI`（本地克隆 `.refs/WindsurfAPI`，2026-10-31 更新至 tag `v3.141.592658`，commit `08a750d1`；上一版是 `272429d3` / v3.141.592657）是 CLI → `server.codeium.com` 的上游 Connect-RPC 代理，与我们客户端侧实现逆的是同一批 `exa.api_server_pb`/`exa.chat_pb` 消息。该仓没有 `.proto`，字段号写在手写的 `parseFields` 与注释里（`.refs/WindsurfAPI/src/devin-connect-catalog.js` 顶部 `F_*` 常量）。
 
-**锚点校验（2026-10-31 复核）**：`git diff b00b3b9..HEAD -- src/devin-connect-catalog.js` 仍为空，`F_*` 仍为 14 处（7 个常量），该文件最后一次改动仍是 `c90e30a8`（2026-10-22）。也就是说初版互证用的锚点 `b00b3b9` 虽然旧，但**被引用的文件内容未变，下表结论不受影响**；后续再同步 `.refs` 时按同一命令复核即可，不必重做对照。
+**锚点校验（2026-10-31 复核）**：`git diff b00b3b9..HEAD -- .refs/WindsurfAPI/src/devin-connect-catalog.js` 仍为空，`F_*` 仍为 14 处（7 个常量），该文件最后一次改动仍是 `c90e30a8`（2026-10-22）。也就是说初版互证用的锚点 `b00b3b9` 虽然旧，但**被引用的文件内容未变，下表结论不受影响**；后续再同步 `.refs` 时按同一命令复核即可，不必重做对照。
 
 | 字段 | 我们（`src/catalog/codec.cjs`） | 对方 |
 | --- | --- | --- |
@@ -89,13 +89,13 @@ tail -c +<偏移> <bundle> | head -c 600
 
 外部实现的**注释与文档头不等于它的实现**，更不等于本机 schema；两侧冲突时以本机 `newFieldList` 为准。
 
-- **案例 1（`GetChatMessageRequest` `#16`）**：对方 `src/session-continuity.js` 文档头写「stable protobuf session_id (**#16**)」，其代码 `writeStringField(16, …)` 的注释自认「这是 `cascade_id`，不是 session id；新 web schema 在 #28 加了 `session_id`，我们不发」。本机 bundle 实测：`16 = cascade_id`、`28 = session_id`。
+- **案例 1（`GetChatMessageRequest` `#16`）**：对方 `.refs/WindsurfAPI/src/session-continuity.js` 文档头写「stable protobuf session_id (**#16**)」，其代码 `writeStringField(16, …)` 的注释自认「这是 `cascade_id`，不是 session id；新 web schema 在 #28 加了 `session_id`，我们不发」。本机 bundle 实测：`16 = cascade_id`、`28 = session_id`。
 - **案例 2（同消息 `#22`）**：对方注释写「`#22` request_id，故意不发」。本机 bundle 实测：`22 = execution_id`（其 `request_id` 在出站响应里是 `GetChatMessageResponse#17`）。
 - **案例 3（`#18`，已在上一轮记录）**：对方只有注释提到 `#18` 是上下文窗口，代码并未解析该字段。
 - **方法论**：交叉验证要同时落到**对方的解析代码**和**本机 schema** 两侧；连续三例说明只读注释会引入假事实。本机取证见上文「怎么读权威字段号」——`newFieldList` 字面量是唯一权威，LS 二进制描述符只证存在性、不含字段号。
-- **反例**（附到「不要猜数值枚举」）：对方 `docs/HISTORY-LEDGER-2026-07-late.md`（~147 行）曾按 protobuf 变体名顺序猜「`StopReason 4 = max_turn_requests`」，被付费实测推翻（4 是付费层正常完成）——后果是完整付费响应被报成截断，按 length 续写的客户端会无限续写。
-- **stop reason 枚举实测**（2026-10-28，`@exa/chat-client/index.js`）：v1 `session/prompt` 结果是**封闭**枚举
-  `end_turn, max_tokens, max_turn_requests, refusal, cancelled`（偏移 ~3498576），与对方 `docs/DEVIN-CONNECT-CUTOVER.md`
+- **反例**（附到「不要猜数值枚举」）：对方 `.refs/WindsurfAPI/docs/HISTORY-LEDGER-2026-07-late.md`（~147 行）曾按 protobuf 变体名顺序猜「`StopReason 4 = max_turn_requests`」，被付费实测推翻（4 是付费层正常完成）——后果是完整付费响应被报成截断，按 length 续写的客户端会无限续写。
+- **stop reason 枚举实测**（2026-10-28，当时安装副本 `@exa/chat-client/index.js`；该包已在后续版本移除）：v1 `session/prompt` 结果是**封闭**枚举
+  `end_turn, max_tokens, max_turn_requests, refusal, cancelled`（偏移 ~3498576），与对方 `.refs/WindsurfAPI/docs/DEVIN-CONNECT-CUTOVER.md`
   （~434 行）所列一致；v2 `state_update.stopReason` 是**开放**联合 `[5 值, string]`（偏移 ~3775106），所以判定必须用
   集合成员，穷举会漏。原生对各值的对待并不对等：i18n 只给 `max_turn_requests` 配了 continue 语义
   （`Reached max tool calls — send another message to continue`，英文/西/日/葡四套，偏移 ~11065694），`max_tokens`

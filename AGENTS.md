@@ -49,7 +49,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/fusion-matrix.md` | 改 Fusion 矩阵 emit 规则、Lead/Sidekick 资格与命名、harness、Fast Mode |
 | `.devin/rules/catalog-and-picker.md` | 改 picker 可见性契约、角色白名单、陈旧条目判定与清理、推送门控、`nativeFamilies`、维度 order |
 | `.devin/rules/catalog-allowlist.md` | 改 allowlist 三态判定、双通道去抖或 restricted→unrestricted 提交时机时必读 |
-| `.devin/rules/catalog-publication.md` | 改原生 `auth-status` 目录写入（原地改写/观测）或 `GetModelStatuses` 处理时必读；发布确认链已于 3.12.17 整链删除，卷内同时是退役记录 |
+| `.devin/rules/catalog-publication.md` | 改原生 `auth-status` 写入、`GetModelStatuses`，或怀疑「改了配置会话看不见」时必读；发布确认链已随 3.12.17 删除 |
 | `.devin/rules/context-and-compaction.md` | 改声明的上下文窗口（ModelInfo `f4`/`maxTokens`）、或怀疑「是不是扩展触发了压缩」 |
 | `.devin/rules/native-observation-and-cli-cache.md` | 改原生目录观测与缓存、CLI 缓存原地重写、配置键分类清理 |
 | `.devin/rules/cli-cache-generations.md` | 改 CLI 缓存写入资格、代际判定、coverage 与 health 映射时必读 |
