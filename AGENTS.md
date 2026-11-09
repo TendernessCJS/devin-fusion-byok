@@ -5,15 +5,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 
 ## 为什么行为约束不在本文件里（2026-10-17 实测后改成分卷）
 
-规则注入有**每文件 16,384 字节上限**，超出部分被**静默丢弃**——CLI 二进制里的原文是
-  `[Rule content truncated to <N> bytes. Read the full file at <path> for additional content.]`；另有**每 prompt 预算**可把整条规则**省略**，原文
-  `[Rule content omitted to stay within the per-prompt rule budget. ...]`（符号 `agent_ext::rules::event_handler::ContentRuleBudget::partition`）。这两项在文档里**没有任何配置项**。
-
-本文件曾达 **62,731 字节**，实测**只有前 26%（16,384 字节）进入常驻上下文**；被丢弃的 74% 里包含**整节「架构边界」（33,573 字节）**——也就是说
-  「漏读会安静地做错」的那批约束**从未被送达过**。而窗口是**零和预算**：在文件内新增内容必然挤掉现有内容，所以唯一的扩容方式是**移出成独立文件**。
-
-因此改为**分卷 + 索引**：本文件只留索引、短节与最高危禁令速查；正文按主题拆到下列卷。拆分已核对**字节守恒（内容只搬不改）**，且每卷都
-  **< 16,384 字节**才可能完整注入。**改 `src/**` 前先按索引找到对应卷再动手。**
+规则注入有**每文件 16,384 字节上限**，超出部分**静默丢弃**；窗口是**零和预算**，新增内容必然挤掉现有内容，唯一扩容方式是移出成独立文件。因此本文件只留索引、短节与最高危禁令速查。完整实测（本文件曾 62,731 字节、只有前 26% 进入上下文）与拆卷纪律见 `.devin/rules/rule-authoring.md`。
 
 ## 最高危禁令速查（漏了会静默坏）
 
@@ -34,7 +26,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
   **缺 frontmatter 的卷登记为 `manual`**（模型永远选不中它，索引里的「何时必读」就成了不可执行的声明），
   `test/rule-budget.test.cjs` 硬拦缺 `trigger`/`description` 的卷。
 
-**体积纪律**：每卷必须 < 16,384 字节，超限部分静默丢弃。`test/rule-budget.test.cjs`（`npm test` 的一部分）会硬拦超限卷与「新卷没进本索引」，所以别在这里维护体积快照——它必然过期，判据以测试为准。接近上限时**先拆卷再加内容**：把「实测依据/排障判据」移成 `<主题>-forensics.md`，契约卷留一条指向与禁令（`runtime-and-injection.md` ↔ `runtime-forensics.md` 是范例）。拆卷是**逐字搬运 + 不加新论断**，只补指针句。拆卷后**必须**跑 `node scripts/rule-split-check.cjs <拆卷前commit> <旧卷> [新卷…]`——退出码非 0 即有 bullet 丢失，不得提交；刻意重写的 bullet 用 `--allow=<归一化 key 子串>` 豁免并在提交信息里说明。该脚本同时拦「整条丢失」与「bullet 还在但内容缩水 >20%」，两类豁免语法相同。事故依据：2026-10-27 拆 `runtime-and-injection.md` 漏做此核对，丢了 4 条约束（安全校验禁令、`assignment_jwt` 契约、backend 转发目标、`injection-health` 宿主约束），`npm test` 与 rule-budget 全绿却无人报警。
+**体积纪律**：每卷必须 < 16,384 字节，超限部分静默丢弃；`test/rule-budget.test.cjs` 硬拦超限卷与「新卷没进本索引」，判据以测试为准。接近上限时**先拆卷再加内容**；拆卷纪律（逐字搬运、`scripts/rule-split-check.cjs`、豁免语法与 2026-10-27 事故依据）见 `.devin/rules/rule-authoring.md`。
 
 **行为锚定卷**（改代码前按需读）
 
@@ -47,7 +39,9 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/auto-continue-forensics.md` | **排查「该续没续」或改 `auto-continue.cjs` 资格判定时必读**——2026-10-31 `session-info` 永久取消资格的真机时间线与修复依据、两个观测事件的字段、残留待定项 |
 | `.devin/rules/upstream-routing.md` | **排查「转发打到了哪里」或推送没生效时必读**——upstream origin 契约与校验、原生派生链与收敛窗口、激活期推送失败的 identity 分级、`upstream-push` / `upstream-origin` / `upstream-push.json` 三个观测落点 |
 | `.devin/rules/fusion-matrix.md` | 改 Fusion 矩阵 emit 规则、Lead/Sidekick 资格与命名、harness、Fast Mode |
+| `.devin/rules/fusion-matrix-dims-and-harness.md` | 改家族/服务器家族判定、控制维度处理或 harness 执行通道时必读 |
 | `.devin/rules/catalog-and-picker.md` | 改 picker 可见性契约、角色白名单、陈旧条目判定与清理、推送门控、`nativeFamilies`、维度 order |
+| `.devin/rules/picker-visibility.md` | 改 picker 行可见性契约、角色白名单或 Lead/Sidekick 门槛时必读 |
 | `.devin/rules/catalog-allowlist.md` | 改 allowlist 三态判定、双通道去抖或 restricted→unrestricted 提交时机时必读 |
 | `.devin/rules/catalog-publication.md` | 改原生 `auth-status` 写入、`GetModelStatuses`，或怀疑「改了配置会话看不见」时必读；发布确认链已随 3.12.17 删除 |
 | `.devin/rules/context-and-compaction.md` | 改声明的上下文窗口（ModelInfo `f4`/`maxTokens`）、或怀疑「是不是扩展触发了压缩」 |
@@ -77,6 +71,8 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/acp-protocol-fields.md` | 改 `src/protocol/*` 的 protobuf 字段号、核对原生请求/响应/用量字段 |
 | `.devin/rules/acp-protocol-fields-forensics.md` | 改字段号、怀疑读数过期，或排查 CompletionDelta 错位陷阱时必读（实测方法与证据） |
 | `.devin/rules/acp-protocol-fields-forensics-rea.md` | **用 REA 取证、或想知道「本机 REA 还能用什么」时必读**——原生面不可用的确切原因、语义图预算实测、partial evidence 只在同会话内有效 |
+| `.devin/rules/rule-authoring.md` | 新增/拆分规则卷、调整 trigger 或撞到 16,384 字节上限时必读 |
+| `.devin/rules/platform-and-network.md` | 处理非 macOS 分支、macOS 硬编码路径，或对接 GitHub 与代理时必读 |
 
 ## 仓库与 remote
 - `origin` = 本仓库的 fork（`git@github.com:TendernessCJS/devin-fusion-byok.git`），是日常推送目标。
@@ -89,21 +85,8 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 - 同步上游更新见「fork 同步与发布」一节。
 ## 本机网络路径
 
-本机直连 GitHub 不可用，必须经代理；代理不可用时停止并报告，不要回退直连。**代理机制与本机配置的权威说明在用户级规则 `~/.devin/global_rules.md` 的「外部网站代理」**（代理地址、
-  `~/.ssh/config` 的 `ProxyCommand`、git 的 URL 限定配置、`gh` 为何只能靠环境变量），本节只记本仓库要用的结论：
+GitHub 直连不可用，**必须经代理；代理不可用即停止并报告，不回退直连**。`origin`(SSH) 与 `upstream`(HTTPS) 的通道差异、`gh` 为何只能靠环境变量、URL 限定 git 代理的具体做法见 `.devin/rules/platform-and-network.md`。
 
-| 目标 | 协议 | 命令里要不要加 `HTTPS_PROXY` |
-| --- | --- | --- |
-| `origin`（`git push` / `git fetch`） | SSH | **不要**：`~/.ssh/config` 的 `ProxyCommand` 自动代理 |
-| `upstream`（`git fetch`） | HTTPS | **不要**：本机已配 URL 限定代理，裸命令即可；未配置的机器要加 |
-| `gh`（建 Release 等） | HTTPS | **要**：`gh` 没有 proxy 配置项，也不读 git 配置 |
-
-代理只管「怎么连」，「连到哪个仓库」是另一回事：本仓库裸 `gh` 解析到 `upstream`，见上一节。
-
-用 `git remote -v` 确认 remote 属于哪种。HTTPS remote 漏了前缀是**长时间挂起**而非快速报错——卡住 10 秒以上先怀疑这个。
-
-不要用无作用域的 `git config --global http.proxy`：它作用于**所有** HTTPS remote，会把 HTTPS 形态的内网仓库也送进代理（SSH 形态的内网 remote 不受任何
-  `http.proxy` 影响）。改动用户级 git 配置须由用户自行执行。
 ## 常用命令
 
 ```bash
@@ -128,14 +111,4 @@ FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口�
 
 ## 平台支持
 
-**只以 macOS 为目标平台**（个人自用，本机即 macOS）：验证、真机验收、发布检查都只针对 macOS。其他平台按「逻辑可行」的最低标准处理，**短期不做实机验证**。
-- **不要声称非 macOS 已验证可用**。涉及平台差异的行为，在代码与文档里注明「仅 macOS 验证」。
-- **非 macOS 必须明确失败，不得静默出错**。既有先例（沿用这个模式）：`src/runtime/host/app-restart.cjs` 在非 darwin 抛 `restart_unsupported`，
-  面板提示「当前环境不支持重启 Devin」；`src/update/updater.cjs` 的 `supported` 判断使非 macOS 只能手动装 vsix。注意 `package.json` **未设 `os` 字段**，
-  其他平台能装上、只是相应功能不可用。
-- **已知 macOS 硬编码**（非 macOS 上会失败或降级，暂无适配计划）：`/usr/bin/sqlite3`（用量归属，`src/monitor/store.cjs`；失败降级为 `unavailable`）、
-  `/usr/bin/unzip`（一键安装，`update/updater.cjs`）、`/usr/bin/open` 与 `/usr/bin/grep`（重启 Devin，`app-restart.cjs`）、
-  `/usr/bin/zip`（打包，`scripts/package.cjs`）。Fast Context 的 ripgrep 查找是唯一带回退的：`FUSION_FAST_CONTEXT_RG` → `PATH`
-  → `/Applications/Devin.app/...`，都找不到才抛 `ripgrep_unavailable`。
-- **测试只覆盖逻辑分支**：平台差异靠注入参数验证（如 `platform` 形参、`resolveNode(env, platform)`），不依赖真机。
-- 结论：**不要为未验证的平台做重构**；能低成本避免耦合就避免，已硬编码的保持现状。
+**只以 macOS 为目标平台**：验证、真机验收、发布检查都只针对 macOS，不要声称其他平台已验证可用。**非 macOS 必须显式失败，不得静默出错**，沿用 `restart_unsupported` 这类既有模式。已知硬编码路径与测试边界见 `.devin/rules/platform-and-network.md`。
