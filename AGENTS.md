@@ -92,6 +92,7 @@ GitHub 直连不可用，**必须经代理；代理不可用即停止并报告�
 ```bash
 npm test                                      # node --test test/*.test.cjs
 npm run package                               # 生成 .vsix（依赖 /usr/bin/zip）
+npm run verify                                # 升级后复验:契约、已安装身份、运行日志聚合
 npm run mcp:fast-context -- --root /abs/proj  # 单独运行 Fast Context MCP
 node scripts/rule-split-check.cjs b4a9da7 .devin/rules/runtime-and-injection.md .devin/rules/architecture-boundaries.md --allow=激活失效判据  # 拆卷后守恒核对
 FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口验收，消耗官方额度

@@ -31,6 +31,7 @@
     "test": "node --test test/*.test.cjs",
     "mcp:fast-context": "node src/fast-context/server.cjs",
     "package": "node scripts/package.cjs",
+    "verify": "node scripts/verify-install.cjs",
     "vscode:uninstall": "node src/lifecycle/uninstall.cjs"
   },
   "contributes": {
