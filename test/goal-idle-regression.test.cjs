@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const { createGoalController } = require('../src/goal/controller.cjs');
 const store = require('../src/goal/store.cjs');
 const reportCli = require('../src/goal/report.cjs');
+const { loadTurnCompletingPromptResponse } = require('./helpers/installed-acp.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 // Only the native ACP boundary is mocked: transport, controller and report
@@ -202,12 +203,18 @@ for (const protocol of [1, 2]) {
 }
 
 // Installed native parser is an additional local check, not a CI dependency.
-const nativeAcpPath = '/Applications/Devin.app/Contents/Resources/app/node_modules/@exa/windsurf-acp/index.cjs';
-test('installed ACP distinguishes non-terminal v2 local acknowledgement from the real v1 result', { skip: !fs.existsSync(nativeAcpPath) }, () => {
-  const native = require(nativeAcpPath);
+// The predicate is extracted from the real extension bundle by installed-acp
+// — a missing app root skips, any other layout drift fails loudly.
+test('installed ACP distinguishes non-terminal v2 local acknowledgement from the real v1 result', t => {
+  const native = loadTurnCompletingPromptResponse();
+  if (native === null) return t.skip('Devin application root is absent');
   const request = { method: 'session/prompt', params: { sessionId: 's1' } };
-  assert.equal(native.isTurnCompletingPromptResponse(request, {}), false);
-  assert.equal(native.isTurnCompletingPromptResponse(request, { stopReason: 'end_turn' }), true);
+  assert.equal(native(request, {}), false);
+  assert.equal(native(request, null), false);
+  assert.equal(native(request, undefined), false);
+  assert.equal(native(request, { stopReason: 'end_turn' }), true);
+  assert.equal(native(request, { stopReason: 'max_turn_requests' }), true);
+  assert.equal(native({ method: 'session/new', params: { sessionId: 's1' } }, { stopReason: 'end_turn' }), false);
 });
 
 for (const protocol of [1, 2]) {
