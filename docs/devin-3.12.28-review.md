@@ -54,6 +54,8 @@
 - `npm test`（补齐后最终结果）：**1748 例 / 1748 pass / 0 fail / 0 skipped**——新增 `installed-acp` 9 例；原回归用例由 skip 转为真实执行。
 - native-field 契约、webapp mapper/picker/family 用例在本机 3.12.28 安装物上全部执行通过（非 skip）。
 
+- 夹具 `test/fixtures/real-picker.json` 已按 3.12.28 实时观测重捕（审计对象为 `~/Library/Application Support/Devin/User/globalStorage/local.devin-fusion-byok/native-cache.json`，savedAt 2026-11-09T00:19:53.245Z）：uid 选择与 3.12.17 快照相同，22 条的 uid/label/order 未变，仅新增各维 `controlType`。
+
 注意：以上均为静态兼容证据与有界自动测试；真实收费推理 E2E 仍未做，不宣称运行时完全兼容。
 
 ## 未执行的手工验收（留给用户）

@@ -1,6 +1,6 @@
 {
-  "cacheTime": "2026-11-07T04:37:41.165Z",
-  "source": "sanitized real cache subset for 3.12.17 (CLI 3000.12.17) picker verification, captured 2026-11-07",
+  "source": "sanitized real cache subset for Devin Desktop 3.12.28 picker verification, captured 2026-11-09",
+  "cacheTime": "2026-11-09T00:19:53.245Z",
   "natives": [
     {
       "uid": "claude-fable-5-1-medium",
@@ -14,22 +14,26 @@
         {
           "key": "Effort",
           "order": 1,
-          "name": "Medium"
+          "name": "Medium",
+          "controlType": 1
         },
         {
           "key": "Thinking",
           "order": 1,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "1M Context",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         }
       ]
     },
@@ -45,12 +49,14 @@
         {
           "key": "Effort",
           "order": 1,
-          "name": "High"
+          "name": "High",
+          "controlType": 1
         },
         {
           "key": "1M Context",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         }
       ]
     },
@@ -68,12 +74,14 @@
         {
           "key": "Reasoning Effort",
           "order": 1,
-          "name": "High"
+          "name": "High",
+          "controlType": 1
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         }
       ]
     },
@@ -82,8 +90,7 @@
       "label": "Adaptive",
       "disabled": 0,
       "harnesses": [],
-      "router": 1,
-      "family": []
+      "router": 1
     },
     {
       "uid": "gpt-5-6-sol-high",
@@ -98,17 +105,20 @@
         {
           "key": "Reasoning Effort",
           "order": 3,
-          "name": "High"
+          "name": "High",
+          "controlType": 1
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Prompt Cache Retention",
           "order": 1,
-          "name": "24h"
+          "name": "24h",
+          "controlType": 2
         }
       ]
     },
@@ -125,17 +135,20 @@
         {
           "key": "Reasoning Effort",
           "order": 3,
-          "name": "High"
+          "name": "High",
+          "controlType": 1
         },
         {
           "key": "Fast Mode",
           "order": 1,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Prompt Cache Retention",
           "order": 1,
-          "name": "24h"
+          "name": "24h",
+          "controlType": 2
         }
       ]
     },
@@ -152,17 +165,20 @@
         {
           "key": "Reasoning Effort",
           "order": 3,
-          "name": "High"
+          "name": "High",
+          "controlType": 1
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Prompt Cache Retention",
           "order": 1,
-          "name": "24h"
+          "name": "24h",
+          "controlType": 2
         }
       ]
     },
@@ -179,17 +195,20 @@
         {
           "key": "Reasoning Effort",
           "order": 3,
-          "name": "High"
+          "name": "High",
+          "controlType": 1
         },
         {
           "key": "Fast Mode",
           "order": 1,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Prompt Cache Retention",
           "order": 1,
-          "name": "24h"
+          "name": "24h",
+          "controlType": 2
         }
       ]
     },
@@ -207,12 +226,14 @@
         {
           "key": "Reasoning Effort",
           "order": 0,
-          "name": "Medium"
+          "name": "Medium",
+          "controlType": 1
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         }
       ]
     },
@@ -229,12 +250,14 @@
         {
           "key": "Reasoning Effort",
           "order": 2,
-          "name": "Max"
+          "name": "Max",
+          "controlType": 1
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         }
       ]
     },
@@ -250,22 +273,26 @@
         {
           "key": "Effort",
           "order": 2,
-          "name": "High"
+          "name": "High",
+          "controlType": 1
         },
         {
           "key": "Thinking",
           "order": 1,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "1M Context",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         }
       ]
     }
@@ -284,27 +311,32 @@
         {
           "key": "Lead",
           "order": 3,
-          "name": "Claude Fable 5.1"
+          "name": "Claude Fable 5.1",
+          "controlType": 3
         },
         {
           "key": "Effort",
           "order": 2,
-          "name": "Medium"
+          "name": "Medium",
+          "controlType": 1
         },
         {
           "key": "Sidekick",
           "order": 1,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 3
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Recommended Sidekick",
           "order": 0,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 0
         }
       ]
     },
@@ -321,27 +353,32 @@
         {
           "key": "Lead",
           "order": 3,
-          "name": "Claude Fable 5.1"
+          "name": "Claude Fable 5.1",
+          "controlType": 3
         },
         {
           "key": "Effort",
           "order": 2,
-          "name": "Medium"
+          "name": "Medium",
+          "controlType": 1
         },
         {
           "key": "Sidekick",
           "order": 6,
-          "name": "GPT-5.6 Luna High"
+          "name": "GPT-5.6 Luna High",
+          "controlType": 3
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Recommended Sidekick",
           "order": 0,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 0
         }
       ]
     },
@@ -358,27 +395,32 @@
         {
           "key": "Lead",
           "order": 3,
-          "name": "Claude Fable 5.1"
+          "name": "Claude Fable 5.1",
+          "controlType": 3
         },
         {
           "key": "Effort",
           "order": 2,
-          "name": "Medium"
+          "name": "Medium",
+          "controlType": 1
         },
         {
           "key": "Sidekick",
           "order": 6,
-          "name": "GPT-5.6 Luna High"
+          "name": "GPT-5.6 Luna High",
+          "controlType": 3
         },
         {
           "key": "Fast Mode",
           "order": 1,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Recommended Sidekick",
           "order": 0,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 0
         }
       ]
     },
@@ -395,27 +437,32 @@
         {
           "key": "Lead",
           "order": 3,
-          "name": "Claude Fable 5.1"
+          "name": "Claude Fable 5.1",
+          "controlType": 3
         },
         {
           "key": "Effort",
           "order": 2,
-          "name": "Medium"
+          "name": "Medium",
+          "controlType": 1
         },
         {
           "key": "Sidekick",
           "order": 8,
-          "name": "GLM-5.2 High"
+          "name": "GLM-5.2 High",
+          "controlType": 3
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Recommended Sidekick",
           "order": 0,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 0
         }
       ]
     },
@@ -433,27 +480,32 @@
         {
           "key": "Lead",
           "order": 6,
-          "name": "GPT-5.6 Sol"
+          "name": "GPT-5.6 Sol",
+          "controlType": 3
         },
         {
           "key": "Effort",
           "order": 3,
-          "name": "High"
+          "name": "High",
+          "controlType": 1
         },
         {
           "key": "Sidekick",
           "order": 8,
-          "name": "GLM-5.2 High"
+          "name": "GLM-5.2 High",
+          "controlType": 3
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Recommended Sidekick",
           "order": 0,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 0
         }
       ]
     },
@@ -470,27 +522,32 @@
         {
           "key": "Lead",
           "order": 3,
-          "name": "Claude Fable 5.1"
+          "name": "Claude Fable 5.1",
+          "controlType": 3
         },
         {
           "key": "Effort",
           "order": 2,
-          "name": "Medium"
+          "name": "Medium",
+          "controlType": 1
         },
         {
           "key": "Sidekick",
           "order": 7,
-          "name": "GPT-5.6 Sol High"
+          "name": "GPT-5.6 Sol High",
+          "controlType": 3
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Recommended Sidekick",
           "order": 0,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 0
         }
       ]
     },
@@ -507,27 +564,32 @@
         {
           "key": "Lead",
           "order": 3,
-          "name": "Claude Fable 5.1"
+          "name": "Claude Fable 5.1",
+          "controlType": 3
         },
         {
           "key": "Effort",
           "order": 2,
-          "name": "Medium"
+          "name": "Medium",
+          "controlType": 1
         },
         {
           "key": "Sidekick",
           "order": 7,
-          "name": "GPT-5.6 Sol High"
+          "name": "GPT-5.6 Sol High",
+          "controlType": 3
         },
         {
           "key": "Fast Mode",
           "order": 1,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Recommended Sidekick",
           "order": 0,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 0
         }
       ]
     },
@@ -544,27 +606,32 @@
         {
           "key": "Lead",
           "order": 3,
-          "name": "Claude Fable 5.1"
+          "name": "Claude Fable 5.1",
+          "controlType": 3
         },
         {
           "key": "Effort",
           "order": 2,
-          "name": "Medium"
+          "name": "Medium",
+          "controlType": 1
         },
         {
           "key": "Sidekick",
           "order": 2,
-          "name": "SWE-2 High"
+          "name": "SWE-2 High",
+          "controlType": 3
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Recommended Sidekick",
           "order": 0,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 0
         }
       ]
     },
@@ -577,8 +644,7 @@
         "swe-1p6",
         "swe-1p5"
       ],
-      "router": 1,
-      "family": []
+      "router": 1
     },
     {
       "uid": "fusion-sidekick-gpt-5-6-luna-high-priority",
@@ -588,8 +654,7 @@
         "gpt-5p6-codex",
         "gpt-5p6"
       ],
-      "router": 1,
-      "family": []
+      "router": 1
     },
     {
       "uid": "fusion-claude-fable-5-1-high-sidekick-swe-2-medium",
@@ -604,27 +669,32 @@
         {
           "key": "Lead",
           "order": 3,
-          "name": "Claude Fable 5.1"
+          "name": "Claude Fable 5.1",
+          "controlType": 3
         },
         {
           "key": "Effort",
           "order": 3,
-          "name": "High"
+          "name": "High",
+          "controlType": 1
         },
         {
           "key": "Sidekick",
           "order": 1,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 3
         },
         {
           "key": "Fast Mode",
           "order": 0,
-          "name": ""
+          "name": "",
+          "controlType": 2
         },
         {
           "key": "Recommended Sidekick",
           "order": 0,
-          "name": "SWE-2 Medium"
+          "name": "SWE-2 Medium",
+          "controlType": 0
         }
       ]
     }
