@@ -84,3 +84,4 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
 
 - **81 个零外部引用导出条目（33 文件）已删**：只删 `module.exports` 项，函数全保留。判据=src/test/scripts 交叉零引用 + 无 `module[变量]` 取用，清理后剩 0。反例：`cli-cache.cjs` 的 `rpcFor` 仍被文件内生产代码调用，只是导出多余。
 - **`src/update/transfer.cjs`（新）**：fetch 与 http.request 两条自更新传输原各抄一份「5 跳重定向 + 限长 + abort/timeout」，现合为 `transferBytes(..., { open })`。**`policy.allowedUrl` 保持成员访问**——`test/proxy.test.cjs` 靠替换它打本地假件。净减 48 行；`attachmentUnsupported` 同时收成 `anthropic.cjs` 单份。
+- **个人使用前提下的兼容层清理（同日）**：monitor 的 `schemaVersion` 概念整体删除（本机 5034 行全为 3；`goal/*`、`context-diagnostics` 的同名字段是另一概念，别删）、`pruneRetiredKeys` 删除（退役键已不在配置中，删后旧键只是静默保留）、`fast_context_search` 别名删除（外部 harness 零引用）、4 个无人导入的 re-export 删除（`mergeNativeEntry`/`backend` 三常量/`parseEvent`/`proxyRequestBytes`）。

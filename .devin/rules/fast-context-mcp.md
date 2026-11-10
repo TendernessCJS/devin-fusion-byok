@@ -5,7 +5,7 @@ description: "改 Fast Context 工具/开关/凭据/SSRF 边界，或外部 MCP 
 
 # Fast Context MCP（fast-context）
 
-`src/fast-context/` —— 把检索能力以 stdio MCP 暴露给外部 harness 的唯一模块。四个工具：`code_search`、`web_search`、`web_read_url`、`fast_context_status`；别名 `fast_context_search → code_search` 兼容旧提示词，**不要删**。
+`src/fast-context/` —— 把检索能力以 stdio MCP 暴露给外部 harness 的唯一模块。四个工具：`code_search`、`web_search`、`web_read_url`、`fast_context_status`。
 
 - **开关**：`external-mcp.json`（0600、原子写）。standalone 启动时读一次、**每次工具调用前再读**；关闭时 `tools/list` 返回空数组、`tools/call` 回 `isError` 文案；`main()` 未开启时 stderr + 退出码 1。
 - **原生耦合点（改动必查）**：`GetUserJwt`、`GetWebSearchResults`、`GetCliTeamSettings` 的字段 3/4，搜索结果项字段 3/4/7；凭据来自 `state.vscdb` 的 `ItemTable.windsurfAuthStatus`（二进制里搜不到，属数据面契约——探针的 `authStore` 只报告，不算 drift）。
