@@ -169,7 +169,7 @@ Devin 的模型选择器读的是 CLI 在 `~/.cache/devin/cli` 下的按身份�
 
 ## 从旧版本升级
 
-早期版本用「预设」卡片提供具名组合，现在已由 Devin 官方的 Fusion 卡片取代。升级时插件做过一次性迁移：把原预设用到的 Lead / Sidekick 转成角色勾选（它们仍会出现在 Fusion 卡片的下拉里），并删除配置里已无用的预设字段。只有当时执行过那次迁移的安装才会在扩展全局存储目录留下 `config.json.pre-preset-retirement.bak` 副本，需要找回旧预设时以它为准。迁移逻辑本身已随预设管线一起删除，遗留字段由激活期的配置清理顺带清掉。
+早期版本用「预设」卡片提供具名组合，现在已由 Devin 官方的 Fusion 卡片取代。升级时插件做过一次性迁移：把原预设用到的 Lead / Sidekick 转成角色勾选（它们仍会出现在 Fusion 卡片的下拉里），并删除配置里已无用的预设字段。只有当时执行过那次迁移的安装才会在扩展全局存储目录留下 `config.json.pre-preset-retirement.bak` 副本，需要找回旧预设时以它为准。迁移逻辑本身已随预设管线一起删除，激活期的退役键清理也已删除，现有遗留字段不再自动清理。
 
 原来储存在配置里的默认组合也会保留，并跟随上面这次迁移映射到等价的组合上。
 
@@ -182,7 +182,8 @@ Devin 的模型选择器读的是 CLI 在 `~/.cache/devin/cli` 下的按身份�
 
 ## 当前版本验证
 
-- 本机 macOS + Devin **3.12.43** × 插件 0.6.6：静态契约 `ok`、`npm run verify -- --with-tests` 全项通过、全量测试 1755 例 / 0 失败。非端到端验收。
+- 本机 macOS + Devin **3.12.43** × 插件 **0.6.7**：自动化全量测试 1764 例 / 0 失败；真机侧 registry/backend 进程、health 与 host-builds 确认 0.6.7 在位，backend `sourceId` 为 `152967d0…5190a`，BYOK（deepseek-flash）对话与工具回合返回 200，Fusion 使用暂未发现问题。以上为本地打包与既有真机证据，非完整端到端验收。
+- 历史：本机 macOS + Devin **3.12.43** × 插件 0.6.6 曾做静态契约 `ok`、`npm run verify -- --with-tests` 全项通过、全量测试 1755 例 / 0 失败；该结果不迁移到 0.6.7。
 - 升级后的复验方法与此前各版本的记录见 [`docs/native-compat-verification.md`](docs/native-compat-verification.md)。
 - ACP 终态判定现从当前 bundle 抽取真实谓词：应用目录缺失才跳过，锚点缺失、重复或形状变化一律失败，不再静默 skip。
 
