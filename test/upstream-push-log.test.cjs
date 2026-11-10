@@ -76,9 +76,8 @@ function fixture(t, options = {}) {
     // Log payloads are built inside the vm realm; re-owning them here keeps
     // deepStrictEqual comparisons against test-realm literals meaningful.
     log: (event, data) => logs.push({ event, data: data && typeof data === 'object' ? { ...data } : data }),
-    catalog: () => ({ models: [] }), nativeMain: '/native/main.js', root, extensionPath,
+    catalog: () => ({ models: [] }), nativeMain: '/native/main.js', root,
     stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } },
-    createPublication: () => ({ observe() {}, changed: () => ({}), status: () => null, dispose() {} }),
     managedSettings: createManagedSettingsGate() };
 
   const effective = { current: options.effective || { origin: null, source: 'default' } };
