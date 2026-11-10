@@ -79,3 +79,8 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
 - **若 Devin 恢复 `devin.refreshUserStatus`**：从 git 历史恢复上述删除（2026-11-07 前的版本含完整实现与测试），不要凭记忆重写。
 - **`src/runtime/host/picker-refresh.cjs`（95 行 + 13 个用例）**：判据**运行期效果为零**——生产硬编码 `lightCommands: []` 使 `run()` 无条件返回，`force()` 全仓零调用。`reloadAcpConnections` 禁令改由 `test/architecture.test.cjs` 守卫（`src/**` 不得出现该字面量）。
 - **6 个死函数（同日删除）**：`catalog/payload.cjs` 的 `protoSidekick`/`jsonSidekick`、`goal/store.cjs` 的 `removeCapability`/`removeCapabilitiesForGoal`、`models/order.cjs` 的 `rankMap`、`panel/goal-view.cjs` 服务端 `statusText`（goalScript 模板内同名客户端函数保留）。判据：**定义后全仓零引用**（交叉扫描确认）。
+
+## 2026-11-10 导出面清理与自更新传输去重
+
+- **81 个零外部引用导出条目（33 文件）已删**：只删 `module.exports` 项，函数全保留。判据=src/test/scripts 交叉零引用 + 无 `module[变量]` 取用，清理后剩 0。反例：`cli-cache.cjs` 的 `rpcFor` 仍被文件内生产代码调用，只是导出多余。
+- **`src/update/transfer.cjs`（新）**：fetch 与 http.request 两条自更新传输原各抄一份「5 跳重定向 + 限长 + abort/timeout」，现合为 `transferBytes(..., { open })`。**`policy.allowedUrl` 保持成员访问**——`test/proxy.test.cjs` 靠替换它打本地假件。净减 48 行；`attachmentUnsupported` 同时收成 `anthropic.cjs` 单份。
