@@ -8,268 +8,24 @@
 
 const { randomUUID } = require('node:crypto');
 const { frame } = require('./wire.cjs');
-const { textChunk, thinkingChunk, signatureChunk, redactedThinkingChunk, toolChunk, stopChunk, usageChunk } = require('./native-chat-codec.cjs');
+const { textChunk, stopChunk } = require('./native-chat-codec.cjs');
 const { createTracker } = require('./tracker.cjs');
-const { anthropicHeaders, createAnthropicAdapter, stripCacheControl, inspectToolPairing } = require('./anthropic.cjs');
-const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, validStateItem, sizeBucket } = require('./state-envelope.cjs');
-const { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody } = require('./provider-request.cjs');
-const { readErrorDetail, parseEvent, events, usageSnapshot, classifyErrorDetail, classifyQuotaDetail } = require('./provider-events.cjs');
+const { anthropicHeaders, createAnthropicAdapter, inspectToolPairing } = require('./anthropic.cjs');
+const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, sizeBucket } = require('./state-envelope.cjs');
+const { STANDARD_CHAT_FINISH, endpoint, buildRequestBody } = require('./provider-request.cjs');
+const { readErrorDetail, parseEvent, events, classifyErrorDetail, classifyQuotaDetail, enumValue, providerErrorCode } = require('./provider-events.cjs');
 const { createStreamWriter } = require('./stream-writer.cjs');
+const { createStreamProcessor } = require('./stream-processor.cjs');
+const { openUpstream, transportDetail } = require('./request-policy.cjs');
 
 // A burst of resets means a second fixed offset tends to re-collide with the
 // same edge, so the pause is drawn from half to full budget instead of being
 // constant. Only one retry exists, so the worst case stays bounded.
 const RETRY_PAUSE_MS = 600;
 
-function processor(id, uid, chat, emit, scope = null, onSkip = () => {}, onStateSize = () => {}, onDiag = () => {}, declaredTools = null) {
-  const calls = new Map();
-  const itemIndexes = new Map();
-  const stateItems = new Map();
-  let finalItems = null;
-  const texts = new Map();
-  let emittedText = 0;
-  let terminal = false;
-  let reason = 2;
-  let chatFinish = null;
-  let finished = false;
-  let usage = null;
-  let finishedResult = null;
-  const getCall = (index, itemId) => {
-    const key = index ?? itemIndexes.get(itemId) ?? itemId;
-    if (key === undefined) {
-      const err = new Error('Tool call has no index');
-      err.code = 'upstream_invalid_tool';
-      err.detail = 'no-index';
-      throw err;
-    }
-    if (itemId) itemIndexes.set(itemId, key);
-    if (!calls.has(key)) calls.set(key, { id: '', name: '', arguments: '', complete: undefined });
-    return calls.get(key);
-  };
-  const setName = (call, name) => {
-    if (!name) return;
-    if (call.name && call.name !== name) { const err = new Error('Tool call name changed mid-stream'); err.code = 'upstream_invalid_tool'; err.detail = 'changed-name'; throw err; }
-    call.name = name;
-  };
-  const text = async (key, value, complete = false, thinking = false) => {
-    if (typeof value !== 'string') return;
-    const previous = texts.get(key) || '';
-    if (complete && !value.startsWith(previous)) {
-      const err = new Error('Inconsistent completed text');
-      err.code = 'upstream_text_mismatch';
-      throw err;
-    }
-    const delta = complete ? value.slice(previous.length) : value;
-    texts.set(key, complete ? value : previous + value);
-    if (delta) { await emit(thinking ? thinkingChunk(id, delta) : textChunk(id, delta)); emittedText++; }
-  };
-  const item = async (value, index, done) => {
-    if (scope && value && typeof value === 'object' && index !== undefined) stateItems.set(index, value);
-    if (value.type === 'function_call' || value.type === 'custom_tool_call') {
-      const call = getCall(index, value.id);
-      if (value.type === 'custom_tool_call') call.custom = true;
-      if (value.call_id || value.id) call.id = value.call_id || value.id;
-      if (value.name) call.name = value.name;
-      const payload = value.type === 'custom_tool_call' ? value.input : value.arguments;
-      if (typeof payload === 'string' && (done || payload)) {
-        if (done) call.complete = payload;
-        else call.arguments = payload;
-      }
-    } else if (done && value.type === 'message') {
-      for (const [contentIndex, part] of (value.content || []).entries()) {
-        if (part.type === 'output_text') await text(`${index}:${contentIndex}`, part.text, true);
-        if (part.type === 'refusal') await text(`refusal:${index}:${contentIndex}`, part.refusal, true);
-      }
-    } else if (done && value.type === 'reasoning') {
-      for (const [summaryIndex, part] of (value.summary || []).entries()) {
-        if (part.type === 'summary_text') await text(`reasoning:${index}:${summaryIndex}`, part.text, true, true);
-      }
-      for (const [contentIndex, part] of (value.content || []).entries()) {
-        if (part.type === 'reasoning_text') await text(`reasoning_text:${index}:${contentIndex}`, part.text, true, true);
-      }
-    }
-  };
-  return {
-    get terminal() { return terminal; },
-    async event(event) {
-      if (finished) return;
-      const data = event.data;
-      if (event.type === 'done') {
-        if (!terminal && chat) terminal = true;
-        return;
-      }
-      if (!data || data.error) {
-        const err = new Error('Upstream stream error');
-        err.code = 'upstream_stream_error';
-        err.providerCode = providerErrorCode(data);
-        throw err;
-      }
-      const container = chat ? data : data.response;
-      if (container && typeof container === 'object' && Object.hasOwn(container, 'usage')) usage = usageSnapshot(data, chat);
-      if (chat) {
-        for (const choice of data.choices || []) {
-          if ((choice.index ?? 0) !== 0) continue;
-          const delta = choice.delta || choice.message || {};
-          if (delta.content) await text('chat', delta.content);
-          if (delta.refusal) await text('chat-refusal', delta.refusal);
-          if (delta.reasoning_content || delta.reasoning) await text('reasoning', delta.reasoning_content || delta.reasoning, false, true);
-          // Signatures and redacted-thinking flags are passthrough markers, not
-          // semantic output — they must not feed `texts` or the empty-output check.
-          if (delta.signature) await emit(signatureChunk(id, delta.signature));
-          if (delta.thinking_redacted) await emit(redactedThinkingChunk(id));
-          if (delta.function_call) {
-            const call = getCall('function_call');
-            call.id = call.id || `${id}:0`;
-            if (delta.function_call.name) setName(call, delta.function_call.name);
-            if (typeof delta.function_call.arguments === 'string') call.arguments += delta.function_call.arguments;
-          }
-          for (const tool of delta.tool_calls || []) {
-            const call = getCall(tool.index ?? 0);
-            if (tool.id && !call.id) call.id = tool.id;
-            if (tool.function?.name) setName(call, tool.function.name);
-            if (typeof tool.function?.arguments === 'string') call.arguments += tool.function.arguments;
-          }
-          if (choice.finish_reason) {
-            terminal = true;
-            chatFinish = choice.finish_reason;
-            reason = choice.finish_reason === 'length' ? 3 : choice.finish_reason === 'content_filter' ? 11 : 2;
-          }
-        }
-        return;
-      }
-      switch (event.type) {
-        case 'response.output_item.added': await item(data.item, data.output_index, false); break;
-        case 'response.output_item.done': await item(data.item, data.output_index, true); break;
-        case 'response.function_call_arguments.delta': getCall(data.output_index, data.item_id).arguments += data.delta || ''; break;
-        case 'response.function_call_arguments.done': getCall(data.output_index, data.item_id).complete = data.arguments; break;
-        // Custom tool calls carry raw-string input, not JSON arguments.
-        case 'response.custom_tool_call_input.delta': { const call = getCall(data.output_index, data.item_id); call.custom = true; call.arguments += data.delta || ''; break; }
-        case 'response.custom_tool_call_input.done': { const call = getCall(data.output_index, data.item_id); call.custom = true; call.complete = data.input; break; }
-        case 'response.output_text.delta': await text(`${data.output_index ?? 0}:${data.content_index ?? 0}`, data.delta); break;
-        case 'response.output_text.done': await text(`${data.output_index ?? 0}:${data.content_index ?? 0}`, data.text, true); break;
-        case 'response.reasoning.delta':
-        case 'response.reasoning_summary_text.delta': await text(`reasoning:${data.output_index ?? 0}:${data.summary_index ?? 0}`, data.delta, false, true); break;
-        case 'response.reasoning_text.delta': await text(`reasoning_text:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.delta, false, true); break;
-        case 'response.reasoning_text.done': await text(`reasoning_text:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.text, true, true); break;
-        case 'response.reasoning_summary_text.done': await text(`reasoning:${data.output_index ?? 0}:${data.summary_index ?? 0}`, data.text, true, true); break;
-        case 'response.refusal.delta': await text(`refusal:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.delta); break;
-        case 'response.refusal.done': await text(`refusal:${data.output_index ?? 0}:${data.content_index ?? 0}`, data.refusal, true); break;
-        case 'response.completed':
-          if (scope && Array.isArray(data.response?.output)) finalItems = data.response.output;
-          if (data.response?.status && data.response.status !== 'completed' && data.response.status !== 'incomplete') {
-            const err = new Error('Unexpected completion status');
-            err.code = 'upstream_stream_error';
-            throw err;
-          }
-          for (const [index, value] of (data.response?.output || []).entries()) await item(value, index, true);
-          terminal = true;
-          if (data.response?.status === 'incomplete') reason = data.response?.incomplete_details?.reason === 'content_filter' ? 11 : 3;
-          break;
-        case 'response.incomplete':
-          if (scope && Array.isArray(data.response?.output)) finalItems = data.response.output;
-          for (const [index, value] of (data.response?.output || []).entries()) await item(value, index, true);
-          terminal = true;
-          reason = data.response?.incomplete_details?.reason === 'content_filter' ? 11 : 3;
-          break;
-        case 'response.failed':
-        case 'error': {
-          const err = new Error('Upstream response failed');
-          err.code = 'upstream_stream_error';
-          err.providerCode = providerErrorCode(data);
-          throw err;
-        }
-      }
-    },
-    async finish() {
-      if (finished) return finishedResult;
-      if (!terminal) {
-        const err = new Error('Upstream stream ended without completion');
-        err.code = 'upstream_stream_incomplete';
-        throw err;
-      }
-      const tools = [];
-      const orderedCalls = [...calls.entries()].sort(([left], [right]) => typeof left === 'number' && typeof right === 'number' ? left - right : 0);
-      const unknownReported = new Set();
-      if (reason === 2) for (const [, call] of orderedCalls) {
-        // Diagnostic only: an undeclared name still forwards the block — the
-        // model's spelling may legitimately differ from our normalisation.
-        if (declaredTools && call.name && !declaredTools.has(call.name) && !unknownReported.has(call.name)) {
-          unknownReported.add(call.name);
-          onDiag({ event: 'tool-name-unknown', name: call.name, declaredCount: declaredTools.size });
-        }
-        const args = call.complete ?? call.arguments;
-        if (!call.name || !call.id || typeof args !== 'string') {
-          const err = new Error('Incomplete tool call');
-          err.code = 'upstream_invalid_tool';
-          err.detail = 'incomplete-call';
-          throw err;
-        }
-        try {
-          if (!call.custom) JSON.parse(args); // Validate once, then forward the original JSON bytes.
-        } catch {
-          const err = new Error('Invalid tool call JSON');
-          err.code = 'upstream_invalid_tool';
-          err.detail = 'invalid-json';
-          throw err;
-        }
-        tools.push({ id: call.id, name: call.name, arguments: args, isCustomToolCall: Boolean(call.custom) });
-      }
-      // `stop` is an ordinary plain-text end; only an upstream claim of a tool
-      // finish with zero tool blocks is a mismatch. The Responses path carries
-      // no such claim marker, so chatFinish stays null there.
-      if (reason === 2 && tools.length === 0 && (chatFinish === 'tool_calls' || chatFinish === 'function_call')) {
-        onDiag({ event: 'tool-claim-mismatch', textChunks: texts.size, toolChunks: 0 });
-      }
-      if (reason === 2 && !tools.length && !emittedText) {
-        const err = new Error('Upstream completed without output');
-        err.code = 'upstream_empty_output';
-        throw err;
-      }
-      if (tools.length) await emit(toolChunk(id, tools));
-      if (usage) await emit(usageChunk(id, uid, usage));
-      if (scope) {
-        const items = finalItems ?? [...stateItems.entries()]
-          .sort(([left], [right]) => typeof left === 'number' && typeof right === 'number' ? left - right : 0).map(([, value]) => value);
-        if (items.length && items.every(validStateItem)) {
-          const envelope = STATE_PREFIX + Buffer.from(JSON.stringify({ scope, items })).toString('base64url');
-          const bytes = Buffer.byteLength(envelope);
-          if (bytes <= MAX_STATE_BYTES) { onStateSize({ bytes }); await emit(signatureChunk(id, envelope)); }
-          else onStateSize({ bytes, dropped: true });
-        } else if (items.length) {
-          onSkip(items.some(item => item?.type === 'custom_tool_call') ? 'custom-tool' : 'invalid-item');
-        }
-      }
-      await emit(stopChunk(id, tools.length ? 10 : reason, uid));
-      finished = true;
-      finishedResult = { toolNames: tools.map(tool => tool.name), toolIds: tools.map(tool => tool.id) };
-      return finishedResult;
-    },
-  };
-}
-
-// Only enumerations reach the log: messages can carry prompt text, host names and tokens.
-const enumValue = value => typeof value === 'string' && /^[A-Za-z_$][\w$]{0,47}$/.test(value) ? value : null;
-const providerErrorCode = data => enumValue(data?.error?.code) || enumValue(data?.response?.error?.code) || enumValue(data?.code);
 // SSE frame names are lowercase vocabulary (`response.output_text.delta`), so the dot is
 // allowed only here and only in that shape.
 const frameName = value => typeof value === 'string' && value.length <= 64 && /^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)*$/.test(value) ? value : null;
-
-// A transport failure is classified as a bare `upstream_network`, which cannot
-// tell a reset socket from a DNS or TLS failure. Only enumerations are kept:
-// messages can carry host names and tokens, so they never reach the log.
-function transportDetail(err) {
-  const parts = [enumValue(err?.name), enumValue(err?.cause?.code) || enumValue(err?.code)];
-  return [...new Set(parts.filter(Boolean))].join('/');
-}
-
-// True when the request body carries any explicit cache breakpoint; only the
-// Anthropic body builder emits them, so the 400 degrade below can safely test
-// for their presence instead of tracking them out of band.
-function hasCacheControl(body) {
-  const marked = list => Array.isArray(list) && list.some(block => block && typeof block === 'object' && block.cache_control !== undefined);
-  if (marked(body?.tools) || (Array.isArray(body?.system) && marked(body.system))) return true;
-  return Array.isArray(body?.messages) && body.messages.some(message => marked(message?.content));
-}
 
 async function serveChat({ request, route, provider, res, signal, log = () => {}, timeouts = {}, onMetrics = () => {}, cacheSupport = null }) {
   const id = randomUUID();
@@ -420,15 +176,6 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
         signal: upstreamController.signal
       });
     };
-    // A connection-layer failure before the first byte is retried up to three
-    // times after bounded, abortable pauses that double per retry. The
-    // zero-output gate only proves no billable output reached the client; it
-    // cannot prove the provider never received the request, so it bounds
-    // duplication risk rather than guaranteeing the provider was never charged.
-    // A retried send still rides the pooled socket — `connection: close` cannot
-    // force a fresh connection through fetch — so consecutive failures on the
-    // same peer can still exhaust the budget.
-    const MAX_CONNECT_ATTEMPTS = 4;
     const RETRYABLE_CODES = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT']);
     const connectFailure = err => RETRYABLE_CODES.has(err?.cause?.code || err?.code);
     const pause = ms => new Promise(resolve => {
@@ -436,101 +183,17 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
       const timer = setTimeout(done, ms);
       upstreamController.signal.addEventListener('abort', done, { once: true });
     });
-    const connectStartedAt = Date.now();
-    let upstream;
-    for (let attempt = 1; ; attempt++) {
-      const attemptStartedAt = Date.now();
-      try {
-        upstream = await send(body);
-        if (attempt > 1) record({ event: 'upstream-retry-recovered', model: route.model, attempt: attempt - 1, attempts: attempt });
-        break;
-      } catch (error) {
-        const elapsedMs = Date.now() - attemptStartedAt;
-        connectAttempts.push({ attempt, elapsedMs, code: enumValue(error?.cause?.code) || enumValue(error?.code) });
-        const retryable = connectFailure(error)
-          && !upstreamController.signal.aborted && !signal?.aborted && !res.headersSent;
-        if (!retryable || attempt >= MAX_CONNECT_ATTEMPTS || retryDeadlineMs === 0) throw error;
-        const waitMs = retryPauseMs(attempt);
-        if (Date.now() - connectStartedAt + waitMs > retryDeadlineMs) throw error;
-        record({ event: 'upstream-retry', model: route.model, attempt, transport: transportDetail(error), pauseMs: waitMs, elapsedMs, bytes: Buffer.byteLength(JSON.stringify(body)) });
-        await pause(waitMs);
-        if (upstreamController.signal.aborted || signal?.aborted) throw error;
-      }
-    }
-    // Thinking-mode providers (DeepSeek, Moonshot) answer a forced/required
-    // tool_choice with HTTP 400 — "Thinking mode does not support this
-    // tool_choice" — instead of ignoring it, so a forced choice turns a working
-    // request into a hard failure. Two bounded steps: on the Anthropic format,
-    // first retry with thinking disabled so the caller's forced choice survives;
-    // only if that also fails, degrade the choice to `auto`. The provider's own
-    // message must name tool_choice, so a 400 about anything else (context
-    // length, bad parameters) still surfaces unchanged.
-    if (!upstream.ok && upstream.status === 400) {
-      // The response body is read exactly once and shared by both degrade
-      // rules — getReader() fails on a consumed stream, so a second read would
-      // silently see an empty string and skip a recoverable retry.
-      const detail = await readDetail(upstream);
-      if (forcedToolChoice(body) && /tool_choice/i.test(detail)) {
-        const hadThinking = body.thinking !== undefined;
-        // Degrading drops an injected `thinking` flag: if the provider refused
-        // that field too, carrying it into the final retry would fail again.
-        const degradeChoice = next => {
-          const degraded = { ...next, tool_choice: anthropic
-            ? { type: 'auto', ...(next.tool_choice?.disable_parallel_tool_use ? { disable_parallel_tool_use: true } : {}) }
-            : 'auto' };
-          if (!hadThinking) delete degraded.thinking;
-          return degraded;
-        };
-        if (anthropic && !hadThinking) {
-          // Thinking mode is what refuses a forced choice, so disabling it is
-          // the cheaper retry; degrading the choice is only the fallback.
-          body = { ...body, thinking: { type: 'disabled' } };
-          upstream = await send(body);
-          if (upstream.ok) {
-            record({ event: 'provider-degraded', model: route.model, reason: 'thinking-disabled' });
-          } else {
-            await readDetail(upstream);
-            body = degradeChoice(body);
-            upstream = await send(body);
-            record({ event: 'provider-degraded', model: route.model, reason: 'tool-choice' });
-          }
-        } else {
-          body = degradeChoice(body);
-          upstream = await send(body);
-          record({ event: 'provider-degraded', model: route.model, reason: 'tool-choice' });
-        }
-      } else if (('store' in body || 'include' in body)
-          && /store|include|reasoning\.encrypted_content/i.test(detail)) {
-        const { store: _store, include: _include, ...stripped } = body;
-        body = stripped;
-        upstream = await send(body);
-        record({ event: 'provider-degraded', model: route.model, reason: 'responses-state' });
-      } else if (anthropic && cacheBreakpoints && hasCacheControl(body)) {
-        // A 400 recoverable only by stripping the breakpoint proves the marker
-        // caused it — that success is what marks the provider. A retry that
-        // still fails has a different cause and must not disable anything.
-        body = stripCacheControl(body);
-        upstream = await send(body);
-        if (upstream.ok) {
-          cacheSupport.disable(provider);
-          record({ event: 'cache-breakpoint-disabled', model: route.model, reason: '400' });
-        }
-      } else if (chat && !anthropic && typeof body.max_tokens === 'number'
-          && /max_?(?:completion_)?tokens/i.test(detail)) {
-        // DeepSeek ignores `max_completion_tokens` but honours `max_tokens`;
-        // official OpenAI reasoning models are the mirror image. One rename
-        // retry, gated on the error naming the field so unrelated 400s
-        // (context length, bad schema) still surface unchanged. `chat` also
-        // covers anthropic here, which legitimately sends `max_tokens` — the
-        // explicit !anthropic guard keeps it out of this rename.
-        const { max_tokens: cap, ...rest } = body;
-        body = { ...rest, max_completion_tokens: cap };
-        upstream = await send(body);
-        // Only a successful rename proves the field was the cause; a retry that
-        // still fails has some other problem and must not read as "degraded".
-        if (upstream.ok) record({ event: 'provider-degraded', model: route.model, reason: 'max-tokens-field' });
-      }
-    }
+    const retry = {
+      deadlineMs: retryDeadlineMs,
+      nextPause: retryPauseMs,
+      pause,
+      canRetry: error => connectFailure(error)
+        && !upstreamController.signal.aborted && !signal?.aborted && !res.headersSent,
+      isAborted: () => upstreamController.signal.aborted || signal?.aborted,
+    };
+    const upstream = await openUpstream({ body, chat, anthropic, provider, model: route.model,
+      cacheBreakpoints, cacheSupport, send, readDetail, record, connectAttempts, retry });
+
     status = upstream.status;
     if (!upstream.ok) {
       // Triage only: the hint must describe the attempt that actually failed, so
@@ -583,12 +246,13 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     }
 
     const declaredTools = new Set((request.tools || []).map(tool => tool.name));
-    const stream = processor(id, route.uid || request.modelUid, chat, write, !chat ? stateScope(provider, route) : null,
-      reason => record({ event: 'state-envelope-skipped', model: route.model, reason }),
-      ({ bytes, dropped }) => dropped
+    const stream = createStreamProcessor({ id, uid: route.uid || request.modelUid, chat, emit: write,
+      scope: !chat ? stateScope(provider, route) : null,
+      onSkip: reason => record({ event: 'state-envelope-skipped', model: route.model, reason }),
+      onStateSize: ({ bytes, dropped }) => dropped
         ? record({ event: 'state-envelope-oversize', model: route.model, bytes, limit: MAX_STATE_BYTES })
         : record({ event: 'state-envelope-size', model: route.model, bytes, bucket: sizeBucket(bytes) }),
-      event => record(event), declaredTools);
+      onDiag: event => record(event), declaredTools });
     try {
       const adapt = anthropic ? createAnthropicAdapter({ onDiagnostic: event => record(event) }) : event => [event];
       upstream: for await (const raw of events(rawChunksWithTimeout(upstream.body))) {

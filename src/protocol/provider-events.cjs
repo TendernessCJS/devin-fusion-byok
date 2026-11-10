@@ -150,4 +150,8 @@ function usageSnapshot(data, chat) {
   return snapshot;
 }
 
-module.exports = { readErrorDetail, parseEvent, events, usageSnapshot, classifyErrorDetail, classifyQuotaDetail };
+// Only enumerations reach the log: messages can carry prompt text, host names and tokens.
+const enumValue = value => typeof value === 'string' && /^[A-Za-z_$][\w$]{0,47}$/.test(value) ? value : null;
+const providerErrorCode = data => enumValue(data?.error?.code) || enumValue(data?.response?.error?.code) || enumValue(data?.code);
+
+module.exports = { readErrorDetail, parseEvent, events, usageSnapshot, classifyErrorDetail, classifyQuotaDetail, enumValue, providerErrorCode };
