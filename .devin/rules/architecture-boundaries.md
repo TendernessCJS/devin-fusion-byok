@@ -19,8 +19,8 @@ description: "Apply when changing module ownership, the src/runtime partition, p
   **必须有上限**——`serveChat` 注入 `timeouts.drainMs`，默认 120000ms、夹取上限 600000ms；超时按客户端取消结算（`outcome: cancelled`、
   `code: client_cancelled`、日志 `chat-aborted` 带 `reason: backpressure-timeout`），**不得**往已堵住的 socket 再写错误文案，也不得据此触发
   供应商错误续跑；零依赖、只做传输，不认识模型/protobuf/monitor），`anthropic.cjs` 仍是
-  Anthropic Messages 的独立实现。`inference.cjs` 的导出面被下游依赖（`backend.cjs` 取 `serveChat`，测试取 `buildRequestBody`/`parseEvent`/`STATE_PREFIX`），
-  再拆时**保持这四个导出不变**；② 字节层 —— `wire.cjs` 是**全仓共享**的 proto 读写/framing/gzip 工具，`catalog/*`、`fast-context/`、
+  Anthropic Messages 的独立实现。`inference.cjs` 的导出面被下游依赖（`backend.cjs` 取 `serveChat`，测试取 `buildRequestBody`/`STATE_PREFIX`），
+  再拆时**保持这三个导出不变**；② 字节层 —— `wire.cjs` 是**全仓共享**的 proto 读写/framing/gzip 工具，`catalog/*`、`fast-context/`、
   `runtime/` 都直接依赖它，**不是协议专用**；③ 埋点 —— `tracker.cjs` 是计量（→ monitor），它落在 `protocol/` 是**依赖图决定而非语义决定**：为消除
   `protocol → runtime` 反向依赖才从 `runtime/monitor.cjs` 移出，**不能搬回 `runtime/`**（`runtime/backend.cjs` 本就 import `protocol/inference.cjs`，
   搬回即成环）。旧名对照：`chat.cjs → acp.cjs → native-chat-codec.cjs`、`responses.cjs → inference.cjs`——旧名正是误读源头（前者与 Chat Completions 无关，OpenAI Chat 的请求体在

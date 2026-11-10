@@ -47,12 +47,10 @@ description: "Apply when changing usage recording, attribution, time filtering, 
 - **配置键分三类，清理时按类处理**：①**面板可管**（`providers`、`roleInclusions`/`roleExclusions`、`hiddenNativeModelUids`、
   `updateProxy`、自动继续开关、`enabled`）；②**程序自管**（`lastFusionSelection`
   在选组合时记录——不要手工写，也不要期望面板能改）；③**死键**（当前代码零读取，如退役管线的 `sidekicks`）。
-  另有一类**派生值**：`inferenceServerUrl`（后端推理地址派生值，非 `ModelInfo.f18`）由运行端口派生、不再持久化；旧配置里等于派生值的副本由 `pruneRetiredKeys` 清理，
-  不同值视为用户手工覆盖保留。新增/删除配置键时先想清属于哪类：**死键必须有清理路径**，
-  否则用户配置会永久带着它而面板又删不掉（「已关闭的排除条目」在角色列表里渲染为无开关死行，面板提供「移除」按钮走 `forgetRoleRef`：BYOK ref 是配置权威、直接可删；native ref 必须
-  `nativeCatalogStatus === 'ready'` 才放行，防止盲窗期把「还没同步」误删成「真死了」）。配置清理一律走 `src/config/config.cjs` 的
-  `pruneRetiredKeys`（激活期一次性、幂等、键不存在即返回 `false` 不写盘），它现在是**所有退役键的唯一清理路径**：`sidekicks`、`fusionPresets`、
-  `defaultFusionUid`、`fusionMatrix` 全在其中（2026-10-16：预设退役迁移已删除，那三个键不再有任何读取方，留着只会让用户配置永久带着删不掉的字段）。
+  另有一类**派生值**：`inferenceServerUrl`（后端推理地址派生值，非 `ModelInfo.f18`）由运行端口派生——不读配置、不持久化。
+  新增/删除配置键时先想清属于哪类；「已关闭的排除条目」在角色列表里渲染为无开关死行，面板提供「移除」按钮走 `forgetRoleRef`：BYOK ref 是配置权威、直接可删；native ref 必须
+  `nativeCatalogStatus === 'ready'` 才放行，防止盲窗期把「还没同步」误删成「真死了」。历史退役键（`sidekicks`、`fusionPresets`、
+  `defaultFusionUid`、`fusionMatrix`）的自动剪枝已随本机清理完成一并退役：从旧备份恢复配置时旧键不生效、也不会被自动删除。
 - **`context-diagnostics` 里的 `zero-size` 计数不是回归信号，唯一判据是「启动后是否继续增长」**。上游在启动阶段会送 `size: 0` 的
   `usage_update`，被观测器按设计丢弃（不渲染、不参与百分比，也不会出现 NaN%）；0.3.47 / 0.3.48 三次实机验收分别停在 6 / 11 / 12 后
   不再增长，而 `missing-size` 始终为 0。**启动期一次性突发属正常，不要为它改代码**；只有该计数在启动之后仍持续增长，才值得插桩
