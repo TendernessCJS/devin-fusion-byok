@@ -77,9 +77,7 @@ function fixture(t, initial = {}) {
     } },
     './config/config.cjs': {
       readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
-      writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)),
-      defaultConfig: realRequire('./config/config.cjs').defaultConfig,
-    },
+      defaultConfig: realRequire('./config/config.cjs').defaultConfig },
     './catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: () => [], isOwnUid: realRequire('./catalog/payload.cjs').isOwnUid,
       catalogSignature: realRequire('./catalog/signature.cjs').catalogSignature,
       ownEntriesSignature: realRequire('./catalog/signature.cjs').ownEntriesSignature,

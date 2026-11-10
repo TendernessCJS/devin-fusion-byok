@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { monitorDateRange, filterMonitorRecords, filteredMonitorView, createMonitorStats } = require('../src/monitor/stats.cjs');
+const { monitorDateRange, filterMonitorRecords, filteredMonitorView, createMonitorStats, deriveUsageMetrics } = require('../src/monitor/stats.cjs');
 
 test('date presets use local calendar days and month boundaries', () => {
   const now = new Date(2026, 9, 13, 12).getTime();
@@ -105,10 +105,30 @@ test('provider and model filters narrow the view before summarizing', () => {
     'provider and model combine');
 });
 
+test('deriveUsageMetrics computes visible tokens, tps and usage state from one formula', () => {
+  const base = { status: 'success', inputTokens: 100, outputTokens: 40, cachedTokens: 0, reasoningTokens: 10,
+    hasTools: false, hasReasoning: true, decodeMs: 1000, durationMs: 2000 };
+  assert.deepEqual(deriveUsageMetrics(base), { visibleTokens: 30, tps: 30, throughputTps: 20, usageState: 'complete', usageComplete: true });
+  assert.deepEqual(deriveUsageMetrics({ ...base, hasTools: true }),
+    { visibleTokens: 30, tps: null, throughputTps: 20, usageState: 'complete', usageComplete: true });
+  assert.deepEqual(deriveUsageMetrics({ ...base, reasoningTokens: null }),
+    { visibleTokens: null, tps: null, throughputTps: 20, usageState: 'complete', usageComplete: true });
+  assert.deepEqual(deriveUsageMetrics({ ...base, outputTokens: 0, reasoningTokens: 0, hasReasoning: false }),
+    { visibleTokens: 0, tps: null, throughputTps: 0, usageState: 'complete', usageComplete: true });
+  assert.deepEqual(deriveUsageMetrics({ ...base, cachedTokens: 101 }),
+    { visibleTokens: null, tps: null, throughputTps: null, usageState: 'inconsistent', usageComplete: false });
+  assert.deepEqual(deriveUsageMetrics({ ...base, inputTokens: null, outputTokens: null, cachedTokens: null, reasoningTokens: null }),
+    { visibleTokens: null, tps: null, throughputTps: null, usageState: 'missing', usageComplete: false });
+});
+
 test('createMonitorStats returns the same pure helpers for browser injection', () => {
   const factory = eval('(' + createMonitorStats.toString() + ')');
   const injected = factory();
   assert.equal(typeof injected.monitorDateRange, 'function');
   assert.equal(typeof injected.filteredMonitorView, 'function');
   assert.equal(injected.monitorDateRange('this-month', { now: new Date(2026, 9, 13, 12).getTime() }).startDate, '2026-10-01');
+  const base = { status: 'success', inputTokens: 100, outputTokens: 40, cachedTokens: 0, reasoningTokens: 10,
+    hasTools: false, hasReasoning: true, decodeMs: 1000, durationMs: 2000 };
+  assert.deepEqual(injected.deriveUsageMetrics(base),
+    { visibleTokens: 30, tps: 30, throughputTps: 20, usageState: 'complete', usageComplete: true });
 });

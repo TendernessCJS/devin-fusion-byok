@@ -1,5 +1,5 @@
 'use strict';
-const { token, usageIsInconsistent, identifier } = require('../monitor/stats.cjs');
+const { token, identifier, deriveUsageMetrics } = require('../monitor/stats.cjs');
 
 function usageOf(data, chat) {
   const u = chat ? data?.usage : data?.response?.usage;
@@ -41,7 +41,7 @@ function semanticOutput(event, chat) {
 }
 function createTracker({ id, route, provider, now = () => performance.now(), startedAt = new Date().toISOString() }) {
   const start = now();
-  let firstOutput = null, firstText = null, firstResponse = null, lastOutput = null, usage = null, complete = false;
+  let firstOutput = null, firstText = null, firstResponse = null, lastOutput = null, usage = null;
   let hasTools = false, hasReasoning = false, terminalAt = null, providerStop = null;
   // The provider-emitted tool block is the only authority on which calls were
   // actually sent: fragment merging below is a fallback for turns that never
@@ -88,11 +88,7 @@ function createTracker({ id, route, provider, now = () => performance.now(), sta
       const container = chat ? event.data : event.data?.response;
       if (container && typeof container === 'object' && Object.hasOwn(container, 'usage')) {
         usage = usageOf(event.data, chat);
-        complete = false;
-        if (usage) {
-          if (usage.reasoningTokens > 0) hasReasoning = true;
-          complete = usage.inputTokens !== null && usage.outputTokens !== null && !usageIsInconsistent(usage);
-        }
+        if (usage && usage.reasoningTokens > 0) hasReasoning = true;
       }
     },
     toolsEmitted(ids) {
@@ -100,20 +96,16 @@ function createTracker({ id, route, provider, now = () => performance.now(), sta
     },
     finish(status, httpStatus, code = null) {
       const durationMs = Math.max(0, now() - start);
-      const inconsistent = usageIsInconsistent(usage);
-      const visibleTokens = !inconsistent && usage?.outputTokens != null && (!hasReasoning || usage?.reasoningTokens != null)
-        ? usage.outputTokens - (usage.reasoningTokens ?? 0) : null;
       const decodeMs = firstText !== null && terminalAt > firstText ? terminalAt - firstText : null;
-      const tps = status === 'success' && !hasTools && visibleTokens > 0 && decodeMs > 0 ? visibleTokens * 1000 / decodeMs : null;
-      return { firstResponseMs: firstResponse, id, startedAt, model: route.model, providerId: provider.id || route.providerId || '', effort: route.effort || null,
+      const record = { firstResponseMs: firstResponse, id, startedAt, model: route.model, providerId: provider.id || route.providerId || '', effort: route.effort || null,
         status, code, httpStatus, inputTokens: usage?.inputTokens ?? null, outputTokens: usage?.outputTokens ?? null,
         cachedTokens: usage?.cachedTokens ?? null, reasoningTokens: usage?.reasoningTokens ?? null,
         firstOutputMs: firstOutput, firstTextMs: firstText, durationMs,
         outputSpanMs: firstOutput !== null && lastOutput > firstOutput ? lastOutput - firstOutput : null,
-        tps, decodeMs, visibleTokens, hasTools, hasReasoning,
-        throughputTps: !inconsistent && usage?.outputTokens != null && durationMs > 0 ? usage.outputTokens * 1000 / durationMs : null,
-        toolIds: emittedToolIds ?? [...new Set([...chatToolIds.values(), ...responseToolIds.values()].map(identifier).filter(Boolean))].slice(-32),
-        usageComplete: complete };
+        decodeMs, hasTools, hasReasoning,
+        toolIds: emittedToolIds ?? [...new Set([...chatToolIds.values(), ...responseToolIds.values()].map(identifier).filter(Boolean))].slice(-32) };
+      const metrics = deriveUsageMetrics(record);
+      return { ...record, visibleTokens: metrics.visibleTokens, tps: metrics.tps, throughputTps: metrics.throughputTps, usageComplete: metrics.usageComplete };
     },
     providerStopReason() { return providerStop; }
   };

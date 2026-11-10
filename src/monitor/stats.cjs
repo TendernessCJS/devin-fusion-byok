@@ -5,6 +5,20 @@ function createMonitorStats() {
   const usageIsInconsistent = record => record?.usageState === 'inconsistent' ||
     (token(record?.cachedTokens) !== null && token(record?.inputTokens) !== null && record.cachedTokens > record.inputTokens) ||
     (token(record?.reasoningTokens) !== null && token(record?.outputTokens) !== null && record.reasoningTokens > record.outputTokens);
+  function deriveUsageMetrics(record) {
+    const outputTokens = token(record.outputTokens);
+    const reasoningTokens = token(record.reasoningTokens);
+    const inconsistent = usageIsInconsistent(record);
+    const visibleTokens = !inconsistent && outputTokens !== null &&
+      (record.hasReasoning === false || reasoningTokens !== null) ? outputTokens - (reasoningTokens ?? 0) : null;
+    const tps = record.status === 'success' && record.hasTools === false && visibleTokens > 0 && record.decodeMs > 0
+      ? visibleTokens * 1000 / record.decodeMs : null;
+    const throughputTps = !inconsistent && outputTokens !== null && record.durationMs > 0
+      ? outputTokens * 1000 / record.durationMs : null;
+    const usageState = inconsistent ? 'inconsistent' : token(record.inputTokens) !== null && outputTokens !== null ? 'complete' :
+      ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens'].some(key => token(record[key]) !== null) ? 'partial' : 'missing';
+    return { visibleTokens, tps, throughputTps, usageState, usageComplete: usageState === 'complete' };
+  }
   function summarize(records) {
     const usable = records.filter(record => !usageIsInconsistent(record));
     const result = { requests: records.length, success: 0, error: 0, cancelled: 0, excludedUsageRecords: records.length - usable.length };
@@ -105,7 +119,7 @@ function createMonitorStats() {
       fields.reduce((sum, field) => sum + originalCounts[field], 0) === records.length;
     return { ...source, records, summary: summarize(records), attributionSummary: complete ? counts : all && originalComplete ? originalCounts : null };
   }
-  return { token, timing, usageIsInconsistent, summarize, attributionStats, monitorDateRange, filterMonitorRecords, filteredMonitorView };
+  return { token, timing, usageIsInconsistent, deriveUsageMetrics, summarize, attributionStats, monitorDateRange, filterMonitorRecords, filteredMonitorView };
 }
 // a usable identifier string — non-empty, bounded, and free of control bytes.
 const identifier = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/.test(value) ? value : null;

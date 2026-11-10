@@ -6,12 +6,12 @@ const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const LIMIT = 5000;
 const COMPACT_AT = LIMIT + 250;
-const { token, timing, usageIsInconsistent, summarize, attributionStats, identifier } = require('./stats.cjs');
+const { token, timing, usageIsInconsistent, deriveUsageMetrics, summarize, attributionStats, identifier } = require('./stats.cjs');
 function normalize(record) {
   if (!identifier(record?.id) || !['success', 'error', 'cancelled'].includes(record.status) || !Number.isFinite(Date.parse(record.startedAt))) return null;
   const result = { id: record.id, startedAt: record.startedAt, model: identifier(record.model) || 'unknown',
     providerId: identifier(record.providerId) || '', effort: identifier(record.effort), status: record.status,
-    code: identifier(record.code), httpStatus: token(record.httpStatus) ?? 0, usageComplete: record.usageComplete === true };
+    code: identifier(record.code), httpStatus: token(record.httpStatus) ?? 0 };
   // The stored record carries no `sessionId`/`attribution`/`messageIds`/`role`:
   // attribution is computed per snapshot by `associate`, so a placeholder here is
   // a claim nothing has verified. Every line of the real monitor.jsonl read
@@ -24,18 +24,11 @@ function normalize(record) {
   result.hasReasoning = typeof record.hasReasoning === 'boolean' ? record.hasReasoning : null;
   if (result.reasoningTokens > 0) result.hasReasoning = true;
   result.decodeMs = timing(record.decodeMs);
-  const inconsistent = usageIsInconsistent(result);
-  result.visibleTokens = !inconsistent && result.outputTokens !== null &&
-    (result.hasReasoning === false || result.reasoningTokens !== null) ? result.outputTokens - (result.reasoningTokens ?? 0) : null;
-  result.tps = result.status === 'success' && result.hasTools === false && result.visibleTokens > 0 && result.decodeMs > 0 ? result.visibleTokens * 1000 / result.decodeMs : null;
-  result.throughputTps = !inconsistent && result.outputTokens !== null && result.durationMs > 0 ? result.outputTokens * 1000 / result.durationMs : null;
+  Object.assign(result, deriveUsageMetrics(result));
   result.firstResponseMs = timing(record.firstResponseMs);
-  result.usageState = inconsistent ? 'inconsistent' : result.inputTokens !== null && result.outputTokens !== null ? 'complete' :
-    ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens'].some(key => result[key] !== null) ? 'partial' : 'missing';
-  result.usageComplete = result.usageState === 'complete';
+  const inconsistent = usageIsInconsistent(result);
   result.gatewayTps = !inconsistent && result.outputTokens > 0 && result.firstResponseMs !== null && result.durationMs > result.firstResponseMs
     ? result.outputTokens * 1000 / (result.durationMs - result.firstResponseMs) : null;
-  if (inconsistent) result.tps = null;
   return result;
 }
 const quote = value => "'" + value.replace(/'/g, "''") + "'";
@@ -75,16 +68,7 @@ async function sessionMatches(databasePath, toolIds = []) {
 async function sessionLabels(databasePath, ids) {
   if (!ids.length) return { labels: new Map(), status: 'not-needed' };
   const values = ids.map(quote).join(',');
-  const sql = `.timeout 1000\nSELECT id, title, last_activity_at FROM sessions WHERE id IN (${values});\n`;
-  const rows = await new Promise(resolve => {
-    let child;
-    try { child = execFile('/usr/bin/sqlite3', ['-readonly', '-json', databasePath], { timeout: 8000, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => {
-      if (error) { resolve(null); return; }
-      try { resolve(JSON.parse(stdout || '[]')); } catch { resolve(null); }
-    }); } catch { resolve(null); return; }
-    child.stdin.on('error', () => {});
-    child.stdin.end(sql);
-  });
+  const rows = await lookupRows(databasePath, `.timeout 1000\nSELECT id, title, last_activity_at FROM sessions WHERE id IN (${values});\n`, TOOL_LOOKUP_TIMEOUT_MS).catch(() => null);
   if (rows === null) return { labels: new Map(), status: 'unavailable' };
   const labels = new Map();
   for (const row of rows) {
