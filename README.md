@@ -182,8 +182,9 @@ Devin 的模型选择器读的是 CLI 在 `~/.cache/devin/cli` 下的按身份�
 
 ## 当前版本验证
 
-- 本机 macOS + Devin **3.12.28** × 插件 0.6.6：静态核对与自动测试（1748 例 / 0 失败）通过，非端到端验收。
-- 初检披露的 ACP 旧路径 skip 缺口已用「从当前 bundle 抽取真实谓词」补齐；本轮未新增兼容层、未修改 Devin 本体。明细见 [`docs/devin-3.12.28-review.md`](docs/devin-3.12.28-review.md)。
+- 本机 macOS + Devin **3.12.43** × 插件 0.6.6：静态契约 `ok`、`npm run verify -- --with-tests` 全项通过、全量测试 1755 例 / 0 失败。非端到端验收。
+- 升级后的复验方法与此前各版本的记录见 [`docs/native-compat-verification.md`](docs/native-compat-verification.md)；3.12.28 的有界 REA 与关键链路专项审查见 [`docs/devin-3.12.28-review.md`](docs/devin-3.12.28-review.md)。
+- ACP 终态判定现从当前 bundle 抽取真实谓词：应用目录缺失才跳过，锚点缺失、重复或形状变化一律失败，不再静默 skip。
 
 ## 开发
 

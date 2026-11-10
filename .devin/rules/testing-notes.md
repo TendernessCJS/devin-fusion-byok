@@ -62,7 +62,7 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   **唯一**凭据来源，CLI 不读本地 REPL 凭据与 env 里的 key。
 - **架构反例必须调用真实违规谓词并精确断言 `source -> target`**：endsWith/子串匹配或自造判定函数会让「删掉守卫」照样绿，等于没有反例。
 - **传输取消用例的判据是「请求到达目标阶段 + 服务端 socket 实际 close」**：不用固定 sleep 触发 abort，也不只断言 reject——要条件等待到 `slowHits`/`closes` 递增。
-- `test/fixtures/real-picker.json` 是 **Devin Desktop 3.12.28** 真实 picker 观测的子集快照，捕获于 2026-11-09（文件名不再带版本，来源记在文件内 `source` 字段与这里）；更新它必须说明取自哪个版本。**2026-11-09 重捕**：uid 选择与 3.12.17 快照完全相同（11 natives + 11 fusions），22 条的 uid/label/各维 order 一字未变，唯一实质变化是开始记录 family 各维的 `controlType`（旧快照未保留）；因此这次重捕不是追变化，而是让夹具不再缺少真机字段。
+- `test/fixtures/real-picker.json` 是 **Devin Desktop 3.12.28** 真实 picker 观测的子集快照，捕获于 2026-11-09（文件名不再带版本，来源记在文件内 `source` 字段与这里）；更新它必须说明取自哪个版本。**2026-11-09 重捕**：uid 选择与 3.12.17 快照完全相同（11 natives + 11 fusions），22 条的 uid/label/各维 order 一字未变，唯一实质变化是开始记录 family 各维的 `controlType`（旧快照未保留）；因此这次重捕不是追变化，而是让夹具不再缺少真机字段。**2026-11-10 复验**：这 11 条原生条目在 3.12.43 的实时目录里 label/name 逐字一致、零缺失，故未随版本重捕——重捕的触发条件是这些行或 picker 报文契约变化，版本号前进本身不算。
 - 读 `test/fixtures/**` 一律用 `__dirname` 拼绝对路径，禁止 CWD 相对路径（曾导致从其他目录单跑 ENOENT）。
 
 ## installed-renderer 双能力探测（批次 C 后）
