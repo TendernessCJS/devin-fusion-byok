@@ -4,7 +4,7 @@ description: "改 CLI 缓存写入资格、代际判定、coverage 与 health �
 ---
 # CLI 缓存代际与 coverage（cli-cache-generations）
 
-## 代际判定与 coverage（Devin 3.11.216 / CLI 3000.11.216 实测后新增；3.11.228 复核、3.12.17 再复核仍 `model_configs_v6`）
+## 代际判定与 coverage（Devin 3.11.216 / CLI 3000.11.216 实测后新增；3.11.228、3.12.17、3.12.43 复核仍 `model_configs_v6`）
 
 - `model_configs_v6.<16hex>.bin` 是当前 CLI 版本在写的格式；**可写性按内容判定，代际号只用于展示**——
   `model_configs*`（含无后缀=v1）一律是候选：信封+载荷校验通过即 supported（任意 `_vN` 可写，

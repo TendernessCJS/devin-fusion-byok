@@ -30,7 +30,7 @@ description: "Apply when changing module ownership, the src/runtime partition, p
 - **扩展宿主编排层在 `src/activation/`**（自 725 行 `extension.cjs` 拆出，16 个 `.cjs`）：`errors`（RuntimeError/`safeError` + 叶子 `models/discovery-error.cjs`）、`settings`（`globalSetting`）、`backend-handshake`
   （`ensureBackend` + 局部 `pause`/`compareVersion`）、`catalog-sync`（原生目录观测/推送）、`effective-origin`（解析原生派生链：
   LS `--api_server_url` → portal → 默认，含收敛窗口）、`managed-settings`（受管设置写入的 `critical()` 闸门）、`enable`
-  （受管设置写入 + LS 注入 + startNativeSync）、`commands`（命令注册、Fusion 选择与 `disable` 恢复）、`panel-install`（状态栏/面板控制器）、`host-identity`（宿主构建身份）、`native-contract`（只读探针）、`liveness`（`live`/`superseded` 判据）、`cache-sync`/`config-sync`（CLI 缓存检查、配置监听/afterChange）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`
+  （受管设置写入 + LS 注入 + startNativeSync）、`commands`（命令注册、Fusion 选择与 `disable` 恢复）、`panel-install`（状态栏/面板控制器）、`host-identity`（宿主构建身份）、`native-contract`（只读探针）、`liveness`（`live`/`superseded` 判据）、`remote-support`（远端窗口反向隧道与远端激活）、`cache-sync`/`config-sync`（CLI 缓存检查、配置监听/afterChange）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`
   被测试与 `package.json` 依赖**。这些文件在扩展宿主运行、**不能进 backend 的 require 闭包**（否则宿主代码被算进重启哈希）。
   拆分时的硬约束：共享可变槽必须放进显式传递的 `shared` 对象，**不得**改成模块级单例（跨 activate 串状态）；
   `enableQueue`/`reconcileQueue` 这类序列化队列留在各自工厂闭包内；`generation`/abort 判据一处都不能少。

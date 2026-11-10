@@ -41,7 +41,7 @@ description: "Apply before changing Anthropic or Chat wire semantics — the per
   单回合输出最大 **4,239**、从未触顶，缓存命中 **99.8%**（`inputTokens 113,078` / `cachedTokens 112,896`）。
   修复后改发 `max_tokens: 393216`（恰为 DeepSeek 文档上限 384K），11 回合全 200、`provider-degraded` **0 次**——该字段被直接接受，换名回退未被需要。
 - 直接因果证据（同日探针，用本仓 `buildRequestBody` 直发真实端点）：`max_completion_tokens: 40` → 输出 **3234** tokens / `finish_reason "stop"`；
-  `max_tokens: 40` → `finish_reason "length"`、正好 40 tokens。注：小上限下思考会吃掉全部预算，出现「`length` + 零可见文本」是**已记录的刻意行为**（见本卷 `response.incomplete` 条）。
+  `max_tokens: 40` → `finish_reason "length"`、正好 40 tokens。注：小上限下思考会吃掉全部预算，出现「`length` + 零可见文本」是**已记录的刻意行为**（见 `provider-measurements.md` 的 `response.incomplete` 条）。
 - **思考 token 有无取决于"面"，不取决于厂商**：同一 `deepseek-flash`，Chat 面给
   `completion_tokens_details.reasoning_tokens`（15/17 >0），Anthropic 面给 `thinking_tokens`（0/34）。掉列先看路由。
 - `tps` 仅 `hasTools === false` 时计算（`monitor/store.cjs`）；Chat 至今每请求都带工具 → 全 `null` 是**设计**。

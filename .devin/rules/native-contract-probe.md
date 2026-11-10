@@ -31,5 +31,5 @@ description: "改探针标记表或缓存判定，或排查「Devin 升级后插
 - **运行期未知目录 RPC 侦测**：`bridge.cjs` 对「RPC 形状 + 方法名含 `Model|ModelConfig|Catalog` + 不匹配 `CATALOG` 正则」的请求记一次 `catalog-rpc-unknown`，按方法名去重后落到 globalStorage `catalog-unknown.json`（`{at, rpc}`，上限 50，只记方法名）。理由：桥的方法名是硬编码白名单，Devin 新增一个携带目录的 RPC 不会报错，只会让 picker 里 BYOK 条目**安静地少一部分**。这份收据是升级后唯一能自查「有没有新目录面冒出来」的落点——**不得**据它自动降级或自动放行。
 - **`assignment_jwt` 是 INFORMATIONAL 标记**（cli+ls）：官方 `ModelAssignment` 带该字段，我们的本地应答刻意不带（CLI 3000.11.228 实测仍不校验）。标记消失说明契约变了，届时本地指派可能被校验失败——这是提前量，**不是**要求我们伪造 jwt。
 
-- **覆盖边界**：本探针只做产物内**字符串存在性**扫描；字段号/字段名的强断言在 `test/native-field-contract.test.cjs`（`CODEC_FIELDS`+`CATALOG_FIELDS`）。两者互补——「探针 ok」不等于「字段号还成立」，反之亦然。
-- **markers `ok` 不证明行为**：3.12.28 升级兼容审查报告见 `docs/devin-3.12.28-review.md`（有界关键链路，非全仓穷尽）——`status:"ok"` 只是标记命中快照，新 hook 的真实运行、`assignment_jwt` 的运行时校验、端到端验收都不在其覆盖内。升级后先跑 `npm run verify -- --with-tests`（静态契约 + 运行期契约缓存 + 已安装身份 + 日志聚合 + 窄测）；3.12.32 与 3.12.43 均 `ok`、`missing` 为空，逐版记录见 `docs/native-compat-verification.md`。
+- **覆盖边界**：本探针只做产物内**字符串存在性**扫描；字段号/字段名的强断言在 `test/native-field-contract.test.cjs`（`EXPECTED_FIELDS`/`EXPECTED_REFS`/`EXPECTED_ENUMS`）。两者互补——「探针 ok」不等于「字段号还成立」，反之亦然。
+- **markers `ok` 不证明行为**：`status:"ok"` 只是标记命中快照，新 hook 的真实运行、`assignment_jwt` 的运行时校验、端到端验收都不在其覆盖内。升级后先跑 `npm run verify -- --with-tests`（静态契约 + 运行期契约缓存 + 已安装身份 + 日志聚合 + 窄测）；3.12.32 与 3.12.43 均 `ok`、`missing` 为空，逐版记录见 `docs/native-compat-verification.md`。

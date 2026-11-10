@@ -13,7 +13,7 @@ trigger: model_decision
 
 ## 3.12.28 / 0.6.6 本轮有界产物分析（2026-11-09）
 
-对**交付物**（0.6.6 VSIX 解包 `extension/`，119 个 JS）与两个 webapp bundle 文件（`modelCatalogSource-*`、`model-picker-concept-*`）做了一次有界 REA 分析：插件侧 0 解析失败但语义图 partial、含 unknowns；两 bundle 文件 2/2 解析、0 失败。注意 `model-picker-concept-*.js` 自身声明是 **non-production mock/playground**，不得当生产 picker 证据。详细数字与边界声明见 `docs/devin-3.12.28-review.md`。本条不改变上文对大型原生 bundle 的预算结论——后者只证明「大型 bundle 拿不到可用图」，小型有界产物是可以分析的。
+对**交付物**（0.6.6 VSIX 解包 `extension/`，119 个 JS）与两个 webapp bundle 文件（`modelCatalogSource-*`、`model-picker-concept-*`）做了一次有界 REA 分析：插件侧 0 解析失败但语义图 partial、含 unknowns；两 bundle 文件 2/2 解析、0 失败。注意 `model-picker-concept-*.js` 自身声明是 **non-production mock/playground**，不得当生产 picker 证据。这些数字来自一次性有界分析，证据目录在 `/tmp`、已不可复现，不作永久权威来源。本条不改变上文对大型原生 bundle 的预算结论——后者只证明「大型 bundle 拿不到可用图」，小型有界产物是可以分析的。
 
 ## REA 的原生面与语义图预算（2026-10-28 复测，REA 6.8.0）
 
@@ -73,7 +73,7 @@ trigger: model_decision
 
 ## 3.11.228 目录面字段表（REA 2026-10-27）
 
-读法同前（assets 里搜 `typeName=\`<类型>\``，紧跟的 `newFieldList`）。强断言在 `test/native-field-contract.test.cjs` 的 `CATALOG_FIELDS`；**本次升级目录面未漂移**（逐条一致）。
+读法同前（assets 里搜 `typeName=\`<类型>\``，紧跟的 `newFieldList`）。强断言在 `test/native-field-contract.test.cjs` 的 `EXPECTED_FIELDS`/`EXPECTED_REFS`（目录面条目）；**本次升级目录面未漂移**（逐条一致）。
 
 ```
 ClientModelConfig: 1 label,4 disabled,5 supports_images,10 provider,18 max_tokens,22 model_uid,23 model_info,30 model_family_metadata

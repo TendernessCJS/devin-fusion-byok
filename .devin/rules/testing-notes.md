@@ -76,7 +76,6 @@ description: "Apply when writing or debugging tests — the installed-renderer s
   `node_modules/@exa/windsurf-acp/index.cjs`，本机 3.12.28 中该旧路径不存在即 skip。现经 `test/helpers/installed-acp.cjs`
   按唯一 export 锚点从 `dist/extension.js` 抽取真实谓词（含 $ 的 minify 名不写死）与其依赖函数，仅 root 缺席才 skip，
   锚点缺失/重复/形状不支持 fail-loud；两份真实 bundle 变异验证证明断言有牙。
-  明细见 `docs/devin-3.12.28-review.md`。
 - `native-field-contract.test.cjs` 从 webapp assets 的 protobuf-es `newFieldList` 锁定实际消费字段的
   号/名/kind/scalar T/repeated/opt，及关键 message/enum 引用的完整 typeName（import→export 递归解析）；
   新字段（ModelInfo f26、ChatMessagePrompt f22、ModelUsageStats f13、GetChatMessageRequest f28）只登记。
