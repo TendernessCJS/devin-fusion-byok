@@ -5,37 +5,25 @@ const path = require('node:path');
 const { defaultConfig, readConfig } = require('./config/config.cjs');
 const { readDoc, updateConfig, archiveCorrupt, recoverFromBackup } = require('./config/store.cjs');
 const { buildCatalog } = require('./catalog.cjs');
-const { installAutoContinue } = require('./runtime/host/auto-continue.cjs');
-const { installGoalContinue } = require('./goal/continue-hook.cjs');
-const { createGoalController } = require('./goal/controller.cjs');
 const { ensureBackend } = require('./activation/backend-handshake.cjs');
 const { safeError } = require('./activation/errors.cjs');
-const { live } = require('./activation/liveness.cjs');
-const { installCatalogSync } = require('./activation/catalog-sync.cjs');
-const { installCacheSync } = require('./activation/cache-sync.cjs');
+const { createCatalogSync } = require('./activation/catalog-sync.cjs');
+const { createSettingsOwner } = require('./activation/settings-owner.cjs');
+const { createSelection } = require('./activation/selection.cjs');
+const { createCacheSync } = require('./activation/cache-sync.cjs');
 const { createConfigSync } = require('./activation/config-sync.cjs');
-const { installEnable } = require('./activation/enable.cjs');
+const { createRuntimeSession } = require('./activation/enable.cjs');
+const { createContinuation } = require('./activation/continuation.cjs');
 const { installCommands } = require('./activation/commands.cjs');
-const { installPanel } = require('./activation/panel-install.cjs');
-const { teardown } = require('./activation/teardown.cjs');
-const { createNativeCatalogState } = require('./activation/stores/native-catalog.cjs');
-const { createCacheSyncState } = require('./activation/stores/cache-sync.cjs');
-const { createAcpObservationState } = require('./activation/stores/acp-observation.cjs');
-const { createPanelState } = require('./activation/stores/panel.cjs');
-const { createManagedSettingsGate } = require('./activation/managed-settings.cjs');
+const { createPanelHost } = require('./activation/panel-install.cjs');
 const { publishHostBuild } = require('./activation/host-identity.cjs');
-const { createRemoteSupport, describeError, probeRemoteSupport } = require('./activation/remote-support.cjs');
-// Shared lifecycle state across activate/teardown/deactivate.
-const lifecycle = { stopNativeSync: undefined, stopAutoContinue: undefined, resetAutoContinue: undefined,
-  cancelAutoContinueSession: undefined, stopGoalContinue: undefined, goalController: undefined,
-  connection: undefined, acpObserver: undefined, authStatus: undefined,
-  remoteSupport: undefined, log: undefined, runtimeWaitAbort: undefined,
-  restoreOnHostDisable: undefined,
-  activationGeneration: 0, reconcileHalted: true, activationDisposed: true };
+// Only the currently active session is reachable for deactivate(); every
+// service below is constructed per activate call, so a re-activated extension
+// never inherits state from a previous instance.
+let activeSession;
 
 async function activate(context) {
   const activatedAt = new Date().toISOString();
-  lifecycle.activationDisposed = false;
   const output = vscode.window.createOutputChannel('Devin Fusion BYOK');
   context.subscriptions.push(output);
   const log = (event, data) => output.appendLine(JSON.stringify({ time: new Date().toISOString(), event, ...(data || {}) }));
@@ -70,142 +58,63 @@ async function activate(context) {
         ? path.resolve(native.extensionPath, native.packageJSON.main) : null;
     } catch { return null; }
   })();
-  // Remote windows keep this extension UI-side while the native extension
-  // lives on the remote: catalog injection is impossible there, so remote
-  // support only wraps the remote extension's ssh spawn / authority resolver
-  // to establish a reverse tunnel back to the local backend. The wrappers
-  // must be in place before the window resolves its remote authority, hence
-  // the eager start inside remote windows only: a local window needs no
-  // tunnel and must not install process-level patches it can never use.
-  const remoteWindow = Boolean(vscode.env?.remoteName);
-  let remoteSupport;
-  try {
-    remoteSupport = createRemoteSupport({ vscode, root, nativeMain, log,
-      isEnabled: () => !lifecycle.activationDisposed && config().enabled !== false });
-  } catch (error) { log('remote-support-unavailable', describeError(error)); }
-  lifecycle.remoteSupport = remoteSupport;
-  if (config().enabled !== false && remoteWindow) void remoteSupport?.start();
-  // Local windows keep the wrappers out but still report whether this host can
-  // be patched at all — otherwise the first remote window is where it fails.
-  else if (config().enabled !== false) void probeRemoteSupport({ vscode, root, nativeMain, log });
-  const installContinuation = () => {
-    try {
-      if (nativeMain) {
-        // Goal mode is opt-in: /goal is neither advertised nor intercepted until the user turns it on.
-        shared.goalContinue = installGoalContinue({
-          nativeMainPath: nativeMain,
-          isEnabled: () => live(lifecycle, config) && config().goalEnabled === true
-        });
-        shared.autoContinue = installAutoContinue({
-          nativeMainPath: nativeMain,
-          isEnabled: () => config().enabled !== false && (config().autoContinueOnProviderError === true || config().autoContinueUntilPlanComplete === true),
-          getOptions: () => ({
-            onProviderError: config().autoContinueOnProviderError === true,
-            untilPlanComplete: config().autoContinueUntilPlanComplete === true
-          }),
-          isSessionSuppressed: sessionId => lifecycle.goalController ? lifecycle.goalController.ownsSession(sessionId) : false,
-          onStopped: data => {
-            if (data?.reason === 'plan-attempt-limit') {
-              return vscode.window.showWarningMessage('已自动继续 10 次仍未结束，已停止自动继续。请检查后手动继续对话。');
-            }
-            return vscode.window.showWarningMessage('服务商持续返回错误，已停止自动继续（上限为 5 次或 10 分钟）。请检查服务商状态后手动继续对话。');
-          },
-          log
-        });
-      } else {
-        log('auto-continue-unavailable');
-      }
-    } catch {
-      log('auto-continue-unavailable');
-    }
-    if (shared.goalContinue) {
-      try {
-        lifecycle.goalController = createGoalController({
-          root,
-          transport: {
-            dispatch: request => shared.goalContinue.dispatch(request),
-            cancel: sessionId => shared.goalContinue.cancel(sessionId),
-            sessions: () => shared.goalContinue.sessions(),
-            sessionStatus: sessionId => shared.goalContinue.sessionStatus(sessionId),
-            setListener: listener => shared.goalContinue.setListener(listener),
-            setCommandHandler: handler => shared.goalContinue.setCommandHandler(handler),
-            setGoalOwned: (sessionId, owned) => {
-              if (owned) lifecycle.cancelAutoContinueSession?.(sessionId);
-              return shared.goalContinue.setGoalOwned(sessionId, owned);
-            }
-          },
-          isEnabled: () => live(lifecycle, config) && config().goalEnabled === true,
-          isTrusted: () => vscode.workspace.isTrusted !== false,
-          reportCliPath: path.join(context.extensionPath, 'src/goal/report.cjs'),
-          log
-        });
-      } catch { lifecycle.goalController = undefined; log('goal-controller-unavailable'); }
-    }
-    lifecycle.stopAutoContinue = () => { shared.autoContinue?.dispose(); shared.autoContinue = undefined; };
-    lifecycle.resetAutoContinue = () => { shared.autoContinue?.reset(); };
-    lifecycle.cancelAutoContinueSession = sessionId => shared.autoContinue?.cancelSession?.(sessionId);
-    lifecycle.stopGoalContinue = () => {
-      try { lifecycle.goalController?.dispose(); } catch {}
-      lifecycle.goalController = undefined;
-      try { shared.goalContinue?.dispose(); } catch {}
-      shared.goalContinue = undefined;
-    };
-  };
-  // Shared slots: each installer assigns the ones it owns, while other
-  // installer segments (and enable/teardown) read them — so the declarations
-  // live in this activate scope, not inside any single installer.
-  const stores = {
-    nativeCatalog: createNativeCatalogState(),
-    cacheSync: createCacheSyncState(),
-    acpObservation: createAcpObservationState(),
-    panel: createPanelState(),
-  };
-  const managedSettings = createManagedSettingsGate();
-  const shared = {
-    goalContinue: undefined, autoContinue: undefined,
-    management: undefined,
-    backendStatus: 'stopped',
-    ensureEnabled: undefined, disablePromise: undefined,
-    saveFusionChoice: undefined, reconcilePreference: undefined,
-    disable: undefined, reconcileSelection: undefined,
-  };
-  installContinuation();
-  const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...stores.nativeCatalog.nativeModels.values()], stores.nativeCatalog.nativeAllowedUids); };
   const run = fn => async () => { try { await fn(); } catch (error) {
     const safe = safeError(error);
     if (safe.code === 'cancelled') return;
     log('error', { code: safe.code }); vscode.window.showErrorMessage('Fusion BYOK：' + safe.message);
   } };
-  lifecycle.log = log;
-  const deps = { lifecycle, config, configFile, vscode, context, log, catalog, nativeMain, root, output, run, stores, managedSettings };
-  const cacheSync = installCacheSync({ deps, shared, publish: () => shared.management?.publish() });
-  installCatalogSync({ deps, shared, onChange: () => {
-    const published = Promise.resolve(shared.management?.publish()).catch(() => {});
-    stores.panel.updateStatusBar?.();
-    cacheSync.changed();
-    return published;
-  } });
-  installEnable({ deps, shared });
-  installCommands({ deps, shared });
+  let session;
+  const settingsOwner = createSettingsOwner({ root, extensionPath: context.extensionPath, vscode,
+    globalState: context.globalState, isLive: () => session.isLive() });
+  let catalogSync;
+  const catalog = () => { const current = config(); const native = catalogSync.read();
+    return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, native.models, native.allowedUids); };
+  let panel;
+  catalogSync = createCatalogSync({ root, config, log,
+    lifecycleView: {
+      isLive: () => session.isLive(),
+      isDisposed: () => session.isDisposed(),
+      generation: () => session.generation(),
+      isSuperseded: generation => session.isSuperseded(generation),
+    },
+    onChange: () => {
+      const published = Promise.resolve(panel.publish()).catch(() => {});
+      panel.updateStatusBar();
+      cacheSync.changed();
+      return published;
+    } });
+  const selection = createSelection({ config, configFile, catalog, settingsOwner,
+    isLive: () => session.isLive(), isReconcileHalted: () => session.isReconcileHalted(), log,
+    publish: () => panel.publish() });
+  const continuation = createContinuation({ root, extensionPath: context.extensionPath, nativeMain,
+    config, vscode, isLive: () => session.isLive(), log });
+  const cacheSync = createCacheSync({ config, catalog, readNativeCatalog: () => catalogSync.read(), log,
+    publish: () => panel.publish() });
+  let configSync;
+  panel = createPanelHost({ vscode, context, config, configFile, root, log, output, catalog, catalogSync,
+    cacheSync, selection, continuation, runtime: () => session,
+    afterChange: type => configSync.afterChange(type) });
+  session = createRuntimeSession({ root, extensionPath: context.extensionPath, subscriptions: context.subscriptions,
+    config, configFile, vscode, context, nativeMain, log, catalog, catalogSync, settingsOwner,
+    selection, continuation, onPublish: () => panel.publish() });
+  activeSession = session;
+  continuation.start();
+  session.prepareHostSupport();
+  installCommands({ vscode, context, config, catalog, output, log, run, runtime: session, selection, panel });
   const configChanged = () => {
     try { cacheSync.changed(); } catch (error) { log('cache-sync-error', { code: error?.code || error?.message || 'unknown' }); }
   };
-  const configSync = createConfigSync({ deps, shared,
-    changed: configChanged,
-    publish: () => shared.management.publish() });
-  installPanel({ deps, shared, cacheSync, afterChange: configSync.afterChange });
+  configSync = createConfigSync({ config, configFile, vscode, context, log, runtime: session,
+    selection, continuation, changed: configChanged, publish: () => panel.publish() });
+  panel.install();
   configSync.start();
-  if (config().enabled !== false) await run(shared.ensureEnabled)();
-  return { status: () => lifecycle.connection?.status, autoContinue: () => shared.autoContinue?.status() };
+  if (config().enabled !== false) await run(session.ensureEnabled)();
+  return { status: () => session.status(), autoContinue: () => continuation.autoContinueDetails() };
 }
 
 async function deactivate() {
-  lifecycle.activationDisposed = true;
-  lifecycle.stopAutoContinue?.(); lifecycle.stopAutoContinue = undefined;
-  lifecycle.stopGoalContinue?.(); lifecycle.stopGoalContinue = undefined;
-  await teardown(lifecycle);
-  const restore = lifecycle.restoreOnHostDisable; lifecycle.restoreOnHostDisable = undefined;
-  try { await restore?.(); } catch {}
+  const session = activeSession; activeSession = undefined;
+  await session?.deactivate();
 }
 
 module.exports = { activate, deactivate, ensureBackend, safeError };

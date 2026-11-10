@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createSandboxLoader } = require('./helpers/sandbox.cjs');
-const { createManagedSettingsGate } = require('../src/activation/managed-settings.cjs');
+const { createSettingsOwner } = require('../src/activation/settings-owner.cjs');
 
 const filename = path.resolve(__dirname, '../src/activation/enable.cjs');
 
@@ -63,22 +63,11 @@ function fixture(t, options = {}) {
       update: async (key, value) => value === undefined ? state.delete(key) : state.set(key, value),
     },
   };
-  const lifecycle = { activationGeneration: 0, activationDisposed: false, connection: undefined };
-  const shared = {
-    reconcilePreference: async () => {},
-    startNativeSync: () => {},
-    observeNativeModels: () => {},
-    pushToBackend: () => {},
-    nativeAllowedUids: new Set(),
-    management: undefined,
+  const catalogSync = {
+    read: () => ({ models: [], allowedUids: new Set(), allowedMode: 'restricted', status: 'loading' }),
+    observeModels: () => {}, observeAllowed: () => {}, refresh: async () => {},
+    markUnsupported: () => {}, start: () => {}, stop: () => {},
   };
-  const deps = { lifecycle, config, configFile, vscode, context,
-    // Log payloads are built inside the vm realm; re-owning them here keeps
-    // deepStrictEqual comparisons against test-realm literals meaningful.
-    log: (event, data) => logs.push({ event, data: data && typeof data === 'object' ? { ...data } : data }),
-    catalog: () => ({ models: [] }), nativeMain: '/native/main.js', root,
-    stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } },
-    managedSettings: createManagedSettingsGate() };
 
   const effective = { current: options.effective || { origin: null, source: 'default' } };
   const loader = createSandboxLoader({ filename, overrides: {
@@ -99,15 +88,27 @@ function fixture(t, options = {}) {
       return Promise.resolve();
     } },
   } });
-  loader.module.exports.installEnable({ deps, shared });
+  const session = loader.module.exports.createRuntimeSession({
+    root, extensionPath, subscriptions: context.subscriptions, config, configFile, vscode, context,
+    nativeMain: '/native/main.js',
+    // Log payloads are built inside the vm realm; re-owning them here keeps
+    // deepStrictEqual comparisons against test-realm literals meaningful.
+    log: (event, data) => logs.push({ event, data: data && typeof data === 'object' ? { ...data } : data }),
+    catalog: () => ({ models: [] }), catalogSync,
+    settingsOwner: createSettingsOwner({ root, extensionPath, vscode, globalState: context.globalState,
+      isLive: () => session.isLive() }),
+    selection: { saveFusionChoice: async () => {}, reconcilePreference: async () => {}, reconcileSelection: async () => {} },
+    continuation: { start: () => {}, suspend: () => {}, resetAutoContinue: () => {}, cancelAutoContinueSession: () => {},
+      dispose: () => {}, autoContinueStatus: () => 'unavailable', goalController: () => undefined },
+    onPublish: () => {} });
   t.after(() => loader.assertStubsUsed('upstream-push-log'));
-  return { root, pushes, signals, resolvers, logs, handlers, lifecycle, codeium, shared, settle, effective, configFile,
+  return { root, pushes, signals, resolvers, logs, handlers, codeium, session, settle, effective, configFile,
     pushLogs: () => logs.filter(entry => entry.event === 'upstream-push') };
 }
 
 test('the effective LS-arg origin is pushed while a hand-written apiServerUrl is ignored', async t => {
   const f = fixture(t, { apiServerUrl: 'https://ignored.example.com', effective: { origin: 'https://custom.example.com/api', source: 'ls-arg' } });
-  await f.shared.ensureEnabled();
+  await f.session.ensureEnabled();
   await f.settle();
   assert.deepEqual(f.pushes, [{ root: f.root, origin: 'https://custom.example.com/api', source: 'ls-arg' }]);
   // deepEqual on the whole payload also pins "no host, no origin, no token".
@@ -116,7 +117,7 @@ test('the effective LS-arg origin is pushed while a hand-written apiServerUrl is
 
 test('an unset apiServerUrl pushes null (backend keeps its default upstream)', async t => {
   const f = fixture(t, {});
-  await f.shared.ensureEnabled();
+  await f.session.ensureEnabled();
   await f.settle();
   assert.equal(f.pushes.length, 1);
   assert.equal(f.pushes[0].origin, null);
@@ -125,21 +126,21 @@ test('an unset apiServerUrl pushes null (backend keeps its default upstream)', a
 
 test('a skipped push is logged with its reason', async t => {
   const f = fixture(t, { effective: { origin: 'https://custom.example.com', source: 'portal' }, result: { ok: false, reason: 'unsupported' } });
-  await f.shared.ensureEnabled();
+  await f.session.ensureEnabled();
   await f.settle();
   assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: false, reason: 'unsupported', source: 'portal' } }]);
 });
 
 test('a failed push logs its detail enum when the backend reports one', async t => {
   const f = fixture(t, { effective: { origin: 'https://custom.example.com', source: 'ls-arg' }, result: { ok: false, reason: 'identity', detail: 'source' } });
-  await f.shared.ensureEnabled();
+  await f.session.ensureEnabled();
   await f.settle();
   assert.deepEqual(f.pushLogs(), [{ event: 'upstream-push', data: { ok: false, reason: 'identity', detail: 'source', source: 'ls-arg' } }]);
 });
 
 test('a later configuration change re-pushes the re-resolved effective origin', async t => {
   const f = fixture(t, {});
-  await f.shared.ensureEnabled();
+  await f.session.ensureEnabled();
   await f.settle();
   assert.equal(f.pushes.length, 1);
   assert.equal(f.handlers.length, 1);
@@ -155,7 +156,7 @@ test('a later configuration change re-pushes the re-resolved effective origin', 
 
 test('a repeated trigger resolving to the same origin sends no second POST', async t => {
   const f = fixture(t, { effective: { origin: 'https://custom.example.com', source: 'ls-arg' } });
-  await f.shared.ensureEnabled();
+  await f.session.ensureEnabled();
   await f.settle();
   assert.equal(f.pushes.length, 1);
   await f.handlers[0]({ affectsConfiguration: section => section === 'windsurf.portalUrl' });
@@ -176,7 +177,7 @@ async function until(fn, label) {
 
 test('a superseded resolution publishes nothing and the newer target wins', async t => {
   const f = fixture(t, { deferResolve: true });
-  const enabling = f.shared.ensureEnabled();
+  const enabling = f.session.ensureEnabled();
   await until(() => f.resolvers.length === 1, 'first resolver');
   await enabling;
   assert.equal(f.handlers.length, 1);
@@ -190,7 +191,7 @@ test('a superseded resolution publishes nothing and the newer target wins', asyn
   f.resolvers[0].resolve({ origin: 'https://old.example.com', source: 'ls-arg' });
   await f.settle();
   assert.equal(f.pushes.length, 1, 'the superseded generation must not publish');
-  assert.equal(f.lifecycle.upstreamPushedKey.endsWith('https://new.example.comportal'), true,
+  assert.deepEqual([f.pushes.at(-1).origin, f.pushes.at(-1).source], ['https://new.example.com', 'portal'],
     'the dedupe key belongs to the newer generation');
   // Exactly one skip record marks the cancelled resolution — the only push
   // event is the one that actually POSTed.
@@ -200,12 +201,11 @@ test('a superseded resolution publishes nothing and the newer target wins', asyn
 
 test('a resolution completing after disable pushes nothing', async t => {
   const f = fixture(t, { deferResolve: true });
-  const enabling = f.shared.ensureEnabled();
+  const enabling = f.session.ensureEnabled();
   await until(() => f.resolvers.length === 1, 'pending resolver');
   await enabling;
   fs.writeFileSync(f.configFile, JSON.stringify({ enabled: false }));
-  f.lifecycle.activationGeneration++;
-  f.lifecycle.activationDisposed = true;
+  await f.session.deactivate();
   f.resolvers[0].resolve({ origin: 'https://stale.example.com', source: 'portal' });
   await f.settle();
   assert.equal(f.pushes.length, 0, 'a resolver that outlives its activation publishes nothing');
@@ -214,11 +214,10 @@ test('a resolution completing after disable pushes nothing', async t => {
 });
 
 test('teardown aborts the signal given to the in-flight push', async t => {
-  const { teardown } = require('../src/activation/teardown.cjs');
   const f = fixture(t, {});
-  await f.shared.ensureEnabled();
+  await f.session.ensureEnabled();
   await until(() => f.pushes.length === 1, 'initial push');
-  await teardown(f.lifecycle);
+  await f.session.deactivate();
   assert.equal(f.signals[0]?.aborted, true, 'the push received the abort controller torn down with the activation');
 });
 
@@ -238,8 +237,8 @@ test('an aborted in-flight push cannot suppress the re-push of the same origin',
       : { ok: true, custom: true };
   } });
   f.effective.current = { origin: A, source: 'ls-arg' };
-  await f.shared.ensureEnabled();
-  await until(() => f.pushes.length === 1 && f.lifecycle.upstreamPushedKey?.endsWith(A + 'ls-arg'),
+  await f.session.ensureEnabled();
+  await until(() => f.pushes.length === 1 && f.pushes.at(-1).origin === A && f.pushes.at(-1).source === 'ls-arg',
     'push A committed and its dedupe key is set');
   f.effective.current = { origin: B, source: 'portal' };
   void f.handlers[0]({ affectsConfiguration: name => name === 'devin.portalUrl' });
@@ -251,7 +250,7 @@ test('an aborted in-flight push cannot suppress the re-push of the same origin',
   assert.deepEqual(f.pushes.map(entry => entry.origin), [A, B, A],
     'the re-push of A must fire after B was aborted mid-flight');
   assert.equal(backend.origin, A, 'the backend ends on the latest committed push');
-  assert.equal(f.lifecycle.upstreamPushedKey.endsWith(A + 'ls-arg'), true);
+  assert.deepEqual([f.pushes.at(-1).origin, f.pushes.at(-1).source], [A, 'ls-arg']);
   assert.equal(f.signals[1].aborted, true, 'the in-flight B push saw the abort');
 });
 
@@ -267,22 +266,25 @@ for (const [label, failure] of [
       return call === 2 ? failure() : { ok: true, custom: true };
     } });
     f.effective.current = { origin: A, source: 'ls-arg' };
-    await f.shared.ensureEnabled();
-    await until(() => f.pushes.length === 1 && f.lifecycle.upstreamPushedKey?.endsWith(A + 'ls-arg'),
+    await f.session.ensureEnabled();
+    await until(() => f.pushes.length === 1 && f.pushes.at(-1).origin === A && f.pushes.at(-1).source === 'ls-arg',
       'push A committed and its dedupe key is set');
     f.effective.current = { origin: B, source: 'portal' };
     await f.handlers[0]({ affectsConfiguration: name => name === 'devin.portalUrl' });
     await f.settle();
     assert.equal(f.pushes.length, 2, 'the failed push still issued its POST');
     assert.equal(backend.origin, B, 'the backend adopted B');
-    assert.equal(f.lifecycle.upstreamPushedKey, undefined,
-      'a failed push leaves the key invalidated — the backend state is uncertain');
     f.effective.current = { origin: A, source: 'ls-arg' };
     await f.handlers[0]({ affectsConfiguration: name => name === 'devin.portalUrl' });
     await f.settle();
     assert.equal(f.pushes.length, 3, 'returning to A must re-push, not dedupe against a stale key');
     assert.equal(backend.origin, A);
-    assert.equal(f.lifecycle.upstreamPushedKey.endsWith(A + 'ls-arg'), true);
+    assert.deepEqual([f.pushes.at(-1).origin, f.pushes.at(-1).source], [A, 'ls-arg']);
+    // The failed push left the key invalidated, so B is not deduplicated either.
+    f.effective.current = { origin: B, source: 'portal' };
+    await f.handlers[0]({ affectsConfiguration: name => name === 'devin.portalUrl' });
+    await f.settle();
+    assert.equal(f.pushes.length, 4, 'a failed push leaves the key invalidated — the backend state is uncertain');
   });
 }
 

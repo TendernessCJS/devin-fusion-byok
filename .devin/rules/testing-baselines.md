@@ -6,9 +6,9 @@ description: "改基线 commit、合成场景矩阵或源码形状守卫覆盖�
 
 ## 源码形状守卫的覆盖边界
 
-`architecture.test.cjs` 的写者守卫识别 `=`/`??=`/`||=`/`&&=`、复合赋值（`+=` 等）、`++`/`--`、`delete holder.slot`、方法变异（`set/delete/clear/push/add/splice`）。但它是**源码形状**判定、不是语义分析：`(x => x)()` 之类旁路不覆盖——注释与测试名都不得宣称「完全封闭」。
+`architecture.test.cjs` 的形状守卫先经 `maskNonCode`（字符串/注释感知屏蔽，模板 `${}` 内仍算代码）再断言 activation 源码无 `shared`/`stores` 标识符。但它仍是**源码形状**判定、不是语义分析：正则字面量内出现目标词会误报、`(x => x)()` 之类旁路不覆盖——注释与测试名都不得宣称「完全封闭」。
 
-- 反证必须对**真实源码文本做回退**（`reverted(from, to)` 整段替换后跑守卫），不要只喂人造行首样例——`installTimeCaptures` 曾因 `^` 行首锚定漏掉行内属性位置的真实捕获。
+- 反证必须对**真实源码文本做回退**（以下两条为旧写者守卫的历史陷阱，现行守卫已换成 maskNonCode 形状判定，仍照此纪律执行）（`reverted(from, to)` 整段替换后跑守卫），不要只喂人造行首样例——`installTimeCaptures` 曾因 `^` 行首锚定漏掉行内属性位置的真实捕获。
 - **前瞻与 `\s*` 的顺序是坑**：`:\s*(?!...)` 里 `\s*` 能回退到 0、让前瞻落在空格字符上，合法箭头包装会被误报；`\s*` 要收进前瞻内部。这个坑在本仓同一守卫上踩过两次。
 - 夹具陷阱：`extension-lifecycle.test.cjs` 的沙盒把 `src/activation/*` 的 `setTimeout` 换成 0ms 来实现快速重试；`managed-settings.cjs` 已**从该替换中排除**——否则 5 s drain 预算会塌成 0ms、drain 恒走超时分支，R1 用例会「因为错误的原因变绿」。新加依赖计时预算的 activation 模块时先核对 `shareGlobals` 的覆盖面。
 

@@ -360,151 +360,159 @@ test('a new file dropped into network/ is guarded by the same ceiling', () => {
     'a new network/ file reaching update/ must be reported');
 });
 
-// `shared` is the activation-wide service locator: installers publish slots
-// that other installers read through late binding. A slot with two writers
-// makes one installer's state another's to overwrite and silently widens the
-// object every test has to fake, so the writer map is pinned here.
-const SHARED_MULTI_WRITER = { backendStatus: ['activation/commands.cjs', 'activation/enable.cjs'] };
-const sharedWriterFiles = () => [
+// The per-activation refactor removed the shared service locator entirely:
+// service state lives inside each factory and cross-service access goes
+// through named interfaces only. `shared`/`stores` identifiers and
+// `deps.stores` access must not reappear in activation code — this is a shape
+// guard (comments are stripped first, so prose keeps its history), not a
+// claim that encapsulation is fully enforced at runtime.
+const activationFiles = () => [
   path.join(srcRoot, 'extension.cjs'),
   ...fs.readdirSync(path.join(srcRoot, 'activation')).filter(name => name.endsWith('.cjs'))
     .map(name => path.join(srcRoot, 'activation', name)),
 ];
-// Assignments and in-place mutations are both writes: `shared.x =`, compound
-// and logical assignments, `++`/`--`, `delete shared.x`, and
-// `shared.x.push(...)`/`shared.x.set(...)` etc. move state all the same.
-const WRITE_PATTERN = (holder, slot) => new RegExp(
-  String.raw`(?:delete\s+|\+\+\s*|--\s*)${holder}\.(${slot})` +
-  String.raw`|${holder}\.(${slot})\s*(?:\+\+|--)` +
-  String.raw`|${holder}\.(${slot})\s*(?:\?\?=|\|\|=|&&=|\*\*=|\+=|-=|\*=|\/=|%=|=)(?!=)` +
-  String.raw`|${holder}\.(${slot})\.(?:set|delete|clear|push|add|splice)\s*\(`, 'g');
-const writtenSlot = match => match.slice(1).find(value => value !== undefined);
-const writeViolations = (holder, multiWriter, readFile = fs.readFileSync) => {
-  const writers = new Map();
-  const pattern = WRITE_PATTERN(holder, '[A-Za-z][A-Za-z0-9]*');
-  for (const file of sharedWriterFiles()) {
-    const label = path.relative(srcRoot, file).split(path.sep).join('/');
-    for (const match of readFile(file, 'utf8').matchAll(pattern)) {
-      const slot = writtenSlot(match);
-      if (!writers.has(slot)) writers.set(slot, new Set());
-      writers.get(slot).add(label);
+// Masks comments and string/template literal *text* with spaces so the guard
+// only ever sees executable code. Template `${}` interpolation contents are
+// real code and stay unmasked (nested templates/strings handled by the same
+// scanner); blanking preserves newlines for stable positions. This is a
+// lexical mask, not full JS parsing — a regex literal whose pattern contains
+// a scanned word would still count as code (no activation source has one).
+const maskNonCode = source => {
+  // Split on UTF-16 code units so indexes line up with indexOf's offsets —
+  // a non-BMP character must not shift the mask window.
+  const chars = source.split('');
+  const blank = (from, to) => { for (let i = from; i < to; i++) if (chars[i] !== '\n') chars[i] = ' '; };
+  const scanQuoted = (i, quote) => {
+    let j = i + 1;
+    while (j < chars.length) {
+      if (chars[j] === '\\') { j += 2; continue; }
+      if (chars[j] === quote) { j += 1; break; }
+      j += 1;
     }
-  }
-  const violations = [];
-  for (const [slot, set] of writers) {
-    const actual = [...set].sort(), allowed = multiWriter[slot];
-    if (!allowed) { if (actual.length > 1) violations.push(slot + ' <- ' + actual.join(', ')); continue; }
-    if (actual.join(',') !== [...allowed].sort().join(',')) violations.push(slot + ' <- ' + actual.join(', '));
-  }
-  return violations;
-};
-const sharedWriterViolations = (readFile = fs.readFileSync) => writeViolations('shared', SHARED_MULTI_WRITER, readFile);
-
-// deps.stores holds the three named slot groups split out of `shared`. Each
-// store has exactly one owning writer module; acpObservation is the stated
-// exception — enable.cjs owns its seq/ownModels, not the store factory file.
-const STORE_OWNER = {
-  nativeCatalog: ['activation/catalog-sync.cjs'],
-  cacheSync: ['activation/cache-sync.cjs'],
-  acpObservation: ['activation/enable.cjs'],
-  panel: ['activation/panel-install.cjs'],
-};
-const storeWriterViolations = (readFile = fs.readFileSync) => {
-  const violations = [];
-  for (const [store, owners] of Object.entries(STORE_OWNER)) {
-    for (const file of sharedWriterFiles()) {
-      const label = path.relative(srcRoot, file).split(path.sep).join('/');
-      const pattern = WRITE_PATTERN(String.raw`stores\.${store}`, '[A-Za-z][A-Za-z0-9]*');
-      for (const match of readFile(file, 'utf8').matchAll(pattern)) {
-        if (!owners.includes(label)) violations.push(`${store}.${writtenSlot(match)} <- ${label}`);
+    blank(i, j);
+    return j;
+  };
+  const scanBraced = i => {
+    // i sits just past '${'; returns the index just past its matching '}'.
+    // The expression is code, so strings/comments/templates inside it get the
+    // same masking while braces keep counting.
+    let depth = 1;
+    let j = i;
+    while (j < chars.length && depth > 0) {
+      const c = chars[j];
+      if (c === '/' && chars[j + 1] === '/') { const end = source.indexOf('\n', j); blank(j, end === -1 ? chars.length : end); j = end === -1 ? chars.length : end; continue; }
+      if (c === '/' && chars[j + 1] === '*') { const end = source.indexOf('*/', j + 2); blank(j, end === -1 ? chars.length : end + 2); j = end === -1 ? chars.length : end + 2; continue; }
+      if (c === "'" || c === '"') { j = scanQuoted(j, c); continue; }
+      if (c === '`') { j = scanTemplate(j); continue; }
+      if (c === '{') depth += 1;
+      if (c === '}') depth -= 1;
+      j += 1;
+    }
+    return j;
+  };
+  const scanTemplate = i => {
+    // Literal text is masked; each ${...} switches back to code scanning.
+    let segment = i;
+    let j = i + 1;
+    while (j < chars.length) {
+      if (chars[j] === '\\') { j += 2; continue; }
+      if (chars[j] === '`') { blank(segment, j + 1); return j + 1; }
+      if (chars[j] === '$' && chars[j + 1] === '{') {
+        blank(segment, j + 2);
+        j = scanBraced(j + 2);
+        segment = j;
+        continue;
       }
+      j += 1;
     }
+    blank(segment, j);
+    return j;
+  };
+  let i = 0;
+  while (i < chars.length) {
+    const c = chars[i];
+    if (c === '/' && chars[i + 1] === '/') { const end = source.indexOf('\n', i); blank(i, end === -1 ? chars.length : end); i = end === -1 ? chars.length : end; continue; }
+    if (c === '/' && chars[i + 1] === '*') { const end = source.indexOf('*/', i + 2); blank(i, end === -1 ? chars.length : end + 2); i = end === -1 ? chars.length : end + 2; continue; }
+    if (c === "'" || c === '"') { i = scanQuoted(i, c); continue; }
+    if (c === '`') { i = scanTemplate(i); continue; }
+    i += 1;
+  }
+  return chars.join('');
+};
+const sharedContainerViolations = (readFile = fs.readFileSync) => {
+  const violations = [];
+  for (const file of activationFiles()) {
+    const label = path.relative(srcRoot, file).split(path.sep).join('/');
+    const source = maskNonCode(readFile(file, 'utf8'));
+    for (const match of source.matchAll(/\bshared\b|\bstores\b/g)) violations.push(`${label}: ${match[0]}`);
   }
   return violations;
 };
-
-test('every shared activation slot has exactly one writer module', () => {
-  assert.deepEqual(sharedWriterViolations(), [],
-    'a new writer must either move to the slot owner or join SHARED_MULTI_WRITER explicitly');
-});
-
-test('the shared writer guard rejects an injected second writer', () => {
-  const target = path.join(srcRoot, 'activation', 'catalog-sync.cjs');
-  const violations = sharedWriterViolations(file => path.resolve(file) === target
-    ? fs.readFileSync(file, 'utf8') + '\nshared.backendStatus = \'x\';\n'
-    : fs.readFileSync(file, 'utf8'));
-  assert.ok(violations.includes('backendStatus <- activation/catalog-sync.cjs, activation/commands.cjs, activation/enable.cjs'),
-    'a third writer of a whitelisted multi-writer slot must be reported');
-});
-
-test('every deps.stores slot is written only by its owning module', () => {
-  assert.deepEqual(storeWriterViolations(), [],
-    'a store slot written outside its owner must move the write or widen STORE_OWNER explicitly');
-});
-
-test('the store writer guard rejects an injected foreign writer', () => {
-  const target = path.join(srcRoot, 'activation', 'catalog-sync.cjs');
-  const violations = storeWriterViolations(file => path.resolve(file) === target
-    ? fs.readFileSync(file, 'utf8') + '\nstores.acpObservation.seq = 1;\n'
-    : fs.readFileSync(file, 'utf8'));
-  assert.ok(violations.includes('acpObservation.seq <- activation/catalog-sync.cjs'),
-    'a write from a non-owning module must be reported');
-});
-
-// Installers must resolve shared function slots at call time. A value capture
-// pins whatever the slot held at install time, and because consumers declare
-// defaults it degrades to a silent no-op instead of an error.
-const installTimeCaptures = (readFile = fs.readFileSync) => {
-  const source = readFile(path.join(srcRoot, 'activation', 'panel-install.cjs'), 'utf8');
-  return [...source.matchAll(/\b(selectFusion|refreshNativeModels):(?!\s*\w+\s*=>|\s*\([^)]*\)\s*=>)/g)].map(match => match[1]);
-};
-
-test('panel installers resolve function slots at call time', () => {
-  assert.deepEqual(installTimeCaptures(), [], 'pass a wrapper arrow function, not the slot value');
-});
-
-test('the call-time guard rejects an injected value capture', () => {
-  const violations = installTimeCaptures(() => '  selectFusion: shared.saveFusionChoice,\n');
-  assert.deepEqual(violations, ['selectFusion'], 'a value capture must be reported');
-});
 
 const reverted = (from, to) => file => fs.readFileSync(file, 'utf8').replace(from, to);
 
-test('the call-time guard catches a refreshNativeModels value capture in real source', () => {
-  const violations = installTimeCaptures(reverted(
-    'refreshNativeModels: () => stores.nativeCatalog.refreshNativeModels()',
-    'refreshNativeModels: stores.nativeCatalog.refreshNativeModels'));
-  assert.deepEqual(violations, ['refreshNativeModels']);
+test('activation code contains no shared or stores container access', () => {
+  assert.deepEqual(sharedContainerViolations(), [],
+    'service state is private to each factory; cross-service access goes through named interfaces');
 });
 
-test('the call-time guard catches a selectFusion value capture in real source', () => {
-  const violations = installTimeCaptures(reverted(
-    'selectFusion: uid => shared.saveFusionChoice(uid)',
-    'selectFusion: shared.saveFusionChoice'));
-  assert.deepEqual(violations, ['selectFusion']);
+test('the no-shared-container guard rejects an injected shared access', () => {
+  const violations = sharedContainerViolations(reverted(
+    'onPublish: () => panel.publish()',
+    'onPublish: () => shared.publish()'));
+  assert.ok(violations.some(entry => entry.includes('shared')),
+    'a shared container access must be reported');
 });
 
-for (const snippet of ['stores.acpObservation.seq++;', 'stores.acpObservation.seq += 1;', 'delete stores.acpObservation.seq;']) {
-  test(`the store writer guard rejects '${snippet}'`, () => {
-    const target = path.join(srcRoot, 'activation', 'catalog-sync.cjs');
-    const violations = storeWriterViolations(file => path.resolve(file) === target
-      ? fs.readFileSync(file, 'utf8') + '\n' + snippet + '\n'
-      : fs.readFileSync(file, 'utf8'));
-    assert.ok(violations.includes('acpObservation.seq <- activation/catalog-sync.cjs'),
-      snippet + ' must be reported');
-  });
-}
+test('the no-shared-container guard rejects a deps.stores access', () => {
+  const violations = sharedContainerViolations(reverted(
+    'onPublish: () => panel.publish()',
+    'onPublish: () => deps.stores.panel.publish()'));
+  assert.ok(violations.some(entry => entry.includes('stores')),
+    'a deps.stores access must be reported');
+});
 
-for (const snippet of ['shared.backendStatus++;', 'shared.backendStatus += 1;', 'delete shared.backendStatus;']) {
-  test(`the shared writer guard rejects '${snippet}'`, () => {
-    const target = path.join(srcRoot, 'activation', 'catalog-sync.cjs');
-    const violations = sharedWriterViolations(file => path.resolve(file) === target
-      ? fs.readFileSync(file, 'utf8') + '\n' + snippet + '\n'
-      : fs.readFileSync(file, 'utf8'));
-    assert.ok(violations.includes('backendStatus <- activation/catalog-sync.cjs, activation/commands.cjs, activation/enable.cjs'),
-      snippet + ' must be reported');
-  });
-}
+test('the guard sees shared access past a URL string on the same line', () => {
+  const violations = sharedContainerViolations(reverted(
+    "expectedEnv: 'http://127.0.0.1:' + PORT,",
+    "expectedEnv: ('http://127.0.0.1:' + PORT + shared.port),"));
+  assert.ok(violations.some(entry => entry.includes('shared')),
+    'a shared access after a // inside a string must be reported');
+});
+
+test('the guard ignores shared inside string literals', () => {
+  const violations = sharedContainerViolations(reverted(
+    "expectedEnv: 'http://127.0.0.1:' + PORT,",
+    "expectedEnv: 'shared',"));
+  assert.deepEqual(violations, [], 'a bare word inside a string is not a container access');
+});
+
+test('the guard ignores template text but sees interpolations', () => {
+  const staticText = sharedContainerViolations(reverted(
+    'onPublish: () => panel.publish()',
+    'onPublish: () => panel.publish(`shared`)'));
+  assert.deepEqual(staticText, [], 'template literal text is not code');
+  const interpolated = sharedContainerViolations(reverted(
+    'onPublish: () => panel.publish()',
+    'onPublish: () => panel.publish(`${shared.port}`)'));
+  assert.ok(interpolated.some(entry => entry.includes('shared')),
+    'an interpolated shared access must be reported');
+});
+
+test('the masker keeps indexes aligned across non-BMP characters', () => {
+  // A surrogate pair would shift a codepoint-based char array relative to
+  // indexOf's UTF-16 offsets, letting later code escape the mask.
+  const violations = sharedContainerViolations(reverted(
+    'onPublish: () => panel.publish()',
+    "onPublish: () => { const note = '😀'; /* note */ return shared.publish(); }"));
+  assert.ok(violations.some(entry => entry.includes('shared')),
+    'a shared access after an emoji string and block comment must be reported');
+  const lineComment = sharedContainerViolations(reverted(
+    'onPublish: () => panel.publish()',
+    "onPublish: () => { const note = '😀'; // note\n  return shared.publish(); }"));
+  assert.ok(lineComment.some(entry => entry.includes('shared')),
+    'a shared access after an emoji string and line comment must be reported');
+});
 
 test('every activation store module stays a zero-dependency leaf', () => {
   const graph = createSourceGraph();

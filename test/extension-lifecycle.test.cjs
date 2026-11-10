@@ -92,7 +92,7 @@ function fixture(t, initial = {}) {
       pushNativeModels: options => { pushes.push(options); return Promise.resolve(pushResult); } },
     './goal/continue-hook.cjs': { installGoalContinue: () => null },
     './runtime/host/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
-      return { status: () => ({}), reset() {}, cancelSession: () => false, dispose() {} }; } },
+      return { status: () => ({ installed: true, connections: 0, activeSessions: 0, pendingTimers: 0, autoContinueCount: 0 }), reset() {}, cancelSession: () => false, dispose() {} }; } },
     './runtime/host/acp-observer.cjs': { installAcpObserver: () => ({ dispose() { acpDisposed += 1; } }) },
     './runtime/host/auth-status.cjs': { installAuthStatusInjection: options => { authOptions.push(options); return authHandle; } },
     './runtime/source-identity.cjs': { runtimeIdentity: () => identity },
@@ -605,6 +605,16 @@ test('the stop callback returns the warning promise so rejections stay contained
   assert.ok(result instanceof Promise, 'the callback returns the warning promise rather than swallowing it');
   await assert.rejects(result, /toast failed/);
   assert.match(f.notices.at(-1), /自动继续/);
+});
+test('activate() returns the detailed auto-continue status object', async t => {
+  const f = fixture(t);
+  const api = await f.activate(f.context);
+  assert.deepEqual(api.autoContinue(), {
+    installed: true, connections: 0, activeSessions: 0, pendingTimers: 0, autoContinueCount: 0 },
+    'the public surface keeps the raw status object, not the panel enum');
+  const remote = fixture(t, { remote: true });
+  const remoteApi = await remote.activate(remote.context);
+  assert.equal(remoteApi.autoContinue(), undefined, 'no native main means no auto-continue install');
 });
 test('a poorer backend sync never downgrades the richer bridge observation', async t => {
   const uid = 'fusion-live-sidekick-swe-2-high';

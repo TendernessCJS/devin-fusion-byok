@@ -289,44 +289,48 @@ test('readNativeModels still fails closed on malformed catalog entries', async t
   assert.equal(ok.status, 'ready', 'a structurally valid entry still reads back');
 });
 
-// Minimal installCatalogSync harness: only ../runtime/host/native-models.cjs is
+// Minimal createCatalogSync harness: only ../runtime/host/native-models.cjs is
 // stubbed, so the push/read paths never reach a real backend.
-function syncFixture({ read = async () => ({ status: 'ready', models: [] }) } = {}) {
+function syncFixture({ read = async () => ({ status: 'ready', models: [] }), pushIntervalMs = 5000,
+  push = () => Promise.resolve({ pushed: 0, reason: 'unavailable' }) } = {}) {
   const logs = [], pushes = [];
   const filename = path.resolve(__dirname, '../src/activation/catalog-sync.cjs');
   const realRequire = createRequire(filename);
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
     module, exports: module.exports,
-    AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
+    AbortController, setTimeout, clearTimeout, setInterval, clearInterval, structuredClone,
     require(name) {
       if (name === '../runtime/host/native-models.cjs') return {
         isUpstreamUid: realRequire('../runtime/host/native-models.cjs').isUpstreamUid,
         readNativeModels: read,
-        pushNativeModels: options => { pushes.push(options); return Promise.resolve({ pushed: 0, reason: 'unavailable' }); },
+        pushNativeModels: options => { pushes.push(options); return push(options); },
       };
       if (name.startsWith('.') || name.startsWith('node:')) return realRequire(name);
       assert.fail('unexpected require ' + name);
     },
   }, { filename });
+  const { live, superseded } = realRequire('./liveness.cjs');
   const lifecycle = { activationDisposed: false, activationGeneration: 0 };
-  const shared = {
-    nativeModels: new Map(), nativeAllowedUids: new Set(),
-    nativeRevision: 0, lastPushedRevision: 0, lastPushAt: 0, nativeSyncSize: -1,
-    nativeAuthoritative: false,
-  };
+  const config = () => ({});
   let changes = 0;
-  module.exports.installCatalogSync({ deps: { lifecycle, config: () => ({}), log: (event, data) => logs.push({ event, data }), root: '/nonexistent',
-    stores: { nativeCatalog: shared } },
-    shared, onChange: () => { changes += 1; } });
-  return { shared, logs, pushes, changes: () => changes };
+  const sync = module.exports.createCatalogSync({ root: '/nonexistent', config,
+    lifecycleView: {
+      isLive: () => live(lifecycle, config),
+      isDisposed: () => lifecycle.activationDisposed,
+      generation: () => lifecycle.activationGeneration,
+      isSuperseded: generation => superseded(lifecycle, config, generation),
+    },
+    log: (event, data) => logs.push({ event, data }),
+    onChange: () => { changes += 1; }, pushIntervalMs });
+  return { sync, logs, pushes, changes: () => changes };
 }
 
 const OBSERVED_ENTRY = { uid: 'swe-2-high', label: 'P', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] };
 
 test('the observation channel reports the synced catalog size too', () => {
   const f = syncFixture();
-  f.shared.observeNativeModels([OBSERVED_ENTRY]);
+  f.sync.observeModels([OBSERVED_ENTRY]);
   const entry = f.logs.find(line => line.event === 'native-sync');
   assert.ok(entry, 'observeNativeModels must log native-sync just like refresh does');
   assert.equal(entry.data.count, 1);
@@ -335,9 +339,9 @@ test('the observation channel reports the synced catalog size too', () => {
 
 test('local observations survive a backend-empty refresh in the published view', async () => {
   const f = syncFixture();
-  f.shared.observeNativeModels([OBSERVED_ENTRY]);
-  await f.shared.refreshNativeModels();
-  assert.ok(f.shared.nativeModels.has('swe-2-high'),
+  f.sync.observeModels([OBSERVED_ENTRY]);
+  await f.sync.refresh();
+  assert.ok(f.sync.read().models.some(e => e.uid === 'swe-2-high'),
     'the retained observation pool must repopulate the rebuilt view');
 });
 
@@ -345,15 +349,15 @@ test('a failed read keeps the published catalog instead of wiping it', async () 
   const BACKEND_ENTRY = { uid: 'gpt-5-6-luna-high', label: 'L', disabled: false, isModelRouter: false, harnessUids: ['gpt-5p6'] };
   let result = { status: 'ready', models: [BACKEND_ENTRY] };
   const f = syncFixture({ read: async () => result });
-  await f.shared.refreshNativeModels();
-  assert.ok(f.shared.nativeModels.has('gpt-5-6-luna-high'));
-  const revision = f.shared.nativeRevision;
+  await f.sync.refresh();
+  assert.ok(f.sync.read().models.some(e => e.uid === 'gpt-5-6-luna-high'));
+  const revision = f.sync.diagnostics().revision;
   result = { status: 'unavailable', models: [] };
-  await f.shared.refreshNativeModels();
-  assert.ok(f.shared.nativeModels.has('gpt-5-6-luna-high'),
+  await f.sync.refresh();
+  assert.ok(f.sync.read().models.some(e => e.uid === 'gpt-5-6-luna-high'),
     'an unavailable read must not wipe backend-sourced entries');
-  assert.equal(f.shared.nativeCatalogStatus, 'unavailable');
-  assert.equal(f.shared.nativeRevision, revision,
+  assert.equal(f.sync.read().status, 'unavailable');
+  assert.equal(f.sync.diagnostics().revision, revision,
     'retaining the view must not advance the revision');
   assert.ok(f.logs.some(line => line.event === 'native-refresh-retained'),
     'the guard must be observable in logs');
@@ -364,13 +368,13 @@ test('an authoritative empty answer still clears backend-sourced entries', async
   const BACKEND_ENTRY = { uid: 'gpt-5-6-luna-high', label: 'L', disabled: false, isModelRouter: false, harnessUids: ['gpt-5p6'] };
   let result = { status: 'ready', models: [BACKEND_ENTRY] };
   const f = syncFixture({ read: async () => result });
-  await f.shared.refreshNativeModels();
-  assert.ok(f.shared.nativeModels.has('gpt-5-6-luna-high'));
+  await f.sync.refresh();
+  assert.ok(f.sync.read().models.some(e => e.uid === 'gpt-5-6-luna-high'));
   result = { status: 'empty', models: [] };
-  await f.shared.refreshNativeModels();
-  assert.equal(f.shared.nativeModels.has('gpt-5-6-luna-high'), false,
+  await f.sync.refresh();
+  assert.equal(f.sync.read().models.some(e => e.uid === 'gpt-5-6-luna-high'), false,
     'an authoritative empty answer is stale-entry cleanup and must still clear');
-  assert.equal(f.shared.nativeCatalogStatus, 'empty');
+  assert.equal(f.sync.read().status, 'empty');
 });
 
 test('readNativeModels passes a valid family uid through and ignores malformed ones', async t => {
@@ -391,25 +395,26 @@ test('readNativeModels passes a valid family uid through and ignores malformed o
 
 test('a stale backend allowlist echo cannot overwrite the host set', async () => {
   const f = syncFixture({ read: async () => ({ status: 'ready', models: [], allowedUids: ['A1'] }) });
-  // This scenario presupposes an already-authoritative catalog: the echo
-  // semantics being tested are independent of the first-authority bump.
-  f.shared.nativeAuthoritative = true;
-  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1', 'A2'] });
-  const revision = f.shared.nativeRevision;
-  await f.shared.refreshNativeModels();
-  assert.deepEqual([...f.shared.nativeAllowedUids].sort(), ['A1', 'A2'],
+  // This scenario presupposes an already-authoritative catalog: the real
+  // refresh path (ready + A1) establishes authority, so the echo semantics
+  // being tested are independent of the first-authority bump.
+  await f.sync.refresh();
+  f.sync.observeAllowed({ kind: 'restricted', uids: ['A1', 'A2'] });
+  const revision = f.sync.diagnostics().revision;
+  await f.sync.refresh();
+  assert.deepEqual([...f.sync.read().allowedUids].sort(), ['A1', 'A2'],
     'an older backend echo must not roll back the host-observed allowlist');
-  assert.equal(f.shared.nativeRevision, revision, 'an advisory echo must not advance the revision');
+  assert.equal(f.sync.diagnostics().revision, revision, 'an advisory echo must not advance the revision');
 });
 
 test('the first backend allowlist echo is adopted once, then the host stays authoritative', async () => {
   let result = { status: 'ready', models: [], allowedUids: ['A1'] };
   const f = syncFixture({ read: async () => result });
-  await f.shared.refreshNativeModels();
-  assert.deepEqual([...f.shared.nativeAllowedUids], ['A1'], 'cold start adopts the backend verdict once');
+  await f.sync.refresh();
+  assert.deepEqual([...f.sync.read().allowedUids], ['A1'], 'cold start adopts the backend verdict once');
   result = { status: 'ready', models: [], allowedUids: ['A2'] };
-  await f.shared.refreshNativeModels();
-  assert.deepEqual([...f.shared.nativeAllowedUids], ['A1'], 'a later divergent echo does not replace the adopted set');
+  await f.sync.refresh();
+  assert.deepEqual([...f.sync.read().allowedUids], ['A1'], 'a later divergent echo does not replace the adopted set');
   assert.ok(f.logs.some(line => line.event === 'native-allowed-diverged'),
     'the divergence must be observable in logs');
 });
@@ -417,9 +422,9 @@ test('the first backend allowlist echo is adopted once, then the host stays auth
 test('a host-observed uid wins label and disabled over a stale backend copy', async () => {
   const f = syncFixture({ read: async () => ({ status: 'ready', models: [
     { uid: 'swe-2-high', label: 'Stale', disabled: true, isModelRouter: false, harnessUids: ['swe-1p6'], familyUid: 'fam' }] }) });
-  f.shared.observeNativeModels([{ uid: 'swe-2-high', label: 'Host', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }]);
-  await f.shared.refreshNativeModels();
-  const entry = f.shared.nativeModels.get('swe-2-high');
+  f.sync.observeModels([{ uid: 'swe-2-high', label: 'Host', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }]);
+  await f.sync.refresh();
+  const entry = f.sync.read().models.find(e => e.uid === 'swe-2-high');
   assert.equal(entry.label, 'Host', 'the host observation wins scalar fields');
   assert.equal(entry.disabled, false, 'a stale disabled flag must not downgrade the host copy');
   assert.equal(entry.familyUid, 'fam', 'fields the host never saw are still carried from the backend copy');
@@ -428,24 +433,27 @@ test('a host-observed uid wins label and disabled over a stale backend copy', as
 test('backend-only entries are still adopted into the published view', async () => {
   const f = syncFixture({ read: async () => ({ status: 'ready', models: [
     { uid: 'swe-2-max', label: 'B', disabled: false, isModelRouter: false, harnessUids: ['h'] }] }) });
-  f.shared.observeNativeModels([OBSERVED_ENTRY]);
-  await f.shared.refreshNativeModels();
-  assert.ok(f.shared.nativeModels.has('swe-2-max'), 'a uid the host never observed still comes in from the backend');
-  assert.ok(f.shared.nativeModels.has('swe-2-high'));
+  f.sync.observeModels([OBSERVED_ENTRY]);
+  await f.sync.refresh();
+  assert.ok(f.sync.read().models.some(e => e.uid === 'swe-2-max'), 'a uid the host never observed still comes in from the backend');
+  assert.ok(f.sync.read().models.some(e => e.uid === 'swe-2-high'));
 });
 
 test('a backend that lost the allowlist is force-pushed the host set', async () => {
-  const f = syncFixture({ read: async () => ({ status: 'ready', models: [], allowedUids: [] }) });
-  f.shared.observeNativeModels([OBSERVED_ENTRY]);
-  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1', 'A2'] });
+  const f = syncFixture({ read: async () => ({ status: 'ready', models: [], allowedUids: [] }),
+    pushIntervalMs: 0, push: () => Promise.resolve({ pushed: 1 }) });
+  await f.sync.refresh();
+  f.sync.observeModels([OBSERVED_ENTRY]);
+  f.sync.observeAllowed({ kind: 'restricted', uids: ['A1', 'A2'] });
+  // Let the ordinary throttled push land so the revision gate has nothing new.
   await new Promise(resolve => setTimeout(resolve, 30));
   const before = f.pushes.length;
-  f.shared.lastPushedRevision = f.shared.nativeRevision;
-  f.shared.lastPushAt = 0;
-  await f.shared.refreshNativeModels();
-  assert.equal(f.shared.nativePushStale, true, 'an empty echo against a host-observed set arms the forced repush');
+  await f.sync.refresh();
+  assert.equal(f.sync.diagnostics().pushStale, true, 'an empty echo against a host-observed set arms the forced repush');
   assert.ok(f.logs.some(line => line.event === 'native-allowed-backend-lost'));
   await new Promise(resolve => setTimeout(resolve, 30));
+  // Seeding lastPushedRevision by hand could fake-pass a broken gate, so this
+  // goes through the real push path: only the forced repush may fire here.
   assert.ok(f.pushes.length > before, 'the forced push must fire even when the revision gate has nothing new');
   assert.deepEqual([...f.pushes.at(-1).allowedUids].sort(), ['A1', 'A2'],
     'the repush carries the host allowlist, not the backend echo');
@@ -453,11 +461,11 @@ test('a backend that lost the allowlist is force-pushed the host set', async () 
 
 test('three consecutive unrestricted observations flip the mode and push it', async () => {
   const f = syncFixture();
-  f.shared.observeNativeModels([OBSERVED_ENTRY]);
-  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1', 'A2'] });
-  for (let i = 0; i < 3; i++) f.shared.observeAllowedUids({ kind: 'unrestricted' });
-  assert.equal(f.shared.nativeAllowedMode, 'unrestricted');
-  assert.equal(f.shared.nativeAllowedUids.size, 0, 'flipping clears the restricted set');
+  f.sync.observeModels([OBSERVED_ENTRY]);
+  f.sync.observeAllowed({ kind: 'restricted', uids: ['A1', 'A2'] });
+  for (let i = 0; i < 3; i++) f.sync.observeAllowed({ kind: 'unrestricted' });
+  assert.equal(f.sync.read().allowedMode, 'unrestricted');
+  assert.equal(f.sync.read().allowedUids.size, 0, 'flipping clears the restricted set');
   assert.equal(f.logs.filter(line => line.event === 'native-allowed-cleared').length, 1);
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(f.pushes.at(-1).allowedMode, 'unrestricted', 'the push carries the lifted restriction');
@@ -465,32 +473,32 @@ test('three consecutive unrestricted observations flip the mode and push it', as
 
 test('two consecutive unrestricted observations do not flip', () => {
   const f = syncFixture();
-  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1'] });
-  f.shared.observeAllowedUids({ kind: 'unrestricted' });
-  f.shared.observeAllowedUids({ kind: 'unrestricted' });
-  assert.equal(f.shared.nativeAllowedMode, 'restricted');
-  assert.ok(f.shared.nativeAllowedUids.has('A1'), 'the weak empty signal stays debounced');
+  f.sync.observeAllowed({ kind: 'restricted', uids: ['A1'] });
+  f.sync.observeAllowed({ kind: 'unrestricted' });
+  f.sync.observeAllowed({ kind: 'unrestricted' });
+  assert.equal(f.sync.read().allowedMode, 'restricted');
+  assert.ok(f.sync.read().allowedUids.has('A1'), 'the weak empty signal stays debounced');
 });
 
 test('an unrestricted backend echo against an unrestricted host is agreement, not loss', async () => {
   const f = syncFixture({ read: async () => ({ status: 'ready', models: [], allowedUids: [], allowedMode: 'unrestricted' }) });
-  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1'] });
-  for (let i = 0; i < 3; i++) f.shared.observeAllowedUids({ kind: 'unrestricted' });
-  await f.shared.refreshNativeModels();
+  f.sync.observeAllowed({ kind: 'restricted', uids: ['A1'] });
+  for (let i = 0; i < 3; i++) f.sync.observeAllowed({ kind: 'unrestricted' });
+  await f.sync.refresh();
   assert.equal(f.logs.some(line => line.event === 'native-allowed-backend-lost'), false,
     'an empty echo consistent with the host mode must not arm the repush');
-  assert.equal(f.shared.nativeAllowedMode, 'unrestricted');
+  assert.equal(f.sync.read().allowedMode, 'unrestricted');
 });
 
 test('a single restricted observation restores restricted mode without debounce', async () => {
   const f = syncFixture();
-  f.shared.observeNativeModels([OBSERVED_ENTRY]);
-  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['A1'] });
-  for (let i = 0; i < 3; i++) f.shared.observeAllowedUids({ kind: 'unrestricted' });
-  assert.equal(f.shared.nativeAllowedMode, 'unrestricted');
-  f.shared.observeAllowedUids({ kind: 'restricted', uids: ['B1'] });
-  assert.equal(f.shared.nativeAllowedMode, 'restricted', 'the first restricted verdict restores immediately');
-  assert.deepEqual([...f.shared.nativeAllowedUids], ['B1']);
+  f.sync.observeModels([OBSERVED_ENTRY]);
+  f.sync.observeAllowed({ kind: 'restricted', uids: ['A1'] });
+  for (let i = 0; i < 3; i++) f.sync.observeAllowed({ kind: 'unrestricted' });
+  assert.equal(f.sync.read().allowedMode, 'unrestricted');
+  f.sync.observeAllowed({ kind: 'restricted', uids: ['B1'] });
+  assert.equal(f.sync.read().allowedMode, 'restricted', 'the first restricted verdict restores immediately');
+  assert.deepEqual([...f.sync.read().allowedUids], ['B1']);
   await new Promise(resolve => setTimeout(resolve, 30));
   const push = f.pushes.at(-1);
   assert.equal(push.allowedMode, 'restricted');
@@ -499,8 +507,8 @@ test('a single restricted observation restores restricted mode without debounce'
 
 test('a host that never observed a restricted verdict ignores unrestricted streaks', () => {
   const f = syncFixture();
-  for (let i = 0; i < 3; i++) f.shared.observeAllowedUids({ kind: 'unrestricted' });
-  assert.equal(f.shared.nativeAllowedMode, 'restricted',
+  for (let i = 0; i < 3; i++) f.sync.observeAllowed({ kind: 'unrestricted' });
+  assert.equal(f.sync.read().allowedMode, 'restricted',
     'without a prior restricted observation the weak signal never flips');
   assert.equal(f.logs.some(line => line.event === 'native-allowed-cleared'), false);
 });
@@ -568,14 +576,14 @@ test('a same-value host observation still establishes source authority', async (
   const HOST = { uid: 'swe-2-high', label: 'Host', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] };
   let result = { status: 'ready', models: [{ ...HOST }] };
   const f = syncFixture({ read: async () => result });
-  await f.shared.refreshNativeModels();
-  const revision = f.shared.nativeRevision;
-  f.shared.observeNativeModels([{ ...HOST }]);
-  assert.equal(f.shared.nativeRevision, revision, 'an unchanged observation must not bump the revision');
+  await f.sync.refresh();
+  const revision = f.sync.diagnostics().revision;
+  f.sync.observeModels([{ ...HOST }]);
+  assert.equal(f.sync.diagnostics().revision, revision, 'an unchanged observation must not bump the revision');
   result = { status: 'ready', models: [
     { uid: 'swe-2-high', label: 'Stale', disabled: true, isModelRouter: false, harnessUids: ['swe-1p6'], familyUid: 'fam' }] };
-  await f.shared.refreshNativeModels();
-  const entry = f.shared.nativeModels.get('swe-2-high');
+  await f.sync.refresh();
+  const entry = f.sync.read().models.find(e => e.uid === 'swe-2-high');
   assert.equal(entry.label, 'Host', 'the host observation is authoritative even when it matched the backend copy');
   assert.equal(entry.disabled, false);
   assert.equal(entry.familyUid, 'fam');
@@ -677,17 +685,59 @@ test('the raw CLI channel needs three consecutive empty verdicts to lift a restr
 test('a status flip into authority bumps the revision even with identical models', async () => {
   let result = { status: 'ready', models: [OBSERVED_ENTRY] };
   const f = syncFixture({ read: async () => result });
-  await f.shared.refreshNativeModels();
-  const baseline = f.shared.nativeRevision;
+  await f.sync.refresh();
+  const baseline = f.sync.diagnostics().revision;
   result = { status: 'unavailable', models: [] };
-  await f.shared.refreshNativeModels();
-  const retained = f.shared.nativeRevision;
-  assert.equal(f.shared.nativeCatalogStatus, 'unavailable');
+  await f.sync.refresh();
+  const retained = f.sync.diagnostics().revision;
+  assert.equal(f.sync.read().status, 'unavailable');
   // The retained branch keeps the model set — an identical-content flip back
   // to authoritative must still republish once.
-  const before = f.shared.nativeModels.size;
+  const before = f.sync.read().models.length;
   result = { status: 'ready', models: [OBSERVED_ENTRY] };
-  await f.shared.refreshNativeModels();
-  assert.equal(f.shared.nativeModels.size, before, 'the model content is unchanged');
-  assert.ok(f.shared.nativeRevision > retained, 'the authority flip alone advances the revision');
+  await f.sync.refresh();
+  assert.equal(f.sync.read().models.length, before, 'the model content is unchanged');
+  assert.ok(f.sync.diagnostics().revision > retained, 'the authority flip alone advances the revision');
+});
+
+test('read() snapshots cannot mutate the published catalog', () => {
+  const f = syncFixture();
+  f.sync.observeModels([{ ...OBSERVED_ENTRY,
+    sidekickDimension: { order: 1, name: 'dim', fastModeOrder: 2 },
+    fusionMetadata: [{ key: 'k', value: 'v' }] }]);
+  const revisionBefore = f.sync.diagnostics().revision;
+  const first = f.sync.read();
+  first.models.push({ uid: 'injected' });
+  first.allowedUids.add('injected');
+  first.models[0].label = 'changed-outside';
+  first.models[0].harnessUids.push('outside');
+  first.models[0].sidekickDimension.name = 'mutated';
+  first.models[0].fusionMetadata[0].value = 'mutated';
+  const second = f.sync.read();
+  assert.equal(second.models.length, 1);
+  assert.equal(second.models.some(e => e.uid === 'injected'), false);
+  assert.equal(second.allowedUids.has('injected'), false);
+  assert.equal(second.models[0].label, 'P', 'scalar entry fields do not leak back');
+  assert.deepEqual(second.models[0].harnessUids, ['swe-1p6'], 'nested arrays do not leak back');
+  assert.equal(second.models[0].sidekickDimension.name, 'dim', 'nested objects do not leak back');
+  assert.deepEqual(second.models[0].fusionMetadata, [{ key: 'k', value: 'v' }]);
+  assert.equal(f.sync.diagnostics().revision, revisionBefore,
+    'external snapshot mutation never moves the catalog revision');
+});
+
+test('stop() then start() resumes refreshing', async t => {
+  let reads = 0;
+  const f = syncFixture({ read: async () => { reads += 1; return { status: 'ready', models: [] }; } });
+  f.sync.stop();
+  f.sync.start();
+  t.after(() => f.sync.stop());
+  let deadline = Date.now() + 2000;
+  while (reads === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(reads >= 1, 'start triggers an immediate refresh');
+  const afterFirst = reads;
+  f.sync.stop();
+  f.sync.start();
+  deadline = Date.now() + 2000;
+  while (reads === afterFirst && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(reads > afterFirst, 'a stopped sync starts again and refreshes immediately');
 });

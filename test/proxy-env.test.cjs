@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createSandboxLoader } = require('./helpers/sandbox.cjs');
-const { createManagedSettingsGate } = require('../src/activation/managed-settings.cjs');
+const { createSettingsOwner } = require('../src/activation/settings-owner.cjs');
 
 const filename = path.resolve(__dirname, '../src/activation/enable.cjs');
 const PORT = 39842;
@@ -55,19 +55,11 @@ function fixture(t, options = {}) {
       update: async (key, value) => value === undefined ? state.delete(key) : state.set(key, value),
     },
   };
-  const lifecycle = { activationGeneration: 0, activationDisposed: false, connection: undefined };
-  const shared = {
-    reconcilePreference: async () => {},
-    startNativeSync: () => {},
-    observeNativeModels: () => {},
-    pushToBackend: () => {},
-    nativeAllowedUids: new Set(),
-    management: undefined,
+  const catalogSync = {
+    read: () => ({ models: [], allowedUids: new Set(), allowedMode: 'restricted', status: 'loading' }),
+    observeModels: () => {}, observeAllowed: () => {}, refresh: async () => {},
+    markUnsupported: () => {}, start: () => {}, stop: () => {},
   };
-  const deps = { lifecycle, config, configFile, vscode, context, log: () => {},
-    catalog: () => ({ models: [] }), nativeMain: '/native/main.js', root,
-    stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } },
-    managedSettings: createManagedSettingsGate() };
 
   // enable.cjs derives the managed env from runtime/port.cjs now, which loads
   // for real here (a leaf module with the same 39842 constant).
@@ -80,14 +72,25 @@ function fixture(t, options = {}) {
       return Promise.resolve();
     } },
   } });
-  loader.module.exports.installEnable({ deps, shared });
+  const makeSession = () => loader.module.exports.createRuntimeSession({
+    root, extensionPath, subscriptions: context.subscriptions, config, configFile, vscode, context,
+    nativeMain: '/native/main.js', log: () => {},
+    catalog: () => ({ models: [] }), catalogSync,
+    settingsOwner: createSettingsOwner({ root, extensionPath, vscode, globalState: context.globalState,
+      isLive: () => true }),
+    selection: { saveFusionChoice: async () => {}, reconcilePreference: async () => {}, reconcileSelection: async () => {} },
+    continuation: { start: () => {}, suspend: () => {}, resetAutoContinue: () => {}, cancelAutoContinueSession: () => {},
+      dispose: () => {}, autoContinueStatus: () => 'unavailable', goalController: () => undefined },
+    onPublish: () => {} });
+  let session = makeSession();
   t.after(() => loader.assertStubsUsed('proxy-env'));
-  return { globals, shared, lifecycle, setHttp: patch => Object.assign(httpConfig, patch) };
+  return { globals, session: () => session, setHttp: patch => Object.assign(httpConfig, patch),
+    renew: async () => { await session.deactivate(); session = makeSession(); } };
 }
 
 test('without http.proxy the managed devin-cli env contains only WINDSURF_API_SERVER_URL', async t => {
   const f = fixture(t);
-  await f.shared.ensureEnabled();
+  await f.session().ensureEnabled();
   // The env object is built inside the sandbox realm; copy it across the
   // boundary before comparing against a test-realm literal.
   assert.deepEqual({ ...f.globals.agentEnv['devin-cli'] },
@@ -100,7 +103,7 @@ test('without http.proxy the managed devin-cli env contains only WINDSURF_API_SE
 // user's proxy.
 test('with http.proxy configured the managed env exempts loopback via NO_PROXY', async t => {
   const f = fixture(t, { httpConfig: { proxy: 'http://127.0.0.1:7897', noProxy: [] } });
-  await f.shared.ensureEnabled();
+  await f.session().ensureEnabled();
   const env = f.globals.agentEnv['devin-cli'];
   assert.equal(env.WINDSURF_API_SERVER_URL, `http://127.0.0.1:${PORT}`);
   const noProxy = String(env.NO_PROXY || '').split(',').map(entry => entry.trim());
@@ -110,11 +113,11 @@ test('with http.proxy configured the managed env exempts loopback via NO_PROXY',
 
 test('clearing http.proxy restores the previous NO_PROXY value', async t => {
   const f = fixture(t, { httpConfig: { proxy: 'http://127.0.0.1:7897' }, env: { NO_PROXY: 'corp.example' } });
-  await f.shared.ensureEnabled();
+  await f.session().ensureEnabled();
   assert.equal(f.globals.agentEnv['devin-cli'].NO_PROXY, '127.0.0.1,localhost,::1');
   f.setHttp({ proxy: '' });
-  f.lifecycle.connection = undefined;
-  await f.shared.ensureEnabled();
+  await f.renew();
+  await f.session().ensureEnabled();
   const env = f.globals.agentEnv['devin-cli'];
   assert.equal(env.NO_PROXY, 'corp.example');
   assert.equal(env.WINDSURF_API_SERVER_URL, `http://127.0.0.1:${PORT}`);

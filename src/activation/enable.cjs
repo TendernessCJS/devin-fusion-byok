@@ -1,6 +1,5 @@
 'use strict';
 const path = require('node:path');
-const { readReceipt, remember, saveReceipt, valueAt } = require('../lifecycle/owned-settings.cjs');
 const { live, superseded } = require('./liveness.cjs');
 const { installLsInjection } = require('../runtime/host/ls-injection.cjs');
 const { createLsBridge } = require('../runtime/bridge.cjs');
@@ -9,25 +8,12 @@ const { installAuthStatusInjection } = require('../runtime/host/auth-status.cjs'
 const { pushUpstream } = require('../runtime/host/upstream.cjs');
 const { recordUnknownCatalog } = require('../runtime/host/observations.cjs');
 const { resolveEffectiveOriginWhenAvailable } = require('./effective-origin.cjs');
-const { BACKEND_URL } = require('../runtime/port.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
-const { globalSetting } = require('./settings.cjs');
 const { safeError, RuntimeError } = require('./errors.cjs');
-const { describeError } = require('./remote-support.cjs');
-
-// A configured http.proxy routes this window, so the managed CLI env must exempt
-// loopback or devin-cli cannot reach the local backend or the LS bridge. Read
-// the global value first: merged workspace settings are never copied into global
-// settings, and the effective value is only a fallback for the window case.
-function loopbackExemption(vscode) {
-  let proxy;
-  try {
-    const http = vscode.workspace.getConfiguration('http');
-    proxy = http?.inspect?.('proxy')?.globalValue;
-    if (typeof proxy !== 'string' || !proxy.trim()) proxy = http?.get?.('proxy');
-  } catch {}
-  return typeof proxy === 'string' && proxy.trim() ? '127.0.0.1,localhost,::1' : null;
-}
+const { describeError, createRemoteSupport, probeRemoteSupport } = require('./remote-support.cjs');
+const { updateConfig } = require('../config/store.cjs');
+const { isHostDisabled } = require('../lifecycle/host-disabled.cjs');
+const { teardown } = require('./teardown.cjs');
 
 const { checkNativeContract } = require('./native-contract.cjs');
 
@@ -42,14 +28,14 @@ const { checkNativeContract } = require('./native-contract.cjs');
 // again after the resolution window and once more when the turn to publish
 // arrives, and commits are serialised so an older trigger's POST can never land
 // after a newer one. The signal aborts an in-flight POST on supersede/disable.
-function serializePush(lifecycle, task) {
-  const previous = lifecycle?.upstreamPushChain || Promise.resolve();
+function serializePush(state, task) {
+  const previous = state?.upstreamPushChain || Promise.resolve();
   const run = previous.then(task, task);
-  if (lifecycle) lifecycle.upstreamPushChain = run.then(() => {}, () => {});
+  if (state) state.upstreamPushChain = run.then(() => {}, () => {});
   return run;
 }
 
-async function pushConfiguredUpstream({ root, vscode, log, lifecycle, signal, shouldContinue = () => true, isLive = () => true }) {
+async function pushConfiguredUpstream({ root, vscode, log, state, signal, shouldContinue = () => true, isLive = () => true }) {
   // A liveness check that can no longer be answered (storage gone, config
   // unreadable) is indistinguishable from a dead activation — never publish.
   const cancelled = () => {
@@ -78,17 +64,17 @@ async function pushConfiguredUpstream({ root, vscode, log, lifecycle, signal, sh
     const effective = await resolveEffectiveOriginWhenAvailable({ vscode, signal, shouldContinue, onDiag });
     if (cancelled()) { skipped(); return; }
     // The dedupe key lives in memory only — compared, never logged or written.
-    const key = `${lifecycle?.activationGeneration}${effective.origin ?? ''}${effective.source}`;
-    return await serializePush(lifecycle, async () => {
+    const key = `${state?.activationGeneration}${effective.origin ?? ''}${effective.source}`;
+    return await serializePush(state, async () => {
       if (cancelled()) { skipped(); return; }
-      if (lifecycle && lifecycle.upstreamPushedKey === key) return;
+      if (state && state.upstreamPushedKey === key) return;
       // The POST commits remote state we cannot read back: invalidate the
       // dedupe key before sending so a cancelled or failed push never leaves
       // the key claiming a state the backend may not hold.
-      if (lifecycle) lifecycle.upstreamPushedKey = undefined;
+      if (state) state.upstreamPushedKey = undefined;
       const result = await pushUpstream({ root, origin: effective.origin, source: effective.source, signal });
       if (cancelled()) { skipped(); return; }
-      if (result.ok && lifecycle) lifecycle.upstreamPushedKey = key;
+      if (result.ok && state) state.upstreamPushedKey = key;
       // Success is logged too: a silent success makes "did the push happen?"
       // unanswerable from the log. Only flags and enums are recorded — never the host.
       if (result.ok) log('upstream-push', { ok: true, custom: result.custom === true, source: effective.source });
@@ -97,18 +83,57 @@ async function pushConfiguredUpstream({ root, vscode, log, lifecycle, signal, sh
   } catch { if (!cancelled()) log('upstream-push', { ok: false, reason: 'unavailable' }); else skipped(); }
 }
 
-function installEnable({ deps, shared }) {
-  const { lifecycle, config, vscode, context, log, catalog, nativeMain, stores, managedSettings } = deps;
-  let enableQueue = Promise.resolve();
-  shared.ensureEnabled = () => {
+function createRuntimeSession({ root, extensionPath, subscriptions, config, configFile, vscode, context, nativeMain, log, catalog, catalogSync, settingsOwner, selection, continuation, onPublish }) {
+  const state = {
+    activationDisposed: false, activationGeneration: 0, reconcileHalted: true,
+    connection: undefined, acpObserver: undefined, authStatus: undefined,
+    remoteSupport: undefined, nativeContract: undefined, runtimeWaitAbort: undefined,
+    upstreamPushGeneration: 0, upstreamPushAbort: undefined, upstreamPushChain: undefined,
+    upstreamPushedKey: undefined, upstreamSubscription: undefined,
+  };
+  let backendStatus = 'stopped', disablePromise = null, enableQueue = Promise.resolve();
+  let acpSeq = 0, acpOwnModels = 0;
+  const isLive = () => live(state, config);
+  const isDisposed = () => state.activationDisposed;
+  const isSuperseded = generation => superseded(state, config, generation);
+  const generation = () => state.activationGeneration;
+  const isReconcileHalted = () => state.reconcileHalted;
+  const status = () => state.connection?.status;
+  const backendStatusValue = () => backendStatus;
+  const acpObservation = () => ({ seq: acpSeq, ownModels: acpOwnModels });
+  const nativeContract = () => state.nativeContract || null;
+  const publishPanel = () => { try { void Promise.resolve(onPublish?.()).catch(() => {}); } catch {} };
+
+  const prepareHostSupport = () => {
+    // Remote windows keep this extension UI-side while the native extension
+    // lives on the remote: catalog injection is impossible there, so remote
+    // support only wraps the remote extension's ssh spawn / authority resolver
+    // to establish a reverse tunnel back to the local backend. The wrappers
+    // must be in place before the window resolves its remote authority, hence
+    // the eager start inside remote windows only: a local window needs no
+    // tunnel and must not install process-level patches it can never use.
+    const remoteWindow = Boolean(vscode.env?.remoteName);
+    let remoteSupport;
+    try {
+      remoteSupport = createRemoteSupport({ vscode, root, nativeMain, log,
+        isEnabled: () => isLive() });
+    } catch (error) { log('remote-support-unavailable', describeError(error)); }
+    state.remoteSupport = remoteSupport;
+    if (config().enabled !== false && remoteWindow) void remoteSupport?.start();
+    // Local windows keep the wrappers out but still report whether this host can
+    // be patched at all — otherwise the first remote window is where it fails.
+    else if (config().enabled !== false) void probeRemoteSupport({ vscode, root, nativeMain, log });
+  };
+
+  const ensureEnabled = () => {
     const operation = enableQueue.then(async () => {
       // A disable in flight owns the teardown until its restore verdict lands:
       // enabling now must wait it out instead of installing hooks that the old
       // finally block would strip again underneath.
-      const disabling = shared.disablePromise;
+      const disabling = disablePromise;
       if (disabling) { try { await disabling; } catch {} }
-      if (!live(lifecycle, config)) return;
-      const existing = lifecycle.connection;
+      if (!isLive()) return;
+      const existing = state.connection;
       if (existing) {
         // A remote connection that lost its tunnel retries the tunnel alone —
         // backend and settings are already in place.
@@ -120,67 +145,40 @@ function installEnable({ deps, shared }) {
     enableQueue = operation.catch(() => {});
     return operation;
   };
+
   async function enable() {
-    managedSettings.open();
-    const generation = ++lifecycle.activationGeneration;
-    lifecycle.runtimeWaitAbort?.abort();
-    const waiting = new AbortController(); lifecycle.runtimeWaitAbort = waiting;
-    shared.backendStatus = 'starting';
+    settingsOwner.openWrites();
+    const generation = ++state.activationGeneration;
+    state.runtimeWaitAbort?.abort();
+    const waiting = new AbortController(); state.runtimeWaitAbort = waiting;
+    backendStatus = 'starting';
     let compatible;
     const compatibleReady = new Promise(resolve => { compatible = resolve; });
-    const upgrade = ensureBackend({ root: deps.root, extensionPath: context.extensionPath, signal: waiting.signal, log,
+    const upgrade = ensureBackend({ root, extensionPath, signal: waiting.signal, log,
       onCompatibleRuntime: health => {
         if (waiting.signal.aborted) return;
         log('runtime-update-pending', { version: health.version });
-        shared.backendStatus = 'running'; void shared.management?.publish()?.catch(() => {});
+        backendStatus = 'running'; publishPanel();
         compatible(health);
       } });
-    void upgrade.finally(() => { if (lifecycle.runtimeWaitAbort === waiting) lifecycle.runtimeWaitAbort = undefined; })
+    void upgrade.finally(() => { if (state.runtimeWaitAbort === waiting) state.runtimeWaitAbort = undefined; })
       .catch(error => { const code = safeError(error).code; if (code !== 'cancelled') log('runtime-upgrade-error', { code }); });
-    upgrade.then(() => { shared.backendStatus = 'running'; void shared.management?.publish()?.catch(() => {}); },
-      error => { const code = safeError(error).code; if (code !== 'cancelled') { shared.backendStatus = code; void shared.management?.publish()?.catch(() => {}); } });
+    upgrade.then(() => { backendStatus = 'running'; publishPanel(); },
+      error => { const code = safeError(error).code; if (code !== 'cancelled') { backendStatus = code; publishPanel(); } });
     await Promise.race([upgrade, compatibleReady]);
-    if (superseded(lifecycle, config, generation)) return;
-    lifecycle.reconcileHalted = false;
-    const settings = vscode.workspace.getConfiguration('devin.acp');
-    const existing = globalSetting(settings, 'agentEnv');
-    const previous = { ...(existing['devin-cli'] || {}) };
-    const desired = { WINDSURF_API_SERVER_URL: BACKEND_URL };
-    const noProxy = loopbackExemption(vscode);
-    if (noProxy) desired.NO_PROXY = noProxy;
-    const saved = { ...context.globalState.get('savedEnv', {}) }, managed = context.globalState.get('managedEnv', {});
-    const receipt = readReceipt(deps.root, context.extensionPath);
-    // Migrate this extension's experimental proxy settings without changing any
-    // values the user subsequently edited.
-    for (const [key, value] of Object.entries(managed)) if (!(key in desired) && previous[key] === value) {
-      if (saved[key] == null) delete previous[key]; else previous[key] = saved[key];
-    }
-    for (const key of Object.keys(desired)) if (!(key in saved)) saved[key] = previous[key] ?? null;
-    for (const [key, value] of Object.entries(desired)) {
-      const current = valueAt({ 'devin.acp.agentEnv': existing }, ['devin.acp.agentEnv', 'devin-cli', key]);
-      const legacy = managed[key] === current.value && Object.hasOwn(saved, key)
-        ? saved[key] == null ? { exists: false } : { exists: true, value: saved[key] } : undefined;
-      remember(receipt, ['devin.acp.agentEnv', 'devin-cli', key], current, value, legacy);
-    }
-    // Commit recovery information before changing the user's settings. The
-    // whole write leg is one critical section: a disable that lands mid-write
-    // drains it before restoring, and one already draining cancels it.
+    if (isSuperseded(generation)) return;
+    state.reconcileHalted = false;
     try {
-      await managedSettings.critical(async () => {
-        saveReceipt(receipt);
-        await context.globalState.update('savedEnv', saved);
-        await context.globalState.update('managedEnv', desired);
-        if (Object.keys(managed).some(k => !(k in desired)) || Object.entries(desired).some(([k, v]) => previous[k] !== v)) await settings.update('agentEnv', { ...existing, 'devin-cli': { ...previous, ...desired } }, vscode.ConfigurationTarget.Global);
-      });
+      await settingsOwner.applyEnvironment();
       // The preference write registers through saveFusionChoice's own gate
       // entry instead of nesting inside this critical section.
-      if (superseded(lifecycle, config, generation)) return;
-      await shared.reconcilePreference();
+      if (isSuperseded(generation)) return;
+      await selection.reconcilePreference();
     } catch (error) {
       if (error?.code === 'cancelled') throw new RuntimeError('cancelled');
       throw error;
     }
-    if (superseded(lifecycle, config, generation)) return;
+    if (isSuperseded(generation)) return;
     const native = vscode.extensions.getExtension('codeium.windsurf');
     if (!native) {
       if (!vscode.env?.remoteName) throw new Error('未找到 Devin 原生扩展');
@@ -188,96 +186,136 @@ function installEnable({ deps, shared }) {
       // catalog injection is possible — the only deliverable here is the
       // reverse tunnel plus the agentEnv write that already happened above.
       let remoteState = 'connecting';
-      const support = deps.lifecycle.remoteSupport;
+      const support = state.remoteSupport;
       let connecting = null;
       const connect = () => {
         if (!support) { remoteState = 'unavailable'; return Promise.reject(new Error('remote_support_unavailable')); }
-        if (remoteState === 'disposed' || lifecycle.connection !== connection) return Promise.resolve();
+        if (remoteState === 'disposed' || state.connection !== connection) return Promise.resolve();
         if (connecting) return connecting;
         remoteState = 'connecting';
         connecting = (async () => {
           try {
             await support.start();
             await support.ensureCurrentRemoteWindowTunnel();
-            if (remoteState === 'disposed' || lifecycle.connection !== connection) return;
+            if (remoteState === 'disposed' || state.connection !== connection) return;
             remoteState = 'ready';
           } catch (error) {
-            if (remoteState !== 'disposed' && lifecycle.connection === connection) remoteState = 'unavailable';
+            if (remoteState !== 'disposed' && state.connection === connection) remoteState = 'unavailable';
             log('remote-tunnel-unavailable', describeError(error));
             throw error;
           } finally { connecting = null; }
         })();
         return connecting;
       };
-      const connection = lifecycle.connection = {
+      const connection = state.connection = {
         get status() { return { state: remoteState, tunnels: support?.status?.() || [] }; },
         retry() { return connect(); },
         dispose() { remoteState = 'disposed'; },
       };
       // No LS bridge and no auth-status hook run on this side, so the desktop
       // catalog can never be observed here: say so instead of polling forever.
-      stores.nativeCatalog.markUnsupported?.();
+      catalogSync.markUnsupported();
       if (!support) remoteState = 'unavailable';
       else void connect().catch(() => {});
       log('activated-remote', { tunnel: Boolean(support) });
       return;
     }
     const injected = await installLsInjection({ nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main),
-      createBridge: (port, extra) => createLsBridge(port, { ...extra, getCatalog: catalog, log, onNativeModels: stores.nativeCatalog.observeNativeModels,
-        onAllowedUids: stores.nativeCatalog.observeAllowedUids,
-        onUnknownCatalog: method => { log('catalog-rpc-unknown', { rpc: method }); recordUnknownCatalog(deps.root, method); } }), log });
-    if (superseded(lifecycle, config, generation) || lifecycle.activationDisposed) {
+      createBridge: (port, extra) => createLsBridge(port, { ...extra, getCatalog: catalog, log, onNativeModels: catalogSync.observeModels,
+        onAllowedUids: catalogSync.observeAllowed,
+        onUnknownCatalog: method => { log('catalog-rpc-unknown', { rpc: method }); recordUnknownCatalog(root, method); } }), log });
+    if (isSuperseded(generation) || state.activationDisposed) {
       try { await injected.dispose(); } catch {}
       return;
     }
-    lifecycle.connection = injected;
+    state.connection = injected;
     // Backend is ready now: align its forward target with the effective
     // upstream origin, and keep it aligned on later setting changes. The
     // subscription is registered once per extension context, not per enable.
     const triggerPush = () => {
       // A newer trigger supersedes any in-flight resolution window.
-      const pushGeneration = (lifecycle.upstreamPushGeneration = (lifecycle.upstreamPushGeneration || 0) + 1);
-      try { lifecycle.upstreamPushAbort?.abort(); } catch {}
+      const pushGeneration = (state.upstreamPushGeneration = (state.upstreamPushGeneration || 0) + 1);
+      try { state.upstreamPushAbort?.abort(); } catch {}
       const controller = new AbortController();
-      lifecycle.upstreamPushAbort = controller;
-      return pushConfiguredUpstream({ root: deps.root, vscode, log, lifecycle, signal: controller.signal,
-        shouldContinue: () => live(lifecycle, config) && lifecycle.upstreamPushGeneration === pushGeneration,
-        isLive: () => live(lifecycle, config) });
+      state.upstreamPushAbort = controller;
+      return pushConfiguredUpstream({ root, vscode, log, state, signal: controller.signal,
+        shouldContinue: () => isLive() && state.upstreamPushGeneration === pushGeneration,
+        isLive });
     };
     void triggerPush();
-    if (!lifecycle.upstreamSubscription) {
-      lifecycle.upstreamSubscription = vscode.workspace.onDidChangeConfiguration?.(event => {
+    if (!state.upstreamSubscription) {
+      state.upstreamSubscription = vscode.workspace.onDidChangeConfiguration?.(event => {
         const sources = ['codeium.apiServerUrl', 'devin.portalUrl', 'windsurf.portalUrl', 'windsurf.serviceUrl'];
         if (typeof event?.affectsConfiguration === 'function' && !sources.some(s => event.affectsConfiguration(s))) return;
-        if (!live(lifecycle, config)) return;
+        if (!isLive()) return;
         return triggerPush();
       });
-      if (lifecycle.upstreamSubscription) context.subscriptions.push(lifecycle.upstreamSubscription);
+      if (state.upstreamSubscription) subscriptions.push(state.upstreamSubscription);
     }
     try {
-      lifecycle.authStatus?.dispose?.();
-      lifecycle.authStatus = installAuthStatusInjection({ nativeMainPath: nativeMain, getCatalog: catalog, log,
-        isEnabled: () => !superseded(lifecycle, config, generation) && !lifecycle.activationDisposed,
-        onNativeModels: entries => { try { stores.nativeCatalog.observeNativeModels?.(entries); } catch {} } });
+      state.authStatus?.dispose?.();
+      state.authStatus = installAuthStatusInjection({ nativeMainPath: nativeMain, getCatalog: catalog, log,
+        isEnabled: () => !isSuperseded(generation) && !state.activationDisposed,
+        onNativeModels: entries => { try { catalogSync.observeModels(entries); } catch {} } });
       // A foreign wrapper that won the method after our install leaves the hook
       // deaf; there is no publication status to degrade anymore, so the only
       // channel left is the output-channel event.
-      if (lifecycle.authStatus?.shadowed?.()) log('auth-status-shadowed');
+      if (state.authStatus?.shadowed?.()) log('auth-status-shadowed');
     } catch {
       log('auth-status-injection-unavailable');
     }
-    try { if (nativeMain) { lifecycle.acpObserver?.dispose?.(); lifecycle.acpObserver = installAcpObserver({ nativeMainPath: nativeMain, log, onModels: counts => { stores.acpObservation.seq++; stores.acpObservation.ownModels = counts.ownModels; } }); } }
+    try { if (nativeMain) { state.acpObserver?.dispose?.(); state.acpObserver = installAcpObserver({ nativeMainPath: nativeMain, log, onModels: counts => { acpSeq++; acpOwnModels = counts.ownModels; } }); } }
     catch { log('acp-observer-error'); }
-    stores.nativeCatalog.startNativeSync();
-    log('activated', { nativeVersion: native.packageJSON.version, storage: deps.root });
+    catalogSync.start();
+    log('activated', { nativeVersion: native.packageJSON.version, storage: root });
     // Post-activation drift probe: async and unobserved by the flow; the
-    // result is surfaced through `lifecycle.nativeContract` for the panel.
+    // result is surfaced through `state.nativeContract` for the panel.
     void checkNativeContract({
       extensionPath: native.extensionPath,
-      cacheFile: path.join(deps.root, 'native-contract.json'),
+      cacheFile: path.join(root, 'native-contract.json'),
       log
-    }).then(result => { lifecycle.nativeContract = result; }).catch(() => {});
+    }).then(result => { state.nativeContract = result; }).catch(() => {});
   }
+
+  // Every disable path (panel switch, disable command, external enabled=false
+  // edit) serializes through the same in-flight promise so a config watcher
+  // firing mid-teardown cannot start a second teardown in parallel.
+  const disable = () => {
+    disablePromise ??= (async () => {
+      try { continuation.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); }
+      backendStatus = 'stopped';
+      updateConfig(configFile, current => { if (current.enabled === false) return false; current.enabled = false; return true; });
+      const drained = await settingsOwner.drainWrites();
+      if (!drained) log('managed-settings-drain-timeout');
+      // Owned settings restore must run even when the LS bridge dispose threw —
+      // a broken bridge can never orphan the user's environment values.
+      try { await teardown(state, { continuation, catalogSync }); }
+      finally { await settingsOwner.restore({ keepReceipt: drained === false }); }
+      if (drained) vscode.window.showInformationMessage('Fusion BYOK 已停用，连接设置已恢复。');
+      else vscode.window.showWarningMessage('Fusion BYOK 已停用，但设置写入等待超时；恢复尚未确认，已保留恢复记录，请稍后重试停用。');
+    })().finally(() => { disablePromise = null; });
+    return disablePromise;
+  };
+
+  const deactivate = async () => {
+    state.activationDisposed = true;
+    continuation.dispose();
+    await teardown(state, { continuation, catalogSync });
+    // Disabling in the extension manager restarts the extension host and never runs
+    // the disable command; without this the native CLI keeps pointing at a runtime
+    // that no longer starts. A plain reload or quit keeps the shared settings.
+    try {
+      if (!isHostDisabled({ storageRoot: root })) return;
+      const drained = await settingsOwner.drainWrites();
+      if (!drained) log('managed-settings-drain-timeout', { phase: 'host-disable' });
+      await settingsOwner.restore({ keepReceipt: drained === false });
+      log(drained ? 'host-disabled-settings-restored' : 'host-disabled-settings-restore-pending');
+    } catch {}
+  };
+
+  return { ensureEnabled, disable, deactivate, prepareHostSupport,
+    isLive, isDisposed, isSuperseded, generation, isReconcileHalted,
+    status, backendStatus: backendStatusValue, acpObservation, nativeContract };
 }
 
-module.exports = { installEnable };
+module.exports = { createRuntimeSession };

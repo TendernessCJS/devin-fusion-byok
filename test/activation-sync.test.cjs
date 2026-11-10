@@ -26,18 +26,16 @@ function cacheSyncFixture(t, { refreshResult, models = [{ uid: 'm1' }] } = {}) {
     },
   });
   t.after(() => loader.assertStubsUsed('cache-sync fixture'));
-  const shared = { cliCacheReport: null, nativeModels: new Map(), acpObservationSeq: 0, acpOwnModels: 0,
-    nativeCatalogStatus: 'ready', hiddenNativeSignature: '[]' };
-  const deps = {
-    log: (event, data) => logs.push({ event, data }),
+  let status = 'ready';
+  const sync = loader.module.exports.createCacheSync({
     config: () => ({}),
     catalog: () => ({ models, fusions: {}, routes: {} }),
-    vscode: { commands: { executeCommand: command => { executed.push(command); return Promise.resolve(); } } },
-    context: { subscriptions: [] },
-    stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } },
-  };
-  const sync = loader.module.exports.installCacheSync({ deps, shared, publish: async () => { publishCalls.push(1); } });
-  return { sync, shared, logs, calls, augOptions, publishCalls, executed, subscriptions: deps.context.subscriptions };
+    readNativeCatalog: () => ({ models: [], allowedUids: new Set(), allowedMode: 'restricted', status }),
+    log: (event, data) => logs.push({ event, data }),
+    publish: async () => { publishCalls.push(1); },
+  });
+  return { sync, logs, calls, augOptions, publishCalls, executed, subscriptions: [],
+    setStatus: next => { status = next; } };
 }
 
 test('an empty catalog still runs the check so recognized stale own entries can retire', t => {
@@ -57,10 +55,13 @@ test('cache sync wires no picker refresh commands or subscriptions', t => {
 
 test('automatic cache checks keep the same report object when the outcome is unchanged', t => {
   const f = cacheSyncFixture(t);
+  // The first-ever authoritative check always forces once (the hidden-native
+  // signature starts unset); stamp it before comparing two settled checks.
+  f.sync.check(); f.calls.length = 0;
   const first = f.sync.check();
   const second = f.sync.check();
   assert.equal(first, second, 'an unchanged automatic check must return the retained report object');
-  assert.equal(f.shared.cliCacheReport, first);
+  assert.equal(f.sync.report(), first);
   assert.equal(f.calls.length, 2);
   assert.ok(!f.calls[0].force && !f.calls[1].force);
 });
@@ -85,13 +86,12 @@ test('refresh() forces a check and publishes the panel', async t => {
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0].force, true);
   assert.equal(f.publishCalls.length, 1);
-  assert.equal(report, f.shared.cliCacheReport);
+  assert.equal(report, f.sync.report());
 });
 
 test('a failing cache probe logs and keeps the previous report', t => {
-  const f = cacheSyncFixture(t);
-  const first = f.sync.check();
   const logs = [];
+  let fail = false;
   const loader = createSandboxLoader({
     filename: path.resolve(__dirname, '../src/activation/cache-sync.cjs'),
     overrides: {
@@ -100,19 +100,21 @@ test('a failing cache probe logs and keeps the previous report', t => {
         augmentCatalog: payload => payload },
       '../runtime/host/cli-cache.cjs': {
         defaultDir: () => '/nonexistent',
-        refreshStaleCliCaches: () => { throw Object.assign(new Error('boom'), { code: 'EACCES' }); },
+        refreshStaleCliCaches: () => { if (fail) throw Object.assign(new Error('boom'), { code: 'EACCES' });
+          return { checked: 1, refreshed: [], skipped: [], errors: [] }; },
       },
     },
   });
   t.after(() => loader.assertStubsUsed('failing cache-sync fixture'));
-  const sync = loader.module.exports.installCacheSync({
-    deps: { log: (event, data) => logs.push({ event, data }), config: () => ({}),
-      catalog: () => ({ models: [{ uid: 'm1' }], fusions: {}, routes: {} }),
-      vscode: { commands: { executeCommand: () => Promise.resolve() } },
-      context: { subscriptions: [] },
-      stores: { nativeCatalog: f.shared, cacheSync: f.shared, acpObservation: { seq: 0, ownModels: 0 } } },
-    shared: f.shared, publish: async () => {},
+  const sync = loader.module.exports.createCacheSync({
+    config: () => ({}),
+    catalog: () => ({ models: [{ uid: 'm1' }], fusions: {}, routes: {} }),
+    readNativeCatalog: () => ({ models: [], allowedUids: new Set(), allowedMode: 'restricted', status: 'ready' }),
+    log: (event, data) => logs.push({ event, data }),
+    publish: async () => {},
   });
+  const first = sync.check();
+  fail = true;
   assert.equal(sync.check(), first);
   assert.ok(logs.some(line => line.event === 'cli-cache-check-failed' && line.data.code === 'EACCES'));
 });
@@ -131,25 +133,26 @@ function configSyncFixture(t, { initial = {} } = {}) {
   t.after(() => loader.assertStubsUsed('config-sync fixture'));
   let current = { enabled: true, ...initial };
   const enabled = [], reconciled = [], preference = [], disabled = [], changedCalls = [], publishCalls = [], resets = [], suspends = [];
-  const shared = {
+  const runtime = {
     ensureEnabled: async () => { enabled.push(1); },
-    reconcileSelection: async () => { reconciled.push(1); },
-    reconcilePreference: () => { preference.push(1); },
     disable: async () => { disabled.push(1); },
   };
-  const lifecycle = { activationDisposed: false, resetAutoContinue: () => { resets.push(1); },
-    goalController: { suspend: () => { suspends.push(1); } } };
-  let prefDisposed = 0;
-  const deps = {
-    lifecycle, log: (event, data) => logs.push({ event, data }),
-    config: () => current, configFile: '/nonexistent/config.json', root: '/nonexistent',
-    context: { subscriptions: [] },
-    vscode: { workspace: { onDidChangeConfiguration: fn => { preferenceListeners.push(fn); return { dispose() { prefDisposed += 1; } }; } } },
+  const selection = {
+    reconcileSelection: async () => { reconciled.push(1); },
+    reconcilePreference: () => { preference.push(1); },
   };
-  const sync = loader.module.exports.createConfigSync({ deps, shared,
+  const continuation = { suspend: () => { suspends.push(1); }, resetAutoContinue: () => { resets.push(1); } };
+  let prefDisposed = 0;
+  const context = { subscriptions: [] };
+  const sync = loader.module.exports.createConfigSync({
+    log: (event, data) => logs.push({ event, data }),
+    config: () => current, configFile: '/nonexistent/config.json',
+    context,
+    vscode: { workspace: { onDidChangeConfiguration: fn => { preferenceListeners.push(fn); return { dispose() { prefDisposed += 1; } }; } } },
+    runtime, selection, continuation,
     changed: () => { changedCalls.push(1); }, publish: () => { publishCalls.push(1); return Promise.resolve(); } });
   return {
-    sync, shared, logs, watchers, unwatchCalls, preferenceListeners, subscriptions: deps.context.subscriptions,
+    sync, logs, watchers, unwatchCalls, preferenceListeners, subscriptions: context.subscriptions,
     enabled, reconciled, preference, disabled, changedCalls, publishCalls, resets, suspends,
     prefDisposed: () => prefDisposed,
     setConfig: next => { current = next; },
@@ -231,19 +234,19 @@ test('the preference listener ignores unrelated configuration sections', t => {
 
 test('the readiness gate switches retirement: loading is additive-only, ready retires', t => {
   const f = cacheSyncFixture(t);
-  f.shared.nativeCatalogStatus = 'loading';
+  f.setStatus('loading');
   f.sync.check();
   assert.equal(f.calls.at(-1).retire, false, 'a loading native catalog forbids retirement');
   f.calls.at(-1).augment(Buffer.from('x'), '/r', () => {});
   assert.equal(f.augOptions.at(-1).retireOwn, false, 'augment stays additive-only while loading');
-  f.shared.nativeCatalogStatus = 'ready';
+  f.setStatus('ready');
   f.sync.check();
   assert.equal(f.calls.at(-1).retire, true, 'a ready native catalog allows retirement');
   f.calls.at(-1).augment(Buffer.from('x'), '/r', () => {});
   assert.equal(f.augOptions.at(-1).retireOwn, true, 'augment retires only under authority');
   // unsupported/empty also count as authoritative; unavailable does not.
   for (const [status, expected] of [['unsupported', true], ['empty', true], ['unavailable', false]]) {
-    f.shared.nativeCatalogStatus = status;
+    f.setStatus(status);
     f.sync.check();
     assert.equal(f.calls.at(-1).retire, expected, status);
   }
@@ -251,13 +254,13 @@ test('the readiness gate switches retirement: loading is additive-only, ready re
 
 test('cli-cache-deferred logs once per non-authoritative spell', t => {
   const f = cacheSyncFixture(t);
-  f.shared.nativeCatalogStatus = 'loading';
+  f.setStatus('loading');
   f.sync.check(); f.sync.check(); f.sync.check();
   assert.equal(f.logs.filter(line => line.event === 'cli-cache-deferred').length, 1,
     'consecutive deferred checks log only once');
-  f.shared.nativeCatalogStatus = 'ready';
+  f.setStatus('ready');
   f.sync.check();
-  f.shared.nativeCatalogStatus = 'unavailable';
+  f.setStatus('unavailable');
   f.sync.check();
   assert.equal(f.logs.filter(line => line.event === 'cli-cache-deferred').length, 2,
     'a new non-authoritative spell logs again');
@@ -269,7 +272,7 @@ test('the shape probe runs once per own-entries signature and stamps it after th
   const probe = f.calls[0].staleProbe;
   assert.deepEqual([...probe(Buffer.alloc(0))], ['dfbyok-stale'],
     'first signature probes own-entry bytes');
-  assert.equal(f.shared.ownShapeSignature, 'sig-1', 'the signature is recorded after the run');
+  assert.equal(f.sync.diagnostics().ownShapeSignature, 'sig-1', 'the signature is recorded after the run');
   f.sync.check();
   assert.deepEqual([...f.calls[1].staleProbe(Buffer.alloc(0))], [],
     'an unchanged signature skips the byte comparison entirely');
@@ -295,8 +298,7 @@ for (const [before, after] of [['loading', 'ready'], ['unavailable', 'empty']]) 
     const file = path.join(dir, name);
     fs.writeFileSync(file, JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload }));
     const bytesBefore = fs.readFileSync(file);
-    const shared = { cliCacheReport: null, cliCacheDeferred: false, ownShapeSignature: undefined,
-      hiddenNativeSignature: '[]', nativeCatalogStatus: before, nativeModels: new Map() };
+    let status = before;
     let probeCalls = 0;
     const countedOwnEntries = (data, options) => { probeCalls++; return realCatalog.staleOwnEntries(data, options); };
     const loader = createSandboxLoader({
@@ -312,21 +314,20 @@ for (const [before, after] of [['loading', 'ready'], ['unavailable', 'empty']]) 
       },
     });
     t.after(() => loader.assertStubsUsed('real cache-sync fixture'));
-    const sync = loader.module.exports.installCacheSync({
-      deps: { log: () => {}, config: () => ({}), catalog: () => current,
-        vscode: { commands: { executeCommand: () => Promise.resolve() } }, context: { subscriptions: [] },
-        stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } } },
-      shared, publish: async () => {},
+    const sync = loader.module.exports.createCacheSync({
+      log: () => {}, config: () => ({}), catalog: () => current,
+      readNativeCatalog: () => ({ models: [], allowedUids: new Set(), allowedMode: 'restricted', status }),
+      publish: async () => {},
     });
     sync.check();
-    assert.equal(shared.ownShapeSignature, undefined, 'a non-authoritative check must not consume the pending signature');
+    assert.equal(sync.diagnostics().ownShapeSignature, undefined, 'a non-authoritative check must not consume the pending signature');
     assert.ok(bytesBefore.equals(fs.readFileSync(file)), 'a non-authoritative check leaves the bytes alone');
     assert.equal(probeCalls, 0, 'a non-authoritative check never runs the shape probe');
-    shared.nativeCatalogStatus = after;
+    status = after;
     const report = sync.check();
     assert.ok(report.refreshed.includes(name), 'the authoritative check rewrites the drifted payload');
     assert.ok(probeCalls >= 1, 'the first authoritative check probes the shape');
-    assert.equal(shared.ownShapeSignature, realCatalog.ownEntriesSignature(current.models));
+    assert.equal(sync.diagnostics().ownShapeSignature, realCatalog.ownEntriesSignature(current.models));
     const stored = new Map();
     for (const entry of fields(Buffer.from(JSON.parse(fs.readFileSync(file, 'utf8')).payload, 'base64'), 1)) {
       stored.set(str(entry.value, 22), entry.value);
@@ -363,8 +364,7 @@ for (const before of ['loading', 'unavailable']) {
     const file = path.join(dir, name);
     fs.writeFileSync(file, JSON.stringify({ version: 1, identity_digest: 'd', fetched_at_secs: 1, payload }));
     const calls = [];
-    const shared = { cliCacheReport: null, cliCacheDeferred: false, ownShapeSignature: undefined,
-      hiddenNativeSignature: undefined, nativeCatalogStatus: before, nativeModels: new Map() };
+    let status = before;
     const loader = createSandboxLoader({
       filename: path.resolve(__dirname, '../src/activation/cache-sync.cjs'),
       overrides: {
@@ -376,26 +376,25 @@ for (const before of ['loading', 'unavailable']) {
       },
     });
     t.after(() => loader.assertStubsUsed('hidden-signature fixture'));
-    const sync = loader.module.exports.installCacheSync({
-      deps: { log: () => {}, config: () => live, catalog: () => current,
-        vscode: { commands: { executeCommand: () => Promise.resolve() } }, context: { subscriptions: [] },
-        stores: { nativeCatalog: shared, cacheSync: shared, acpObservation: { seq: 0, ownModels: 0 } } },
-      shared, publish: async () => {},
+    const sync = loader.module.exports.createCacheSync({
+      log: () => {}, config: () => live, catalog: () => current,
+      readNativeCatalog: () => ({ models: [], allowedUids: new Set(), allowedMode: 'restricted', status }),
+      publish: async () => {},
     });
     const uids = () => fields(Buffer.from(JSON.parse(fs.readFileSync(file, 'utf8')).payload, 'base64'), 1)
       .filter(field => field.wire === 2).map(field => str(field.value, 22));
 
     sync.check();
     assert.equal(calls[0].force, false, 'a non-authoritative check never forces');
-    assert.equal(shared.hiddenNativeSignature, undefined, 'and never consumes the pending signature');
+    assert.equal(sync.diagnostics().hiddenNativeSignature, undefined, 'and never consumes the pending signature');
     assert.ok(uids().includes('native-hide-me'), 'nor rewrites the payload');
 
-    shared.nativeCatalogStatus = 'ready';
+    status = 'ready';
     sync.check();
     assert.equal(calls[1].force, true, 'the first authoritative check sees the pending hide change');
     assert.ok(!uids().includes('native-hide-me'), 'the hidden native is actually removed');
     assert.ok(uids().includes('native-keep'), 'other natives survive');
-    assert.equal(shared.hiddenNativeSignature, JSON.stringify([...hiddenSet].sort()));
+    assert.equal(sync.diagnostics().hiddenNativeSignature, JSON.stringify([...hiddenSet].sort()));
 
     sync.check();
     assert.equal(calls[2].force, false, 'an unchanged signature does not force again');
@@ -424,10 +423,10 @@ for (const before of ['loading', 'unavailable']) {
     current = { ...current, hiddenNativeModelUids: ['native-hide-me'] };
     sync.check();
     assert.equal(calls[8].force, true, 'a genuinely different hide set forces once');
-    assert.equal(shared.hiddenNativeSignature, JSON.stringify(['native-hide-me']));
+    assert.equal(sync.diagnostics().hiddenNativeSignature, JSON.stringify(['native-hide-me']));
     const reportA = sync.check(), reportB = sync.check();
     assert.equal(calls[9].force, false);
     assert.equal(reportA, reportB, 'stable checks keep the same report object — no per-interval churn');
-    assert.ok(!JSON.stringify(shared.cliCacheReport).includes('native-hide'), 'uids never reach the report');
+    assert.ok(!JSON.stringify(sync.report()).includes('native-hide'), 'uids never reach the report');
   });
 }

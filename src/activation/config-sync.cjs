@@ -1,14 +1,13 @@
 'use strict';
 const fs = require('node:fs');
 const { safeError } = require('./errors.cjs');
-function createConfigSync({ deps, shared, changed, publish }) {
-  const { lifecycle, config, configFile, vscode, context, log } = deps;
+function createConfigSync({ config, configFile, vscode, context, log, runtime, selection, continuation, changed, publish }) {
   const afterChange = async type => {
-    if (type === 'setEnabled' && config().enabled === false) await shared.disable();
-    else if (type === 'setGoalEnabled') { if (config().goalEnabled !== true) { try { lifecycle.goalController?.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); } } }
-    else if (type === 'setAutoContinue' || type === 'setAutoContinueUntilPlanComplete') lifecycle.resetAutoContinue?.();
+    if (type === 'setEnabled' && config().enabled === false) await runtime.disable();
+    else if (type === 'setGoalEnabled') { if (config().goalEnabled !== true) { try { continuation.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); } } }
+    else if (type === 'setAutoContinue' || type === 'setAutoContinueUntilPlanComplete') continuation.resetAutoContinue();
     else if (type === 'setUpdateProxy') {}
-    else if (config().enabled !== false) { await shared.ensureEnabled(); await shared.reconcileSelection(); }
+    else if (config().enabled !== false) { await runtime.ensureEnabled(); await selection.reconcileSelection(); }
     log('config-after-change', { type });
     changed();
   };
@@ -22,12 +21,12 @@ function createConfigSync({ deps, shared, changed, publish }) {
       if (currentAutoError !== lastAutoError || currentAutoPlan !== lastAutoPlan) {
         lastAutoError = currentAutoError;
         lastAutoPlan = currentAutoPlan;
-        lifecycle.resetAutoContinue?.();
+        continuation.resetAutoContinue();
       }
-      if (currentConfig.enabled === false) void shared.disable().catch(() => log('disable-cleanup-error'));
+      if (currentConfig.enabled === false) void runtime.disable().catch(() => log('disable-cleanup-error'));
       else {
-        void shared.ensureEnabled().catch(error => { const safe = safeError(error); if (safe.code !== 'cancelled') log('error', { code: safe.code }); });
-        void shared.reconcilePreference();
+        void runtime.ensureEnabled().catch(error => { const safe = safeError(error); if (safe.code !== 'cancelled') log('error', { code: safe.code }); });
+        void selection.reconcilePreference();
         changed?.();
       }
       void publish()?.catch(() => {});
@@ -44,7 +43,7 @@ function createConfigSync({ deps, shared, changed, publish }) {
     context.subscriptions.push({ dispose: () => fs.unwatchFile(configFile, onConfigChanged) });
     const preferenceSubscription = vscode.workspace.onDidChangeConfiguration?.(event => {
       if (typeof event?.affectsConfiguration === 'function' && !event.affectsConfiguration('devin.acp.agentPreferences')) return;
-      return shared.reconcilePreference();
+      return selection.reconcilePreference();
     });
     if (preferenceSubscription) context.subscriptions.push(preferenceSubscription);
   };

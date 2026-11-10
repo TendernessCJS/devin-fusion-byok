@@ -2,8 +2,8 @@
 const { staleFusionUids, staleOwnEntries, augmentCatalog, ownEntriesSignature, isOwnUid } = require('../catalog.cjs');
 const { defaultDir: cliCacheDir, refreshStaleCliCaches } = require('../runtime/host/cli-cache.cjs');
 
-function installCacheSync({ deps, shared, publish }) {
-  const { config, log, catalog, stores } = deps;
+function createCacheSync({ config, catalog, readNativeCatalog, log, publish }) {
+  let cliCacheReport = null, cliCacheDeferred = false, ownShapeSignature, hiddenNativeSignature;
   // No picker refresh command is wired anywhere: the desktop's ACP reconnect
   // command drops every ACP connection on execution — users see "ACP
   // connection closed" and a window reload follows by ~5-35s (observed
@@ -21,26 +21,26 @@ function installCacheSync({ deps, shared, publish }) {
   // additive-only and stored own entries can never be deleted early (measured
   // 2026-10-24: an activation-time check stripped all 150 combos from the cache
   // because installPanel runs before ensureEnabled starts the native sync).
-  const nativeAuthoritative = () => stores.nativeCatalog.nativeCatalogStatus !== 'loading' && stores.nativeCatalog.nativeCatalogStatus !== 'unavailable';
   const check = ({ force = false } = {}) => {
     try {
-      if (config().enabled === false) return stores.cacheSync.cliCacheReport;
-      const retire = nativeAuthoritative();
-      if (!retire && !stores.cacheSync.cliCacheDeferred) {
-        stores.cacheSync.cliCacheDeferred = true;
-        log('cli-cache-deferred', { status: stores.nativeCatalog.nativeCatalogStatus });
-      } else if (retire) stores.cacheSync.cliCacheDeferred = false;
+      if (config().enabled === false) return cliCacheReport;
+      const native = readNativeCatalog();
+      const retire = native.status !== 'loading' && native.status !== 'unavailable';
+      if (!retire && !cliCacheDeferred) {
+        cliCacheDeferred = true;
+        log('cli-cache-deferred', { status: native.status });
+      } else if (retire) cliCacheDeferred = false;
       const current = catalog();
       const expectedUids = current.models.map(model => model.uid);
       const emittedFusionUids = new Set(Object.keys(current.fusions || {}));
-      const knownUids = new Set([...Object.keys(current.routes || {}), ...emittedFusionUids, ...stores.nativeCatalog.nativeModels.keys()]);
+      const knownUids = new Set([...Object.keys(current.routes || {}), ...emittedFusionUids, ...native.models.map(e => e.uid)]);
       // `excludedRoleUids` carries the catalog's family expansion, so a single
       // excluded member retires every sibling uid here exactly as it does in
       // assignment. Hand-built catalogs may lack the field — empty sets keep
       // the old behaviour.
       const excluded = { lead: current.excludedRoleUids?.lead || new Set(), sidekick: current.excludedRoleUids?.sidekick || new Set() };
       const shapeSignature = ownEntriesSignature(current.models);
-      const probeShape = stores.cacheSync.ownShapeSignature !== shapeSignature;
+      const probeShape = ownShapeSignature !== shapeSignature;
       // Explicit hide-list config changes must rewrite the cache once even
       // when the own emission is byte-identical — hidden natives are removed
       // on augment. The signature keeps only valid non-owned configured uids
@@ -48,7 +48,7 @@ function installCacheSync({ deps, shared, publish }) {
       const hiddenSignature = JSON.stringify([...new Set(
         (Array.isArray(config().hiddenNativeModelUids) ? config().hiddenNativeModelUids : [])
           .filter(uid => typeof uid === 'string' && uid.length > 0 && uid.length <= 256 && !isOwnUid(uid)))].sort());
-      const effectiveForce = force || (retire && stores.cacheSync.hiddenNativeSignature !== hiddenSignature);
+      const effectiveForce = force || (retire && hiddenNativeSignature !== hiddenSignature);
       const result = refreshStaleCliCaches({ dir: cliCacheDir(), expectedUids, force: effectiveForce, retire, matrixUids: current.matrixUids,
         staleProbe: payload => {
           const fused = staleFusionUids(payload, { emitted: emittedFusionUids, known: knownUids, excluded, fastLeadUids: current.fastLeadUids, nonFastLeadUids: current.nonFastLeadUids });
@@ -76,20 +76,20 @@ function installCacheSync({ deps, shared, publish }) {
       // must not consume the pending signature before the authoritative run
       // can see the drift.
       if (retire) {
-        stores.cacheSync.ownShapeSignature = shapeSignature;
-        stores.cacheSync.hiddenNativeSignature = hiddenSignature;
+        ownShapeSignature = shapeSignature;
+        hiddenNativeSignature = hiddenSignature;
       }
       const summary = { checked: result.checked, refreshed: result.refreshed,
         skipped: result.skipped || [], errors: result.errors || [], coverage: result.coverage };
-      const previous = stores.cacheSync.cliCacheReport && JSON.stringify({ checked: stores.cacheSync.cliCacheReport.checked,
-        refreshed: stores.cacheSync.cliCacheReport.refreshed, skipped: stores.cacheSync.cliCacheReport.skipped,
-        errors: stores.cacheSync.cliCacheReport.errors, coverage: stores.cacheSync.cliCacheReport.coverage });
-      if (force || previous !== JSON.stringify(summary)) stores.cacheSync.cliCacheReport = { at: new Date().toISOString(), ...summary };
+      const previous = cliCacheReport && JSON.stringify({ checked: cliCacheReport.checked,
+        refreshed: cliCacheReport.refreshed, skipped: cliCacheReport.skipped,
+        errors: cliCacheReport.errors, coverage: cliCacheReport.coverage });
+      if (force || previous !== JSON.stringify(summary)) cliCacheReport = { at: new Date().toISOString(), ...summary };
       if (result.refreshed.length) log('cli-cache-refreshed', { files: result.refreshed, force: effectiveForce });
       for (const skip of result.skipped || []) log('cli-cache-skip', { name: skip.name, reason: skip.reason });
       for (const error of result.errors || []) log('cli-cache-write-error', { name: error.name, code: error.code });
     } catch (error) { log('cli-cache-check-failed', { code: error?.code || 'unknown' }); }
-    return stores.cacheSync.cliCacheReport;
+    return cliCacheReport;
   };
   const changed = () => check();
   // Manual counterpart of the automatic check: the panel button exists so a
@@ -103,7 +103,9 @@ function installCacheSync({ deps, shared, publish }) {
     await publish();
     return report;
   };
-  return { check, changed, refresh };
+  const report = () => cliCacheReport;
+  const diagnostics = () => ({ ownShapeSignature, hiddenNativeSignature, deferred: cliCacheDeferred });
+  return { check, changed, refresh, report, diagnostics };
 }
 
-module.exports = { installCacheSync };
+module.exports = { createCacheSync };
