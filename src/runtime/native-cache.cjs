@@ -1,6 +1,6 @@
 'use strict';
 const fs = require('node:fs');
-const { normalizeNativeEntry, normalizeAllowedUids, mergeNativeEntry } = require('../models/native-entry.cjs');
+const { normalizeNativeEntry, normalizeAllowedUids } = require('../models/native-entry.cjs');
 
 const CACHE_VERSION = 1;
 const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -19,10 +19,6 @@ function normalizedList(entries) {
   }
   return models;
 }
-
-// mergeNativeEntry lives in models/native-entry.cjs — the canonical-shape
-// module — and is re-exported here only so existing importers keep working.
-// New code should take it from models/native-entry.cjs directly.
 
 function loadNativeCache(file, { now = Date.now, ttlMs = DEFAULT_TTL_MS, readFile = fs.readFileSync } = {}) {
   const empty = { models: [], allowedUids: [], allowedMode: 'restricted' };
@@ -57,4 +53,4 @@ function saveNativeCache(file, entries, { now = Date.now, allowedUids, allowedMo
   }
 }
 
-module.exports = { CACHE_VERSION, DEFAULT_TTL_MS, MAX_ENTRIES, normalizeNativeEntry, normalizeAllowedUids, mergeNativeEntry, loadNativeCache, saveNativeCache };
+module.exports = { CACHE_VERSION, DEFAULT_TTL_MS, MAX_ENTRIES, normalizeNativeEntry, normalizeAllowedUids, loadNativeCache, saveNativeCache };

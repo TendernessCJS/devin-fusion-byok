@@ -21,4 +21,4 @@ async function requestBytes(url, { limit, signal, fetchImpl, timeout = 30000, pr
   } });
 }
 
-module.exports = { requestBytes, proxyRequestBytes };
+module.exports = { requestBytes };

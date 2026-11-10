@@ -30,8 +30,6 @@ const TOOLS = [
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
 ];
 const WEB_TOOLS = new Set(['web_search', 'web_read_url']);
-// Name used before 0.3.43; still accepted so existing harness prompts keep working.
-const ALIASES = { fast_context_search: 'code_search' };
 const NETWORK_TIMEOUT_MS = 60000;
 const MAX_WEB_CONCURRENT = 4;
 const DISABLED_TEXT = 'mcp_disabled: the external MCP is turned off. Ask the user to enable it in Devin: Fusion BYOK control panel > 对外提供 MCP.';
@@ -74,7 +72,7 @@ function startServer({ root, rg, exclude = [], input = process.stdin, output = p
     if (method === 'tools/list') { reply(id, { tools: isEnabled() ? TOOLS : [] }); return; }
     if (method !== 'tools/call') { fail(id, -32601, 'Method not found'); return; }
     if (!isEnabled()) { reply(id, { isError: true, content: [{ type: 'text', text: DISABLED_TEXT }] }); return; }
-    const name = Object.hasOwn(ALIASES, params.name) ? ALIASES[params.name] : params.name;
+    const name = params.name;
     if (!TOOLS.some(tool => tool.name === name)) { fail(id, -32602, 'Unknown tool'); return; }
     const args = params.arguments ?? {};
     if (name === 'fast_context_status') {

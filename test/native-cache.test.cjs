@@ -145,7 +145,8 @@ test('the real filesystem round-trip writes a private readable file', t => {
 });
 
 test('mergeNativeEntry keeps the richer form when a poorer copy arrives later', () => {
-  const { mergeNativeEntry, normalizeNativeEntry } = require('../src/runtime/native-cache.cjs');
+  const { mergeNativeEntry } = require('../src/models/native-entry.cjs');
+  const { normalizeNativeEntry } = require('../src/runtime/native-cache.cjs');
   const rich = normalizeNativeEntry({ uid: 'fusion-a-sidekick-swe-2-high', label: 'F', disabled: false, isModelRouter: true,
     harnessUids: ['fusion'], sidekickDimension: { order: 2, name: 'SWE-2 High', fastModeOrder: 0 },
     fusionMetadata: [{ key: 'Sidekick', order: 2, name: 'SWE-2 High', controlType: 3 }] });
@@ -169,7 +170,7 @@ test('mergeNativeEntry keeps the richer form when a poorer copy arrives later', 
 });
 
 test('normalizeNativeEntry and mergeNativeEntry carry the server family uid', () => {
-  const { mergeNativeEntry } = require('../src/runtime/native-cache.cjs');
+  const { mergeNativeEntry } = require('../src/models/native-entry.cjs');
   assert.equal(normalizeNativeEntry(entry({ familyUid: 'glm-5.2' })).familyUid, 'glm-5.2');
   for (const bad of [42, '', 'x'.repeat(200), {}]) {
     assert.equal(normalizeNativeEntry(entry({ familyUid: bad })).familyUid, undefined, JSON.stringify(bad));

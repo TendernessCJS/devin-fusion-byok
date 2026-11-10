@@ -105,7 +105,7 @@ function createTracker({ id, route, provider, now = () => performance.now(), sta
         ? usage.outputTokens - (usage.reasoningTokens ?? 0) : null;
       const decodeMs = firstText !== null && terminalAt > firstText ? terminalAt - firstText : null;
       const tps = status === 'success' && !hasTools && visibleTokens > 0 && decodeMs > 0 ? visibleTokens * 1000 / decodeMs : null;
-      return { schemaVersion: 3, firstResponseMs: firstResponse, id, startedAt, model: route.model, providerId: provider.id || route.providerId || '', effort: route.effort || null,
+      return { firstResponseMs: firstResponse, id, startedAt, model: route.model, providerId: provider.id || route.providerId || '', effort: route.effort || null,
         status, code, httpStatus, inputTokens: usage?.inputTokens ?? null, outputTokens: usage?.outputTokens ?? null,
         cachedTokens: usage?.cachedTokens ?? null, reasoningTokens: usage?.reasoningTokens ?? null,
         firstOutputMs: firstOutput, firstTextMs: firstText, durationMs,

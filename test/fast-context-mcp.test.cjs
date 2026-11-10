@@ -24,14 +24,13 @@ test('MCP handshake, list, status, validation and safe errors', async t => {
   h.send('tools/list', {}, 2);
   h.send('tools/call', { name: 'fast_context_status' }, 3);
   h.send('tools/call', { name: 'code_search', arguments: { query: 'x', root: '/etc' } }, 4);
-  // The pre-0.3.43 name stays callable for prompts written against it.
   h.send('tools/call', { name: 'fast_context_search', arguments: { query: 'x' } }, 5);
   await settle();
   assert.deepEqual(h.messages.find(m => m.id === 2).result.tools.map(tool => tool.name),
     ['code_search', 'web_search', 'web_read_url', 'fast_context_status']);
   assert.equal(h.messages.find(m => m.id === 3).result.structuredContent.authentication, 'not_checked');
   assert.equal(h.messages.find(m => m.id === 4).error.code, -32602);
-  assert.equal(h.messages.find(m => m.id === 5).result.isError, true);
+  assert.equal(h.messages.find(m => m.id === 5).error.code, -32602);
   assert.doesNotMatch(JSON.stringify(h.messages), /SECRET/);
 });
 test('MCP handles concurrency, matching cancellation and progress', async t => {
@@ -56,7 +55,7 @@ test('stdin EOF aborts work and does not emit a late response', async t => {
   const h = harness(t, (_, { signal }) => new Promise((resolve, reject) => {
     signal.addEventListener('abort', () => { cancelled = true; reject(new Error('cancelled')); });
   }));
-  h.send('tools/call', { name: 'fast_context_search', arguments: { query: 'x' } }, 2);
+  h.send('tools/call', { name: 'code_search', arguments: { query: 'x' } }, 2);
   h.input.end(); await settle();
   assert.equal(cancelled, true);
   assert.equal(h.messages.some(m => m.id === 2), false);

@@ -2,7 +2,7 @@
 const vscode = require('vscode');
 const fs = require('node:fs');
 const path = require('node:path');
-const { defaultConfig, pruneRetiredKeys, readConfig } = require('./config/config.cjs');
+const { defaultConfig, readConfig } = require('./config/config.cjs');
 const { readDoc, updateConfig, archiveCorrupt, recoverFromBackup } = require('./config/store.cjs');
 const { buildCatalog } = require('./catalog.cjs');
 const { installAutoContinue } = require('./runtime/host/auto-continue.cjs');
@@ -171,12 +171,6 @@ async function activate(context) {
   };
   installContinuation();
   const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...stores.nativeCatalog.nativeModels.values()], stores.nativeCatalog.nativeAllowedUids); };
-  const pruneConfig = () => {
-    try {
-      if (updateConfig(configFile, current => pruneRetiredKeys(current)).changed) log('config-pruned');
-    } catch { log('config-prune-failed'); }
-  };
-  pruneConfig();
   const run = fn => async () => { try { await fn(); } catch (error) {
     const safe = safeError(error);
     if (safe.code === 'cancelled') return;

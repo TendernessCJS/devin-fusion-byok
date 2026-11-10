@@ -92,11 +92,8 @@ test('gateway timing includes metadata, tools and canceled usage; snapshots repl
   assert.equal(r.usageState, 'complete'); assert.equal(r.cachedTokens, null);
   assert.equal(r.status, 'cancelled'); assert.equal(snapshot.summary.gatewayTps.value, 20);
   assert.equal(snapshot.summary.firstResponseMs.value, 100);
-  monitor.record({ ...r, id: 'legacy', schemaVersion: 2 });
   monitor.record({ ...r, id: 'bad', cachedTokens: 200 });
   const next = await monitor.snapshot();
-  assert.equal(next.records.find(v => v.id === 'legacy').gatewayTps, null);
-  assert.equal(next.records.find(v => v.id === 'legacy').firstResponseMs, null);
   assert.equal(next.records.find(v => v.id === 'bad').usageState, 'inconsistent');
   assert.equal(next.records.find(v => v.id === 'bad').gatewayTps, null);
 });
@@ -129,7 +126,7 @@ test('attribution reads only the indexed tool table', async t => {
   const db = path.join(root, 'sessions.db');
   execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO sessions VALUES('session-t','工具会话',300); INSERT INTO tool_call_state VALUES('session-t','call-a');"]);
   const monitor = createMonitor({ root, databasePath: db });
-  monitor.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  monitor.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', toolIds: ['call-a'] });
   const snapshot = await monitor.snapshot();
   assert.equal(snapshot.sessionStatus, 'ready');
   assert.equal(snapshot.sessions[0].sessionId, 'session-t');
@@ -141,7 +138,7 @@ test('a failing tool-id lookup still reports the session lookup as unavailable',
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-toolfail-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const monitor = createMonitor({ root, databasePath: path.join(root, 'missing.db') });
-  monitor.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  monitor.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', toolIds: ['call-a'] });
   const snapshot = await monitor.snapshot();
   assert.equal(snapshot.sessionStatus, 'unavailable', 'the tool-id branch is authoritative');
   assert.equal(snapshot.records[0].sessionId, null);
@@ -154,7 +151,7 @@ test('session labels order newest first, tolerate missing rows and survive looku
   execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO sessions VALUES('session-old','旧会话',100),('session-new','新会话',200); INSERT INTO tool_call_state VALUES('session-old','call-old'),('session-new','call-new'),('session-ghost','call-ghost');"]);
   const monitor = createMonitor({ root, databasePath: db });
   for (const [id, tool] of [['r-old', 'call-old'], ['r-new', 'call-new'], ['r-ghost', 'call-ghost'], ['r-lone', null]]) {
-    monitor.record({ id, startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: tool ? [tool] : [] });
+    monitor.record({ id, startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', toolIds: tool ? [tool] : [] });
   }
   const snapshot = await monitor.snapshot();
   assert.equal(snapshot.sessionStatus, 'ready');
@@ -167,7 +164,7 @@ test('session labels order newest first, tolerate missing rows and survive looku
   const db2 = path.join(bare, 'sessions.db');
   execFileSync('/usr/bin/sqlite3', [db2, "CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO tool_call_state VALUES('session-x','call-x');"]);
   const degraded = createMonitor({ root: bare, databasePath: db2 });
-  degraded.record({ id: 'r-x', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-x'] });
+  degraded.record({ id: 'r-x', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', toolIds: ['call-x'] });
   const fallback = await degraded.snapshot();
   assert.equal(fallback.sessionStatus, 'ready', 'a missing sessions table must not fail attribution');
   assert.equal(fallback.sessions[0].sessionId, 'session-x');
@@ -182,7 +179,7 @@ test('long session titles pass through snapshot and publicSnapshot untruncated',
   const longTitle = '长'.repeat(150) + '末尾标记';
   execFileSync('/usr/bin/sqlite3', [db, `CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO sessions VALUES('session-long','${longTitle}',300); INSERT INTO tool_call_state VALUES('session-long','call-long');`]);
   const monitor = createMonitor({ root, databasePath: db });
-  monitor.record({ id: 'r-long', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-long'] });
+  monitor.record({ id: 'r-long', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', toolIds: ['call-long'] });
   const snapshot = await monitor.snapshot();
   assert.equal(snapshot.sessions[0].title, longTitle);
   const { publicSnapshot } = require('../src/runtime/host/monitor-client.cjs');
@@ -475,7 +472,7 @@ test('a tool lookup failure distinguishes lookup-unavailable from no-tool-ids', 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-toolfail-reason-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const monitor = createMonitor({ root, databasePath: path.join(root, 'missing.db') });
-  monitor.record({ id: 'r-tool', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  monitor.record({ id: 'r-tool', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', toolIds: ['call-a'] });
   monitor.record({ id: 'r-bare', startedAt: '2026-01-01T00:00:01Z', status: 'success', model: 'm', providerId: 'p' });
   const snapshot = await monitor.snapshot();
   assert.equal(snapshot.sessionStatus, 'unavailable');
@@ -520,7 +517,7 @@ test('a missing label row differs from a failed label query, and titles never pe
   const db = path.join(root, 'sessions.db');
   execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO tool_call_state VALUES('session-t','call-a');"]);
   const monitor = createMonitor({ root, databasePath: db });
-  monitor.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  monitor.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', toolIds: ['call-a'] });
   const snapshot = await monitor.snapshot();
   assert.equal(snapshot.sessions[0].sessionId, 'session-t');
   assert.equal(snapshot.sessions[0].title, null);
@@ -533,7 +530,7 @@ test('a missing label row differs from a failed label query, and titles never pe
   const db2 = path.join(bare, 'sessions.db');
   execFileSync('/usr/bin/sqlite3', [db2, "CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); INSERT INTO tool_call_state VALUES('session-t','call-a');"]);
   const degraded = createMonitor({ root: bare, databasePath: db2 });
-  degraded.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  degraded.record({ id: 'r1', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', toolIds: ['call-a'] });
   const fallback = await degraded.snapshot();
   assert.equal(fallback.sessions[0].sessionId, 'session-t');
   assert.equal(fallback.lookupStatus.labels, 'unavailable', 'a sessions-table failure is reported separately');
@@ -574,7 +571,7 @@ test('storageDiagnostics reports safe fixed codes and counters for every failure
 
 test('publicSnapshot exposes diagnostics through the whitelist and strips secrets', () => {
   const { publicSnapshot } = require('../src/runtime/host/monitor-client.cjs');
-  const record = { schemaVersion: 3, id: 'r1', startedAt: '2026-01-01T00:00:00Z', model: 'm', providerId: 'p', status: 'error',
+  const record = { id: 'r1', startedAt: '2026-01-01T00:00:00Z', model: 'm', providerId: 'p', status: 'error',
     attributionReason: 'lookup-unavailable', leak: 'SECRET', toolIds: ['internal'], messageIds: ['internal'] };
   const snapshot = {
     version: 1, status: 'degraded', storageError: true, sessionStatus: 'unavailable',
@@ -610,7 +607,7 @@ test('publicSnapshot accepts legacy snapshots without diagnostics', () => {
 
 test('an invalid attributionReason is normalized to null through the client whitelist', () => {
   const { publicSnapshot } = require('../src/runtime/host/monitor-client.cjs');
-  const record = { schemaVersion: 3, id: 'r1', startedAt: '2026-01-01T00:00:00Z', model: 'm', providerId: 'p', status: 'success', attributionReason: 'injected-SECRET' };
+  const record = { id: 'r1', startedAt: '2026-01-01T00:00:00Z', model: 'm', providerId: 'p', status: 'success', attributionReason: 'injected-SECRET' };
   const pub = publicSnapshot({ version: 1, status: 'ready', storageError: false, sessionStatus: 'ready',
     summary: { requests: 1 }, records: [record], sessions: [] });
   assert.equal(pub.records[0].attributionReason, null);
@@ -650,9 +647,9 @@ test('inconsistent usage is excluded from aggregates but kept in the detail', as
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
   monitor.record({ id: 'inconsistent', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p',
-    schemaVersion: 3, inputTokens: 100, outputTokens: 30, cachedTokens: 200, durationMs: 1000, firstResponseMs: 100 });
+    inputTokens: 100, outputTokens: 30, cachedTokens: 200, durationMs: 1000, firstResponseMs: 100 });
   monitor.record({ id: 'partial', startedAt: '2026-01-01T00:00:01Z', status: 'success', model: 'm', providerId: 'p',
-    schemaVersion: 3, outputTokens: 30, durationMs: 500 });
+    outputTokens: 30, durationMs: 500 });
   const snapshot = await monitor.snapshot();
   const detail = snapshot.records.find(r => r.id === 'inconsistent');
   assert.equal(detail.usageState, 'inconsistent');
@@ -846,7 +843,7 @@ test('attribution never queries the unindexed message_nodes side', async t => {
   const db = path.join(root, 'sessions.db');
   execFileSync('/usr/bin/sqlite3', [db, "CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,last_activity_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT); CREATE TABLE message_nodes(session_id TEXT,chat_message TEXT); INSERT INTO sessions VALUES('session-t','会话',300); INSERT INTO tool_call_state VALUES('session-t','call-a'); INSERT INTO message_nodes VALUES('session-t','{\"message_id\":\"r-x\"}');"]);
   const plain = createMonitor({ root, databasePath: db });
-  plain.record({ id: 'r-x', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', schemaVersion: 2, toolIds: ['call-a'] });
+  plain.record({ id: 'r-x', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', providerId: 'p', toolIds: ['call-a'] });
   const snapshot = await plain.snapshot();
   assert.equal(snapshot.records[0].sessionId, 'session-t', 'the indexed tool branch attributes');
   assert.ok(queries.length > 0);
@@ -867,7 +864,7 @@ test('attribution never queries the unindexed message_nodes side', async t => {
 });
 
 test('authored numeric edge cases stay exact through normalize and summarize', async t => {
-  const zeroRecord = { id: 'zero', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', schemaVersion: 3,
+  const zeroRecord = { id: 'zero', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm',
     inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, durationMs: 1000, hasTools: false, hasReasoning: false };
   const zero = summarize([zeroRecord]);
   assert.equal(zero.inputTokens.value, 0); assert.equal(zero.inputTokens.reported, 1);
@@ -890,9 +887,9 @@ test('authored numeric edge cases stay exact through normalize and summarize', a
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-numeric-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const monitor = createMonitor({ root, databasePath: path.join(root, 'none.db') });
-  monitor.record({ id: 'legacy', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', schemaVersion: 2,
+  monitor.record({ id: 'legacy', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm',
     outputTokens: 40, hasTools: false, hasReasoning: true, reasoningTokens: null, visibleTokens: 40, decodeMs: 1000 });
-  monitor.record({ id: 'flags', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm', schemaVersion: 2,
+  monitor.record({ id: 'flags', startedAt: '2026-01-01T00:00:00Z', status: 'success', model: 'm',
     outputTokens: 40, visibleTokens: 40, decodeMs: 1000 });
   const snapshot = await monitor.snapshot();
   const legacy = snapshot.records.find(r => r.id === 'legacy');

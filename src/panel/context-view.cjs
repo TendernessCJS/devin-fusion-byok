@@ -26,7 +26,7 @@ function contextDetails(session, monitor, catalog) {
   // page (summarize from monitor stats): show the latest eligible sample, and when that
   // sample is older than the newest request say so in visible text — this panel's
   // tooltips do not render on hover, so a title alone would not be seen.
-  const tpsSample = records.filter(record => record.schemaVersion >= 2 && record.status === 'success' && !usageIsInconsistent(record) && timing(record.tps) !== null)
+  const tpsSample = records.filter(record => record.status === 'success' && !usageIsInconsistent(record) && timing(record.tps) !== null)
     .reduce((best, record) => !best || Date.parse(record.startedAt) >= Date.parse(best.startedAt) ? record : best, null);
   const tpsAt = tpsSample ? clock(tpsSample.startedAt) : null;
   const tpsFromLatest = Boolean(tpsSample && latest && Date.parse(tpsSample.startedAt) === Date.parse(latest.startedAt));

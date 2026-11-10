@@ -79,7 +79,6 @@ function fixture(t, initial = {}) {
       readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
       writeConfig: (file, value) => fs.writeFileSync(file, JSON.stringify(value)),
       defaultConfig: realRequire('./config/config.cjs').defaultConfig,
-      pruneRetiredKeys: realRequire('./config/config.cjs').pruneRetiredKeys,
     },
     './catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: () => [], isOwnUid: realRequire('./catalog/payload.cjs').isOwnUid,
       catalogSignature: realRequire('./catalog/signature.cjs').catalogSignature,
@@ -308,23 +307,6 @@ test('a stale or absent remembered combination never replaces an official or mis
     await f.settle();
     assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-official');
   }
-});
-test('activation prunes every retired config key', async t => {
-  const f = fixture(t, { config: { sidekicks: [{ providerId: 'p', model: 'x' }], roleExclusions: { lead: [], sidekick: [] },
-    fusionPresets: [{ id: 'p1', name: 'P1' }], defaultFusionUid: 'fusion-dfbyok-gone', fusionMatrix: true } });
-  await f.activate(f.context);
-  const written = JSON.parse(fs.readFileSync(f.configFile, 'utf8'));
-  for (const key of ['sidekicks', 'roleExclusions', 'fusionPresets', 'defaultFusionUid', 'fusionMatrix']) {
-    assert.ok(!Object.hasOwn(written, key), key + ' is a retired key with no reader left');
-  }
-  assert.deepEqual(written.providers, [{ id: 'cpa', name: 'CPA', models: [] }], 'nothing else in the config is touched');
-});
-test('enable no longer persists the derived inference server url', async t => {
-  const f = fixture(t, { config: { inferenceServerUrl: 'http://127.0.0.1:39842' } });
-  await f.activate(f.context);
-  const written = JSON.parse(fs.readFileSync(f.configFile, 'utf8'));
-  assert.ok(!Object.hasOwn(written, 'inferenceServerUrl'),
-    'the value is derived from the runtime port, so a persisted equal copy is pruned and never re-written');
 });
 test('cli cache checks are confined to the stubbed directory and see every own uid', async t => {
   const f = fixture(t);

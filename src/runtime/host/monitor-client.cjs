@@ -7,7 +7,7 @@ const MAX_HEALTH_BYTES = 4 * 1024 * 1024;
 const COUNT_FIELDS = ['requests', 'success', 'error', 'cancelled', 'excludedUsageRecords'];
 const METRIC_KEYS = ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens', 'ttftMs', 'textTtftMs', 'tps', 'throughputTps', 'firstResponseMs', 'gatewayTps'];
 const METRIC_FIELDS = ['value', 'reported', 'samples'];
-const RECORD_FIELDS = ['schemaVersion', 'id', 'startedAt', 'model', 'providerId', 'effort', 'status', 'code', 'httpStatus',
+const RECORD_FIELDS = ['id', 'startedAt', 'model', 'providerId', 'effort', 'status', 'code', 'httpStatus',
   'inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens', 'firstOutputMs', 'firstTextMs', 'firstResponseMs',
   'durationMs', 'outputSpanMs', 'tps', 'decodeMs', 'visibleTokens', 'hasTools', 'hasReasoning',
   'throughputTps', 'gatewayTps', 'usageState', 'usageComplete', 'sessionId', 'attribution'];

@@ -438,7 +438,7 @@ test('sessions without observable data are hidden, cannot steal focus, and resol
 test('tps falls back to the latest eligible sample with a visible timestamp note', () => {
   const localClock = value => { const d = new Date(Date.parse(value)); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
   const session = { sessionId: 's', lead: { used: 5, size: 100, timestampMs: 1 } };
-  const rec = over => ({ schemaVersion: 2, status: 'success', model: 'm', startedAt: '2026-10-16T10:00:00', durationMs: 1000, ...over });
+  const rec = over => ({ status: 'success', model: 'm', startedAt: '2026-10-16T10:00:00', durationMs: 1000, ...over });
   const details = records => contextDetails(session, { sessions: [{ sessionId: 's', records }] });
   const pick = records => { const rows = details(records).request; const row = rows.find(r => r.key === 'tps'); return { row, values: Object.fromEntries(rows.map(r => [r.key, r.value])), labels: Object.fromEntries(rows.map(r => [r.key, r.label])) }; };
 
@@ -455,10 +455,9 @@ test('tps falls back to the latest eligible sample with a visible timestamp note
   assert.equal(out.values.tps, '200');
   assert.equal(out.labels.tps, '正文 TPS（不含工具）');
 
-  // Ineligible-looking records are skipped: old schema, error status, inconsistent
+  // Ineligible-looking records are skipped: error status, inconsistent
   // usage (cachedTokens > inputTokens) and a null tps all lose to the one valid sample.
   out = pick([older,
-    rec({ startedAt: '2026-10-16T10:06:00', schemaVersion: 1, tps: 999 }),
     rec({ startedAt: '2026-10-16T10:07:00', status: 'error', tps: 999 }),
     rec({ startedAt: '2026-10-16T10:08:00', tps: 999, cachedTokens: 50, inputTokens: 10 }),
     rec({ startedAt: '2026-10-16T10:09:00', tps: null }),

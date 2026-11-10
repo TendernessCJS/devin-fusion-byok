@@ -19,7 +19,7 @@ test('monitor browser script compiles, uses text nodes, and preserves zero versu
   let receive;
   vm.runInNewContext(monitorScript(), { document: { getElementById: byId, createElement: () => new Element() }, window: { addEventListener: (_, fn) => { receive = fn; } }, vscode: { postMessage() {} } });
   byId('monitor-time-range').value = 'all';
-  const record = { id: 'id', startedAt: 'now', model: '<img onerror=alert(1)>', status: 'success', schemaVersion: 3, inputTokens: 0, outputTokens: null, usageComplete: false, attribution: 'unassigned' };
+  const record = { id: 'id', startedAt: 'now', model: '<img onerror=alert(1)>', status: 'success', inputTokens: 0, outputTokens: null, usageComplete: false, attribution: 'unassigned' };
   receive({ data: { type: 'monitor-state', result: { snapshot: { summary: { requests: 1, success: 1, error: 0, cancelled: 0 }, records: [record], sessions: [], sessionStatus: 'ready' } } } });
   const cells = byId('monitor-requests').children[0].children;
   assert.equal(cells[1].textContent, '<img onerror=alert(1)>');
@@ -427,7 +427,7 @@ function monitorFixture({ now } = {}) {
 }
 const dayMs = 24 * 3600 * 1000;
 const isoLocal = ms => new Date(ms).toISOString();
-const validRecord = (id, extra = {}) => ({ schemaVersion: 3, id, startedAt: new Date(Date.now()).toISOString(), model: 'm', status: 'success', attribution: 'unassigned', attributionReason: 'no-tool-ids', ...extra });
+const validRecord = (id, extra = {}) => ({ id, startedAt: new Date(Date.now()).toISOString(), model: 'm', status: 'success', attribution: 'unassigned', attributionReason: 'no-tool-ids', ...extra });
 
 test('rows show attribution reasons in Chinese and keep the legacy fallback', () => {
   const f = monitorFixture();

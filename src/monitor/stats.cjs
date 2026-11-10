@@ -14,10 +14,10 @@ function createMonitorStats() {
       result[key] = { value: values.length ? values.reduce((a, b) => a + b, 0) : null, reported: values.length };
     }
     for (const [key, field] of [['ttftMs', 'firstOutputMs'], ['textTtftMs', 'firstTextMs']]) {
-      const values = records.filter(r => r.status === 'success' && r.schemaVersion >= 2).map(r => timing(r[field])).filter(v => v !== null);
+      const values = records.filter(r => r.status === 'success').map(r => timing(r[field])).filter(v => v !== null);
       result[key] = { value: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null, samples: values.length };
     }
-    const eligible = usable.filter(r => r.schemaVersion >= 2 && r.status === 'success' && timing(r.tps) !== null);
+    const eligible = usable.filter(r => r.status === 'success' && timing(r.tps) !== null);
     const latest = eligible.reduce((a, b) => !a || Date.parse(b.startedAt) >= Date.parse(a.startedAt) ? b : a, null);
     result.tps = { value: latest?.tps ?? null, samples: eligible.length };
     const firstResponses = records.map(r => timing(r.firstResponseMs)).filter(v => v !== null);

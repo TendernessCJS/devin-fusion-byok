@@ -64,7 +64,7 @@ test('the range is left-closed right-open on record start times', () => {
 test('filteredMonitorView recomputes summary and attribution inside the range only', () => {
   const iso = ms => new Date(ms).toISOString();
   const base = new Date(2026, 9, 15, 12).getTime();
-  const record = extra => ({ schemaVersion: 3, model: 'm', status: 'success', attribution: 'unassigned', attributionReason: 'no-tool-ids', ...extra });
+  const record = extra => ({ model: 'm', status: 'success', attribution: 'unassigned', attributionReason: 'no-tool-ids', ...extra });
   const inRange = [
     record({ id: 'ok', startedAt: iso(base), outputTokens: 10, durationMs: 1000, tps: 25 }),
     record({ id: 'cancel', startedAt: iso(base + 1), status: 'cancelled', outputTokens: 20, durationMs: 2000 }),
@@ -92,7 +92,7 @@ test('filteredMonitorView recomputes summary and attribution inside the range on
 test('provider and model filters narrow the view before summarizing', () => {
   const iso = ms => new Date(ms).toISOString();
   const base = new Date(2026, 9, 15, 12).getTime();
-  const record = extra => ({ schemaVersion: 3, model: 'm', providerId: 'ds', status: 'success', attribution: 'unassigned', attributionReason: 'no-tool-ids', startedAt: iso(base), outputTokens: 10, durationMs: 1000, ...extra });
+  const record = extra => ({ model: 'm', providerId: 'ds', status: 'success', attribution: 'unassigned', attributionReason: 'no-tool-ids', startedAt: iso(base), outputTokens: 10, durationMs: 1000, ...extra });
   const snapshot = { version: 1, status: 'ready', retentionLimit: 5000, sessions: [], summary: {},
     records: [record({ id: 'a' }), record({ id: 'b', model: 'other' }), record({ id: 'c', providerId: 'ms' }), record({ id: 'd', providerId: '' })] };
   const all = monitorDateRange('all');

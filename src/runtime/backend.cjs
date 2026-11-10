@@ -399,4 +399,4 @@ if (require.main === module) {
     log('startup-error', { code: 'startup_failed' }); process.exit(1);
   });
 }
-module.exports = { startBackend, runtimeIdentity, controlFile, PORT, VERSION, MANAGEMENT_PROTOCOL, DEFAULT_UPSTREAM, resolveUpstreamOrigin };
+module.exports = { startBackend, runtimeIdentity, controlFile, PORT, resolveUpstreamOrigin };

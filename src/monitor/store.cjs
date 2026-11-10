@@ -19,18 +19,17 @@ function normalize(record) {
   // attributed to sessions in the panel, and `role` is read nowhere at all.
   for (const key of ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens']) result[key] = token(record[key]);
   for (const key of ['firstOutputMs', 'firstTextMs', 'durationMs', 'outputSpanMs']) result[key] = timing(record[key]);
-  result.schemaVersion = [2, 3].includes(record.schemaVersion) ? record.schemaVersion : 1;
-  result.toolIds = result.schemaVersion >= 2 && Array.isArray(record.toolIds) ? [...new Set(record.toolIds.map(identifier).filter(Boolean))].slice(-32) : [];
-  result.hasTools = result.schemaVersion >= 2 && typeof record.hasTools === 'boolean' ? record.hasTools : null;
-  result.hasReasoning = result.schemaVersion >= 2 && typeof record.hasReasoning === 'boolean' ? record.hasReasoning : null;
-  if (result.schemaVersion >= 2 && result.reasoningTokens > 0) result.hasReasoning = true;
-  result.decodeMs = result.schemaVersion >= 2 ? timing(record.decodeMs) : null;
+  result.toolIds = Array.isArray(record.toolIds) ? [...new Set(record.toolIds.map(identifier).filter(Boolean))].slice(-32) : [];
+  result.hasTools = typeof record.hasTools === 'boolean' ? record.hasTools : null;
+  result.hasReasoning = typeof record.hasReasoning === 'boolean' ? record.hasReasoning : null;
+  if (result.reasoningTokens > 0) result.hasReasoning = true;
+  result.decodeMs = timing(record.decodeMs);
   const inconsistent = usageIsInconsistent(result);
-  result.visibleTokens = !inconsistent && result.schemaVersion >= 2 && result.outputTokens !== null &&
+  result.visibleTokens = !inconsistent && result.outputTokens !== null &&
     (result.hasReasoning === false || result.reasoningTokens !== null) ? result.outputTokens - (result.reasoningTokens ?? 0) : null;
-  result.tps = result.schemaVersion >= 2 && result.status === 'success' && result.hasTools === false && result.visibleTokens > 0 && result.decodeMs > 0 ? result.visibleTokens * 1000 / result.decodeMs : null;
+  result.tps = result.status === 'success' && result.hasTools === false && result.visibleTokens > 0 && result.decodeMs > 0 ? result.visibleTokens * 1000 / result.decodeMs : null;
   result.throughputTps = !inconsistent && result.outputTokens !== null && result.durationMs > 0 ? result.outputTokens * 1000 / result.durationMs : null;
-  result.firstResponseMs = result.schemaVersion >= 3 ? timing(record.firstResponseMs) : null;
+  result.firstResponseMs = timing(record.firstResponseMs);
   result.usageState = inconsistent ? 'inconsistent' : result.inputTokens !== null && result.outputTokens !== null ? 'complete' :
     ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens'].some(key => result[key] !== null) ? 'partial' : 'missing';
   result.usageComplete = result.usageState === 'complete';

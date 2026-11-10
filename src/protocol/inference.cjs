@@ -681,4 +681,4 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
   }
 }
 
-module.exports = { serveChat, buildRequestBody, parseEvent, STATE_PREFIX };
+module.exports = { serveChat, buildRequestBody, STATE_PREFIX };
