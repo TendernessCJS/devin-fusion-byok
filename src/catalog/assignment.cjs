@@ -77,4 +77,4 @@ function resolveAssignment(data, format = {}, catalog, lockedFusionUids) {
   } catch { return null; }
 }
 
-module.exports = { assignmentUid, resolveAssignment };
+module.exports = { resolveAssignment };

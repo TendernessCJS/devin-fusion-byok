@@ -1,6 +1,6 @@
 'use strict';
 
-const { isAnthropicFormat, buildAnthropicBody } = require('./anthropic.cjs');
+const { isAnthropicFormat, buildAnthropicBody, attachmentUnsupported } = require('./anthropic.cjs');
 const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, replayVerdict } = require('./state-envelope.cjs');
 
 function isChatFormat(format = '') { return /chat[-_\/]?completions|^(?:chat|openai)$/.test(format); }
@@ -25,15 +25,6 @@ function forcedToolChoice(body) {
   if (choice === undefined || choice === null) return false;
   const type = typeof choice === 'object' ? choice.type : choice;
   return type !== undefined && type !== 'auto' && type !== 'none';
-}
-
-// A request carrying an attachment type the target protocol cannot express
-// fails loudly instead of silently dropping the user's file.
-function attachmentUnsupported(detail) {
-  const err = new Error('Attachments are not supported by this protocol');
-  err.code = 'attachment_unsupported';
-  err.detail = detail;
-  return err;
 }
 
 function contentOf(message, chat) {
@@ -158,4 +149,4 @@ function buildRequestBody(request, route, provider, onState = () => {}, options 
   return body;
 }
 
-module.exports = { isChatFormat, STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, contentOf, buildRequestBody };
+module.exports = { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody };

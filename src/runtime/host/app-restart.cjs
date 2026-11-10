@@ -156,4 +156,4 @@ async function restartApp({ vscode, spawn, platform = process.platform, appRoot 
   return bundle;
 }
 
-module.exports = { restartApp, relaunchScript, relaunchCommand, appProbe, appBundle, appExecutable };
+module.exports = { restartApp, relaunchScript, relaunchCommand, appProbe, appBundle };

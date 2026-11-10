@@ -118,4 +118,4 @@ function createTracker({ id, route, provider, now = () => performance.now(), sta
     providerStopReason() { return providerStop; }
   };
 }
-module.exports = { createTracker, usageOf, semanticOutput };
+module.exports = { createTracker, usageOf };

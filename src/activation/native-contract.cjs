@@ -210,4 +210,4 @@ async function checkNativeContract({ extensionPath, cacheFile, log = () => {}, p
   }
 }
 
-module.exports = { PROBE_VERSION, REQUIRED, INFORMATIONAL, artifacts, findAppRoot, authStoreStatus, sha256, scanMarkers, checkNativeContract };
+module.exports = { PROBE_VERSION, REQUIRED, INFORMATIONAL, artifacts, authStoreStatus, sha256, scanMarkers, checkNativeContract };

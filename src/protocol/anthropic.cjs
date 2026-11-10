@@ -275,4 +275,4 @@ function createAnthropicAdapter({ onDiagnostic = () => {} } = {}) {
   };
 }
 
-module.exports = { ANTHROPIC_VERSION, isAnthropicFormat, anthropicHeaders, buildAnthropicBody, buildTurns, inspectToolPairing, stripCacheControl, createAnthropicAdapter };
+module.exports = { isAnthropicFormat, attachmentUnsupported, anthropicHeaders, buildAnthropicBody, inspectToolPairing, stripCacheControl, createAnthropicAdapter };

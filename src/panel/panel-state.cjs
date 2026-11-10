@@ -201,4 +201,4 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
   };
 }
 
-module.exports = { publicState, nativeVendor };
+module.exports = { publicState };

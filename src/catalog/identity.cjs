@@ -124,6 +124,6 @@ function nativeUid(entry) {
   return typeof uid === 'string' ? uid : '';
 }
 module.exports = { OWN_GROUP, SIDEKICK_HARNESSES, ownUid, has, digest, slug, concat, positive, refKey,
-  NATIVE_ORDER_BASE, NATIVE_ORDER_SPAN, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE,
+  NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE,
   BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, stableOrders,
-  NATIVE_EFFORT_SUFFIX, leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, NATIVE_LABEL_SUFFIX, leadFamilyLabel, effortMetadata, expandHiddenByFamily, normalizeAllowedUids, nativeUid, isFastLeadUid };
+  leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, leadFamilyLabel, effortMetadata, expandHiddenByFamily, normalizeAllowedUids, nativeUid, isFastLeadUid };

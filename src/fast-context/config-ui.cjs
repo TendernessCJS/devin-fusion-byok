@@ -108,4 +108,4 @@ function registerFastContext({ vscode, context }) {
   });
   context.subscriptions.push(command);
 }
-module.exports = { mcpConfig, registerFastContext, resolveNode, createFastContextHost, KINDS };
+module.exports = { mcpConfig, registerFastContext, createFastContextHost };

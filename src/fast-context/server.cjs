@@ -163,4 +163,4 @@ function main(argv = process.argv.slice(2)) {
   }
 }
 if (require.main === module) main();
-module.exports = { startServer, parseArgs, safeError, main, TOOLS, ALIASES };
+module.exports = { startServer, parseArgs, safeError, main };

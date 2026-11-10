@@ -88,4 +88,4 @@ if (require.main === module) {
   process.exitCode = outcome.code;
 }
 
-module.exports = { main, parseArguments, validateReport, submit, USAGE };
+module.exports = { main, submit };

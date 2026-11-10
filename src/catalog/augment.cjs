@@ -385,4 +385,4 @@ function augmentLocalModelChoices(data, format, catalog, skip = () => {}, retire
   } catch { skip('transform-failed'); return data; }
 }
 
-module.exports = { augmentProtoList, augmentJsonList, augmentCatalog, staleFusionUids, staleOwnEntries, collectNativeModels, collectAllowedUids, augmentLocalModelChoices };
+module.exports = { augmentCatalog, staleFusionUids, staleOwnEntries, collectNativeModels, collectAllowedUids };

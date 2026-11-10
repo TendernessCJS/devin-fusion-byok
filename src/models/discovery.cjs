@@ -43,4 +43,4 @@ async function discover(provider, { request = directFetch } = {}) {
   });
   return provider.models.length;
 }
-module.exports = { modelList, discover };
+module.exports = { discover };

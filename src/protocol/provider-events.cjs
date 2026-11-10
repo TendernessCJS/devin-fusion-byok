@@ -150,4 +150,4 @@ function usageSnapshot(data, chat) {
   return snapshot;
 }
 
-module.exports = { MAX_SSE_BUFFER, readErrorDetail, parseEvent, events, usageSnapshot, classifyErrorDetail, classifyQuotaDetail };
+module.exports = { readErrorDetail, parseEvent, events, usageSnapshot, classifyErrorDetail, classifyQuotaDetail };

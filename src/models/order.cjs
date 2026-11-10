@@ -28,4 +28,4 @@ function nextOrder(list) {
 function normalizeOrders(list) {
   sortByOrder(list).forEach((item, index) => { item.order = index; });
 }
-module.exports = { ORDER_MAX, orderOf, sortByOrder, nextOrder, normalizeOrders };
+module.exports = { orderOf, sortByOrder, nextOrder, normalizeOrders };

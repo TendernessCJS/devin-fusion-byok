@@ -189,4 +189,4 @@ function createWebClient({ key, request = fetch, signal, pageRequest = fetch } =
   };
 }
 
-module.exports = { createWebClient, authorize, checkPolicy, readResults, searchOptions, readOptions, fetchPage, htmlToText, isPrivateAddress, SETTINGS, LIMITS };
+module.exports = { createWebClient, authorize, readResults, searchOptions, readOptions, fetchPage, htmlToText, isPrivateAddress, LIMITS };

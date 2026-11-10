@@ -439,4 +439,4 @@ function jsonPickerLabels(payload) {
   return labels.size ? labels : null;
 }
 
-module.exports = { OBSERVE_SOURCE, rpcShape, rewriteMessage, validateProtoCatalog, isOwnUid, reportFusionStatus, protoUid, metaFamilyUid, protoFamilyUid, protoDisabled, protoMetadata, CANONICAL_FAMILY_KEYS, protoFusionMetadata, extractSidekickDimension, jsonAliasValue, jsonMetadata, jsonFusionMetadata, nativeEntries, reportNativeModels, defaultFusion, jsonKey, protoPickerLabels, jsonPickerLabels };
+module.exports = { rpcShape, rewriteMessage, validateProtoCatalog, isOwnUid, reportFusionStatus, protoUid, protoFamilyUid, jsonMetadata, nativeEntries, reportNativeModels, defaultFusion, jsonKey, protoPickerLabels, jsonPickerLabels };

@@ -622,4 +622,4 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
   return handle;
 }
 
-module.exports = { installGoalContinue, createSessionRegistry, parseGoalCommand, withGoalCommand, GOAL_COMMAND, SESSION_LIMIT, isEligibleConnector };
+module.exports = { installGoalContinue, parseGoalCommand, withGoalCommand };

@@ -536,4 +536,4 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
 }
 
 /** Build a secret-free catalog. Provider credentials stay solely in caller configuration. */
-module.exports = { analyzeRoles, discoverOfficialRoles, discoverAdditionalNativeRoles, roleRefs, roleSelected, buildRoleLists };
+module.exports = { analyzeRoles, discoverOfficialRoles, discoverAdditionalNativeRoles, buildRoleLists };

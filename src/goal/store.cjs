@@ -417,14 +417,14 @@ function releaseOwnership(root, sessionId, { owner } = {}) {
 }
 
 module.exports = {
-  GOAL_DIR, SCHEMA_VERSION, MAX_RECORD_BYTES, MAX_EVIDENCE_LENGTH, MAX_OBJECTIVE_LENGTH, MAX_CRITERIA_LENGTH,
-  MAX_REASON_LENGTH, MAX_EVIDENCE_ENTRIES, MAX_RUNS, DEFAULT_MAX_RUNS, REPORT_STATUSES, GOAL_STATUSES,
+  SCHEMA_VERSION, MAX_RECORD_BYTES, MAX_EVIDENCE_LENGTH, MAX_OBJECTIVE_LENGTH, MAX_CRITERIA_LENGTH,
+  MAX_EVIDENCE_ENTRIES, MAX_RUNS, DEFAULT_MAX_RUNS, REPORT_STATUSES,
   identifier, goalId, runId, ownerId, capabilityToken, sessionKey, goalRoot, goalsDirectory, capabilitiesDirectory,
-  reportsDirectory, locksDirectory, historyDirectory, goalFile, capabilityFile, reportFile, lockFile, safeDirectory,
-  safeReadDirectory, readJsonFile, writeAtomic, publishExclusive, removeFile, listDirectory, normalizeEvidence,
-  normalizeObjective, normalizeCriteria, normalizeReason, normalizeMaxRuns, normalizeRetryPolicy, isReportStatus, isGoalStatus,
-  validGoalRecord, readGoal, scanGoals, scanHistory, listGoals, readGoalById, writeGoal, archiveGoal,
-  issueCapability, readCapability, removeCapabilitiesExcept,
-  removeCapabilitiesForRun, writeReport, readReport, removeReport, isProcessAlive, readOwnership, acquireOwnership,
+  historyDirectory, goalFile, capabilityFile, lockFile,
+  removeFile, normalizeEvidence,
+  normalizeObjective, normalizeCriteria, normalizeReason, normalizeMaxRuns, normalizeRetryPolicy,
+  readGoal, listGoals, readGoalById, writeGoal, archiveGoal,
+  issueCapability, readCapability,
+  removeCapabilitiesForRun, writeReport, readReport, removeReport, readOwnership, acquireOwnership,
   releaseOwnership, MAX_GOALS, MAX_HISTORY
 };

@@ -167,4 +167,4 @@ function installRemoteSupport({ vscode, nativeMainPath, opensshMainPath, wslMain
   } catch (error) { unwind(); throw error; }
   return { ...manager, dispose() { manager.dispose(); for (const restore of restores.reverse()) restore(); } };
 }
-module.exports = { locationToAuthority, injectSshRemoteForwardArgs, createRemoteTunnelManager, installRemoteSupport, remoteProgram };
+module.exports = { locationToAuthority, injectSshRemoteForwardArgs, createRemoteTunnelManager, installRemoteSupport };

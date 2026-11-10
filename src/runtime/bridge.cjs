@@ -222,4 +222,4 @@ async function createLsBridge(originalPort, options) {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   return { port: server.address().port, close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }) };
 }
-module.exports = { createLsBridge, forward, collect, cors };
+module.exports = { createLsBridge, forward, collect };

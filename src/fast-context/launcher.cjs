@@ -55,4 +55,4 @@ function ensureLauncher({ storageDir, extensionPath }) {
   return file;
 }
 
-module.exports = { launcherSource, ensureLauncher, FILE };
+module.exports = { ensureLauncher, FILE };

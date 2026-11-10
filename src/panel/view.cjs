@@ -206,4 +206,4 @@ function panelScript() {
 }
 
 
-module.exports = { renderPanel, panelStyles, panelMarkup, panelScript };
+module.exports = { renderPanel };

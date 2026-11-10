@@ -26,4 +26,4 @@ function safeError(error) {
   return { code: 'operation_failed', message: '操作失败，请检查接口配置和连接状态。' };
 }
 
-module.exports = { RUNTIME_ERRORS, RuntimeError, safeError };
+module.exports = { RuntimeError, safeError };

@@ -112,4 +112,4 @@ function publicSnapshot(snapshot) {
     records: snapshot.records.map(recordOf).filter(Boolean), summary,
     sessions: snapshot.sessions.map(sessionOf).filter(Boolean) };
 }
-module.exports = { readMonitor, MAX_SNAPSHOT_BYTES, publicSnapshot };
+module.exports = { readMonitor, publicSnapshot };

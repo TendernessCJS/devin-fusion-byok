@@ -723,6 +723,5 @@ function createGoalController({
 }
 
 module.exports = {
-  createGoalController, reportCommandFor, shellQuote, NEXT_RUN_DELAY_MS, MISSING_REPORT_LIMIT,
-  REPEAT_EVIDENCE_LIMIT, CONTINUE_STOP_REASON
+  createGoalController, shellQuote
 };

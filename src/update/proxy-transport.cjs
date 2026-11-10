@@ -3,9 +3,7 @@ const net = require('node:net');
 const tls = require('node:tls');
 const { Duplex } = require('node:stream');
 const { createRequest } = require('../network/client-request.cjs');
-// Member access, like update/download.cjs: one allowlist entry point that both
-// transports resolve through, so a test swap cannot miss one of them.
-const policy = require('./url-policy.cjs');
+const { transferBytes } = require('./transfer.cjs');
 
 function openConnection(proxy) {
   const port = Number(proxy.url.port) || (proxy.url.protocol === 'https:' ? 443 : 80);
@@ -95,36 +93,16 @@ function request(target, { proxy, signal, connect }) {
 }
 
 async function proxyRequestBytes(url, { proxy, limit, signal, timeout = 30000, connect }) {
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  signal?.addEventListener('abort', abort, { once: true });
-  if (signal?.aborted) abort();
-  const timer = setTimeout(abort, timeout);
-  try {
-    for (let hops = 0; hops <= 5; hops++) {
-      const target = policy.allowedUrl(url);
-      let response;
-      try { response = await request(target, { proxy, signal: controller.signal, connect }); }
-      catch (error) { if (controller.signal.aborted) throw Error('aborted'); throw error; }
-      if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
-        response.destroy();
-        const location = response.headers.location; if (!location) throw Error('redirect');
-        url = new URL(location, target).href; continue;
-      }
-      if (response.statusCode !== 200 || Number(response.headers['content-length']) > limit) { response.destroy(); throw Error('http'); }
-      const chunks = []; let size = 0;
-      try {
-        for await (const chunk of response) {
-          size += chunk.length;
-          if (size > limit || controller.signal.aborted) { response.destroy(); throw Error('size'); }
-          chunks.push(Buffer.from(chunk));
-        }
-      } catch (error) { if (controller.signal.aborted) throw Error('aborted'); throw error; }
-      if (controller.signal.aborted) throw Error('aborted');
-      return Buffer.concat(chunks);
-    }
-    throw Error('redirect');
-  } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+  return transferBytes(url, { limit, signal, timeout, open: async (target, { signal }) => {
+    const response = await request(target, { proxy, signal, connect });
+    return {
+      status: response.statusCode,
+      location: response.headers.location,
+      length: response.headers['content-length'],
+      body: response,
+      cancel: () => { response.destroy(); }
+    };
+  } });
 }
 
 module.exports = { tunnel, request, proxyRequestBytes };

@@ -149,4 +149,4 @@ async function search(input, { root, rg, exclude = [], signal, remote, snapshotF
   }
   throw new Error('search_budget_exhausted');
 }
-module.exports = { options, toolDefinitions, parseAnswer, search };
+module.exports = { options, parseAnswer, search };

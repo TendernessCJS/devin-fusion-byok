@@ -379,5 +379,5 @@ function refreshStaleCliCaches({ dir, expectedUids = [], staleProbe, augment, fo
   return { checked, refreshed, skipped, errors, coverage };
 }
 
-module.exports = { CACHE_NAME, MAX_CACHE_BYTES, defaultDir, rpcFor,
+module.exports = { CACHE_NAME, MAX_CACHE_BYTES, defaultDir,
   inspectCliCacheCoverage, inspectCliCaches, refreshStaleCliCaches };

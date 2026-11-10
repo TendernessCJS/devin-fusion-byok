@@ -59,4 +59,4 @@ function validStateItem(item) {
   return false;
 }
 
-module.exports = { STATE_PREFIX, MAX_STATE_BYTES, stateScope, canonicalize, sameArguments, replayMatches, replayVerdict, validStateItem, sizeBucket };
+module.exports = { STATE_PREFIX, MAX_STATE_BYTES, stateScope, replayMatches, replayVerdict, validStateItem, sizeBucket };

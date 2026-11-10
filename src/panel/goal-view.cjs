@@ -174,4 +174,4 @@ function createGoalUi({ vscode, context, controller, isEnabled = () => true, isT
   return handle;
 }
 
-module.exports = { createGoalUi, goalHtml, goalScript, STATUS_LABELS, SESSION_LABELS, REASON_LABELS };
+module.exports = { createGoalUi, goalHtml, goalScript };
