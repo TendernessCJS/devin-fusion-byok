@@ -114,24 +114,36 @@ function evaluateContractCache(cache, appVersion) {
   return checks;
 }
 
-function compareTrees(a, b) {
-  const diffs = [];
+// compareTrees(installedRoot, repoRoot): installed 侧独有标 (repo 缺),repo 侧独有标 (installed 缺);
+// 只在一侧存在且递归不含任何文件的目录进 emptyDirs,不进 diffs。
+function compareTrees(installedRoot, repoRoot) {
+  const diffs = [], emptyDirs = [];
+  const hasFile = (dir) => fs.readdirSync(dir, { withFileTypes: true })
+    .some(e => e.isDirectory() ? hasFile(path.join(dir, e.name)) : true);
   const walk = (dirA, dirB, rel) => {
     const namesA = new Set(fs.readdirSync(dirA)), namesB = new Set(fs.readdirSync(dirB));
     for (const name of namesA) {
       const relPath = rel ? rel + '/' + name : name;
       const pa = path.join(dirA, name), pb = path.join(dirB, name);
-      if (!namesB.has(name)) { diffs.push(relPath + ' (installed 缺)'); continue; }
+      if (!namesB.has(name)) {
+        (fs.statSync(pa).isDirectory() && !hasFile(pa) ? emptyDirs : diffs).push(relPath + ' (repo 缺)');
+        continue;
+      }
       const sa = fs.statSync(pa), sb = fs.statSync(pb);
       if (sa.isDirectory() !== sb.isDirectory()) { diffs.push(relPath + ' (类型)'); continue; }
       if (sa.isDirectory()) walk(pa, pb, relPath);
       else if (crypto.createHash('sha256').update(fs.readFileSync(pa)).digest('hex') !==
                crypto.createHash('sha256').update(fs.readFileSync(pb)).digest('hex')) diffs.push(relPath);
     }
-    for (const name of namesB) if (!namesA.has(name)) diffs.push((rel ? rel + '/' + name : name) + ' (repo 缺)');
+    for (const name of namesB) {
+      if (namesA.has(name)) continue;
+      const relPath = rel ? rel + '/' + name : name;
+      const pb = path.join(dirB, name);
+      (fs.statSync(pb).isDirectory() && !hasFile(pb) ? emptyDirs : diffs).push(relPath + ' (installed 缺)');
+    }
   };
-  walk(a, b, '');
-  return diffs;
+  walk(installedRoot, repoRoot, '');
+  return { diffs, emptyDirs };
 }
 
 function verdictOf(checks) {
@@ -206,9 +218,10 @@ function main() {
       const mismatches = ['name', 'publisher', 'version'].filter(k => instPkg[k] !== repoPkg[k]);
       if (mismatches.length) push('installed', 'FAIL', '已安装 package.json 与仓库不一致', { mismatches });
       else {
-        const diffs = compareTrees(path.join(installedDir, 'src'), path.join(REPO, 'src'));
-        if (!diffs.length) push('installed', 'PASS', `装的正是这份代码(local.devin-fusion-byok-${repoPkg.version})`);
-        else push('installed', 'FAIL', '已安装代码与仓库不一致,需重新打包安装', { diffs: diffs.slice(0, 10), total: diffs.length });
+        const { diffs, emptyDirs } = compareTrees(path.join(installedDir, 'src'), path.join(REPO, 'src'));
+        if (diffs.length) push('installed', 'FAIL', '已安装代码与仓库不一致,需重新打包安装', { diffs: diffs.slice(0, 10), total: diffs.length });
+        else if (emptyDirs.length) push('installed', 'WARN', '已安装包含仓库已删除的空目录,建议重新打包安装', { emptyDirs: emptyDirs.slice(0, 10), total: emptyDirs.length });
+        else push('installed', 'PASS', `装的正是这份代码(local.devin-fusion-byok-${repoPkg.version})`);
       }
     }
   }

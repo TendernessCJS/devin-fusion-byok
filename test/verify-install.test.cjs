@@ -1,7 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseLogLines, aggregateLog, evaluateLog, evaluateContractCache, verdictOf } =
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { parseLogLines, aggregateLog, evaluateLog, evaluateContractCache, compareTrees, verdictOf } =
   require('../scripts/verify-install.cjs');
 
 const NOW = Date.parse('2026-11-09T12:00:00Z');
@@ -97,4 +100,77 @@ test('log evaluation maps the three warn categories without touching info-only s
   const { warns } = evaluateLog(agg);
   assert.equal(warns.length, 3, 'non-200 + request-error + no catalog');
   assert.match(warns[2], /窗口内未见目录注入/);
+});
+
+test('compareTrees: identical trees produce no diffs and no emptyDirs', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-verify-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installed = path.join(root, 'installed'), repo = path.join(root, 'repo');
+  for (const dir of [installed, repo]) {
+    fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'a.cjs'), 'same');
+    fs.writeFileSync(path.join(dir, 'sub', 'b.cjs'), 'same too');
+  }
+  const { diffs, emptyDirs } = compareTrees(installed, repo);
+  assert.deepEqual(diffs, []);
+  assert.deepEqual(emptyDirs, []);
+});
+
+test('compareTrees: same-name file with different content is a diff', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-verify-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installed = path.join(root, 'installed'), repo = path.join(root, 'repo');
+  fs.mkdirSync(installed, { recursive: true });
+  fs.mkdirSync(repo, { recursive: true });
+  fs.writeFileSync(path.join(installed, 'a.cjs'), 'installed body');
+  fs.writeFileSync(path.join(repo, 'a.cjs'), 'repo body');
+  const { diffs, emptyDirs } = compareTrees(installed, repo);
+  assert.deepEqual(diffs, ['a.cjs']);
+  assert.deepEqual(emptyDirs, []);
+});
+
+test('compareTrees: file only on installed side is (repo 缺)', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-verify-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installed = path.join(root, 'installed'), repo = path.join(root, 'repo');
+  fs.mkdirSync(installed, { recursive: true });
+  fs.mkdirSync(repo, { recursive: true });
+  fs.writeFileSync(path.join(installed, 'extra.cjs'), 'x');
+  const { diffs } = compareTrees(installed, repo);
+  assert.deepEqual(diffs, ['extra.cjs (repo 缺)']);
+});
+
+test('compareTrees: file only on repo side is (installed 缺)', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-verify-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installed = path.join(root, 'installed'), repo = path.join(root, 'repo');
+  fs.mkdirSync(installed, { recursive: true });
+  fs.mkdirSync(repo, { recursive: true });
+  fs.writeFileSync(path.join(repo, 'missing.cjs'), 'x');
+  const { diffs } = compareTrees(installed, repo);
+  assert.deepEqual(diffs, ['missing.cjs (installed 缺)']);
+});
+
+test('compareTrees: empty dir only on installed side goes to emptyDirs, not diffs', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-verify-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installed = path.join(root, 'installed'), repo = path.join(root, 'repo');
+  fs.mkdirSync(path.join(installed, 'stores'), { recursive: true });
+  fs.mkdirSync(repo, { recursive: true });
+  fs.writeFileSync(path.join(installed, 'a.cjs'), 'same');
+  fs.writeFileSync(path.join(repo, 'a.cjs'), 'same');
+  const { diffs, emptyDirs } = compareTrees(installed, repo);
+  assert.deepEqual(diffs, []);
+  assert.deepEqual(emptyDirs, ['stores (repo 缺)']);
+});
+
+test('compareTrees: dir on one side vs same-name file on the other is (类型)', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-verify-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installed = path.join(root, 'installed'), repo = path.join(root, 'repo');
+  fs.mkdirSync(path.join(installed, 'thing'), { recursive: true });
+  fs.mkdirSync(repo, { recursive: true });
+  fs.writeFileSync(path.join(repo, 'thing'), 'file');
+  const { diffs } = compareTrees(installed, repo);
+  assert.deepEqual(diffs, ['thing (类型)']);
 });
