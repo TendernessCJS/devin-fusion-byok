@@ -26,8 +26,9 @@ npm run verify -- --with-tests    # 追加窄测（含从当前 bundle 抽取 AC
 | 3.12.28 | 2026-11-09 上午 | `ok`，`missing {}` | `ok` | 31/31（当轮修复后） | 1748 全绿 | 未发现必修实现缺陷；唯一问题是 ACP 测试入口指向已删模块，当轮已修 |
 | 3.12.32 | 2026-11-09 10:03 | `ok`，`missing {}` | `ok`，`appVersion 3.12.32` | 128 / 0 / 0 | 1755 全绿 | 兼容；同日新增 `npm run verify` 复验脚本 |
 | 3.12.43 | 2026-11-10 08:13 | `ok`，`missing {}` | `ok`，`appVersion 3.12.43` | 128 / 0 / 0 | 1755 全绿 | 兼容；夹具 11/11 仍成立（见下节） |
+| 3.12.59 | 2026-11-13 上午 | `ok`，`missing {}` | `ok`，`appVersion 3.12.59` | 130 / 0 / 0 | 1764 全绿 | 兼容；未发现需适配的实现改动；installed 差异为空目录残留，判定已降为 WARN（见下） |
 
-三版共同的稳态项：informational 只有 `desktop: devin.refreshUserStatus`（3.12.17 起官方删除该命令，插件已不再调用，缺失是稳态不是漂移），`catalog-unknown.json` 均不存在。
+四版共同的稳态项：informational 只有 `desktop: devin.refreshUserStatus`（3.12.17 起官方删除该命令，插件已不再调用，缺失是稳态不是漂移），`catalog-unknown.json` 均不存在。
 
 ## 3.12.43 产物指纹（2026-11-10）
 
@@ -47,9 +48,60 @@ npm run verify -- --with-tests    # 追加窄测（含从当前 bundle 抽取 AC
 - **其他诊断**：`tool-name-unknown: view_image` 1 次、`forward-timeout` 2 次（均 connect 阶段），都发生在 2026-11-09；两者都不阻断请求，也不影响判定。
 - `catalog-unknown.json` 不存在：没有出现白名单外的原生目录 RPC。
 
+## 3.12.59 产物指纹（2026-11-13）
+
+| 产物 | 路径 | 字节 | sha256 |
+| --- | --- | --- | --- |
+| cli | `…/extensions/windsurf/devin/bin/devin` | 192,099,840 | `43b8b587cb8d319a1e085e08015a22a6bfc8abe26d99e7cbb18a4a8a9f15b2ce` |
+| ls | `…/extensions/windsurf/bin/language_server_macos_arm` | 147,091,824 | `a6f8f97370877338c8727565e8d2d6ce3d5d51aa65b28bb83c8b069937bc054d` |
+| desktop | `…/out/vs/workbench/workbench.desktop.main.js` | 23,714,066 | `ac9c4991e6d7226258494e0d6b56a3fd4c4f679d58fedf8fd32f80a01b25f2e0` |
+| chat | `…/out/vs/workbench/windsurf-chat-client/index.js` | 28,821,100 | `71155dcb6054fc69f80e142e9fbe5d585c59605a4af3d091293d00ae00c69832` |
+| acp | `…/extensions/windsurf/dist/extension.js` | 6,556,474 | `7e2c52f550df478d2f03e521a95912a25fd1298b0e3e4654d38cda273ee3d140` |
+
+## 3.12.59 运行期观测
+
+- **目录注入**：`GetUserStatus` models 238 / matrix 229 / own `0 → 207`，与 3.12.43 数值一致。
+- **推理**：24h 窗口 3057 条事件，`chat-complete` 710 条状态全 200，`request-error` 0，`state-envelope-replay-failed` 0。
+- **`forward-timeout`** 4 条，均为 `BatchRecordAnalyticsEvents` 的 connect 阶段（2026-11-12），不阻断请求。
+- **`chat-error`** 1 条（`upstream_stream_error`，`TypeError/ECONNRESET`，failFrame `response.reasoning_text.delta`），属供应商侧传输重置，与桌面版本无关。
+- `catalog-unknown.json` 不存在：没有出现白名单外的原生目录 RPC。
+- **原生 picker 缓存** 1101 条（3.12.43 同期为 1018）；3.12.59 新增原生形态不破坏插件：新 harness `gpt-5p4-persistent`（10 条）由插件原样透传（无白名单），29 条无 `familyUid` 条目是 `fusion`/`fusion-sidekick-*` router 条目与 `MODEL_GPT_OSS_120B`/`adaptive`，`familyUid` 仅用于设置页聚合。
+
+## 官方 Fusion 组合的变更与注入边界（2026-11-13）
+
+解析同一 identity 的 CLI 缓存 `~/.cache/devin/cli/model_configs_v6.22718a016192f32f.bin` 与其 11-06 备份（`.bak`，覆盖本次升级）：
+
+| 项 | 11-06 | 11-13（3.12.59） | 变化 |
+| --- | --- | --- | --- |
+| 官方 lead×side combo | 864 | 934 | +70 |
+| 官方 combo 的 lead 值 | 95 | 105 | +10 |
+| 官方 sidekick uid | 14 | 14 | 0 |
+| 官方 sidekick 维度值 | 10（order 1..10） | 10（order 1..10） | 0，name+order 逐项一致 |
+| 官方 `fusion-sidekick-*` 注册条目 | 14 | 14 | 0 |
+| 原生模型条目 | 270 | 288 | +18 |
+| 我方注入条目 | 99 | 99 | 0 |
+
+新增的 10 个 lead 全属同一新家族 Claude Fable 5.2（`medium/high/xhigh/low/max` 及各自 `-fast`），无删除；+70 = 10 lead × 7 sidekick。我方 99 条（9 个 BYOK 模型 + 90 条 `fusion-dfbyok-…-sidekick-<原生>`）逐条不变。
+
+**真正的变化在 Lead 维度，不在 Sidekick**：Fable 5.2 插进 Lead 第 3 位，原 #3 起的 8 个值整体后移，Lead 维度值 8 → 9 个，70 个既有 lead 的 order +1（如 `GPT-5.6 Sol#6→#7`、`Claude Opus 5#7→#8`）。Sidekick 侧 10 个维度值 `SWE-2 Medium#1` … `Claude Haiku 5.5 Medium#10` 与 14 个 uid（10 普通 + 4 个 GPT `-priority`）逐项未变。Fable 5.2 的 fast 档只声明 4 个 `-priority` sidekick，普通 5 档各配满 10 个，是官方自身的不对称。
+
+判定为不冲突的依据：
+
+- 目录内 uid 零重复；官方 uid 形如 `fusion-<原生>-sidekick-<原生>`，我方全部含 `dfbyok`，`isOwnUid` 可判归属。
+- `build.cjs` 用观测到的 `fusion-` 原生 uid 建 `officialFusionUids`，同 uid 的矩阵条目不发射，不会遮蔽官方条目；官方这次只改 Lead 的 order、uid 未变，守卫照常生效。
+- 我方组合从 BYOK lead 出发，官方 lead 集合的增减不改变发射数。
+- sidekick 维度复用官方 `name+order`，不另造值；官方侧这次 0 变化，复用锚点未动。官方 14 个 sidekick uid 里 4 个 GPT `-priority` 与普通变体共享同一维度、由 `Fast Mode` 承载，去重后只留 10 个 uid 代表，`test/role-exclusions.test.cjs` 守着该行为。
+- Lead 重排不波及我方：BYOK lead 维度落在 BYOK 段（`0x20000000`），`assertNativeBand` 的官方下限取自实时观测（现为 9），原生段 `0x10000000` 起仍远高于它；我方不写官方 Lead 维度。
+
+**跨 identity 不可比**：另一 identity（`c87a25d8…`）的 lead×side combo 为 795 条，目录规模不同；上述变化全部取自同一 identity 的前后对比。
+
+## verify 的 installed 判定口径
+
+`verify` 的 `installed` 项曾对「仅已安装侧多出的空目录」报 FAIL（0.6.7 vsix 打包时仓库仍含空的 `src/activation/stores/`，随后仓库删除了它）。判定已改为 WARN（建议重新打包安装）；代码内容哈希不一致仍是 FAIL。
+
 ## 夹具与版本的绑定关系
 
-`test/fixtures/real-picker.json` 捕获于 3.12.28（2026-11-09）。2026-11-10 复核：这 11 条原生条目在 3.12.43 的实时 `native-cache.json`（1018 条）里 **label 与 name 逐字一致、零缺失**，因此没有随版本重捕。
+`test/fixtures/real-picker.json` 捕获于 3.12.28（2026-11-09）。2026-11-10 复核：这 11 条原生条目在 3.12.43 的实时 `native-cache.json`（1018 条）里 **label 与 name 逐字一致、零缺失**，因此没有随版本重捕。2026-11-13 复核：在 3.12.59 的 `native-cache.json`（1101 条）里同样 **label 逐字一致、零缺失**，未重捕。
 
 重捕的触发条件是：**这些行发生变化，或 picker 报文契约发生变化**；版本号前进本身不构成重捕理由。
 
