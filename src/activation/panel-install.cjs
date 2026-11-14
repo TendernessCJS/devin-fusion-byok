@@ -7,8 +7,9 @@ const { statusTooltip } = require('../panel/status-text.cjs');
 const { safeError } = require('./errors.cjs');
 const { checkInjectionHealth } = require('../runtime/host/injection-health.cjs');
 const { PORT } = require('../runtime/port.cjs');
+const { translator } = require('../i18n/index.cjs');
 
-function createPanelHost({ vscode, context, config, configFile, root, log, output, catalog, catalogSync, cacheSync, selection, continuation, runtime, afterChange }) {
+function createPanelHost({ vscode, context, config, configFile, root, log, output, catalog, catalogSync, cacheSync, selection, continuation, runtime, afterChange, t = translator() }) {
   let statusBar, manager, contextObserver, controller;
   const open = () => controller?.open();
   const publish = () => controller?.publish();
@@ -42,8 +43,9 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
       cliCache: cacheSync.report(),
       acpObserved: runtime().acpObservation().seq,
       acpOwnModels: runtime().acpObservation().ownModels,
+      t,
     });
-    manager = createManager({ read: config, write: (next, baseline) => updateConfig(configFile, doc => applyKeyDelta(doc, next, baseline)),
+    manager = createManager({ t, read: config, write: (next, baseline) => updateConfig(configFile, doc => applyKeyDelta(doc, next, baseline)),
       acpOwnModels: () => runtime().acpObservation().ownModels,
       nativeModels: () => catalogSync.read().models, nativeAllowedUids: () => catalogSync.read().allowedUids, refreshNativeModels: () => catalogSync.refresh(), nativeCatalogStatus: () => catalogSync.read().status,
       backendStatus: () => runtime().backendStatus(),
@@ -56,8 +58,8 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
     const updater = require('../update.cjs').createUpdateHost({ vscode, context,
       proxy: () => config().updateProxy,
       onChange: () => publishUpdates() });
-    controller = require('../panel/controller.cjs').createPanelController({ vscode, context, manager, safeError, updater,
-      fastContext: require('../fast-context/config-ui.cjs').createFastContextHost({ vscode, context }),
+    controller = require('../panel/controller.cjs').createPanelController({ vscode, context, manager, safeError, updater, t,
+      fastContext: require('../fast-context/config-ui.cjs').createFastContextHost({ vscode, context, t }),
       restartApp: () => { log('app-restart-requested'); return require('../runtime/host/app-restart.cjs').restartApp({ vscode, spawn, logFile: path.join(root, 'restart.log'), userData: path.resolve(root, '..', '..', '..') }); },
       reloadWindow: () => { log('window-reload-requested'); return vscode.commands.executeCommand('workbench.action.reloadWindow'); },
       readMonitor: () => require('../runtime/host/monitor-client.cjs').readMonitor({ root }) });

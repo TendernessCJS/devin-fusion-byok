@@ -70,25 +70,26 @@ function createMonitorStats() {
     return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? date : null;
   };
   function monitorDateRange(mode = 'this-month', { start = '', end = '', now = Date.now() } = {}) {
+    // error is a code; the usage tab owns the copy (src/i18n, monitor.range.*).
     const invalid = error => ({ from: null, to: null, startDate: '', endDate: '', error });
     if (mode === 'all') return { from: null, to: null, startDate: '', endDate: '', error: null };
     let from, to;
     if (mode === 'custom') {
-      if (!start || !end) return invalid('请选择开始和结束日期。');
+      if (!start || !end) return invalid('range-incomplete');
       from = parseLocalDate(start);
       const last = parseLocalDate(end);
-      if (!from || !last) return invalid('日期无效，请选择有效的开始和结束日期。');
-      if (from.getTime() > last.getTime()) return invalid('开始日期不能晚于结束日期。');
+      if (!from || !last) return invalid('range-invalid-date');
+      if (from.getTime() > last.getTime()) return invalid('range-inverted');
       to = localDate(last.getFullYear(), last.getMonth(), last.getDate() + 1);
     } else {
       const date = new Date(now);
-      if (!Number.isFinite(date.getTime()) || date.getFullYear() < 1 || date.getFullYear() > 9999) return invalid('当前时间不可用，请检查系统时间。');
+      if (!Number.isFinite(date.getTime()) || date.getFullYear() < 1 || date.getFullYear() > 9999) return invalid('range-clock');
       const year = date.getFullYear(), month = date.getMonth(), day = date.getDate();
       if (mode === 'today') { from = localDate(year, month, day); to = localDate(year, month, day + 1); }
       else if (mode === 'this-month') { from = localDate(year, month, 1); to = localDate(year, month + 1, 1); }
       else if (mode === 'last-month') { from = localDate(year, month - 1, 1); to = localDate(year, month, 1); }
       else if (mode === 'last-7-days') { from = localDate(year, month, day - 6); to = localDate(year, month, day + 1); }
-      else return invalid('请选择有效的时间区间。');
+      else return invalid('range-mode');
     }
     const last = new Date(to.getTime());
     last.setDate(last.getDate() - 1);

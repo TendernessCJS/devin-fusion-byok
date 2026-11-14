@@ -1,15 +1,19 @@
 'use strict';
 const { createMonitorStats } = require('../monitor/stats.cjs');
+const { markupText } = require('./dom.cjs');
+const { translator, browserSource } = require('../i18n/index.cjs');
 // Columns marked "extra" stay in the DOM but are hidden until "显示全部指标" is checked.
-const COLUMNS = [['开始时间（本机）'], ['模型／档位'], ['状态'], ['用量', true], ['首响应数据 s'], ['首响应后 TPS'], ['输入'], ['输出'], ['缓存命中', true], ['推理', true],
-  ['首输出 s', true], ['正文首字 s', true], ['正文 TPS', true], ['请求吞吐 TPS', true], ['总耗时 s'], ['会话归属', true]];
-function monitorMarkup() {
-  const head = COLUMNS.map(([label, extra]) => `<th${extra ? ' class="extra"' : ''}>${label}</th>`).join('');
-  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="选择会话"><option value="all">全部会话</option></select><select id="monitor-provider" aria-label="选择供应商"><option value="all">全部供应商</option></select><select id="monitor-model" aria-label="选择模型"><option value="all">全部模型</option></select><select id="monitor-time-range" aria-label="时间区间"><option value="today">今天</option><option value="this-month">当月</option><option value="last-month">上月</option><option value="last-7-days">最近 7 天</option><option value="all">全部保留记录</option><option value="custom">自定义</option></select><span id="monitor-date-controls" hidden><label for="monitor-date-start">开始日期 <input id="monitor-date-start" type="date" min="0001-01-01" max="9999-12-31"></label><label for="monitor-date-end">结束日期 <input id="monitor-date-end" type="date" min="0001-01-01" max="9999-12-31"></label></span><button id="monitor-refresh" class="secondary" type="button">刷新</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">显示全部指标</label></div><p id="monitor-status" class="warn mb" role="status">正在读取…</p><p id="monitor-diagnostics" class="hint mb" role="status" aria-live="polite" hidden></p><p id="monitor-range-error" class="warn mb" role="alert" hidden></p><p id="monitor-range-info" class="hint mb" role="status" hidden></p><div id="monitor-summary" class="tiles"></div><div id="monitor-table-wrap" class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">上一页</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">下一页</button></div></div>`;
+const COLUMNS = [['started'], ['model'], ['status'], ['usage', true], ['firstResponse'], ['gatewayTps'], ['input'], ['output'], ['cached', true], ['reasoning', true],
+  ['firstOutput', true], ['firstText', true], ['textTps', true], ['throughput', true], ['duration'], ['attribution', true]];
+function monitorMarkup(t = translator()) {
+  const h = markupText(t);
+  const head = COLUMNS.map(([key, extra]) => `<th${extra ? ' class="extra"' : ''}>${h('monitor.col.' + key)}</th>`).join('');
+  return `<div id="usage-monitor"><div class="monitor-controls"><select id="monitor-session" aria-label="${h('monitor.sessionAria')}"><option value="all">${h('monitor.allSessions')}</option></select><select id="monitor-provider" aria-label="${h('monitor.providerAria')}"><option value="all">${h('monitor.allProviders')}</option></select><select id="monitor-model" aria-label="${h('monitor.modelAria')}"><option value="all">${h('monitor.allModels')}</option></select><select id="monitor-time-range" aria-label="${h('monitor.rangeAria')}"><option value="today">${h('monitor.range.today')}</option><option value="this-month">${h('monitor.range.thisMonth')}</option><option value="last-month">${h('monitor.range.lastMonth')}</option><option value="last-7-days">${h('monitor.range.last7')}</option><option value="all">${h('monitor.range.all')}</option><option value="custom">${h('monitor.range.custom')}</option></select><span id="monitor-date-controls" hidden><label for="monitor-date-start">${h('monitor.dateStart')} <input id="monitor-date-start" type="date" min="0001-01-01" max="9999-12-31"></label><label for="monitor-date-end">${h('monitor.dateEnd')} <input id="monitor-date-end" type="date" min="0001-01-01" max="9999-12-31"></label></span><button id="monitor-refresh" class="secondary" type="button">${h('common.refresh')}</button><span class="spacer"></span><label class="toggle hint"><input id="monitor-detail" type="checkbox">${h('monitor.detail')}</label></div><p id="monitor-status" class="warn mb" role="status">${h('monitor.loading')}</p><p id="monitor-diagnostics" class="hint mb" role="status" aria-live="polite" hidden></p><p id="monitor-range-error" class="warn mb" role="alert" hidden></p><p id="monitor-range-info" class="hint mb" role="status" hidden></p><div id="monitor-summary" class="tiles"></div><div id="monitor-table-wrap" class="monitor-table-wrap"><table class="monitor-table"><thead><tr>${head}</tr></thead><tbody id="monitor-requests"></tbody></table></div><div class="monitor-pager"><button id="monitor-prev" class="secondary" type="button">${h('monitor.prev')}</button><span id="monitor-page" class="hint" role="status"></span><button id="monitor-next" class="secondary" type="button">${h('monitor.next')}</button></div></div>`;
 }
-function monitorScript() {
+function monitorScript(locale) {
   return `
   (() => {
+    ${browserSource(locale, ['common.', 'monitor.'])}
     const { monitorDateRange, filteredMonitorView } = (${createMonitorStats.toString()})();
     const PAGE_SIZE = 100;
     let snapshot = null, page = 0, rowsSignature = '', summarySignature = '', rangeKey = '', selectorSignature, providerSignature, modelSignature;
@@ -30,7 +34,7 @@ function monitorScript() {
     const initialCustom = monitorDateRange('this-month');
     dateStart.value = initialCustom.startDate;
     dateEnd.value = initialCustom.endDate;
-    const localZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return '本机时区'; } };
+    const localZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return t('monitor.localZone'); } };
     let startedFormatter = null, formatterZone = null;
     const startTimeFormatter = zone => {
       if (formatterZone !== zone) { formatterZone = zone; startedFormatter = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }); }
@@ -52,33 +56,33 @@ function monitorScript() {
     const EXTRA = ${JSON.stringify(COLUMNS.map(([, extra]) => !!extra))};
     const format = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
     const metricFormat = (key, value) => key.endsWith('Ms') && typeof value === 'number' && Number.isFinite(value) ? (value / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 3 }) : format(value);
-    const attribution = value => ({ 'tool-id': '工具 ID 确认', ambiguous: '存在歧义', unassigned: '未归属' }[value] || '未知');
-    const attributionReason = value => ({ 'ambiguous-match': '存在歧义', 'no-tool-ids': '无可用工具 ID', 'lookup-unavailable': '归属查询不可用', 'tool-id-unmatched': '工具状态未匹配' }[value]);
-    const stateName = value => ({ success: '成功', error: '失败', cancelled: '已取消' }[value] || '未知');
-    const usageName = value => ({ complete: '完整', partial: '不完整', missing: '未上报', inconsistent: '数据异常' }[value] || '—');
+    const attribution = value => ({ 'tool-id': t('monitor.attr.toolId'), ambiguous: t('monitor.attr.ambiguous'), unassigned: t('monitor.attr.unassigned') }[value] || t('common.unknown'));
+    const attributionReason = value => ({ 'ambiguous-match': t('monitor.attr.ambiguous'), 'no-tool-ids': t('monitor.attr.noToolIds'), 'lookup-unavailable': t('monitor.attr.lookupUnavailable'), 'tool-id-unmatched': t('monitor.attr.unmatched') }[value]);
+    const stateName = value => ({ success: t('monitor.state.success'), error: t('monitor.state.error'), cancelled: t('monitor.state.cancelled') }[value] || t('common.unknown'));
+    const usageName = value => ({ complete: t('monitor.usage.complete'), partial: t('monitor.usage.partial'), missing: t('monitor.usage.missing'), inconsistent: t('monitor.usage.inconsistent') }[value] || '—');
     const ago = epoch => {
       if (!Number.isSafeInteger(epoch)) return '';
       const seconds = Math.floor(Date.now() / 1000) - epoch;
-      if (seconds < 60) return '刚刚';
-      if (seconds < 3600) return Math.floor(seconds / 60) + ' 分钟前';
-      if (seconds < 86400) return Math.floor(seconds / 3600) + ' 小时前';
-      return Math.floor(seconds / 86400) + ' 天前';
+      if (seconds < 60) return t('monitor.ago.now');
+      if (seconds < 3600) return t('monitor.ago.minutes', { count: Math.floor(seconds / 60) });
+      if (seconds < 86400) return t('monitor.ago.hours', { count: Math.floor(seconds / 3600) });
+      return t('monitor.ago.days', { count: Math.floor(seconds / 86400) });
     };
     const syncSelectorTitle = () => { const option = [...selector.options].find(o => o.value === selector.value); selector.title = option ? option.textContent : ''; };
     // [key, label, shown without detail]
-    const METRICS = [['firstResponseMs','平均首响应数据 s',true],['gatewayTps','首响应后吞吐 TPS',true],['inputTokens','输入 token',true],['outputTokens','输出 token',true],['cachedTokens','缓存命中 token',true],['reasoningTokens','推理 token',false],['ttftMs','平均首输出 s',false],['textTtftMs','平均正文首字 s',false],['tps','最近有效正文 TPS',false],['throughputTps','请求吞吐 TPS（含等待）',false]];
+    const METRICS = [['firstResponseMs',true],['gatewayTps',true],['inputTokens',true],['outputTokens',true],['cachedTokens',true],['reasoningTokens',false],['ttftMs',false],['textTtftMs',false],['tps',false],['throughputTps',false]].map(([key, basic]) => [key, t('monitor.metric.' + key), basic]);
     const FIELDS = ['firstResponseMs','gatewayTps','inputTokens','outputTokens','cachedTokens','reasoningTokens','firstOutputMs','firstTextMs','tps','throughputTps','durationMs'];
     const METRIC_TITLES = {
-      firstResponseMs: '从请求开始到首个进入监控的 SSE 数据事件，不是 HTTP 响应头时间；包含成功、失败与取消请求的有效时间样本。',
-      gatewayTps: '全部有效输出 token ÷ 首响应数据到请求结束的时间；包含推理和工具，并包含失败/取消的有效已上报用量。',
-      throughputTps: '全部有效输出 token ÷ 总请求耗时，包含等待；包含失败/取消的有效已上报用量。'
+      firstResponseMs: t('monitor.metricTitle.firstResponseMs'),
+      gatewayTps: t('monitor.metricTitle.gatewayTps'),
+      throughputTps: t('monitor.metricTitle.throughputTps')
     };
     const metricTitle = (key, metric, requests) => {
-      if (key === 'tps') return '最近一条有效成功样本的正文 TPS，不是平均值；含工具或已知 reasoning 分项不明时不计算。保留记录中有 ' + (metric?.samples ?? 0) + ' 条有效样本。';
+      if (key === 'tps') return t('monitor.metricTitle.tps', { samples: metric?.samples ?? 0 });
       if (METRIC_TITLES[key]) return METRIC_TITLES[key];
-      if (key === 'inputTokens' || key === 'outputTokens') return '基于 ' + (metric?.reported ?? 0) + '/' + requests + ' 次请求；异常用量记录已从汇总排除。';
-      if (key === 'cachedTokens' || key === 'reasoningTokens') return '基于 ' + (metric?.reported ?? 0) + '/' + requests + ' 次请求；异常用量记录已从汇总排除；数值是输入/输出 token 的子集，不重复计入总量。';
-      return '基于 ' + (metric?.reported ?? metric?.samples ?? 0) + '/' + requests + ' 次请求';
+      if (key === 'inputTokens' || key === 'outputTokens') return t('monitor.metricTitle.tokens', { reported: metric?.reported ?? 0, requests });
+      if (key === 'cachedTokens' || key === 'reasoningTokens') return t('monitor.metricTitle.subsetTokens', { reported: metric?.reported ?? 0, requests });
+      return t('monitor.metricTitle.basedOn', { reported: metric?.reported ?? metric?.samples ?? 0, requests });
     };
     function tile(value, label, title) {
       const node = document.createElement('div'); node.className = 'tile'; if (title) node.title = title;
@@ -93,19 +97,19 @@ function monitorScript() {
       for (const [value, label] of entries) { const option = document.createElement('option'); option.value = value; option.textContent = label; option.title = label; select.append(option); }
       select.value = entries.some(([value]) => value === previous) ? previous : 'all';
     };
-    const providerLabel = id => id === '__none__' ? '未知供应商' : (providerNames.get(id) || id);
+    const providerLabel = id => id === '__none__' ? t('monitor.unknownProvider') : (providerNames.get(id) || id);
     const syncProviderOptions = () => {
       const ids = [...new Set((snapshot?.records || []).map(r => r.providerId || '__none__'))];
       ids.sort((a, b) => providerLabel(a).localeCompare(providerLabel(b), 'zh'));
       const key = ids.map(id => id + '|' + providerLabel(id)).join('~');
-      if (key !== providerSignature) { providerSignature = key; syncOptions(providerSel, ids.map(id => [id, providerLabel(id)]), '全部供应商'); }
+      if (key !== providerSignature) { providerSignature = key; syncOptions(providerSel, ids.map(id => [id, providerLabel(id)]), t('monitor.allProviders')); }
     };
     const syncModelOptions = () => {
       const ids = [...new Set((snapshot?.records || [])
         .filter(r => providerSel.value === 'all' || (r.providerId || '__none__') === providerSel.value)
         .map(r => r.model).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh'));
       const key = providerSel.value + '|' + ids.join('~');
-      if (key !== modelSignature) { modelSignature = key; syncOptions(modelSel, ids.map(id => [id, id]), '全部模型'); }
+      if (key !== modelSignature) { modelSignature = key; syncOptions(modelSel, ids.map(id => [id, id]), t('monitor.allModels')); }
     };
     function render() {
       syncSelectorTitle();
@@ -119,7 +123,7 @@ function monitorScript() {
         summarySignature = summaryKey;
         summary.replaceChildren();
         if (s) {
-          summary.append(tile(format(s.requests), '请求' + (s.error ? ' · 失败 ' + s.error : '') + (s.cancelled ? ' · 取消 ' + s.cancelled : ''), '成功 ' + s.success + ' · 失败 ' + s.error + ' · 取消 ' + s.cancelled));
+          summary.append(tile(format(s.requests), t('monitor.requests') + (s.error ? ' · ' + t('monitor.requestsFailed', { count: s.error }) : '') + (s.cancelled ? ' · ' + t('monitor.requestsCancelled', { count: s.cancelled }) : ''), t('monitor.requestsTitle', { success: s.success, error: s.error, cancelled: s.cancelled })));
           for (const [key, label, basic] of METRICS) {
             if (!basic && !detail.checked) continue;
             const metric = s[key];
@@ -146,33 +150,34 @@ function monitorScript() {
           const startedAt = typeof r.startedAt === 'string' ? r.startedAt : String(r.startedAt ?? '');
           const parsed = Date.parse(startedAt);
           const values = [Number.isFinite(parsed) ? formatStarted.format(parsed) : (startedAt || '—'), r.model + (r.effort ? ' / ' + r.effort : ''), stateName(r.status), usageName(r.usageState), ...FIELDS.map(k => metricFormat(k, r[k])), attributionReason(r.attributionReason) || attribution(r.attribution)];
-          values.forEach((value, index) => { const cell = document.createElement('td'); if (EXTRA[index]) cell.className = 'extra'; if (index === 0) cell.title = '原始时间：' + startedAt; else { const key = FIELDS[index - 4]; if (key && METRIC_TITLES[key]) cell.title = METRIC_TITLES[key]; } cell.textContent = value; row.append(cell); });
-          row.title = '请求 ID：' + r.id + (r.code ? ' · ' + r.code : ''); rows.append(row);
+          values.forEach((value, index) => { const cell = document.createElement('td'); if (EXTRA[index]) cell.className = 'extra'; if (index === 0) cell.title = t('monitor.rawTime', { time: startedAt }); else { const key = FIELDS[index - 4]; if (key && METRIC_TITLES[key]) cell.title = METRIC_TITLES[key]; } cell.textContent = value; row.append(cell); });
+          row.title = t('monitor.requestId', { id: r.id }) + (r.code ? ' · ' + r.code : ''); rows.append(row);
         }
-        if (!pageRecords.length) { const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = EXTRA.length; cell.className = 'hint'; cell.textContent = range.error ? '请修正时间区间后查看用量。' : range.from === null ? '还没有请求记录。' : '所选时间区间内暂无保留记录。'; row.append(cell); rows.append(row); }
+        if (!pageRecords.length) { const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = EXTRA.length; cell.className = 'hint'; cell.textContent = range.error ? t('monitor.fixRange') : range.from === null ? t('monitor.noRecords') : t('monitor.noRecordsInRange'); row.append(cell); rows.append(row); }
         if (tableWrap) tableWrap.scrollTop = tableScroll;
       }
-      pageLabel.textContent = selected ? '第 ' + (page + 1) + ' / ' + totalPages + ' 页 · 共 ' + selected.records.length + ' 条' : '';
+      pageLabel.textContent = selected ? t('monitor.page', { page: page + 1, pages: totalPages, count: selected.records.length }) : '';
       prev.disabled = !selected || page === 0;
       next.disabled = !selected || page >= totalPages - 1;
       const lines = [];
       if (snapshot && selected) {
-        lines.push(Number.isSafeInteger(snapshot.retentionLimit) ? '统计窗口：最近 ' + snapshot.retentionLimit + ' 条（当前 ' + selected.records.length + ' 条）' : '当前保留 ' + selected.records.length + ' 条');
+        lines.push(Number.isSafeInteger(snapshot.retentionLimit) ? t('monitor.window', { limit: snapshot.retentionLimit, count: selected.records.length }) : t('monitor.retained', { count: selected.records.length }));
         const counts = selected.attributionSummary;
         if (counts && [counts.assigned, counts.ambiguous, counts.noToolIds, counts.unmatchedToolIds, counts.lookupUnavailable].every(value => Number.isSafeInteger(value) && value >= 0)) {
-          lines.push('归属：已确认 ' + counts.assigned + ' · 无可用工具 ID ' + counts.noToolIds + ' · 工具状态未匹配 ' + counts.unmatchedToolIds + ' · 歧义 ' + counts.ambiguous + ' · 查询不可用 ' + counts.lookupUnavailable);
+          lines.push(t('monitor.attrSummary', { assigned: counts.assigned, noToolIds: counts.noToolIds, unmatched: counts.unmatchedToolIds, ambiguous: counts.ambiguous, unavailable: counts.lookupUnavailable }));
         }
-        if (s.excludedUsageRecords > 0) lines.push('已从用量与吞吐汇总排除 ' + s.excludedUsageRecords + ' 条异常记录（仍计入请求数和时间指标）');
+        if (s.excludedUsageRecords > 0) lines.push(t('monitor.excluded', { count: s.excludedUsageRecords }));
       }
       const diagnosticsText = lines.join('\\n');
       if (diagnostics.textContent !== diagnosticsText) diagnostics.textContent = diagnosticsText;
       diagnostics.hidden = !lines.length;
-      const errorText = range.error ? range.error : '';
+      // stats.cjs reports a code; an unknown one is shown as is rather than hidden.
+      const errorText = range.error ? (Object.prototype.hasOwnProperty.call(I18N, 'monitor.' + range.error) ? t('monitor.' + range.error) : range.error) : '';
       if (rangeError.textContent !== errorText) rangeError.textContent = errorText;
       rangeError.hidden = !errorText;
       const infoText = !snapshot ? '' : (range.error ? '' :
-        (range.from === null ? '全部保留记录' : '选定日期范围 ' + range.startDate + ' 至 ' + range.endDate) +
-        '；按请求开始时间统计；本机时区（' + zone + '）。仅基于本地保留记录，可能不完整，非供应商账单。');
+        (range.from === null ? t('monitor.range.all') : t('monitor.rangeSpan', { start: range.startDate, end: range.endDate })) +
+        t('monitor.rangeNote', { zone }));
       if (rangeInfo.textContent !== infoText) rangeInfo.textContent = infoText;
       rangeInfo.hidden = !infoText;
     }
@@ -192,23 +197,23 @@ function monitorScript() {
       snapshot = result?.snapshot || null;
       providerNames = new Map((result?.providers || []).map(p => [p?.id, p?.name]).filter(([id]) => typeof id === 'string' && id));
       const warnings = [];
-      if (!snapshot) warnings.push(result?.status === 'unsupported' ? '用量统计未启用。' : '用量统计暂不可用。');
+      if (!snapshot) warnings.push(result?.status === 'unsupported' ? t('monitor.unsupported') : t('monitor.unavailable'));
       else {
         if (snapshot.storageError) {
           const codes = {
-            'load-too-large': '用量日志超过读取上限，原日志保留，本轮未继续落盘。请先备份再人工处理。',
-            'load-invalid-record': '用量日志含无法解析的记录，已保留原日志并停止自动压缩。',
-            'load-unavailable': '用量日志读取失败，原日志保留，本轮未继续落盘。请检查文件访问权限。',
-            'append-failed': '用量记录追加失败，部分数据可能仅在内存中。请检查磁盘空间和权限。',
-            'compact-failed': '用量日志压缩失败，原日志保留。请检查磁盘空间和权限。'
+            'load-too-large': t('monitor.storage.loadTooLarge'),
+            'load-invalid-record': t('monitor.storage.loadInvalidRecord'),
+            'load-unavailable': t('monitor.storage.loadUnavailable'),
+            'append-failed': t('monitor.storage.appendFailed'),
+            'compact-failed': t('monitor.storage.compactFailed')
           };
-          warnings.push(codes[snapshot.storageDiagnostics?.code] || '统计存储异常。');
+          warnings.push(codes[snapshot.storageDiagnostics?.code] || t('monitor.storage.generic'));
           const diagnosticsCounts = snapshot.storageDiagnostics;
-          if (diagnosticsCounts && diagnosticsCounts.failedWrites > 0) warnings.push('写入失败 ' + diagnosticsCounts.failedWrites + ' 次');
-          if (diagnosticsCounts && diagnosticsCounts.pendingWrites > 0) warnings.push('待写 ' + diagnosticsCounts.pendingWrites + ' 次');
+          if (diagnosticsCounts && diagnosticsCounts.failedWrites > 0) warnings.push(t('monitor.storage.failedWrites', { count: diagnosticsCounts.failedWrites }));
+          if (diagnosticsCounts && diagnosticsCounts.pendingWrites > 0) warnings.push(t('monitor.storage.pendingWrites', { count: diagnosticsCounts.pendingWrites }));
         }
-        if (snapshot.sessionStatus !== 'ready') warnings.push('工具归属查询暂不可用，统计用量仍可查看。');
-        if (snapshot.lookupStatus?.labels === 'unavailable') warnings.push('会话标题读取失败，暂显示会话 ID。');
+        if (snapshot.sessionStatus !== 'ready') warnings.push(t('monitor.lookupUnavailable'));
+        if (snapshot.lookupStatus?.labels === 'unavailable') warnings.push(t('monitor.titlesUnavailable'));
       }
       status.textContent = warnings.join(' ');
       status.hidden = !status.textContent;
@@ -217,11 +222,11 @@ function monitorScript() {
       if (selectorKey !== selectorSignature) {
         selectorSignature = selectorKey;
         const previous = selector.value; selector.replaceChildren();
-        const all = document.createElement('option'); all.value = 'all'; all.textContent = '全部会话'; all.title = all.textContent; selector.append(all);
+        const all = document.createElement('option'); all.value = 'all'; all.textContent = t('monitor.allSessions'); all.title = all.textContent; selector.append(all);
         for (const session of snapshot?.sessions || []) {
           const option = document.createElement('option');
           option.value = session.sessionId || '__unassigned__';
-          if (!session.sessionId) { option.textContent = '未归属／有歧义'; option.title = option.textContent; selector.append(option); continue; }
+          if (!session.sessionId) { option.textContent = t('monitor.unassignedSessions'); option.title = option.textContent; selector.append(option); continue; }
           const parts = [session.title || session.sessionId];
           const time = ago(session.lastActivityAt);
           if (time) parts.push(time);

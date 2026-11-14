@@ -26,10 +26,17 @@ function resolveLocale(choice, language) {
   return choice !== 'auto' && Object.hasOwn(TABLES, choice) ? choice : displayLocale(language);
 }
 
-// Serialized into webviews: keep it self-contained (no closures, no helpers).
+// `{name}` inserts a param; `{name|one|other}` picks a word by whether the
+// param equals 1 (English plurals; the Chinese copy never needs it, so both
+// tables keep one key per string). Serialized into webviews: keep it
+// self-contained (no closures, no helpers).
 function format(template, params) {
   if (!params) return template;
-  return template.replace(/\{(\w+)\}/g, (match, name) => Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match);
+  return template.replace(/\{(\w+)(?:\|([^|{}]*)\|([^|{}]*))?\}/g, (match, name, one, other) => {
+    if (!Object.prototype.hasOwnProperty.call(params, name)) return match;
+    if (one !== undefined) return Number(params[name]) === 1 ? one : other;
+    return String(params[name]);
+  });
 }
 
 function lookup(table, key) {
@@ -44,6 +51,20 @@ function translator(locale = DEFAULT_LOCALE) {
   const t = (key, params) => format(lookup(table, key), params);
   t.locale = resolved;
   return t;
+}
+
+// The per-activation service: `t` re-reads the locale on every call, so a
+// language change reaches every holder of `t` without re-injection.
+function createI18n({ language = () => undefined, choice = () => 'auto' } = {}) {
+  const translators = new Map();
+  const locale = () => resolveLocale(choice(), language());
+  const t = (key, params) => {
+    const current = locale();
+    if (!translators.has(current)) translators.set(current, translator(current));
+    return translators.get(current)(key, params);
+  };
+  Object.defineProperty(t, 'locale', { get: locale, enumerable: true });
+  return { t, locale };
 }
 
 // The webview prelude: `const t = …` at the top level of the page script, so
@@ -62,4 +83,4 @@ function browserSource(locale = DEFAULT_LOCALE, prefixes = null) {
     'const t = (key, params) => I18N_FORMAT(Object.prototype.hasOwnProperty.call(I18N, key) ? I18N[key] : key, params);';
 }
 
-module.exports = { DEFAULT_LOCALE, LOCALES, LANGUAGE_CHOICES, TABLES, displayLocale, resolveLocale, format, translator, browserSource };
+module.exports = { DEFAULT_LOCALE, LOCALES, LANGUAGE_CHOICES, TABLES, displayLocale, resolveLocale, format, translator, createI18n, browserSource };

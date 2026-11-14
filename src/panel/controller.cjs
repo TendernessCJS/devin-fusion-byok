@@ -2,7 +2,8 @@
 const crypto = require('node:crypto');
 const { renderPanel } = require('./view.cjs');
 const { PanelInputError } = require('./manager.cjs');
-function createPanelController({ vscode, context, manager, safeError, updater, restartApp, reloadWindow, fastContext, readMonitor = async () => ({ status: 'unsupported', snapshot: null }) }) {
+const { translator } = require('../i18n/index.cjs');
+function createPanelController({ vscode, context, manager, safeError, updater, restartApp, reloadWindow, fastContext, readMonitor = async () => ({ status: 'unsupported', snapshot: null }), t = translator() }) {
   let panel;
   let monitorPending = false;
   const refreshMonitor = async () => {
@@ -33,14 +34,13 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
   };
   const publishUpdates = () => panel && updater ? panel.webview.postMessage({ type: 'update-state', state: updater.snapshot() }) : undefined;
   const publish = () => panel ? postState(panel, manager.state()) : undefined;
-  const FAST_CONTEXT_ERRORS = { fast_context_root_not_allowed: '只能选择已打开的项目或在此处选择的文件夹。',
-    fast_context_root_missing: '该文件夹不存在或无法访问，请重新选择。', fast_context_untrusted: '请先信任工作区，再复制 Fast Context 配置。',
-    fast_context_check_required: '请先检测账号，确认代码搜索可用后再开启。', fast_context_not_enabled: '对外 MCP 还没有开启。',
-    fast_context_unavailable: '当前环境无法保存开关状态。' };
-  const FAST_CONTEXT_COPIED = { prompt: '提示词已复制，粘贴给其他 Harness 里的 Agent 即可。', json: '配置 JSON 已复制。' };
+  // Keyed by the error codes config-ui.cjs throws; the copy lives in src/i18n.
+  const FAST_CONTEXT_ERRORS = new Set(['fast_context_root_not_allowed', 'fast_context_root_missing', 'fast_context_untrusted',
+    'fast_context_check_required', 'fast_context_not_enabled', 'fast_context_unavailable']);
+  const FAST_CONTEXT_COPIED = { prompt: 'fc.copied.prompt', json: 'fc.copied.json' };
   async function handleFastContext(target, message) {
     const post = value => target.webview.postMessage(value);
-    if (!fastContext) { await post({ type: 'fast-context-result', ok: false, text: '当前环境不支持 Fast Context 配置。' }); return; }
+    if (!fastContext) { await post({ type: 'fast-context-result', ok: false, text: t('fc.error.unsupported') }); return; }
     const kind = Object.hasOwn(FAST_CONTEXT_COPIED, message.payload?.kind) ? message.payload.kind : 'prompt';
     let selected;
     try {
@@ -55,10 +55,10 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
       } else if (message.type === 'fastContext.pick') selected = await fastContext.pick() || undefined;
       else if (message.type === 'fastContext.copy') {
         await fastContext.copy(kind, message.payload?.root);
-        await post({ type: 'fast-context-result', ok: true, text: FAST_CONTEXT_COPIED[kind] });
+        await post({ type: 'fast-context-result', ok: true, text: t(FAST_CONTEXT_COPIED[kind]) });
       } else if (message.type !== 'fastContext.state') return;
     } catch (error) {
-      const text = FAST_CONTEXT_ERRORS[error?.message] || safeError(error).message;
+      const text = FAST_CONTEXT_ERRORS.has(error?.message) ? t('fc.error.' + error.message) : safeError(error).message;
       if (message.type === 'fastContext.preview') { await post({ type: 'fast-context-preview', kind, root: message.payload?.root, text: '', error: text }); return; }
       await post({ type: 'fast-context-result', check: message.type === 'fastContext.check', enable: message.type === 'fastContext.enable', ok: false, text });
     }
@@ -67,37 +67,40 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
   function open() {
     if (disposed) return;
     if (panel) { panel.reveal(); void publish(); return; }
-    panel = vscode.window.createWebviewPanel('devinFusionByok.management', 'Fusion BYOK 控制面板', vscode.ViewColumn.Active,
+    panel = vscode.window.createWebviewPanel('devinFusionByok.management', t('panel.title'), vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
     lastState = undefined;
     const current = panel;
-    panel.webview.html = renderPanel({ nonce: crypto.randomBytes(24).toString('base64') });
+    panel.webview.html = renderPanel({ nonce: crypto.randomBytes(24).toString('base64'), locale: t.locale });
     const messages = panel.webview.onDidReceiveMessage(async message => {
       if (!message || typeof message.id !== 'string' || message.id.length > 100 || typeof message.type !== 'string') return;
       if (message.type === 'monitor.refresh') { await refreshMonitor(); return; }
       if (message.type.startsWith('fastContext.')) { await handleFastContext(current, message); return; }
       try {
         if (message.type === 'window.reload') {
-          if (typeof reloadWindow !== 'function') throw new PanelInputError('当前环境不支持重载窗口。');
-          const choice = await vscode.window.showWarningMessage('重载窗口会中断当前窗口正在进行的对话，但不会关闭应用、也不影响其他窗口。确定现在重载吗？', { modal: true }, '重载');
-          if (choice === '重载') {
+          if (typeof reloadWindow !== 'function') throw new PanelInputError(t('panel.reload.unsupported'));
+          // The modal returns the label it was given; compare against the same value.
+          const confirmLabel = t('panel.reload.confirm');
+          const choice = await vscode.window.showWarningMessage(t('panel.reload.prompt'), { modal: true }, confirmLabel);
+          if (choice === confirmLabel) {
             try { await reloadWindow(); }
-            catch { throw new PanelInputError('无法重载窗口，请从命令面板执行 Developer: Reload Window。'); }
+            catch { throw new PanelInputError(t('panel.reload.failed')); }
           }
-          await current.webview.postMessage({ type: 'result', id: message.id, ok: true, cancelled: choice !== '重载' });
+          await current.webview.postMessage({ type: 'result', id: message.id, ok: true, cancelled: choice !== confirmLabel });
           return;
         }
         if (message.type === 'app.restart') {
-          if (typeof restartApp !== 'function') throw new PanelInputError('当前环境不支持重启 Devin。');
-          const choice = await vscode.window.showWarningMessage('重启 Devin 会关闭所有窗口并中断正在进行的对话，之后会自动重新打开（通常几秒，失败会自动重试）。确定现在重启吗？', { modal: true }, '重启');
-          if (choice === '重启') {
+          if (typeof restartApp !== 'function') throw new PanelInputError(t('panel.restart.unsupported'));
+          const confirmLabel = t('panel.restart.confirm');
+          const choice = await vscode.window.showWarningMessage(t('panel.restart.prompt'), { modal: true }, confirmLabel);
+          if (choice === confirmLabel) {
             try { await restartApp(); }
             catch (error) {
-              if (error?.message === 'restart_unsupported') throw new PanelInputError('当前环境不支持重启 Devin。');
-              throw new PanelInputError('无法自动重启 Devin，请手动退出后重新打开。');
+              if (error?.message === 'restart_unsupported') throw new PanelInputError(t('panel.restart.unsupported'));
+              throw new PanelInputError(t('panel.restart.failed'));
             }
           }
-          await current.webview.postMessage({ type: 'result', id: message.id, ok: true, cancelled: choice !== '重启' });
+          await current.webview.postMessage({ type: 'result', id: message.id, ok: true, cancelled: choice !== confirmLabel });
           return;
         }
         if (message.type === 'goal.open') {

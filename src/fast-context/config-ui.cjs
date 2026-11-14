@@ -2,7 +2,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { setupPrompt, snippets, NAME } = require('./setup-prompt.cjs');
-const { createSelfCheck } = require('./self-check.cjs');
+const { createSelfCheck, CHECK_MESSAGES } = require('./self-check.cjs');
+const { translator } = require('../i18n/index.cjs');
 const { ensureLauncher } = require('./launcher.cjs');
 const { readEnabled, writeEnabled } = require('./state.cjs');
 const KINDS = new Set(['prompt', 'json']);
@@ -33,7 +34,7 @@ function isDirectory(value) {
 // Panel host for the Fast Context tab. Roots are limited to open local folders plus folders the user picked here.
 // The external MCP stays off until the user passes the account check and turns it on.
 function createFastContextHost({ vscode, context, resolve = resolveNode, check = createSelfCheck(), entry = () => stableEntry(context),
-  stateDir = context.globalStorageUri?.fsPath } = {}) {
+  stateDir = context.globalStorageUri?.fsPath, t = translator() } = {}) {
   const picked = [];
   let launcher = entry();
   const enabled = () => Boolean(stateDir) && readEnabled({ dir: stateDir });
@@ -75,14 +76,17 @@ function createFastContextHost({ vscode, context, resolve = resolveNode, check =
   }
   async function pick() {
     const chosen = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false,
-      openLabel: '允许 Fast Context 搜索此文件夹' });
+      openLabel: t('fc.pickLabel') });
     const folder = chosen?.[0];
     if (!folder || folder.scheme !== 'file' || !isDirectory(folder.fsPath)) return null;
     if (!picked.includes(folder.fsPath)) picked.push(folder.fsPath);
     if (picked.length > 10) picked.shift();
     return folder.fsPath;
   }
-  return { state, copy, pick, build, preview, setEnabled, selfCheck: check.run, checkMessage: check.message };
+  // The reason codes are self-check.cjs's (CHECK_MESSAGES keys); the panel copy
+  // for each lives in src/i18n under fc.check.*. Unknown codes read as unavailable.
+  const checkMessage = code => t('fc.check.' + (Object.hasOwn(CHECK_MESSAGES, code) ? code : 'unavailable'));
+  return { state, copy, pick, build, preview, setEnabled, selfCheck: check.run, checkMessage };
 }
 function registerFastContext({ vscode, context }) {
   const command = vscode.commands.registerCommand('devinFusionByok.fastContextMcp', async () => {

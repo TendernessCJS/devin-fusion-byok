@@ -45,7 +45,7 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
     node.hidden = !message;
     if (!message) return;
     node.append(element('span', { text: message }));
-    if (tone === 'error') node.append(element('button', { type: 'button', class: 'quiet', text: '×', 'aria-label': '关闭提示', onclick: () => notice('') }));
+    if (tone === 'error') node.append(element('button', { type: 'button', class: 'quiet', text: '×', 'aria-label': t('client.dismiss'), onclick: () => notice('') }));
     if (tone === 'success') toastTimer = setTimeout(() => notice(''), 2500);
   }
 
@@ -81,7 +81,7 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         pending.delete(id);
-        reject(new Error('操作等待超时，请稍后重试。'));
+        reject(new Error(t('client.timeout')));
       }, 90000);
       pending.set(id, { resolve, reject, timeout });
       vscode.postMessage({ id, type, payload });
@@ -91,16 +91,16 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
   async function run(action, progress, success) {
     if (busy) return false;
     setBusy(true);
-    notice(progress || '正在保存…');
+    notice(progress || t('client.saving'));
     try {
       await action();
       // A function success message is resolved after the action, so it can read
       // the state the action produced — the catalog notices depend on whether
       // the emit still has entries the running session never saw.
-      notice((typeof success === 'function' ? success() : success) || '已保存，新对话中生效。', 'success');
+      notice((typeof success === 'function' ? success() : success) || t('client.savedNewChat'), 'success');
       return true;
     } catch (error) {
-      notice(error.message || '操作失败，请重试。', 'error');
+      notice(error.message || t('client.failed'), 'error');
       return false;
     } finally {
       setBusy(false);
@@ -142,7 +142,7 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
 
   function finishDialog(dialog, form, submitText, onSubmit, extraButton, successText) {
     const error = element('p', { class: 'dialog-error', role: 'alert' });
-    const cancel = button('取消', () => dialog.close());
+    const cancel = button(t('common.cancel'), () => dialog.close());
     const submit = element('button', { type: 'submit', text: submitText });
     form.append(error, element('div', { class: 'dialog-actions' }, extraButton || null, element('span', { class: 'spacer' }), cancel, submit));
     let saving = false;
@@ -163,9 +163,9 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
       try {
         await onSubmit();
         dialog.close();
-        notice(successText || '已保存，新对话中生效。', 'success');
+        notice(successText || t('client.savedNewChat'), 'success');
       } catch (failure) {
-        error.textContent = failure.message || '保存失败，请重试。';
+        error.textContent = failure.message || t('client.saveFailed');
       } finally {
         saving = false;
         for (const [node, disabled] of locked) node.disabled = disabled;
@@ -179,20 +179,20 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
   function confirmDialog(title, message, onConfirm) {
     const { dialog, form } = openDialog(title);
     form.append(element('p', { class: 'confirm-text', text: message }));
-    finishDialog(dialog, form, '删除', onConfirm, null, '已删除。').classList.add('danger');
+    finishDialog(dialog, form, t('common.delete'), onConfirm, null, t('client.deleted')).classList.add('danger');
   }
 
   // Deleting lives inside each editor so list rows stay uncluttered.
   function deleteButton(dialog, title, message, onConfirm) {
-    return element('button', { type: 'button', class: 'danger', text: '删除', onclick: () => { dialog.close(); confirmDialog(title, message, onConfirm); } });
+    return element('button', { type: 'button', class: 'danger', text: t('common.delete'), onclick: () => { dialog.close(); confirmDialog(title, message, onConfirm); } });
   }
 
   // Catalog-only changes are instant for uids the running session already
   // holds; anything new waits for a conversation. Resolving the notice after
   // the action keeps the two apart instead of promising "即刻更新" for both.
   const catalogSuccess = () => state?.catalogDrift
-    ? '已保存，另有 ' + state.catalogDrift.missing + ' 个模型/组合需新对话才能看到。'
-    : '已保存，目录即刻更新。';
+    ? t('client.savedDrift', { count: state.catalogDrift.missing })
+    : t('client.savedInstant');
   const ui = {
     state: () => state,
     busy: () => busy,
@@ -240,7 +240,7 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
     byId('disabled-banner').hidden = !off();
     byId('goal-enabled').checked = state.goalEnabled === true;
     byId('goal-enabled').disabled = off();
-    byId('goal-enabled-label').textContent = state.goalEnabled === true ? '已开启' : '已关闭';
+    byId('goal-enabled-label').textContent = state.goalEnabled === true ? t('goalDoc.switchOn') : t('goalDoc.switchOff');
     modelsView.render();
     settingsView.render();
     fusionView.render();
@@ -261,7 +261,7 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
   for (const node of document.querySelectorAll('.tab')) node.addEventListener('click', () => showTab(node.dataset.tab));
   modelsView.bind();
   settingsView.bind();
-  const setEnabled = value => run(() => request('setEnabled', { enabled: value }), value ? '正在启用…' : '正在停用…', value ? '已启用。' : '已停用。');
+  const setEnabled = value => run(() => request('setEnabled', { enabled: value }), value ? t('client.enabling') : t('client.disabling'), value ? t('client.enabled') : t('client.disabled'));
   byId('plugin-enabled').addEventListener('change', event => {
     const value = event.target.checked;
     setEnabled(value).then(ok => { if (!ok) event.target.checked = !value; });
@@ -269,23 +269,23 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
   byId('enable-now').addEventListener('click', () => setEnabled(true));
   byId('goal-enabled').addEventListener('change', event => {
     const value = event.target.checked;
-    run(() => request('setGoalEnabled', { enabled: value }), value ? '正在开启目标模式…' : '正在关闭目标模式…',
-      value ? '目标模式已开启，新的对话里可以使用 /goal。' : '目标模式已关闭。').then(ok => { if (!ok) event.target.checked = !value; });
+    run(() => request('setGoalEnabled', { enabled: value }), value ? t('client.goalEnabling') : t('client.goalDisabling'),
+      value ? t('client.goalEnabled') : t('client.goalDisabled')).then(ok => { if (!ok) event.target.checked = !value; });
   });
   byId('open-goal').addEventListener('click', () => {
-    request('goal.open').catch(error => notice(error.message || '无法打开目标进度。', 'error'));
+    request('goal.open').catch(error => notice(error.message || t('client.goalOpenFailed'), 'error'));
   });
   byId('reload-window').addEventListener('click', async () => {
     if (busy) return;
     try { await request('window.reload'); }
-    catch (error) { notice(error.message || '重载失败，请从命令面板执行 Developer: Reload Window。', 'error'); }
+    catch (error) { notice(error.message || t('client.reloadFailed'), 'error'); }
   });
   byId('restart-devin').addEventListener('click', async () => {
     if (busy) return;
     try {
       const result = await request('app.restart');
-      if (!result?.cancelled) notice('正在关闭并重启 Devin（通常几秒后自动重开，失败会自动重试）…', 'success');
-    } catch (error) { notice(error.message || '重启失败，请手动退出后重新打开 Devin。', 'error'); }
+      if (!result?.cancelled) notice(t('client.restarting'), 'success');
+    } catch (error) { notice(error.message || t('client.restartFailed'), 'error'); }
   });
   window.addEventListener('message', event => {
     const message = event.data;
@@ -301,7 +301,7 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
       pending.delete(message.id);
       clearTimeout(operation.timeout);
       if (message.ok) operation.resolve({ cancelled: message.cancelled === true });
-      else operation.reject(new Error(typeof message.error === 'string' ? message.error : '操作失败，请重试。'));
+      else operation.reject(new Error(typeof message.error === 'string' ? message.error : t('client.failed')));
     }
   });
   showTab(selection.tab);

@@ -9,46 +9,51 @@ const { pageMarkup: fusionMarkup, createFusionView } = require('./fusion-view.cj
 const { pageMarkup: settingsMarkup, createSettingsView } = require('./settings-view.cjs');
 const { panelClient } = require('./client.cjs');
 const { baseStyles } = require('./theme.cjs');
-const { escapeAttribute, domHelpersSource } = require('./dom.cjs');
+const { escapeAttribute, domHelpersSource, markupText } = require('./dom.cjs');
+const { translator, browserSource } = require('../i18n/index.cjs');
 
-const TABS = [['models', '模型'], ['fusion', 'Fusion'], ['usage', '用量'], ['goal', '目标'], ['fastcontext', '对外提供 MCP'], ['settings', '设置']];
+const TABS = ['models', 'fusion', 'usage', 'goal', 'fastcontext', 'settings'];
 
-function goalMarkup() {
-  const code = text => `<code class="cmd">${text}</code>`;
+function goalMarkup(t) {
+  const h = markupText(t);
+  const code = text => `<code class="cmd">${escapeAttribute(text)}</code>`;
   const rows = [
-    ['/goal 要达成的目标', '在当前对话启动目标，这条消息就是第一轮。已有目标时会替换旧目标。'],
-    ['/goal', '查看当前目标、状态、已运行轮数和最近进展。'],
-    ['/goal pause', '暂停自动推进。'],
-    ['/goal resume', '继续推进；已到运行上限时再追加 10 轮（总共最多 100 轮）。'],
-    ['/goal clear', '清除当前目标。']
-  ].map(([command, text]) => `<div class="row"><div class="row-main"><span class="row-title">${code(command)}</span><span class="row-sub">${text}</span></div></div>`).join('');
+    [t('goalDoc.cmd.start'), 'goalDoc.cmd.startHelp'],
+    ['/goal', 'goalDoc.cmd.statusHelp'],
+    ['/goal pause', 'goalDoc.cmd.pauseHelp'],
+    ['/goal resume', 'goalDoc.cmd.resumeHelp'],
+    ['/goal clear', 'goalDoc.cmd.clearHelp']
+  ].map(([command, key]) => `<div class="row"><div class="row-main"><span class="row-title">${code(command)}</span><span class="row-sub">${h(key)}</span></div></div>`).join('');
   return `<div class="goal-doc">
-      <div class="section-head"><h2>目标模式（Goal）</h2><div class="actions"><button id="open-goal" class="secondary" type="button">查看目标进度</button><label class="toggle"><span class="muted" id="goal-enabled-label">已关闭</span><input id="goal-enabled" class="switch" type="checkbox" role="switch" aria-label="开启目标模式" disabled></label></div></div>
-      <p>让模型围绕一个目标一轮轮自动工作，直到它提交带证据的完成报告。默认关闭；打开右上角的开关后，Devin 聊天框里才会出现 <code class="cmd">/goal</code> 命令。关闭时正在推进的目标会暂停。</p>
-      <h3 class="mt">命令</h3>
+      <div class="section-head"><h2>${h('goalDoc.title')}</h2><div class="actions"><button id="open-goal" class="secondary" type="button">${h('goalDoc.openProgress')}</button><label class="toggle"><span class="muted" id="goal-enabled-label">${h('goalDoc.switchOff')}</span><input id="goal-enabled" class="switch" type="checkbox" role="switch" aria-label="${h('goalDoc.switchAria')}" disabled></label></div></div>
+      <p>${h('goalDoc.intro', { command: '<code class="cmd">/goal</code>' })}</p>
+      <h3 class="mt">${h('goalDoc.commands')}</h3>
       <div class="list">${rows}</div>
-      <h3 class="mt">怎么写目标</h3>
-      <p>把“怎样算做完”直接写进这句话，最好能用命令或文件验证。例如：${code('/goal 让 test/auth 里的测试全部通过，并保持 lint 干净')}</p>
-      <h3 class="mt">它会怎么运行</h3>
+      <h3 class="mt">${h('goalDoc.writingTitle')}</h3>
+      <p>${h('goalDoc.writingBody', { example: code(t('goalDoc.writingExample')) })}</p>
+      <h3 class="mt">${h('goalDoc.runTitle')}</h3>
       <ul>
-        <li>每轮结束前，模型用插件提供的报告命令提交状态：有进展、等待你的输入、受阻，或已完成。</li>
-        <li>提交“有进展”后自动开始下一轮；提交“已完成”并附上证据后，目标自动结束并进入历史。模型只在文字里说“做完了”不算。</li>
-        <li>你在进行中插话，目标会让出这一轮，你这轮结束后自动接着推进；模型等你回答时，你回复后也会自动继续。</li>
-        <li>默认最多 10 轮。遇到权限确认、运行被取消、连续两轮没有报告、连续三轮进展相同、窗口重新加载时会停下，用 ${code('/goal resume')} 继续。</li>
+        <li>${h('goalDoc.run1')}</li>
+        <li>${h('goalDoc.run2')}</li>
+        <li>${h('goalDoc.run3')}</li>
+        <li>${h('goalDoc.run4', { resume: code('/goal resume') })}</li>
       </ul>
-      <h3 class="mt">注意</h3>
+      <h3 class="mt">${h('goalDoc.notesTitle')}</h3>
       <ul>
-        <li>每一轮都是一次正常的模型调用，会按你的供应商计费。${code('/goal')}、${code('/goal pause')} 等查看和控制命令也会产生一次很短的模型回复。</li>
-        <li>完成报告来自模型本身，关键结果请自己再核对一下。</li>
+        <li>${h('goalDoc.note1', { status: code('/goal'), pause: code('/goal pause') })}</li>
+        <li>${h('goalDoc.note2')}</li>
       </ul>
     </div>`;
 }
 
 
-function renderPanel({ nonce }) {
+// locale defaults to zh-CN, the original copy: a caller that passes none
+// (the existing tests, any older wiring) renders exactly what it did before.
+function renderPanel({ nonce, locale = 'zh-CN' }) {
+  const t = translator(locale);
   const safeNonce = escapeAttribute(nonce);
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="${escapeAttribute(t.locale)}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -56,8 +61,8 @@ function renderPanel({ nonce }) {
   <title>Fusion BYOK</title>
   <style nonce="${safeNonce}">${baseStyles()}${panelStyles()}${fastContextStyles()}</style>
 </head>
-${panelMarkup()}
-  <script nonce="${safeNonce}">${panelScript()}</script>
+${panelMarkup(t)}
+  <script nonce="${safeNonce}">${panelScript(t.locale)}</script>
 </body>
 </html>`;
 }
@@ -181,28 +186,31 @@ function panelStyles() {
   `;
 }
 
-function panelMarkup() {
-  const tabs = TABS.map(([id, label, tag], index) => `<button id="tab-${id}" class="tab" type="button" role="tab" aria-controls="view-${id}" aria-selected="${index === 0}" data-tab="${id}">${label}${tag ? ` <span class="badge beta">${tag}</span>` : ''}</button>`).join('');
+function panelMarkup(t) {
+  const h = markupText(t);
+  const tabs = TABS.map((id, index) => `<button id="tab-${id}" class="tab" type="button" role="tab" aria-controls="view-${id}" aria-selected="${index === 0}" data-tab="${id}">${h('panel.tab.' + id)}</button>`).join('');
   return `<body>
   <main id="main" aria-busy="true">
     <header class="topbar">
-      <div class="topbar-row"><h1>Fusion BYOK</h1><div class="actions"><button id="reload-window" class="secondary" type="button" title="应用插件改动或刷新模型选择器时使用。会中断当前窗口正在进行的对话，但不关闭应用、不影响其他窗口，比重启 Devin 快。">重载窗口</button><button id="restart-devin" class="secondary" type="button" title="重载窗口仍无效时使用。会关闭所有窗口并中断正在进行的对话，之后自动重新打开（通常几秒，失败会自动重试）。">重启 Devin</button><label class="toggle"><span class="muted">启用</span><input id="plugin-enabled" class="switch" type="checkbox" role="switch" aria-label="启用插件" disabled></label></div></div>
-      <nav class="tabs" role="tablist" aria-label="面板分区">${tabs}</nav>
+      <div class="topbar-row"><h1>Fusion BYOK</h1><div class="actions"><button id="reload-window" class="secondary" type="button" title="${h('panel.reload.title')}">${h('panel.reload')}</button><button id="restart-devin" class="secondary" type="button" title="${h('panel.restart.title')}">${h('panel.restart')}</button><label class="toggle"><span class="muted">${h('panel.enabled')}</span><input id="plugin-enabled" class="switch" type="checkbox" role="switch" aria-label="${h('panel.enabledAria')}" disabled></label></div></div>
+      <nav class="tabs" role="tablist" aria-label="${h('panel.tabsAria')}">${tabs}</nav>
     </header>
-    <div id="disabled-banner" class="banner" hidden><span>插件已停用：导入的模型不会出现在新对话里，官方 Fusion 卡片里也不会有本插件的条目。</span><button id="enable-now" type="button">启用</button></div>
-    <section id="view-models" role="tabpanel" aria-labelledby="tab-models">${modelsMarkup()}</section>
-    <section id="view-fusion" role="tabpanel" aria-labelledby="tab-fusion" hidden>${fusionMarkup()}</section>
-    <section id="view-usage" role="tabpanel" aria-labelledby="tab-usage" hidden>${monitorMarkup()}</section>
-    <section id="view-goal" role="tabpanel" aria-labelledby="tab-goal" hidden>${goalMarkup()}</section>
-    <section id="view-fastcontext" role="tabpanel" aria-labelledby="tab-fastcontext" hidden>${fastContextMarkup()}</section>
-    <section id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>${settingsMarkup()}</section>
+    <div id="disabled-banner" class="banner" hidden><span>${h('panel.disabledBanner')}</span><button id="enable-now" type="button">${h('panel.enableNow')}</button></div>
+    <section id="view-models" role="tabpanel" aria-labelledby="tab-models">${modelsMarkup(t)}</section>
+    <section id="view-fusion" role="tabpanel" aria-labelledby="tab-fusion" hidden>${fusionMarkup(t)}</section>
+    <section id="view-usage" role="tabpanel" aria-labelledby="tab-usage" hidden>${monitorMarkup(t)}</section>
+    <section id="view-goal" role="tabpanel" aria-labelledby="tab-goal" hidden>${goalMarkup(t)}</section>
+    <section id="view-fastcontext" role="tabpanel" aria-labelledby="tab-fastcontext" hidden>${fastContextMarkup(t)}</section>
+    <section id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>${settingsMarkup(t)}</section>
   </main>
   <div id="status" class="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="editor-dialog" aria-labelledby="dialog-title"></dialog>`;
 }
 
-function panelScript() {
-  return `${domHelpersSource()}const vscode = acquireVsCodeApi(); (${panelClient.toString()})(${createModelsView.toString()}, ${createFusionView.toString()}, ${createSettingsView.toString()}, vscode, ${normalizeBaseUrlPath.toString()}, ${modelEfforts.toString()}); ${monitorScript()} ${updateScript()} ${fastContextScript()}`;
+function panelScript(locale) {
+  // The i18n prelude sits beside the dom helpers at the top level of the one
+  // <script>, so every serialized view below resolves t() from that scope.
+  return `${domHelpersSource()}${browserSource(locale, ['common.', 'client.', 'goalDoc.', 'models.', 'fusion.', 'settings.'])}const vscode = acquireVsCodeApi(); (${panelClient.toString()})(${createModelsView.toString()}, ${createFusionView.toString()}, ${createSettingsView.toString()}, vscode, ${normalizeBaseUrlPath.toString()}, ${modelEfforts.toString()}); ${monitorScript(locale)} ${updateScript(locale)} ${fastContextScript(locale)}`;
 }
 
 

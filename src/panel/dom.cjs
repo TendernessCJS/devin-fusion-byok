@@ -1,6 +1,13 @@
 'use strict';
+const { format } = require('../i18n/index.cjs');
 function escapeAttribute(value) {
   return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+}
+// Host-side markup is a template string, so translated copy is escaped before
+// it is spliced in. Placeholders are filled after escaping: a param may carry
+// markup the caller built (a <code> chip), the template itself never can.
+function markupText(t) {
+  return (key, params) => format(escapeAttribute(t(key)), params);
 }
 // Browser-side helpers shared by every webview. Standalone documents emit this
 // once inside their own script; the main panel emits it once at the top level
@@ -30,4 +37,4 @@ const element = (tag, attributes, ...children) => {
   // indent applies to the remaining lines only.
   return indent ? source.split('\n').map((line, index) => index ? indent + line : line).join('\n') : source;
 }
-module.exports = { escapeAttribute, domHelpersSource };
+module.exports = { escapeAttribute, markupText, domHelpersSource };

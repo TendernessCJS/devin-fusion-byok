@@ -1,8 +1,11 @@
 'use strict';
-function pageMarkup() {
+const { markupText } = require('./dom.cjs');
+const { translator } = require('../i18n/index.cjs');
+function pageMarkup(t = translator()) {
+  const h = markupText(t);
   return `
       <div class="models-layout">
-        <div><div class="section-head"><h2>供应商</h2><button id="add-provider" class="quiet" type="button" disabled>添加</button></div><nav id="providers" class="provider-nav" aria-label="供应商列表"></nav></div>
+        <div><div class="section-head"><h2>${h('models.providers')}</h2><button id="add-provider" class="quiet" type="button" disabled>${h('models.add')}</button></div><nav id="providers" class="provider-nav" aria-label="${h('models.providersAria')}"></nav></div>
         <div id="models"></div>
       </div>`;
 }
@@ -19,14 +22,14 @@ function createModelsView(ui) {
     const container = byId('providers');
     container.replaceChildren();
     if (!state().providers.length) {
-      container.append(element('p', { class: 'hint', text: '还没有供应商。' }));
+      container.append(element('p', { class: 'hint', text: t('models.noProviders') }));
       return;
     }
     for (const [index, provider] of state().providers.entries()) {
       const on = provider.models.filter(model => model.enabled !== false).length;
       const moveButton = (delta, label, title, disabled) => element('button', {
         type: 'button', class: 'move', disabled,
-        'aria-label': label + '供应商 ' + provider.name, title,
+        'aria-label': t(delta < 0 ? 'models.moveProviderUpAria' : 'models.moveProviderDownAria', { name: provider.name }), title,
         onclick: () => run(() => request('moveProvider', { id: provider.id, delta }), undefined, catalogSuccess),
       }, element('span', { class: 'move-glyph', text: delta < 0 ? '↑' : '↓' }));
       container.append(element('div', {
@@ -43,10 +46,10 @@ function createModelsView(ui) {
             renderModels();
           }
         }, element('span', { class: 'row-title', text: provider.name }),
-        element('span', { class: 'row-sub', text: provider.enabled === false ? '已停用' : on + ' 个模型' })),
+        element('span', { class: 'row-sub', text: provider.enabled === false ? t('models.providerOff') : t('models.modelCount', { count: on }) })),
         element('div', { class: 'order-move' },
-          moveButton(-1, '上移', '上移', index === 0),
-          moveButton(1, '下移', '下移', index === state().providers.length - 1))));
+          moveButton(-1, t('models.moveUp'), t('models.moveUp'), index === 0),
+          moveButton(1, t('models.moveDown'), t('models.moveDown'), index === state().providers.length - 1))));
     }
   }
 
@@ -56,40 +59,40 @@ function createModelsView(ui) {
     container.replaceChildren();
     if (!provider) {
       container.append(element('div', { class: 'list' }, element('div', { class: 'empty' },
-        element('p', { text: '添加一个 OpenAI 或 Anthropic 兼容的 API，就能在 Devin 里用它的模型。' }),
-        button('添加供应商', () => providerDialog(), ''))));
+        element('p', { text: t('models.emptyLead') }),
+        button(t('models.addProvider'), () => providerDialog(), ''))));
       return;
     }
     const format = { 'openai-responses': 'Responses', anthropic: 'Anthropic Messages' }[provider.apiFormat] || 'Chat Completions';
     container.append(element('div', { class: 'provider-head' },
       element('div', { class: 'row-main' }, element('h2', { text: provider.name }),
-        element('span', { class: 'row-sub', text: hostOf(provider.baseUrl) + ' · ' + format + (provider.keyConfigured ? '' : ' · 未填密钥') })),
+        element('span', { class: 'row-sub', text: hostOf(provider.baseUrl) + ' · ' + format + (provider.keyConfigured ? '' : ' · ' + t('models.noKey')) })),
       element('div', { class: 'actions' },
-        switchInput(provider.enabled !== false, '启用供应商 ' + provider.name,
+        switchInput(provider.enabled !== false, t('models.enableProviderAria', { name: provider.name }),
           value => run(() => request('setProviderEnabled', { id: provider.id, enabled: value }), undefined, catalogSuccess)),
-        button('编辑', () => providerDialog(provider), 'quiet'))));
-    if (provider.enabled === false) container.append(element('p', { class: 'warn mb', text: '已停用，这里的模型不会出现在模型列表与 Fusion 下拉里。' }));
+        button(t('models.edit'), () => providerDialog(provider), 'quiet'))));
+    if (provider.enabled === false) container.append(element('p', { class: 'warn mb', text: t('models.providerOffNotice') }));
     // The ACP directory is built once per session, so enabling a supplier or
     // adding models here leaves the running conversation on the old list until
     // a new one starts. Saying so beats leaving the user to guess why the
     // picker looks unchanged.
     const drift = state().catalogDrift;
     if (drift) container.append(element('p', { class: 'warn mb',
-      text: '还有 ' + drift.missing + ' 个模型/组合没进入当前会话，开一个新对话即可看到。' }));
-    const search = element('input', { type: 'search', placeholder: '搜索模型', 'aria-label': '搜索导入的模型',
+      text: t('models.drift', { count: drift.missing }) }));
+    const search = element('input', { type: 'search', placeholder: t('models.search'), 'aria-label': t('models.searchImportedAria'),
       oninput: event => { selection.modelSearch = event.target.value; renderModelRows(); } });
     search.value = selection.modelSearch;
     focusTargets.set('model-search', search);
-    const importButton = button('导入模型', () => provider.keyConfigured
+    const importButton = button(t('models.import'), () => provider.keyConfigured
       ? run(async () => {
         await request('refreshModels', { providerId: provider.id });
         importDialog(provider.id);
-      }, '正在获取模型列表…', '请勾选要导入的模型。')
-      : notice('该供应商未配置 API 密钥，请先添加密钥再导入模型。', 'error'), '');
-    if (!provider.keyConfigured) importButton.title = '未配置 API 密钥';
+      }, t('models.fetching'), t('models.pickToImport'))
+      : notice(t('models.importNeedsKey'), 'error'), '');
+    if (!provider.keyConfigured) importButton.title = t('models.keyMissingTitle');
     container.append(element('div', { class: 'toolbar' }, provider.models.length ? search : element('span', { class: 'spacer' }),
-      importButton, button('手动添加', () => modelDialog(provider))));
-    const list = element('div', { id: 'model-list', class: 'list scroll', 'aria-label': '模型列表' });
+      importButton, button(t('models.addManually'), () => modelDialog(provider))));
+    const list = element('div', { id: 'model-list', class: 'list scroll', 'aria-label': t('models.listAria') });
     scrollTargets.set('model-list', list);
     container.append(list);
     renderModelRows();
@@ -107,7 +110,7 @@ function createModelsView(ui) {
     container.replaceChildren();
     const models = visibleModels();
     if (!models.length) {
-      container.append(element('div', { class: 'empty', text: provider.models.length ? '没有匹配的模型。' : '还没有模型，点「导入模型」从供应商获取。' }));
+      container.append(element('div', { class: 'empty', text: provider.models.length ? t('models.noMatch') : t('models.emptyModels') }));
       return;
     }
     if (models.length > 1) {
@@ -117,10 +120,10 @@ function createModelsView(ui) {
       };
       const filtered = models.length < provider.models.length;
       container.append(element('div', { class: 'row compact' },
-        element('span', { class: 'row-main hint', text: (filtered ? '筛选出 ' + models.length + ' 个 · ' : '')
-          + models.filter(model => model.enabled !== false).length + ' / ' + models.length + ' 已启用' }),
-        button(filtered ? '启用这些' : '全部启用', () => bulk(true), 'quiet'),
-        button(filtered ? '停用这些' : '全部停用', () => bulk(false), 'quiet')));
+        element('span', { class: 'row-main hint', text: (filtered ? t('models.filteredCount', { count: models.length }) : '')
+          + t('models.enabledCount', { enabled: models.filter(model => model.enabled !== false).length, total: models.length }) }),
+        button(filtered ? t('models.enableThese') : t('models.enableAll'), () => bulk(true), 'quiet'),
+        button(filtered ? t('models.disableThese') : t('models.disableAll'), () => bulk(false), 'quiet')));
     }
     const fmtTokens = value => value >= 1000000 ? (Math.round(value / 100000) / 10) + 'M'
       : value >= 1000 ? Math.round(value / 1000) + 'K' : String(value);
@@ -128,35 +131,35 @@ function createModelsView(ui) {
       const name = model.label || model.id;
       const caps = [];
       const variants = modelEfforts(model).length;
-      if (variants > 1) caps.push(variants + ' 档');
+      if (variants > 1) caps.push(t('models.tiers', { count: variants }));
       if (model.contextWindow) caps.push(fmtTokens(model.contextWindow) + ' Context');
       const sub = [name !== model.id ? model.id : '', ...caps].filter(Boolean).join(' · ');
       const index = models.indexOf(model);
       const moveButton = (delta, label, title, disabled) => element('button', {
         type: 'button', class: 'move', disabled,
-        'aria-label': label + '模型 ' + name, title,
+        'aria-label': t(delta < 0 ? 'models.moveModelUpAria' : 'models.moveModelDownAria', { name }), title,
         onclick: () => run(() => request('moveModel', { providerId: provider.id, id: model.id, delta }), undefined, catalogSuccess),
       }, element('span', { class: 'move-glyph', text: delta < 0 ? '↑' : '↓' }));
       container.append(element('div', { class: 'row' },
         element('div', { class: 'row-main' },
-          element('button', { type: 'button', class: 'link-title', text: name, 'aria-label': '编辑模型 ' + name, onclick: () => modelDialog(provider, model) }),
+          element('button', { type: 'button', class: 'link-title', text: name, 'aria-label': t('models.editModelAria', { name }), onclick: () => modelDialog(provider, model) }),
           sub ? element('span', { class: 'row-sub mono', text: sub }) : null),
         selection.modelSearch.trim() ? null : element('div', { class: 'order-move' },
-          moveButton(-1, '上移', '上移', index === 0),
-          moveButton(1, '下移', '下移', index === models.length - 1)),
-        switchInput(model.enabled !== false, '启用模型 ' + name,
+          moveButton(-1, t('models.moveUp'), t('models.moveUp'), index === 0),
+          moveButton(1, t('models.moveDown'), t('models.moveDown'), index === models.length - 1)),
+        switchInput(model.enabled !== false, t('models.enableModelAria', { name }),
           value => run(() => request('updateModels', { providerId: provider.id, changes: [{ id: model.id, enabled: value }] }), undefined, catalogSuccess))));
     }
   }
 
   function importDialog(providerId) {
     const candidates = state().importCandidates;
-    if (!candidates || candidates.providerId !== providerId) throw new Error('模型列表已失效，请重新获取。');
-    const { dialog, form } = openDialog('导入模型');
+    if (!candidates || candidates.providerId !== providerId) throw new Error(t('models.candidatesExpired'));
+    const { dialog, form } = openDialog(t('models.import'));
     form.classList.add('import-picker');
     const selected = new Set();
-    const search = input('', { type: 'search', placeholder: '搜索模型', 'aria-label': '搜索可导入的模型' });
-    const list = element('div', { class: 'list scroll', 'aria-label': '可导入的模型列表' });
+    const search = input('', { type: 'search', placeholder: t('models.search'), 'aria-label': t('models.searchCandidatesAria') });
+    const list = element('div', { class: 'list scroll', 'aria-label': t('models.candidatesAria') });
     const count = element('span', { class: 'hint', role: 'status' });
     let submit;
     const visible = () => {
@@ -164,7 +167,7 @@ function createModelsView(ui) {
       return candidates.models.filter(model => (model.id + ' ' + model.label).toLocaleLowerCase().includes(query));
     };
     const updateCount = () => {
-      count.textContent = '已选 ' + selected.size + ' / 共 ' + candidates.models.length;
+      count.textContent = t('models.selectedCount', { selected: selected.size, total: candidates.models.length });
       if (submit) submit.disabled = selected.size === 0;
     };
     const renderRows = () => {
@@ -175,32 +178,32 @@ function createModelsView(ui) {
         list.append(element('label', { class: 'row' }, checkbox,
           element('span', { class: 'row-main' }, element('span', { class: 'row-title', text: model.label }),
             model.label !== model.id ? element('span', { class: 'row-sub mono', text: model.id }) : null),
-          model.imported ? element('span', { class: 'hint', text: '已导入' }) : null));
+          model.imported ? element('span', { class: 'hint', text: t('models.imported') }) : null));
       }
-      if (!list.childElementCount) list.append(element('p', { class: 'empty', text: candidates.models.length ? '没有匹配的模型。' : '供应商没有返回模型。' }));
+      if (!list.childElementCount) list.append(element('p', { class: 'empty', text: candidates.models.length ? t('models.noMatch') : t('models.noneReturned') }));
       updateCount();
     };
     search.addEventListener('input', renderRows);
     form.append(element('div', { class: 'toolbar' }, search),
-      element('div', { class: 'toolbar' }, button('全选', () => {
+      element('div', { class: 'toolbar' }, button(t('models.selectAll'), () => {
         for (const model of visible()) if (!model.imported) selected.add(model.id);
         renderRows();
-      }, 'quiet'), button('清空', () => { selected.clear(); renderRows(); }, 'quiet'), element('span', { class: 'spacer' }), count), list);
-    submit = finishDialog(dialog, form, '导入', () => request('importModels', { providerId, token: candidates.token, ids: [...selected] }), null, '已导入，新对话中生效。');
+      }, 'quiet'), button(t('models.clearSelection'), () => { selected.clear(); renderRows(); }, 'quiet'), element('span', { class: 'spacer' }), count), list);
+    submit = finishDialog(dialog, form, t('models.importSubmit'), () => request('importModels', { providerId, token: candidates.token, ids: [...selected] }), null, t('models.importedNotice'));
     renderRows();
   }
 
   function providerDialog(provider) {
-    const { dialog, form } = openDialog(provider ? '编辑供应商' : '添加供应商');
-    const name = input(provider?.name, { required: true, maxlength: 80, placeholder: '例如：OpenRouter' });
+    const { dialog, form } = openDialog(provider ? t('models.editProvider') : t('models.addProvider'));
+    const name = input(provider?.name, { required: true, maxlength: 80, placeholder: t('models.namePlaceholder') });
     const baseUrl = input(provider?.baseUrl, { type: 'url', required: true, placeholder: 'https://example.com/v1', spellcheck: 'false' });
-    const apiFormat = element('select', { 'aria-label': 'API 类型' },
+    const apiFormat = element('select', { 'aria-label': t('models.apiType') },
       element('option', { value: 'openai-responses', text: 'OpenAI Responses' }),
       element('option', { value: 'openai', text: 'OpenAI Chat Completions' }),
       element('option', { value: 'anthropic', text: 'Anthropic Messages' }));
     apiFormat.value = provider?.apiFormat || 'openai-responses';
-    const apiKey = input('', { type: 'password', autocomplete: 'new-password', placeholder: provider?.keyConfigured ? '留空则不修改' : '', spellcheck: 'false' });
-    const urlField = field('API 地址', baseUrl, '只填域名时会自动补上 /v1；写了路径就按原样使用，例如 /v1、/api/paas/v4、/openai 都原样保留。');
+    const apiKey = input('', { type: 'password', autocomplete: 'new-password', placeholder: provider?.keyConfigured ? t('models.keyKeep') : '', spellcheck: 'false' });
+    const urlField = field(t('models.baseUrl'), baseUrl, t('models.baseUrlHint'));
     const urlPreview = element('span', { class: 'hint url-preview' });
     urlField.append(urlPreview);
     const refreshPreview = () => {
@@ -210,19 +213,19 @@ function createModelsView(ui) {
       if (!url || !['http:', 'https:'].includes(url.protocol)) return;
       const base = url.origin + normalizeBaseUrlPath(url.pathname);
       const path = { openai: '/chat/completions', anthropic: '/messages' }[apiFormat.value] || '/responses';
-      urlPreview.append('实际请求：' + base + path, element('br'), '获取模型：' + base + '/models');
+      urlPreview.append(t('models.previewRequest', { url: base + path }), element('br'), t('models.previewModels', { url: base + '/models' }));
       // /v1 is appended only for a bare host. Saying so outright beats leaving
       // the user to reverse-engineer the rule from the two URLs above — the
       // failure mode of getting it wrong is a silent 404.
-      if (url.pathname.replace(/\/+$/, '') === '') urlPreview.append(element('br'), '地址只填了域名，已自动补 /v1');
+      if (url.pathname.replace(/\/+$/, '') === '') urlPreview.append(element('br'), t('models.previewBareHost'));
     };
     baseUrl.addEventListener('input', refreshPreview);
     apiFormat.addEventListener('change', refreshPreview);
     refreshPreview();
-    form.append(field('名称', name), urlField, field('API 类型', apiFormat), field('API 密钥', apiKey));
-    const remove = provider ? deleteButton(dialog, '删除供应商？', '会一并移除“' + provider.name + '”导入的模型；用到它们的 Fusion 组合会失效。',
+    form.append(field(t('models.name'), name), urlField, field(t('models.apiType'), apiFormat), field(t('models.apiKey'), apiKey));
+    const remove = provider ? deleteButton(dialog, t('models.deleteProviderTitle'), t('models.deleteProviderBody', { name: provider.name }),
       () => request('deleteProvider', { id: provider.id })) : null;
-    finishDialog(dialog, form, '保存', () => {
+    finishDialog(dialog, form, t('common.save'), () => {
       const payload = { name: name.value.trim(), baseUrl: baseUrl.value.trim(), apiFormat: apiFormat.value };
       if (provider) payload.id = provider.id;
       if (apiKey.value.trim()) payload.apiKey = apiKey.value.trim();
@@ -231,33 +234,33 @@ function createModelsView(ui) {
   }
 
   function modelDialog(provider, model) {
-    const { dialog, form } = openDialog(model ? '编辑模型' : '手动添加模型');
-    const id = input(model?.id, { required: true, readOnly: Boolean(model), maxlength: 256, placeholder: '供应商的模型 ID', spellcheck: 'false' });
-    const label = input(model?.label || '', { maxlength: 160, placeholder: '留空使用模型 ID' });
+    const { dialog, form } = openDialog(model ? t('models.editModel') : t('models.addModelTitle'));
+    const id = input(model?.id, { required: true, readOnly: Boolean(model), maxlength: 256, placeholder: t('models.idPlaceholder'), spellcheck: 'false' });
+    const label = input(model?.label || '', { maxlength: 160, placeholder: t('models.labelPlaceholder') });
     const contextWindow = input(model?.contextWindow || 272000, { type: 'number', min: 1, step: 1, required: true });
     const maxOutputTokens = input(model?.maxOutputTokens || 131072, { type: 'number', min: 1, step: 1, required: true });
     const efforts = input((model?.efforts || []).join(', '), { placeholder: 'low, medium, high', spellcheck: 'false' });
-    const effortMode = element('select', { 'aria-label': '思考档位' },
-      element('option', { value: 'auto', text: '自动' }),
-      element('option', { value: 'manual', text: '手动填写' }),
-      element('option', { value: 'none', text: '不指定' }));
+    const effortMode = element('select', { 'aria-label': t('models.effort') },
+      element('option', { value: 'auto', text: t('models.effortAuto') }),
+      element('option', { value: 'manual', text: t('models.effortManual') }),
+      element('option', { value: 'none', text: t('models.effortNone') }));
     effortMode.value = model?.effortMode || (model?.efforts?.length ? 'manual' : 'auto');
-    const manual = field('档位列表', efforts, '用逗号分隔。');
+    const manual = field(t('models.effortList'), efforts, t('models.effortListHint'));
     manual.hidden = effortMode.value !== 'manual';
     effortMode.addEventListener('change', () => { manual.hidden = effortMode.value !== 'manual'; });
-    form.append(field('模型 ID', id), field('显示名称', label),
-      element('details', { class: 'fold', open: effortMode.value === 'manual' }, element('summary', { text: '高级' }),
-        element('div', { class: 'field-grid' }, field('上下文（tokens）', contextWindow), field('最大输出（tokens）', maxOutputTokens)),
-        field('思考档位', effortMode, '自动：GPT/o 系列与较新的 Claude Opus/Sonnet 提供 Low、Medium、High、XHigh、Max，能否生效取决于供应商。'), manual));
-    const remove = model ? deleteButton(dialog, '删除模型？', '从“' + provider.name + '”移除“' + (model.label || model.id) + '”，之后可以重新导入。',
+    form.append(field(t('models.modelId'), id), field(t('models.displayName'), label),
+      element('details', { class: 'fold', open: effortMode.value === 'manual' }, element('summary', { text: t('models.advanced') }),
+        element('div', { class: 'field-grid' }, field(t('models.contextWindow'), contextWindow), field(t('models.maxOutput'), maxOutputTokens)),
+        field(t('models.effort'), effortMode, t('models.effortHint')), manual));
+    const remove = model ? deleteButton(dialog, t('models.deleteModelTitle'), t('models.deleteModelBody', { provider: provider.name, model: model.label || model.id }),
       () => request('updateModels', { providerId: provider.id, changes: [], removeIds: [model.id] })) : null;
-    finishDialog(dialog, form, model ? '保存' : '添加', () => {
+    finishDialog(dialog, form, model ? t('common.save') : t('models.addSubmit'), () => {
       const saved = { id: id.value.trim(), label: label.value.trim() || id.value.trim(),
         contextWindow: Number(contextWindow.value), maxOutputTokens: Number(maxOutputTokens.value), effortMode: effortMode.value,
         efforts: effortMode.value === 'auto' ? [] : [...new Set(efforts.value.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean))] };
       if (model) return request('updateModels', { providerId: provider.id, changes: [{ ...saved, supportsImages: true }] });
       return request('addModel', { providerId: provider.id, model: { ...saved, enabled: true } });
-    }, remove, model ? undefined : '已添加，新对话中生效。');
+    }, remove, model ? undefined : t('models.addedNotice'));
   }
 
   return {

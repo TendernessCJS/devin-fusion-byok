@@ -23,6 +23,10 @@ test('format fills named placeholders and leaves unknown ones visible', () => {
   assert.equal(i18n.format('{a} / {b}', { a: 1, b: 'x' }), '1 / x');
   assert.equal(i18n.format('{a} {missing}', { a: 0 }), '0 {missing}');
   assert.equal(i18n.format('no params {a}'), 'no params {a}');
+  assert.equal(i18n.format('{n} {n|model|models}', { n: 1 }), '1 model');
+  assert.equal(i18n.format('{n} {n|model|models}', { n: 0 }), '0 models');
+  assert.equal(i18n.format('{n} {n|model|models}', { n: '2' }), '2 models');
+  assert.equal(i18n.format('{x|a|b}', {}), '{x|a|b}', 'a missing param leaves the plural form visible');
 });
 
 test('translators default to zh-CN, fall back to zh-CN for an unknown locale, and to the key when nothing matches', () => {
