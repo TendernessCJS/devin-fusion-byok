@@ -1,80 +1,75 @@
 'use strict';
 const crypto = require('node:crypto');
 const { baseStyles } = require('./theme.cjs');
-const { domHelpersSource } = require('./dom.cjs');
+const { domHelpersSource, markupText } = require('./dom.cjs');
+const { translator, browserSource } = require('../i18n/index.cjs');
 
-const STATUS_LABELS = {
-  active: '进行中', paused: '已暂停', waiting: '等待输入', blocked: '受阻', limited: '已达运行上限',
-  review: '待验收（不等于已完成）', completed: '已完成'
-};
-const SESSION_LABELS = { idle: '空闲', busy: '忙', unknown: '未知' };
-const REASON_LABELS = {
-  review: '模型请求人工验收，尚未完成', 'missing-report': '连续两次运行没有提交报告，已暂停',
-  'max-runs': '已达运行上限', 'no-progress': '连续三次证据没有变化，已暂停', 'user-paused': '由用户暂停',
-  'manual-prompt': '检测到用户手动输入，已暂停', 'session-busy': '会话正在处理其它请求，已暂停',
-  'session-unavailable': '会话状态未知或不可用，已暂停', 'session-not-idle': '会话不再空闲，已暂停',
-  reloaded: '窗口重新加载，需手动恢复', disposed: '控制器已停用', disabled: '插件已停用',
-  'missing-goal': '目标已不存在', 'dispatch-failed': '派发失败，已暂停', 'store-write-failed': '状态写入失败，已暂停',
-  'capability-failed': '报告凭据创建失败，已暂停', 'ownership-lost': '该会话归属已变化，已暂停',
-  'run-ended-unknown': '运行结束状态未知，已暂停', cancelled: '运行被取消', refusal: '模型拒绝继续',
-  permission: '等待权限确认', 'session-inactive': '会话已结束或不可用', disconnected: '连接已断开',
-  interrupted: '运行被中断', suspended: '已挂起', accepted: '已由用户验收', achieved: '模型已提交完成证据'
-};
-function goalScript() {
-  return `${domHelpersSource()}const vscode=acquireVsCodeApi();let state=null,errorText='',notice='',sessions=[],selectedSession='';
-const STATUS_LABELS=${JSON.stringify(STATUS_LABELS)},REASON_LABELS=${JSON.stringify(REASON_LABELS)},SESSION_LABELS=${JSON.stringify(SESSION_LABELS)};
+// Goal status and reason codes (goal/store.cjs, goal/controller.cjs); the copy
+// for each is goal.status.<code> / goal.reason.<code> in src/i18n.
+const STATUS_CODES = ['active', 'paused', 'waiting', 'blocked', 'limited', 'review', 'completed'];
+const SESSION_CODES = ['idle', 'busy', 'unknown'];
+const REASON_CODES = ['review', 'missing-report', 'max-runs', 'no-progress', 'user-paused', 'manual-prompt', 'session-busy',
+  'session-unavailable', 'session-not-idle', 'reloaded', 'disposed', 'disabled', 'missing-goal', 'dispatch-failed',
+  'store-write-failed', 'capability-failed', 'ownership-lost', 'run-ended-unknown', 'cancelled', 'refusal', 'permission',
+  'session-inactive', 'disconnected', 'interrupted', 'suspended', 'accepted', 'achieved'];
+function goalScript(locale) {
+  const labels = (codes, prefix) => `Object.fromEntries(${JSON.stringify(codes)}.map(code=>[code,t('${prefix}'+code)]))`;
+  return `${domHelpersSource()}${browserSource(locale, ['common.', 'goal.'])}const vscode=acquireVsCodeApi();let state=null,errorText='',notice='',sessions=[],selectedSession='';
+const STATUS_LABELS=${labels(STATUS_CODES, 'goal.status.')},REASON_LABELS=${labels(REASON_CODES, 'goal.reason.')},SESSION_LABELS=${labels(SESSION_CODES, 'goal.session.')};
 const el=byId;
 
 function statusText(goal){const base=STATUS_LABELS[goal.status]||goal.status;
-if(goal.locked)return base+'（该会话由另一个窗口占用，本窗口不可操作）';
+if(goal.locked)return base+t('goal.lockedSuffix');
 const reason=goal.reason?(REASON_LABELS[goal.reason]||goal.reason):'';return reason?base+' · '+reason:base;}
 function option(value,label){const o=document.createElement('option');o.value=value;o.textContent=label;return o;}
 function sessionLabel(id){const session=sessions.find(s=>s.sessionId===id);const label=session?.title||id;
 return sessions.filter(s=>(s.title||s.sessionId)===label).length>1?label+' · '+id:label;}
-function render(){if(!state)return;el('enabled').textContent=state.enabled?'已启用':'已停用';
-el('trusted').textContent=state.trusted?'工作区已信任':'工作区未信任';
-el('storeError').textContent=state.storeError?('状态存储问题：'+state.storeError):'';
-el('corrupt').textContent=state.corruptGoals?('发现 '+state.corruptGoals+' 条无法解析的目标记录，已保留未覆盖。'):'';
+function render(){if(!state)return;el('enabled').textContent=state.enabled?t('goal.enabled'):t('goal.disabled');
+el('trusted').textContent=state.trusted?t('goal.trusted'):t('goal.untrusted');
+el('storeError').textContent=state.storeError?t('goal.storeError',{error:state.storeError}):'';
+el('corrupt').textContent=state.corruptGoals?t('goal.corrupt',{count:state.corruptGoals}):'';
 el('error').textContent=errorText;el('notice').textContent=notice;
 sessions=state.sessions||[];
 const list=el('goals');list.replaceChildren();
 if(!(state.goals||[]).length){const empty=document.createElement('p');empty.className='hint mt';
-empty.textContent=!state.enabled?'插件已停用，Goal 暂不可用。请在控制面板启用。':!state.trusted?'工作区未受信任，Goal 暂不可用。':'还没有目标。在 Devin 聊天框输入「/goal 要达成的目标」即可开始，进度会显示在这里。';
+empty.textContent=!state.enabled?t('goal.emptyDisabled'):!state.trusted?t('goal.emptyUntrusted'):t('goal.empty');
 list.append(empty);}
 for(const goal of state.goals||[]){const item=document.createElement('div');item.className='goal';
 const head=document.createElement('div');head.className='goalhead';head.textContent=statusText(goal)+' · '+sessionLabel(goal.sessionId);item.append(head);
-const meta=document.createElement('div');meta.className='meta';meta.textContent='运行额度已使用 '+goal.runsStarted+' / '+goal.maxRuns+'（含派发准备，非模型回复数）· 修订 '+goal.revision+(goal.archived?' · 已归档':'');item.append(meta);
-const objective=document.createElement('pre');objective.textContent='目标：'+goal.objective+(goal.criteria&&goal.criteria!==goal.objective?'\\n验收标准：'+goal.criteria:'');item.append(objective);
+const meta=document.createElement('div');meta.className='meta';meta.textContent=t('goal.meta',{runs:goal.runsStarted,max:goal.maxRuns,revision:goal.revision})+(goal.archived?t('goal.archivedSuffix'):'');item.append(meta);
+const objective=document.createElement('pre');objective.textContent=t('goal.objective',{objective:goal.objective})+(goal.criteria&&goal.criteria!==goal.objective?'\\n'+t('goal.criteria',{criteria:goal.criteria}):'');item.append(objective);
 const evidence=document.createElement('div');evidence.className='evidence';
-if(!goal.evidence.length)evidence.textContent='尚无证据。';
+if(!goal.evidence.length)evidence.textContent=t('goal.noEvidence');
 for(const entry of goal.evidence){const line=document.createElement('pre');line.textContent='['+entry.status+'] '+entry.evidence;evidence.append(line);}
 item.append(evidence);
 const actions=document.createElement('div');actions.className='actions';
-const act=(type,label,extra,needsConfirm)=>{const b=document.createElement('button');b.textContent=label;
-b.className=/清除|删除|放弃|归档/.test(label)?'danger':(label==='验收完成'?'':'secondary');
+const act=(type,label,variant,extra,needsConfirm)=>{const b=document.createElement('button');b.textContent=label;
+b.className=variant;
 b.disabled=!!goal.locked;b.onclick=()=>send(type,Object.assign({id:goal.id},extra||{}),needsConfirm);actions.append(b);};
-if(!goal.locked){if(goal.status==='active')act('goal.pause','暂停');
-else if(!goal.archived&&goal.status!=='completed')act('goal.resume','恢复',{},false);
-if(goal.status==='review')act('goal.accept','验收完成',{},true);
-if(!goal.archived)act('goal.archive','归档',{},goal.status==='active');}
+if(!goal.locked){if(goal.status==='active')act('goal.pause',t('goal.pause'),'secondary');
+else if(!goal.archived&&goal.status!=='completed')act('goal.resume',t('goal.resume'),'secondary',{},false);
+if(goal.status==='review')act('goal.accept',t('goal.accept'),'',{},true);
+if(!goal.archived)act('goal.archive',t('goal.archive'),'danger',{},goal.status==='active');}
 item.append(actions);list.append(item);}
 const history=el('history');history.replaceChildren();
 el('historyTitle').hidden=!(state.history||[]).length;
-for(const goal of state.history||[]){const line=document.createElement('pre');line.textContent='['+goal.status+'] '+sessionLabel(goal.sessionId)+' · 修订 '+goal.revision+'\\n'+goal.objective;history.append(line);}}
+for(const goal of state.history||[]){const line=document.createElement('pre');line.textContent='['+goal.status+'] '+sessionLabel(goal.sessionId)+' · '+t('goal.revision',{revision:goal.revision})+'\\n'+goal.objective;history.append(line);}}
 function send(type,payload,needsConfirm){const id=String(Math.random());errorText='';notice='';el('error').textContent='';el('notice').textContent='';
 vscode.postMessage({type,id,payload,confirm:needsConfirm===true});}
 window.addEventListener('message',event=>{const data=event.data;if(!data)return;
 if(data.type==='goal-state'){state=data.state;render();return;}
-if(data.type==='goal-result'){if(!data.ok){errorText=data.error||'操作失败。';}else{notice=data.notice||'';}render();}});
+if(data.type==='goal-result'){if(!data.ok){errorText=data.error||t('goal.failed');}else{notice=data.notice||'';}render();}});
 el('refresh').onclick=()=>send('goal.refresh',{});
 vscode.postMessage({type:'goal.ready',id:String(Math.random()),payload:{}});`;
 }
 
-function goalHtml(nonce) {
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';"><style nonce="${nonce}">${baseStyles()}label{display:block;margin-top:12px}.goal{border:1px solid var(--border);border-radius:var(--radius-container);padding:12px 14px;margin-top:12px}.goalhead{font-weight:600}.meta{opacity:.8}.evidence{border-left:2px solid var(--border);padding-left:8px;margin-top:6px}.actions{margin-top:12px}.notice{color:var(--muted)}</style></head><body><h2>Fusion BYOK Goal</h2><p class="hint">在 Devin 聊天框输入 <b>/goal 要达成的目标</b> 即可在当前对话启动，模型会一轮轮自动推进，直到它提交带证据的完成报告。<br>/goal 查看进度 · /goal pause 暂停 · /goal resume 继续 · /goal clear 清除。这里只用于查看和管理。</p><p>插件：<span id="enabled">未知</span> · <span id="trusted">未知</span></p><p id="storeError" class="error mt" role="status"></p><p id="corrupt" class="error mt" role="status"></p><div class="actions"><button id="refresh" class="secondary">刷新</button></div><p id="error" class="error mt" role="status"></p><p id="notice" class="notice mt" role="status"></p><div id="goals"></div><h3 id="historyTitle" class="mt">历史（已归档）</h3><div id="history"></div><script nonce="${nonce}">${goalScript()}</script></body></html>`;
+function goalHtml(nonce, locale = 'zh-CN') {
+  const t = translator(locale);
+  const h = markupText(t);
+  return `<!DOCTYPE html><html lang="${t.locale}"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';"><style nonce="${nonce}">${baseStyles()}label{display:block;margin-top:12px}.goal{border:1px solid var(--border);border-radius:var(--radius-container);padding:12px 14px;margin-top:12px}.goalhead{font-weight:600}.meta{opacity:.8}.evidence{border-left:2px solid var(--border);padding-left:8px;margin-top:6px}.actions{margin-top:12px}.notice{color:var(--muted)}</style></head><body><h2>Fusion BYOK Goal</h2><p class="hint">${h('goal.intro', { command: '<b>' + h('goalDoc.cmd.start') + '</b>' })}<br>${h('goal.commandsLine')}</p><p>${h('goal.pluginLabel')}<span id="enabled">${h('common.unknown')}</span> · <span id="trusted">${h('common.unknown')}</span></p><p id="storeError" class="error mt" role="status"></p><p id="corrupt" class="error mt" role="status"></p><div class="actions"><button id="refresh" class="secondary">${h('common.refresh')}</button></div><p id="error" class="error mt" role="status"></p><p id="notice" class="notice mt" role="status"></p><div id="goals"></div><h3 id="historyTitle" class="mt">${h('goal.history')}</h3><div id="history"></div><script nonce="${nonce}">${goalScript(t.locale)}</script></body></html>`;
 }
 
-function createGoalUi({ vscode, context, controller, isEnabled = () => true, isTrusted = () => true, safeError = () => ({ message: '操作失败。' }) }) {
+function createGoalUi({ vscode, context, controller, isEnabled = () => true, isTrusted = () => true, t = translator(), safeError = () => ({ message: t('goal.failed') }) }) {
   let panel, disposed = false;
   const item = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 18);
   function refreshStatusBar() {
@@ -82,7 +77,7 @@ function createGoalUi({ vscode, context, controller, isEnabled = () => true, isT
     let count = 0;
     try { count = (controller.snapshot().goals || []).filter(goal => !goal.archived).length; } catch {}
     item.text = '$(target) Goal' + (count ? ' ' + count : '');
-    item.tooltip = 'Fusion BYOK Goal：在聊天框输入 /goal 目标 即可启动。';
+    item.tooltip = t('goal.statusBarTooltip');
     item.command = 'devinFusionByok.goal';
     item.show();
   }
@@ -92,19 +87,21 @@ function createGoalUi({ vscode, context, controller, isEnabled = () => true, isT
   }
   async function confirm(message) {
     if (typeof vscode.window.showWarningMessage !== 'function') return false;
-    const choice = await vscode.window.showWarningMessage(message, { modal: true }, '确认');
-    return choice === '确认';
+    // The modal returns the label it was given; compare against the same value.
+    const confirmLabel = t('goal.confirm');
+    const choice = await vscode.window.showWarningMessage(message, { modal: true }, confirmLabel);
+    return choice === confirmLabel;
   }
   async function askRunLimit(goal) {
     if (typeof vscode.window.showInputBox !== 'function') return null;
     const answer = await vscode.window.showInputBox({
-      title: '提高运行上限后恢复目标',
-      prompt: '已派发 ' + goal.runsStarted + ' 次，请输入新的总运行上限（1-100，必须大于已派发次数）',
+      title: t('goal.raiseLimitTitle'),
+      prompt: t('goal.raiseLimitPrompt', { runs: goal.runsStarted }),
       value: String(Math.min(100, Math.max(goal.runsStarted + 1, goal.maxRuns))),
       validateInput: value => {
         const parsed = Number(value);
-        if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 100) return '请输入 1 到 100 的整数。';
-        if (parsed <= goal.runsStarted) return '必须大于已派发的 ' + goal.runsStarted + ' 次。';
+        if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 100) return t('goal.raiseLimitRange');
+        if (parsed <= goal.runsStarted) return t('goal.raiseLimitAbove', { runs: goal.runsStarted });
         return null;
       }
     });
@@ -135,11 +132,11 @@ function createGoalUi({ vscode, context, controller, isEnabled = () => true, isT
         }
         result = controller.resume(payload);
       } else if (message.type === 'goal.accept') {
-        if (!(await confirm('确认把该目标标记为已完成？只有待验收状态且已有证据的目标可以验收。'))) return;
+        if (!(await confirm(t('goal.acceptConfirm')))) return;
         result = controller.accept(payload);
       } else if (message.type === 'goal.archive') {
         const goal = (state().goals || []).find(item => item.id === payload.id);
-        if (goal && goal.status === 'active' && !(await confirm('该目标仍在运行，确认归档并停止自动推进？'))) return;
+        if (goal && goal.status === 'active' && !(await confirm(t('goal.archiveConfirm')))) return;
         result = controller.archive(payload);
       } else return;
       await target.webview.postMessage({ type: 'goal-result', id: message.id, ok: true });
@@ -157,7 +154,7 @@ function createGoalUi({ vscode, context, controller, isEnabled = () => true, isT
     panel = vscode.window.createWebviewPanel('devinFusionByok.goal', 'Fusion BYOK Goal', vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
     const current = panel;
-    current.webview.html = goalHtml(crypto.randomBytes(24).toString('base64'));
+    current.webview.html = goalHtml(crypto.randomBytes(24).toString('base64'), t.locale);
     const listener = current.webview.onDidReceiveMessage(message => { void handleMessage(message); });
     const closing = current.onDidDispose(() => { listener.dispose(); closing.dispose(); if (panel === current) panel = undefined; });
   }

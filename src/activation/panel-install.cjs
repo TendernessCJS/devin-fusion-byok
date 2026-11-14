@@ -70,7 +70,7 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
           nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main), isEnabled: () => runtime().isLive() });
         context.subscriptions.push(contextObserver);
       }
-      require('../panel/context-view.cjs').createContextUi({ vscode, context,
+      require('../panel/context-view.cjs').createContextUi({ vscode, context, t,
         snapshot: () => contextObserver?.snapshot() || [], catalog,
         nativeLabels: () => new Map(catalogSync.read().models.map(entry => [entry.uid, entry.label])),
         focused: () => contextObserver?.focused?.() || null,
@@ -82,7 +82,7 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
       readStatus: () => contextObserver?.status(), snapshot: () => contextObserver?.snapshot() || [], readHealth
     }));
     try {
-      require('../panel/goal-view.cjs').createGoalUi({ vscode, context,
+      require('../panel/goal-view.cjs').createGoalUi({ vscode, context, t,
         controller: {
           snapshot: () => continuation.goalController() ? continuation.goalController().snapshot() : {
             enabled: config().enabled !== false, trusted: vscode.workspace.isTrusted !== false,
