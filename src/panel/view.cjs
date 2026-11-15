@@ -49,7 +49,7 @@ function goalMarkup(t) {
 
 // locale defaults to zh-CN, the original copy: a caller that passes none
 // (the existing tests, any older wiring) renders exactly what it did before.
-function renderPanel({ nonce, locale = 'zh-CN' }) {
+function renderPanel({ nonce, locale = 'zh-CN', languageChoice = 'auto' }) {
   const t = translator(locale);
   const safeNonce = escapeAttribute(nonce);
   return `<!doctype html>
@@ -61,7 +61,7 @@ function renderPanel({ nonce, locale = 'zh-CN' }) {
   <title>Fusion BYOK</title>
   <style nonce="${safeNonce}">${baseStyles()}${panelStyles()}${fastContextStyles()}</style>
 </head>
-${panelMarkup(t)}
+${panelMarkup(t, languageChoice)}
   <script nonce="${safeNonce}">${panelScript(t.locale)}</script>
 </body>
 </html>`;
@@ -154,6 +154,7 @@ function panelStyles() {
     #monitor-date-controls label { display: inline-flex; gap: 4px; align-items: center; }
     #monitor-date-controls input { width: auto; }
     #update-proxy { width: 200px; flex: 0 1 auto; min-width: 120px; max-width: 200px; }
+    #language-select { width: auto; flex: none; }
     .monitor-table-wrap { overflow: auto; max-height: 480px; border: 1px solid var(--border); border-radius: var(--radius-container); }
     .monitor-table { border-collapse: collapse; white-space: nowrap; width: 100%; font-variant-numeric: tabular-nums; }
     .monitor-table td, .monitor-table th { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; }
@@ -186,7 +187,7 @@ function panelStyles() {
   `;
 }
 
-function panelMarkup(t) {
+function panelMarkup(t, languageChoice) {
   const h = markupText(t);
   const tabs = TABS.map((id, index) => `<button id="tab-${id}" class="tab" type="button" role="tab" aria-controls="view-${id}" aria-selected="${index === 0}" data-tab="${id}">${h('panel.tab.' + id)}</button>`).join('');
   return `<body>
@@ -201,7 +202,7 @@ function panelMarkup(t) {
     <section id="view-usage" role="tabpanel" aria-labelledby="tab-usage" hidden>${monitorMarkup(t)}</section>
     <section id="view-goal" role="tabpanel" aria-labelledby="tab-goal" hidden>${goalMarkup(t)}</section>
     <section id="view-fastcontext" role="tabpanel" aria-labelledby="tab-fastcontext" hidden>${fastContextMarkup(t)}</section>
-    <section id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>${settingsMarkup(t)}</section>
+    <section id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>${settingsMarkup(t, languageChoice)}</section>
   </main>
   <div id="status" class="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="editor-dialog" aria-labelledby="dialog-title"></dialog>`;

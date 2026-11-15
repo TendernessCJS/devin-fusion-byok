@@ -165,7 +165,12 @@ function createGoalUi({ vscode, context, controller, isEnabled = () => true, isT
     try { void panel.webview.postMessage({ type: 'goal-state', state: state() }); } catch {}
   }, 3000);
   timer.unref?.();
-  const handle = { dispose() { disposed = true; clearInterval(timer); command.dispose(); item?.dispose(); panel?.dispose(); }, refresh: refreshStatusBar };
+  // A language change re-renders an open page (it reloads and sends goal.ready).
+  function relocalize() {
+    refreshStatusBar();
+    if (!disposed && panel) panel.webview.html = goalHtml(crypto.randomBytes(24).toString('base64'), t.locale);
+  }
+  const handle = { dispose() { disposed = true; clearInterval(timer); command.dispose(); item?.dispose(); panel?.dispose(); }, refresh: refreshStatusBar, relocalize };
   context.subscriptions.push(handle);
   refreshStatusBar();
   return handle;

@@ -29,7 +29,7 @@ async function activate(context) {
   context.subscriptions.push(output);
   const log = (event, data) => output.appendLine(JSON.stringify({ time: new Date().toISOString(), event, ...(data || {}) }));
   // UI copy only: logs, config and protocol text never go through `t`.
-  const i18n = createI18n({ language: () => vscode.env?.language });
+  const i18n = createI18n({ language: () => vscode.env?.language, memento: context.globalState });
   const root = context.globalStorageUri.fsPath, configFile = path.join(root, 'config.json');
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const build = publishHostBuild({ root, extensionPath: context.extensionPath, version: context.extension?.packageJSON?.version, activatedAt });
@@ -95,7 +95,7 @@ async function activate(context) {
     publish: () => panel.publish() });
   let configSync;
   panel = createPanelHost({ vscode, context, config, configFile, root, log, output, catalog, catalogSync,
-    cacheSync, selection, continuation, runtime: () => session, t: i18n.t,
+    cacheSync, selection, continuation, runtime: () => session, i18n,
     afterChange: type => configSync.afterChange(type) });
   session = createRuntimeSession({ root, extensionPath: context.extensionPath, subscriptions: context.subscriptions,
     config, configFile, vscode, context, nativeMain, log, catalog, catalogSync, settingsOwner,

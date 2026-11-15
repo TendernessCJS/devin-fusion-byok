@@ -138,7 +138,18 @@ function createContextUi({ vscode, context, snapshot, readMonitor, catalog, nati
   }
   const command = vscode.commands.registerCommand('devinFusionByok.contextDetails', open);
   const timer = setInterval(() => { try { refresh(); } catch {} }, 1000); timer.unref?.();
-  const handle = { dispose() { disposed = true; clearInterval(timer); command.dispose(); item?.dispose(); panel?.dispose(); }, refresh };
+  // A language change re-renders an open page (it reloads and sends ready);
+  // the status bar item picks the new copy up on the forced refresh.
+  function relocalize() {
+    if (disposed) return;
+    if (panel) {
+      panel.title = t('context.title');
+      lastPayload = null;
+      panel.webview.html = contextHtml(crypto.randomBytes(24).toString('hex'), t.locale);
+    }
+    refresh(true);
+  }
+  const handle = { dispose() { disposed = true; clearInterval(timer); command.dispose(); item?.dispose(); panel?.dispose(); }, refresh, relocalize };
   context.subscriptions.push(handle); refresh(); return handle;
 }
 module.exports = { contextDetails, contextHtml, contextScript, createContextUi };

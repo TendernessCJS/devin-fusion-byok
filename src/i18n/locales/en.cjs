@@ -834,4 +834,14 @@ module.exports = Object.freeze({
     '- the result of each verification step;',
     '- the exact text of any error you hit.',
   ].join('\n'),
+
+  // ── Language option (panel/settings-view.cjs; the title and language names are identical in both tables so they can be found from either language) ──
+  'settings.language.title': '语言 / Language',
+  'settings.language.hint': 'Auto follows the editor\'s display language. Command names in the Command Palette always follow the editor language.',
+  'settings.language.auto': 'Auto',
+  'settings.language.zh-CN': '中文',
+  'settings.language.en': 'English',
+  'settings.language.saved': 'Language saved.',
+  'settings.language.unavailable': 'The language setting cannot be saved here.',
+  'settings.language.invalid': 'Unsupported language option.',
 });

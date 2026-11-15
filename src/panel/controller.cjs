@@ -2,8 +2,10 @@
 const crypto = require('node:crypto');
 const { renderPanel } = require('./view.cjs');
 const { PanelInputError } = require('./manager.cjs');
-const { translator } = require('../i18n/index.cjs');
-function createPanelController({ vscode, context, manager, safeError, updater, restartApp, reloadWindow, fastContext, readMonitor = async () => ({ status: 'unsupported', snapshot: null }), t = translator() }) {
+const { translator, LANGUAGE_CHOICES } = require('../i18n/index.cjs');
+// language: { choice(): string, set(choice): Promise } — the panel's language
+// option; absent in hosts (and tests) that only render a fixed locale.
+function createPanelController({ vscode, context, manager, safeError, updater, restartApp, reloadWindow, fastContext, readMonitor = async () => ({ status: 'unsupported', snapshot: null }), t = translator(), language = null }) {
   let panel;
   let monitorPending = false;
   const refreshMonitor = async () => {
@@ -64,6 +66,19 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
     }
     await post({ type: 'fast-context-state', state: fastContext.state(), selected });
   }
+  const languageChoice = () => { try { return language?.choice() || 'auto'; } catch { return 'auto'; } };
+  const render = target => {
+    target.title = t('panel.title');
+    target.webview.html = renderPanel({ nonce: crypto.randomBytes(24).toString('base64'), locale: t.locale, languageChoice: languageChoice() });
+  };
+  // Re-render an open panel in the current language. The page reloads and
+  // sends 'ready' again, which forces a fresh state; the webview's saved tab
+  // and provider (vscode.setState) are kept by the host across the reload.
+  function relocalize() {
+    if (disposed || !panel) return;
+    lastState = undefined;
+    render(panel);
+  }
   function open() {
     if (disposed) return;
     if (panel) { panel.reveal(); void publish(); return; }
@@ -71,7 +86,7 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
     lastState = undefined;
     const current = panel;
-    panel.webview.html = renderPanel({ nonce: crypto.randomBytes(24).toString('base64'), locale: t.locale });
+    render(panel);
     const messages = panel.webview.onDidReceiveMessage(async message => {
       if (!message || typeof message.id !== 'string' || message.id.length > 100 || typeof message.type !== 'string') return;
       if (message.type === 'monitor.refresh') { await refreshMonitor(); return; }
@@ -101,6 +116,18 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
             }
           }
           await current.webview.postMessage({ type: 'result', id: message.id, ok: true, cancelled: choice !== confirmLabel });
+          return;
+        }
+        if (message.type === 'setLanguage') {
+          const choice = message.payload?.choice;
+          if (!language || typeof language.set !== 'function') throw new PanelInputError(t('settings.language.unavailable'));
+          if (!LANGUAGE_CHOICES.includes(choice)) throw new PanelInputError(t('settings.language.invalid'));
+          // When the resolved language changes, set() re-renders this panel and
+          // the result below lands on the new page, which ignores the unknown
+          // id; otherwise the same page gets it and shows its toast. A failed
+          // write reaches the page that asked, through the catch below.
+          await language.set(choice);
+          await current.webview.postMessage({ type: 'result', id: message.id, ok: true });
           return;
         }
         if (message.type === 'goal.open') {
@@ -137,6 +164,6 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
     const closing = panel.onDidDispose(() => { clearInterval(timer); messages.dispose(); closing.dispose(); if (panel === current) panel = undefined; });
   }
   context.subscriptions.push({ dispose() { disposed = true; panel?.dispose(); } });
-  return { open, publish, publishUpdates };
+  return { open, publish, publishUpdates, relocalize };
 }
 module.exports = { createPanelController };

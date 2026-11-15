@@ -53,10 +53,20 @@ function translator(locale = DEFAULT_LOCALE) {
   return t;
 }
 
+// The panel's language choice lives in the extension's globalState (as the
+// updater's own preference does): it survives updates, needs no config.json
+// write, and so triggers none of the config watchers. 'auto' is stored as
+// absent.
+const CHOICE_KEY = 'devinFusionByok.language';
+const cleanChoice = value => value === 'zh-CN' || value === 'en' ? value : 'auto';
+
 // The per-activation service: `t` re-reads the locale on every call, so a
-// language change reaches every holder of `t` without re-injection.
-function createI18n({ language = () => undefined, choice = () => 'auto' } = {}) {
+// language change reaches every holder of `t` without re-injection; views that
+// render once (webview HTML, status bar items) re-render on onDidChange.
+function createI18n({ language = () => undefined, memento = null } = {}) {
   const translators = new Map();
+  const listeners = new Set();
+  const choice = () => { try { return cleanChoice(memento?.get(CHOICE_KEY)); } catch { return 'auto'; } };
   const locale = () => resolveLocale(choice(), language());
   const t = (key, params) => {
     const current = locale();
@@ -64,7 +74,19 @@ function createI18n({ language = () => undefined, choice = () => 'auto' } = {}) 
     return translators.get(current)(key, params);
   };
   Object.defineProperty(t, 'locale', { get: locale, enumerable: true });
-  return { t, locale };
+  async function setChoice(next) {
+    if (!LANGUAGE_CHOICES.includes(next)) throw new TypeError('language choice must be one of ' + LANGUAGE_CHOICES.join(', '));
+    if (!memento || typeof memento.update !== 'function') throw new Error('language_unavailable');
+    const previous = locale();
+    await memento.update(CHOICE_KEY, next === 'auto' ? undefined : next);
+    const current = locale();
+    for (const listener of [...listeners]) { try { listener({ locale: current, previous, choice: choice() }); } catch {} }
+    return current;
+  }
+  // Fires after every successful choice change, even when the resolved locale
+  // stays the same (the panel's selector still has to show the new choice).
+  const onDidChange = listener => { listeners.add(listener); return { dispose() { listeners.delete(listener); } }; };
+  return { t, locale, choice, setChoice, onDidChange };
 }
 
 // The webview prelude: `const t = …` at the top level of the page script, so
@@ -83,4 +105,4 @@ function browserSource(locale = DEFAULT_LOCALE, prefixes = null) {
     'const t = (key, params) => I18N_FORMAT(Object.prototype.hasOwnProperty.call(I18N, key) ? I18N[key] : key, params);';
 }
 
-module.exports = { DEFAULT_LOCALE, LOCALES, LANGUAGE_CHOICES, TABLES, displayLocale, resolveLocale, format, translator, createI18n, browserSource };
+module.exports = { DEFAULT_LOCALE, LOCALES, LANGUAGE_CHOICES, CHOICE_KEY, TABLES, displayLocale, resolveLocale, format, translator, createI18n, browserSource };

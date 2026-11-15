@@ -1,11 +1,21 @@
 'use strict';
 const { updateMarkup } = require('./update-view.cjs');
 const { markupText } = require('./dom.cjs');
-const { translator } = require('../i18n/index.cjs');
+const { translator, LANGUAGE_CHOICES } = require('../i18n/index.cjs');
 
-function pageMarkup(t = translator()) {
+// The language row is static markup (settings-general below is rebuilt on every
+// state push): changing the language re-renders the whole page, so the current
+// choice is baked in here. Its title reads the same in both languages, so a
+// user stuck in the wrong one can still find it.
+function languageMarkup(h, choice) {
+  const options = LANGUAGE_CHOICES.map(value => `<option value="${value}"${value === choice ? ' selected' : ''}>${h('settings.language.' + value)}</option>`).join('');
+  return `<div class="list mb"><div class="setting"><div class="row-main"><span class="row-title">${h('settings.language.title')}</span><span class="row-sub">${h('settings.language.hint')}</span></div><select id="language-select" aria-label="${h('settings.language.title')}">${options}</select></div></div>`;
+}
+
+function pageMarkup(t = translator(), languageChoice = 'auto') {
   const h = markupText(t);
   return `
+      ${languageMarkup(h, languageChoice)}
       <div id="settings-general"></div>
       <details id="native-group" class="group"><summary>${h('settings.native.title')}<span id="native-count" class="hint"></span></summary><div class="group-body" id="native-models"></div></details>
       <details id="cache-group" class="group"><summary>${h('settings.cache.title')}<span id="cache-hint" class="hint"></span></summary><div class="group-body">
@@ -268,6 +278,16 @@ function createSettingsView(ui) {
     render() { renderSettings(); renderNative(); renderCache(); },
     bind() {
       byId('refresh-cache').addEventListener('click', () => run(() => request('refreshCliCaches'), t('settings.cache.refreshing'), t('settings.cache.checked')));
+      // A new display language re-renders the page from the host; when the
+      // resolved language stays the same (e.g. Auto on an English editor), the
+      // toast below is what the user sees. A rejected change puts the old value back.
+      const language = byId('language-select');
+      let applied = language.value;
+      language.addEventListener('change', () => {
+        const choice = language.value;
+        run(() => request('setLanguage', { choice }), t('client.saving'), t('settings.language.saved'))
+          .then(ok => { if (ok) applied = choice; else language.value = applied; });
+      });
     },
   };
 }

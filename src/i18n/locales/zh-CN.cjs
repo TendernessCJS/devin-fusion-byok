@@ -834,4 +834,14 @@ module.exports = Object.freeze({
     '- 验证每一步的结果；',
     '- 遇到的任何错误原文。',
   ].join('\n'),
+
+  // ── 语言设置（panel/settings-view.cjs；标题与语言名在两张表里相同，选错语言时也能认出来） ──
+  'settings.language.title': '语言 / Language',
+  'settings.language.hint': '自动：跟随编辑器的显示语言。命令面板里的命令名称始终跟随编辑器语言。',
+  'settings.language.auto': '自动',
+  'settings.language.zh-CN': '中文',
+  'settings.language.en': 'English',
+  'settings.language.saved': '语言设置已保存。',
+  'settings.language.unavailable': '当前环境无法保存语言设置。',
+  'settings.language.invalid': '不支持的语言选项。',
 });

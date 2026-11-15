@@ -9,8 +9,11 @@ const { checkInjectionHealth } = require('../runtime/host/injection-health.cjs')
 const { PORT } = require('../runtime/port.cjs');
 const { translator } = require('../i18n/index.cjs');
 
-function createPanelHost({ vscode, context, config, configFile, root, log, output, catalog, catalogSync, cacheSync, selection, continuation, runtime, afterChange, t = translator() }) {
-  let statusBar, manager, contextObserver, controller;
+// i18n: the activation's language service (src/i18n createI18n); without it the
+// host renders zh-CN and offers no language option.
+function createPanelHost({ vscode, context, config, configFile, root, log, output, catalog, catalogSync, cacheSync, selection, continuation, runtime, afterChange, i18n = null }) {
+  const t = i18n?.t || translator();
+  let statusBar, manager, contextObserver, controller, contextUi, goalUi;
   const open = () => controller?.open();
   const publish = () => controller?.publish();
   const publishUpdates = () => controller?.publishUpdates?.();
@@ -62,6 +65,7 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
     // safeError rebuilds the message in the display language; codes stay as they are.
     const displayError = error => safeError(error, t);
     controller = require('../panel/controller.cjs').createPanelController({ vscode, context, manager, safeError: displayError, updater, t,
+      language: i18n ? { choice: () => i18n.choice(), set: choice => i18n.setChoice(choice) } : null,
       fastContext: require('../fast-context/config-ui.cjs').createFastContextHost({ vscode, context, t }),
       restartApp: () => { log('app-restart-requested'); return require('../runtime/host/app-restart.cjs').restartApp({ vscode, spawn, logFile: path.join(root, 'restart.log'), userData: path.resolve(root, '..', '..', '..') }); },
       reloadWindow: () => { log('window-reload-requested'); return vscode.commands.executeCommand('workbench.action.reloadWindow'); },
@@ -73,7 +77,7 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
           nativeMainPath: path.resolve(native.extensionPath, native.packageJSON.main), isEnabled: () => runtime().isLive() });
         context.subscriptions.push(contextObserver);
       }
-      require('../panel/context-view.cjs').createContextUi({ vscode, context, t,
+      contextUi = require('../panel/context-view.cjs').createContextUi({ vscode, context, t,
         snapshot: () => contextObserver?.snapshot() || [], catalog,
         nativeLabels: () => new Map(catalogSync.read().models.map(entry => [entry.uid, entry.label])),
         focused: () => contextObserver?.focused?.() || null,
@@ -85,7 +89,7 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
       readStatus: () => contextObserver?.status(), snapshot: () => contextObserver?.snapshot() || [], readHealth
     }));
     try {
-      require('../panel/goal-view.cjs').createGoalUi({ vscode, context, t,
+      goalUi = require('../panel/goal-view.cjs').createGoalUi({ vscode, context, t,
         controller: {
           snapshot: () => continuation.goalController() ? continuation.goalController().snapshot() : {
             enabled: config().enabled !== false, trusted: vscode.workspace.isTrusted !== false,
@@ -101,6 +105,15 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
         isTrusted: () => vscode.workspace.isTrusted !== false,
         safeError: displayError });
     } catch { log('goal-ui-unavailable'); }
+    // Everything that rendered copy once re-renders when the display language
+    // changes; `t` itself already reads the current language on every call.
+    if (i18n) context.subscriptions.push(i18n.onDidChange(({ locale, previous }) => {
+      if (locale === previous) return;
+      log('language-changed', { locale });
+      if (statusBar) statusBar.tooltip = t('status.initial');
+      updateStatusBar();
+      for (const view of [controller, contextUi, goalUi]) { try { view?.relocalize?.(); } catch {} }
+    }));
   };
   return { install, open, publish, publishUpdates, updateStatusBar };
 }
