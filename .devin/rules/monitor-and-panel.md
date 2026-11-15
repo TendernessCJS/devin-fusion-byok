@@ -60,6 +60,15 @@ description: "Apply when changing usage recording, attribution, time filtering, 
   `checkInjectionHealth` 的输入只取自既有共享槽（backendStatus/bridgeState/bridgeHook/envValue+expectedEnv/cliCache/acp 计数），返回值由输入唯一决定。ACP 信号必须**三态**：首个
   `session/new` 观测（`acpObserved > 0`）之前判 `unknown`，否则每次窗口重载都会误报「会话无本插件条目」。
 
+## 界面文案与多语言（i18n）
+
+- **用户可见文字一律放 `src/i18n/locales/zh-CN.cjs` 与 `en.cjs`（同名键）**：宿主代码用注入的 `t()`（各模块参数默认是 zh-CN 翻译器，测试不传即断言原中文）；
+  webview 代码用 `browserSource(locale, prefixes)` 注入的顶层 `t()`，自带 IIFE 的子脚本各带一份（与 `domHelpersSource` 同一约定）；宿主模板先转义再填占位符（`dom.cjs` 的 `markupText`）。
+  `{name}` 是占位符，`{n|one|other}` 只给英文复数用。zh-CN 是原文与回退。
+- **不翻译**：日志事件、配置键、错误码、协议字段、给模型的提示词，以及被其他模块匹配的值（`safeError` 匹配的中文消息、`roles.cjs` 的 `reason`、`panel-state.cjs` 的「其他」）——这些在行尾标 `// i18n-data: 原因`，渲染处再翻译。
+- `test/i18n.test.cjs` 拦下：两表键集或占位符不一致、代码引用了不存在的键、`src/` 中未标注的硬编码中文（全量扫描，豁免文件清单写明原因）。
+- 语言选项存于扩展 globalState `devinFusionByok.language`（自动 = 不存），**不写 config.json**；切换后 `panel-install` 重新渲染已打开的面板/Goal/上下文页并刷新状态栏。命令标题走 `package.nls*.json`，只能跟随编辑器显示语言。
+
 ## webview 安全不变量
 
 - **CSP**（`src/panel/view.cjs`）：`default-src 'none'`；`style-src`/`script-src` 用 per-render 24 字节随机 nonce 白名单（`renderPanel({ nonce })`，nonce 同用于 `<style>`/`<script>`）；`img-src 'none'`、`font-src 'none'`、`connect-src 'none'`、`base-uri 'none'`、`form-action 'none'`。`connect-src 'none'` 意味着即便注入脚本也无法外联；**不要为加图标放宽 `img-src`**——三个 webview 的 `localResourceRoots` 都是 `[]`，放了也拿不到本地资源。

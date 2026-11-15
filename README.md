@@ -1,5 +1,7 @@
 # Devin Fusion BYOK
 
+中文 | [English](README.en.md)
+
 一个 Devin 用户扩展：把你自己的模型 API（BYOK）接入 Devin 原生模型列表，并把这些模型组合进 Devin 官方的 Fusion 卡片（Lead + Sidekick）使用。
 
 > 本仓库是 [kuobibulaien/devin-fusion-byok](https://github.com/kuobibulaien/devin-fusion-byok) 的 fork。下载与自更新均指向本仓库的 Release。
