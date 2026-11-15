@@ -235,7 +235,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
 
   const importedCandidate = lead => ({ ...lead, native: false,
     ref: { providerId: lead.providerId, model: lead.model, effort: lead.effort },
-    label: lead.familyLabel + (lead.effort ? ` · ${effortMetadata(lead.effort).name}` : ' · 默认档位') });
+    label: lead.familyLabel + (lead.effort ? ` · ${effortMetadata(lead.effort).name}` : ' · 默认档位') }); // i18n-data: part of a catalog model label sent to Devin (catalog data, not panel copy)
   const candidates = {
     lead: [...selectedImportedLeads.map(importedCandidate), ...selectedAdditionalNativeLeads.map(native => ({
       ...native, native: true, ref: { nativeUid: native.uid },

@@ -257,7 +257,7 @@ function createModelsView(ui) {
     finishDialog(dialog, form, model ? t('common.save') : t('models.addSubmit'), () => {
       const saved = { id: id.value.trim(), label: label.value.trim() || id.value.trim(),
         contextWindow: Number(contextWindow.value), maxOutputTokens: Number(maxOutputTokens.value), effortMode: effortMode.value,
-        efforts: effortMode.value === 'auto' ? [] : [...new Set(efforts.value.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean))] };
+        efforts: effortMode.value === 'auto' ? [] : [...new Set(efforts.value.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean))] }; // i18n-data: accepts a full-width comma as a list separator in user input
       if (model) return request('updateModels', { providerId: provider.id, changes: [{ ...saved, supportsImages: true }] });
       return request('addModel', { providerId: provider.id, model: { ...saved, enabled: true } });
     }, remove, model ? undefined : t('models.addedNotice'));

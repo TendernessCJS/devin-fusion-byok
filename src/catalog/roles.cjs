@@ -497,7 +497,7 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
     leadList.push({
       ref, label: ref.nativeUid || ((ref.providerId || '') + ' · ' + (ref.model || '')),
       native: !!ref.nativeUid, available: false, selected: false, defaultSelected: false,
-      disabled: true, reason: '当前未在可用列表中',
+      disabled: true, reason: '当前未在可用列表中', // i18n-data: role data; panel/fusion-view.cjs translates it for display
     });
   }
   for (const ref of Array.isArray(config.roleExclusions?.sidekick) ? config.roleExclusions.sidekick : []) {
@@ -507,7 +507,7 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
     sidekickList.push({
       ref, label: ref.nativeUid || ((ref.providerId || '') + ' · ' + (ref.model || '')),
       native: !!ref.nativeUid, available: false, selected: false, defaultSelected: false,
-      disabled: true, reason: '当前未在可用列表中',
+      disabled: true, reason: '当前未在可用列表中', // i18n-data: role data; panel/fusion-view.cjs translates it for display
     });
   }
   for (const ref of Array.isArray(config.roleInclusions?.lead) ? config.roleInclusions.lead : []) {
@@ -517,7 +517,7 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
     leadList.push({
       ref, label: ref.nativeUid || ((ref.providerId || '') + ' · ' + (ref.model || '')),
       native: !!ref.nativeUid, available: false, selected: false, defaultSelected: false, explicitIncluded: true,
-      disabled: true, reason: '当前未在可用列表中',
+      disabled: true, reason: '当前未在可用列表中', // i18n-data: role data; panel/fusion-view.cjs translates it for display
     });
   }
   for (const ref of Array.isArray(config.roleInclusions?.sidekick) ? config.roleInclusions.sidekick : []) {
@@ -527,7 +527,7 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
     sidekickList.push({
       ref, label: ref.nativeUid || ((ref.providerId || '') + ' · ' + (ref.model || '')),
       native: !!ref.nativeUid, available: false, selected: false, defaultSelected: false, explicitIncluded: true,
-      disabled: true, reason: '当前未在可用列表中',
+      disabled: true, reason: '当前未在可用列表中', // i18n-data: role data; panel/fusion-view.cjs translates it for display
     });
   }
 

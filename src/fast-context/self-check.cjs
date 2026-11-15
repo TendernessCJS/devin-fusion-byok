@@ -1,19 +1,16 @@
 'use strict';
 const { readKey } = require('./auth.cjs');
 const { authorize } = require('./web.cjs');
+const { translator } = require('../i18n/index.cjs');
 
 // Account check for the control panel. It reads the local Devin login, exchanges
 // it for a short-lived user token and reads the account policy. Only per-capability
 // booleans and a reason code are kept; the credential is never returned.
-const CHECK_MESSAGES = {
-  ok: '已连接：代码搜索、网页搜索、网页读取三项能力都可以用。',
-  web_search_disabled: '账号或团队关闭了网页搜索开关，网页搜索和网页读取暂时不能用；代码搜索不受影响。',
-  unauthenticated: '本机 Devin 的登录已失效，请在 Devin 里重新登录后再试一次。',
-  fast_context_disabled: '账号或团队关闭了 Fast Context，代码搜索暂时不能用，请联系管理员。',
-  credentials_unavailable: '没有读到本机 Devin 的登录信息，请确认已经在 Devin 里登录。',
-  insecure_tls_configuration: '系统关闭了 HTTPS 证书校验，请恢复后再试，不会在关闭校验时发送任何凭证。',
-  unavailable: '暂时连不上官方服务，检查一下网络后再试。',
-};
+// The reason codes this check can report. Their copy is fc.check.<code> in
+// src/i18n; CHECK_MESSAGES keeps the original zh-CN text under the same
+// export for existing callers, and the panel translates per display language.
+const CHECK_CODES = ['ok', 'web_search_disabled', 'unauthenticated', 'fast_context_disabled', 'credentials_unavailable', 'insecure_tls_configuration', 'unavailable'];
+const CHECK_MESSAGES = Object.freeze(Object.fromEntries(CHECK_CODES.map(code => [code, translator()('fc.check.' + code)])));
 const KNOWN = new Set(Object.keys(CHECK_MESSAGES));
 
 function createSelfCheck({ loadKey = readKey, verify = options => authorize(options) } = {}) {
