@@ -19,9 +19,9 @@ function stableEntry(context) {
   if (!storageDir) return undefined;
   try { return ensureLauncher({ storageDir, extensionPath: context.extensionPath }); } catch { return undefined; }
 }
-function render(kind, config) {
+function render(kind, config, t) {
   const server = config.mcpServers[NAME];
-  return kind === 'prompt' ? setupPrompt(server) : snippets(server)[kind];
+  return kind === 'prompt' ? setupPrompt({ ...server, t }) : snippets(server)[kind];
 }
 function resolveNode(env = process.env, platform = process.platform) {
   const binary = platform === 'win32' ? 'node.exe' : 'node';
@@ -66,7 +66,7 @@ function createFastContextHost({ vscode, context, resolve = resolveNode, check =
   function preview(kind, root) {
     if (!KINDS.has(kind)) throw new Error('invalid_kind');
     if (!enabled()) throw new Error('fast_context_not_enabled');
-    return render(kind, build(root));
+    return render(kind, build(root), t);
   }
   async function copy(kind, root) {
     if (vscode.workspace?.isTrusted === false) throw new Error('fast_context_untrusted');
