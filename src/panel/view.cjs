@@ -183,6 +183,10 @@ function panelStyles() {
       .provider-nav .order-move { flex-direction: row; }
       .provider-nav .move-glyph { display: inline-block; transform: rotate(-90deg); }
       .field-grid { grid-template-columns: 1fr; gap: 0; }
+      /* A setting's text column may not be squeezed to nothing by wide controls
+         (the update buttons, the proxy field): those move to the next line. */
+      .setting { flex-wrap: wrap; }
+      .setting > .row-main { min-width: min(100%, 160px); }
     }
   `;
 }
