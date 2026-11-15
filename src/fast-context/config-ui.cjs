@@ -88,27 +88,27 @@ function createFastContextHost({ vscode, context, resolve = resolveNode, check =
   const checkMessage = code => t('fc.check.' + (Object.hasOwn(CHECK_MESSAGES, code) ? code : 'unavailable'));
   return { state, copy, pick, build, preview, setEnabled, selfCheck: check.run, checkMessage };
 }
-function registerFastContext({ vscode, context }) {
+function registerFastContext({ vscode, context, t = translator() }) {
   const command = vscode.commands.registerCommand('devinFusionByok.fastContextMcp', async () => {
     const dir = context.globalStorageUri?.fsPath;
     if (!dir || !readEnabled({ dir })) {
-      vscode.window.showWarningMessage('对外 MCP 还没有开启。请在 Fusion BYOK 控制面板的「对外提供 MCP」里先检测账号，再打开开关。'); return;
+      vscode.window.showWarningMessage(t('fc.command.notEnabled')); return;
     }
     if (vscode.workspace.isTrusted === false) {
-      vscode.window.showWarningMessage('请先信任工作区，再生成 Fast Context 配置。'); return;
+      vscode.window.showWarningMessage(t('fc.command.untrusted')); return;
     }
     const folders = (vscode.workspace.workspaceFolders || []).filter(folder => folder.uri.scheme === 'file');
-    if (!folders.length) { vscode.window.showWarningMessage('请先打开一个本地项目文件夹。'); return; }
-    const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: '选择允许 Fast Context 搜索的项目' });
+    if (!folders.length) { vscode.window.showWarningMessage(t('fc.command.noFolder')); return; }
+    const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: t('fc.command.pickFolder') });
     if (!folder || folder.uri.scheme !== 'file') return;
-    const confirm = await vscode.window.showInformationMessage(
-      'Fast Context 使用现有 Devin 账号，会把问题和选中的代码片段发送到官方服务，可能消耗账号额度。配置只允许搜索所选项目，不含密钥。',
-      { modal: true }, '生成配置');
-    if (confirm !== '生成配置') return;
+    // The modal returns the label it was given; compare against the same value.
+    const generate = t('fc.command.generate');
+    const confirm = await vscode.window.showInformationMessage(t('fc.command.confirm'), { modal: true }, generate);
+    if (confirm !== generate) return;
     const config = mcpConfig({ extensionPath: context.extensionPath, root: folder.uri.fsPath, node: resolveNode(), entry: stableEntry(context) });
     const document = await vscode.workspace.openTextDocument({ language: 'json', content: JSON.stringify(config, null, 2) });
     await vscode.window.showTextDocument(document, { preview: false, preserveFocus: false });
-    vscode.window.showInformationMessage('把 fusion-fast-context 项合并到其他 Harness 的 MCP 配置。需要 Node.js 22.16+（推荐 24 LTS）；插件升级后会自动使用新版本，无需重新配置。');
+    vscode.window.showInformationMessage(t('fc.command.done'));
   });
   context.subscriptions.push(command);
 }

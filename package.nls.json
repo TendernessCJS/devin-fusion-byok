@@ -1,0 +1,11 @@
+{
+  "command.checkUpdates.title": "Fusion BYOK: Check for Updates",
+  "command.openPanel.title": "Fusion BYOK: Open Control Panel",
+  "command.refreshModels.title": "Fusion BYOK: Import Models",
+  "command.selectFusion.title": "Fusion BYOK: Select Fusion Combination",
+  "command.contextDetails.title": "Fusion BYOK: Context and Performance",
+  "command.fastContextMcp.title": "Fusion BYOK: Set Up External MCP",
+  "command.goal.title": "Fusion BYOK: Goal",
+  "command.status.title": "Fusion BYOK: Show Status",
+  "command.disable.title": "Fusion BYOK: Disable and Restore Connection"
+}

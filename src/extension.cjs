@@ -45,12 +45,12 @@ async function activate(context) {
       const { configRevision: _ignored, ...rest } = recovered.doc;
       const result = updateConfig(configFile, doc => Object.assign(doc, rest), { fromEmpty: true });
       log('config-recovered-from-backup', { revision: result.revision });
-      vscode.window.showWarningMessage('Fusion BYOK：配置文件已损坏，已从备份恢复。');
+      vscode.window.showWarningMessage(i18n.t('notify.configRecovered'));
     } else {
       archiveCorrupt(configFile);
       updateConfig(configFile, doc => Object.assign(doc, defaultConfig()), { fromEmpty: true });
       log('config-reset-corrupt');
-      vscode.window.showErrorMessage('Fusion BYOK：配置文件已损坏，已重置为默认配置。');
+      vscode.window.showErrorMessage(i18n.t('notify.configReset'));
     }
   }
   const config = () => readConfig(configFile);
@@ -62,9 +62,9 @@ async function activate(context) {
     } catch { return null; }
   })();
   const run = fn => async () => { try { await fn(); } catch (error) {
-    const safe = safeError(error);
+    const safe = safeError(error, i18n.t);
     if (safe.code === 'cancelled') return;
-    log('error', { code: safe.code }); vscode.window.showErrorMessage('Fusion BYOK：' + safe.message);
+    log('error', { code: safe.code }); vscode.window.showErrorMessage(i18n.t('notify.error', { message: safe.message }));
   } };
   let session;
   const settingsOwner = createSettingsOwner({ root, extensionPath: context.extensionPath, vscode,
@@ -90,7 +90,7 @@ async function activate(context) {
     isLive: () => session.isLive(), isReconcileHalted: () => session.isReconcileHalted(), log,
     publish: () => panel.publish() });
   const continuation = createContinuation({ root, extensionPath: context.extensionPath, nativeMain,
-    config, vscode, isLive: () => session.isLive(), log });
+    config, vscode, isLive: () => session.isLive(), log, t: i18n.t });
   const cacheSync = createCacheSync({ config, catalog, readNativeCatalog: () => catalogSync.read(), log,
     publish: () => panel.publish() });
   let configSync;
@@ -99,11 +99,11 @@ async function activate(context) {
     afterChange: type => configSync.afterChange(type) });
   session = createRuntimeSession({ root, extensionPath: context.extensionPath, subscriptions: context.subscriptions,
     config, configFile, vscode, context, nativeMain, log, catalog, catalogSync, settingsOwner,
-    selection, continuation, onPublish: () => panel.publish() });
+    selection, continuation, onPublish: () => panel.publish(), t: i18n.t });
   activeSession = session;
   continuation.start();
   session.prepareHostSupport();
-  installCommands({ vscode, context, config, catalog, output, log, run, runtime: session, selection, panel });
+  installCommands({ vscode, context, config, catalog, output, log, run, runtime: session, selection, panel, t: i18n.t });
   const configChanged = () => {
     try { cacheSync.changed(); } catch (error) { log('cache-sync-error', { code: error?.code || error?.message || 'unknown' }); }
   };

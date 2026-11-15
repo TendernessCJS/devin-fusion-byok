@@ -3,8 +3,9 @@ const path = require('node:path');
 const { installAutoContinue } = require('../runtime/host/auto-continue.cjs');
 const { installGoalContinue } = require('../goal/continue-hook.cjs');
 const { createGoalController } = require('../goal/controller.cjs');
+const { translator } = require('../i18n/index.cjs');
 
-function createContinuation({ root, extensionPath, nativeMain, config, vscode, isLive, log }) {
+function createContinuation({ root, extensionPath, nativeMain, config, vscode, isLive, log, t = translator() }) {
   let goalContinue, autoContinue, controller;
   const start = () => {
     try {
@@ -12,7 +13,8 @@ function createContinuation({ root, extensionPath, nativeMain, config, vscode, i
         // Goal mode is opt-in: /goal is neither advertised nor intercepted until the user turns it on.
         goalContinue = installGoalContinue({
           nativeMainPath: nativeMain,
-          isEnabled: () => isLive() && config().goalEnabled === true
+          isEnabled: () => isLive() && config().goalEnabled === true,
+          t
         });
         autoContinue = installAutoContinue({
           nativeMainPath: nativeMain,
@@ -24,9 +26,9 @@ function createContinuation({ root, extensionPath, nativeMain, config, vscode, i
           isSessionSuppressed: sessionId => controller ? controller.ownsSession(sessionId) : false,
           onStopped: data => {
             if (data?.reason === 'plan-attempt-limit') {
-              return vscode.window.showWarningMessage('已自动继续 10 次仍未结束，已停止自动继续。请检查后手动继续对话。');
+              return vscode.window.showWarningMessage(t('notify.autoContinuePlanLimit'));
             }
-            return vscode.window.showWarningMessage('服务商持续返回错误，已停止自动继续（上限为 5 次或 10 分钟）。请检查服务商状态后手动继续对话。');
+            return vscode.window.showWarningMessage(t('notify.autoContinueProviderLimit'));
           },
           log
         });
@@ -55,7 +57,8 @@ function createContinuation({ root, extensionPath, nativeMain, config, vscode, i
           isEnabled: () => isLive() && config().goalEnabled === true,
           isTrusted: () => vscode.workspace.isTrusted !== false,
           reportCliPath: path.join(extensionPath, 'src/goal/report.cjs'),
-          log
+          log,
+          t
         });
       } catch { controller = undefined; log('goal-controller-unavailable'); }
     }

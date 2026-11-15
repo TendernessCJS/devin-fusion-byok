@@ -52,6 +52,7 @@ function loadModule(relative, api) {
       }
       if (name.endsWith('acp-hook.cjs')) return acpHook.exports;
       if (name === '../../catalog/payload.cjs') return require(path.join(ROOT, 'catalog/payload.cjs'));
+      if (name === '../i18n/index.cjs') return require(path.join(ROOT, 'i18n/index.cjs'));
       assert.fail('unexpected require ' + name);
     },
   }, { filename: path.basename(file) });

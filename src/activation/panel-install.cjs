@@ -22,13 +22,14 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
         nativeModelCount: catalogSync.read().models.length,
         cacheErrorCount: cacheSync.report()?.errors?.length ?? 0,
         matrixCount: catalog().matrixUids?.size ?? 0,
+        t,
       });
     } catch {}
   };
   const install = () => {
     statusBar = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 20);
     if (statusBar) {
-      statusBar.text = 'Fusion BYOK'; statusBar.tooltip = '管理供应商、模型列表与 Fusion 组合';
+      statusBar.text = 'Fusion BYOK'; statusBar.tooltip = t('status.initial');
       statusBar.command = 'devinFusionByok.openPanel'; statusBar.show(); context.subscriptions.push(statusBar);
     }
     updateStatusBar();
@@ -58,7 +59,9 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
     const updater = require('../update.cjs').createUpdateHost({ vscode, context,
       proxy: () => config().updateProxy,
       onChange: () => publishUpdates() });
-    controller = require('../panel/controller.cjs').createPanelController({ vscode, context, manager, safeError, updater, t,
+    // safeError rebuilds the message in the display language; codes stay as they are.
+    const displayError = error => safeError(error, t);
+    controller = require('../panel/controller.cjs').createPanelController({ vscode, context, manager, safeError: displayError, updater, t,
       fastContext: require('../fast-context/config-ui.cjs').createFastContextHost({ vscode, context, t }),
       restartApp: () => { log('app-restart-requested'); return require('../runtime/host/app-restart.cjs').restartApp({ vscode, spawn, logFile: path.join(root, 'restart.log'), userData: path.resolve(root, '..', '..', '..') }); },
       reloadWindow: () => { log('window-reload-requested'); return vscode.commands.executeCommand('workbench.action.reloadWindow'); },
@@ -96,7 +99,7 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
         },
         isEnabled: () => runtime().isLive(),
         isTrusted: () => vscode.workspace.isTrusted !== false,
-        safeError });
+        safeError: displayError });
     } catch { log('goal-ui-unavailable'); }
   };
   return { install, open, publish, publishUpdates, updateStatusBar };

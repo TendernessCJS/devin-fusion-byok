@@ -32,6 +32,7 @@ function loadWithStubbedVscode(source, name, api, extra = {}) {
       }
       if (request === './store.cjs') return realRequire('../src/goal/store.cjs');
       if (request === './prompts.cjs') return realRequire('../src/goal/prompts.cjs');
+      if (request === '../i18n/index.cjs') return realRequire('../src/i18n/index.cjs');
       if (Object.hasOwn(extra, request)) return extra[request];
       return realRequire(request);
     }
@@ -63,6 +64,9 @@ function fixture(t) {
     update: async (key, value) => { globals[key] = value; }
   };
   const vscode = {
+    // The assertions below check the zh-CN copy; pin the display language so
+    // automatic language selection keeps choosing it.
+    env: { language: 'zh-cn' },
     ConfigurationTarget: { Global: 1 },
     workspace: { getConfiguration: () => settings, isTrusted: true,
       onDidChangeConfiguration: fn => { preferenceListeners.push(fn); return { dispose() {} }; } },

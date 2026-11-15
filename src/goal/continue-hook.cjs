@@ -2,6 +2,7 @@
 const crypto = require('node:crypto');
 const { createRequire } = require('node:module');
 const { loadAcpApi, restoreMember, createAcpRegistry, isTerminalStatus } = require('../runtime/host/acp-hook.cjs');
+const { translator } = require('../i18n/index.cjs');
 
 const INSTANCE = Symbol.for('devin-fusion-byok.goal-continue.v1');
 const ATTACHED = Symbol.for('devin-fusion-byok.goal-continue.attached');
@@ -16,11 +17,9 @@ const INTERRUPT_METHODS = new Set([
   'session/request_permission', 'elicitation/create', '_session/elicitation', 'session/permission_request'
 ]);
 
-const GOAL_COMMAND = Object.freeze({
-  name: 'goal',
-  description: 'Fusion BYOK：设定目标并自动持续推进，直到完成（/goal 查看，/goal pause|resume|clear 控制）',
-  input: { hint: '要达成的目标，写清楚怎样算完成' }
-});
+const GOAL_COMMAND_NAME = 'goal';
+// The slash-command entry Devin lists in its chat box; description and hint are UI copy.
+const goalCommand = t => ({ name: GOAL_COMMAND_NAME, description: t('goalHook.description'), input: { hint: t('goalHook.hint') } });
 const GOAL_COMMAND_RE = /^\/goal(?:\s+([\s\S]*))?$/;
 
 function parseGoalCommand(prompt) {
@@ -34,15 +33,15 @@ function parseGoalCommand(prompt) {
   if (['pause', 'resume', 'clear', 'status'].includes(word)) return { action: word, text: '' };
   return { action: 'start', text: rest };
 }
-function withGoalCommand(message) {
+function withGoalCommand(message, t = translator()) {
   const update = message?.params?.update;
   if (message?.method !== 'session/update' || update?.sessionUpdate !== 'available_commands_update' ||
-      !Array.isArray(update.availableCommands) || update.availableCommands.some(command => command?.name === GOAL_COMMAND.name)) {
+      !Array.isArray(update.availableCommands) || update.availableCommands.some(command => command?.name === GOAL_COMMAND_NAME)) {
     return message;
   }
   return {
     ...message,
-    params: { ...message.params, update: { ...update, availableCommands: [...update.availableCommands, { ...GOAL_COMMAND, input: { ...GOAL_COMMAND.input } }] } }
+    params: { ...message.params, update: { ...update, availableCommands: [...update.availableCommands, goalCommand(t)] } }
   };
 }
 
@@ -124,7 +123,7 @@ function createSessionRegistry({ limit = SESSION_LIMIT } = {}) {
   };
 }
 
-function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = () => {}, registry } = {}) {
+function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = () => {}, registry, t = translator() } = {}) {
   const api = loadAcpApi(nativeMainPath);
   const vscode = createRequire(nativeMainPath)('vscode');
   if (api[INSTANCE]) return api[INSTANCE];
@@ -248,7 +247,7 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
           // A command-only reply must not create a second ACP turn while the
           // Goal is live: v2 state events do not identify their request.
           if (!rewritten.runId && (activeRuns.has(sessionId) || activeTurns.has(sessionId))) {
-            const localText = rewritten.localText ?? 'Goal 控制命令已处理。';
+            const localText = rewritten.localText ?? t('goalHook.handled');
             const messageId = crypto.randomUUID();
             const meta = { 'cognition.ai/streaming': false, 'cognition.ai/streamingMessageId': messageId };
             const update = connector.protocolVersion >= 2 ? {
@@ -368,7 +367,7 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
 
     entry.forwardWrapper = function (...args) {
       if (!disposed && entry.active && enabled()) {
-        try { args = [withGoalCommand(args[0]), ...args.slice(1)]; } catch {}
+        try { args = [withGoalCommand(args[0], t), ...args.slice(1)]; } catch {}
       }
       const result = Reflect.apply(originalForward, this, args);
       try { observeIncoming(args[0]); } catch {}
@@ -486,7 +485,7 @@ function installGoalContinue({ nativeMainPath, isEnabled = () => false, log = ()
 
   function mirrorUserMessage(connector, sessionId, clientMessageId, runsStarted) {
     const isV2 = connector.protocolVersion >= 2;
-    const label = 'Goal 自动推进（第 ' + runsStarted + ' 次运行）';
+    const label = t('goalHook.runLabel', { run: runsStarted });
     const timestamp = new Date().toISOString();
     const message = isV2 ? {
       method: 'session/update',

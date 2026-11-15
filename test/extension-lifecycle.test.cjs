@@ -46,6 +46,9 @@ function fixture(t, initial = {}) {
       globals[key] = value; updates.push(key); },
   };
   const vscode = {
+    // The assertions below check the zh-CN copy; pin the display language so
+    // automatic language selection keeps choosing it.
+    env: { language: 'zh-cn' },
     ConfigurationTarget: { Global: 1 },
     workspace: { getConfiguration: () => settings,
       onDidChangeConfiguration: fn => { preferenceListeners.push(fn); return { dispose() {} }; } },
@@ -133,7 +136,7 @@ function fixture(t, initial = {}) {
     }),
   };
   if (initial.remote) {
-    vscode.env = { remoteName: 'ssh-remote' };
+    vscode.env = { language: 'zh-cn', remoteName: 'ssh-remote' };
     vscode.extensions.getExtension = () => undefined;
   }
   const loader = createSandboxLoader({ filename, overrides, globals: {

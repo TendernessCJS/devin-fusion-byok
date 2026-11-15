@@ -10,6 +10,7 @@ const { recordUnknownCatalog } = require('../runtime/host/observations.cjs');
 const { resolveEffectiveOriginWhenAvailable } = require('./effective-origin.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
 const { safeError, RuntimeError } = require('./errors.cjs');
+const { translator } = require('../i18n/index.cjs');
 const { describeError, createRemoteSupport, probeRemoteSupport } = require('./remote-support.cjs');
 const { updateConfig } = require('../config/store.cjs');
 const { isHostDisabled } = require('../lifecycle/host-disabled.cjs');
@@ -83,7 +84,7 @@ async function pushConfiguredUpstream({ root, vscode, log, state, signal, should
   } catch { if (!cancelled()) log('upstream-push', { ok: false, reason: 'unavailable' }); else skipped(); }
 }
 
-function createRuntimeSession({ root, extensionPath, subscriptions, config, configFile, vscode, context, nativeMain, log, catalog, catalogSync, settingsOwner, selection, continuation, onPublish }) {
+function createRuntimeSession({ root, extensionPath, subscriptions, config, configFile, vscode, context, nativeMain, log, catalog, catalogSync, settingsOwner, selection, continuation, onPublish, t = translator() }) {
   const state = {
     activationDisposed: false, activationGeneration: 0, reconcileHalted: true,
     connection: undefined, acpObserver: undefined, authStatus: undefined,
@@ -181,7 +182,7 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
     if (isSuperseded(generation)) return;
     const native = vscode.extensions.getExtension('codeium.windsurf');
     if (!native) {
-      if (!vscode.env?.remoteName) throw new Error('未找到 Devin 原生扩展');
+      if (!vscode.env?.remoteName) throw new Error('未找到 Devin 原生扩展'); // i18n-data: matched by activation/errors.cjs safeError
       // Remote window: the native extension runs on the remote side, so no
       // catalog injection is possible — the only deliverable here is the
       // reverse tunnel plus the agentEnv write that already happened above.
@@ -291,8 +292,8 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
       // a broken bridge can never orphan the user's environment values.
       try { await teardown(state, { continuation, catalogSync }); }
       finally { await settingsOwner.restore({ keepReceipt: drained === false }); }
-      if (drained) vscode.window.showInformationMessage('Fusion BYOK 已停用，连接设置已恢复。');
-      else vscode.window.showWarningMessage('Fusion BYOK 已停用，但设置写入等待超时；恢复尚未确认，已保留恢复记录，请稍后重试停用。');
+      if (drained) vscode.window.showInformationMessage(t('notify.disabled'));
+      else vscode.window.showWarningMessage(t('notify.disabledPending'));
     })().finally(() => { disablePromise = null; });
     return disablePromise;
   };
