@@ -12,7 +12,7 @@ const { textChunk, stopChunk } = require('./native-chat-codec.cjs');
 const { createTracker } = require('./tracker.cjs');
 const { anthropicHeaders, createAnthropicAdapter, inspectToolPairing } = require('./anthropic.cjs');
 const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, sizeBucket } = require('./state-envelope.cjs');
-const { STANDARD_CHAT_FINISH, endpoint, buildRequestBody } = require('./provider-request.cjs');
+const { STANDARD_CHAT_FINISH, endpoint, providerHeaders, buildRequestBody } = require('./provider-request.cjs');
 const { readErrorDetail, parseEvent, events, classifyErrorDetail, classifyQuotaDetail, enumValue, providerErrorCode } = require('./provider-events.cjs');
 const { createStreamWriter } = require('./stream-writer.cjs');
 const { createStreamProcessor } = require('./stream-processor.cjs');
@@ -164,6 +164,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
     const headers = {
       'content-type': 'application/json',
       accept: 'text/event-stream',
+      ...providerHeaders(url, request),
       ...(anthropic ? anthropicHeaders(provider.apiKey) : provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {})
     };
     const send = payload => {
