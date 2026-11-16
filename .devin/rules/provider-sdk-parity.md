@@ -41,6 +41,8 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 
 **两条别顺手「统一升级」的**：Chat 用 `system` 角色、只有 Responses 用 `developer`——Chat 兼容面窄，很多第三方网关只认 `system`；`file_data` 的裸 base64 也不是疏漏。
 
+**按主机加的请求头只有 OpenCode 一家**（`provider-request.cjs` 的 `providerHeaders()`）：主机为 `opencode.ai` 或其子域时，带 `user-agent: devin-fusion-byok/<版本>` 与 `x-opencode-session`。OpenCode Go 缺后者直接 400 `missing_session_id`（见 https://opencode.ai/docs/go/#where-can-i-use-it）。会话号取 f27 `prompt_cache_key`（缺失时退回首条消息的 `messageId`）的 sha256 前 32 位，原生标识不出本机；两者都没有时不编造会话号。其他主机不加任何头。
+
 ## 刻意不发：SDK 有、原生无法表达
 
 判据是「ACP 请求里有没有对应控制位」。没有控制位就不发——发了等于替用户做决定，且第三方兼容网关更容易 400。
