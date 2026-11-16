@@ -3,18 +3,20 @@ const { updateMarkup } = require('./update-view.cjs');
 const { markupText } = require('./dom.cjs');
 const { translator, LANGUAGE_CHOICES } = require('../i18n/index.cjs');
 
-// The language row is static markup (settings-general below is rebuilt on every
-// state push): changing the language re-renders the whole page, so the current
-// choice is baked in here. Its title reads the same in both languages, so a
-// user stuck in the wrong one can still find it.
+// The language row is static markup sandwiched between two dynamic containers
+// (settings-status and settings-general are both rebuilt on every state push):
+// changing the language re-renders the whole page, so the current choice is
+// baked in here. Its title reads the same in both languages, so a user stuck
+// in the wrong one can still find it.
 function languageMarkup(h, choice) {
   const options = LANGUAGE_CHOICES.map(value => `<option value="${value}"${value === choice ? ' selected' : ''}>${h('settings.language.' + value)}</option>`).join('');
-  return `<div class="list mb"><div class="setting"><div class="row-main"><span class="row-title">${h('settings.language.title')}</span><span class="row-sub">${h('settings.language.hint')}</span></div><select id="language-select" aria-label="${h('settings.language.title')}">${options}</select></div></div>`;
+  return `<div class="list mt"><div class="setting"><div class="row-main"><span class="row-title">${h('settings.language.title')}</span><span class="row-sub">${h('settings.language.hint')}</span></div><select id="language-select" aria-label="${h('settings.language.title')}">${options}</select></div></div>`;
 }
 
 function pageMarkup(t = translator(), languageChoice = 'auto') {
   const h = markupText(t);
   return `
+      <div id="settings-status"></div>
       ${languageMarkup(h, languageChoice)}
       <div id="settings-general"></div>
       <details id="native-group" class="group"><summary>${h('settings.native.title')}<span id="native-count" class="hint"></span></summary><div class="group-body" id="native-models"></div></details>
@@ -37,8 +39,10 @@ function createSettingsView(ui) {
   const OTHER_VENDOR = '其他'; // i18n-data: vendor value emitted by panel/panel-state.cjs
 
   function renderSettings() {
-    const container = byId('settings-general');
+    const container = byId('settings-status');
+    const general = byId('settings-general');
     container.replaceChildren();
+    general.replaceChildren();
     const backendText = { starting: t('settings.backend.starting'), running: t('settings.backend.running'), stopped: t('settings.backend.stopped') }[state().backendStatus]
       || t('settings.abnormal', { status: state().backendStatus || t('common.unknown') });
     const catalogText = { ready: t('settings.catalog.ready'), loading: t('settings.catalog.loading'), empty: t('settings.catalog.empty') }[state().nativeCatalogStatus]
@@ -61,7 +65,7 @@ function createSettingsView(ui) {
     // The auto-continue card is rebuilt on every state push, so it cannot be a
     // <details>: the open flag would reset. The heading lives inside the card
     // instead, keeping title, switches and warning one visual unit.
-    container.append(element('div', { class: 'list mt' },
+    general.append(element('div', { class: 'list mt' },
       element('div', { class: 'list-head', text: t('settings.auto.title') }),
       setting(t('settings.auto.retry'), t('settings.auto.retryHint'),
         switchInput(state().autoContinueOnProviderError === true, t('settings.auto.retry'),

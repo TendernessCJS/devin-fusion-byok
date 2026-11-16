@@ -259,9 +259,9 @@ test('an injection failure in the cache report reads as untouched, not as up to 
 test('the settings tab summarizes backend and catalog status', () => {
   const { byId, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), backendStatus: 'running', nativeCatalogStatus: 'ready' } } });
-  assert.match(textOf(byId('settings-general')), /后台服务 运行中 · 官方目录 已同步/);
+  assert.match(textOf(byId('settings-status')), /后台服务 运行中 · 官方目录 已同步/);
   receive({ data: { type: 'state', state: { ...state(), backendStatus: 'port_in_use', nativeCatalogStatus: 'empty' } } });
-  assert.match(textOf(byId('settings-general')), /后台服务 异常（port_in_use） · 官方目录 未同步/);
+  assert.match(textOf(byId('settings-status')), /后台服务 异常（port_in_use） · 官方目录 未同步/);
 });
 
 test('a state render mid-request keeps the busy lock but must not stick it', async () => {

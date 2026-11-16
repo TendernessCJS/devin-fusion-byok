@@ -137,7 +137,7 @@ function panelStyles() {
     .setting + .setting { border-top: 1px solid var(--border); }
     .list-head { padding: 12px 14px; font-weight: 600; border-bottom: 1px solid var(--border); }
     .list-note { margin: 0; padding: 10px 14px; border-top: 1px solid var(--border); }
-    #settings-general > .hint + .hint { margin-top: 4px; }
+    #settings-general > .hint + .hint, #settings-status > .hint + .hint { margin-top: 4px; }
     .cache-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
     #cache-report { margin: 0; line-height: 1.6; }
     #cache-report:empty { display: none; }
