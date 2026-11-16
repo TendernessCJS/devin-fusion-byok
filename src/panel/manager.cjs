@@ -6,22 +6,25 @@ const { normalizeBaseUrlPath } = require('./base-url.cjs');
 const { parseProxy, maskProxy } = require('../update/proxy-config.cjs');
 const { publicState } = require('./panel-state.cjs');
 const { sortByOrder, nextOrder, normalizeOrders } = require('../models/order.cjs');
+const { translator } = require('../i18n/index.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 class PanelInputError extends Error {}
 const fail = message => { throw new PanelInputError(message); };
-function text(value, label, maximum = 256) {
-  if (typeof value !== 'string' || !value.trim() || value.length > maximum || /[\u0000-\u001f]/.test(value)) fail(label + '无效。');
+// The validators take the translator and a field key (manager.field.*): the
+// message is copy for the panel's error toast, never parsed.
+function text(t, value, field, maximum = 256) {
+  if (typeof value !== 'string' || !value.trim() || value.length > maximum || /[\u0000-\u001f]/.test(value)) fail(t('manager.invalid', { label: t(field) }));
   return value.trim();
 }
-function baseUrl(value) {
-  let url; try { url = new URL(text(value, 'API 地址', 2048)); } catch { fail('请填写完整的 http:// 或 https:// API 地址。'); }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail('API 地址不能包含登录信息、查询参数或片段。');
+function baseUrl(t, value) {
+  let url; try { url = new URL(text(t, value, 'manager.field.baseUrl', 2048)); } catch { fail(t('manager.baseUrlIncomplete')); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail(t('manager.baseUrlParts'));
   url.pathname = normalizeBaseUrlPath(url.pathname);
   return url.toString().replace(/\/$/, '');
 }
-function boolean(value, label) { if (typeof value !== 'boolean') fail(label + '无效。'); return value; }
-function number(value, label) { if (!Number.isSafeInteger(value) || value < 1 || value > 2147483647) fail(label + '必须是正整数。'); return value; }
-function providerAt(config, id) { return config.providers.find(provider => provider.id === id) || fail('该供应商已不存在，请刷新面板。'); }
+function boolean(t, value, field) { if (typeof value !== 'boolean') fail(t('manager.invalid', { label: t(field) })); return value; }
+function number(t, value, field) { if (!Number.isSafeInteger(value) || value < 1 || value > 2147483647) fail(t('manager.positiveInteger', { label: t(field) })); return value; }
+function providerAt(t, config, id) { return config.providers.find(provider => provider.id === id) || fail(t('manager.providerGone')); }
 // A role reference to a BYOK model is authoritative in config, so a ref whose
 // provider or model is gone can never resolve again — and an unresolvable ref
 // renders as a switchless "not in the available list" row, so it would stick
@@ -42,25 +45,25 @@ function pruneDanglingRoleRefs(config) {
     if (!Object.keys(lists).length) delete config[key];
   }
 }
-function modelPatch(input, previous) {
+function modelPatch(t, input, previous) {
   const model = { ...previous };
-  if (own(input, 'label')) model.label = text(input.label, '模型名称');
-  if (own(input, 'enabled')) model.enabled = boolean(input.enabled, '启用状态');
-  if (own(input, 'supportsImages')) { boolean(input.supportsImages, '图片支持'); model.supportsImages = true; }
-  if (own(input, 'contextWindow')) model.contextWindow = number(input.contextWindow, '上下文长度');
-  if (own(input, 'maxOutputTokens')) model.maxOutputTokens = number(input.maxOutputTokens, '最大输出长度');
+  if (own(input, 'label')) model.label = text(t, input.label, 'manager.field.modelName');
+  if (own(input, 'enabled')) model.enabled = boolean(t, input.enabled, 'manager.field.enabled');
+  if (own(input, 'supportsImages')) { boolean(t, input.supportsImages, 'manager.field.images'); model.supportsImages = true; }
+  if (own(input, 'contextWindow')) model.contextWindow = number(t, input.contextWindow, 'manager.field.contextWindow');
+  if (own(input, 'maxOutputTokens')) model.maxOutputTokens = number(t, input.maxOutputTokens, 'manager.field.maxOutput');
   if (own(input, 'efforts')) {
-    if (!Array.isArray(input.efforts) || input.efforts.some(v => !['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(v))) fail('推理强度列表无效。');
+    if (!Array.isArray(input.efforts) || input.efforts.some(v => !['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(v))) fail(t('manager.effortsInvalid'));
     model.efforts = [...new Set(input.efforts)];
   }
   if (own(input, 'effortMode')) {
-    if (!['auto', 'manual', 'none'].includes(input.effortMode)) fail('推理档位来源无效。');
+    if (!['auto', 'manual', 'none'].includes(input.effortMode)) fail(t('manager.effortModeInvalid'));
     model.effortMode = input.effortMode;
   }
-  if (model.maxOutputTokens > model.contextWindow) fail('最大输出长度不能超过上下文长度。');
+  if (model.maxOutputTokens > model.contextWindow) fail(t('manager.outputOverContext'));
   return model;
 }
-function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, nativeContract = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown', health = () => null, acpOwnModels = () => 0 }) {
+function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, nativeContract = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown', health = () => null, acpOwnModels = () => 0, t = translator() }) {
   let queue = Promise.resolve();
   let pendingImport;
   const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey]);
@@ -80,11 +83,11 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
     return result;
   };
   async function apply(type, payload = {}) {
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) fail('操作参数无效。');
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) fail(t('manager.payloadInvalid'));
     if (type === 'ready' || type === 'refreshNativeModels') { await refreshNativeModels(); return state(); }
     if (type === 'refreshCliCaches') {
-      if (read().enabled === false) fail('请先启用 Fusion BYOK 再刷新缓存。');
-      if (typeof refreshCliCaches !== 'function') fail('当前环境不支持手动刷新缓存。');
+      if (read().enabled === false) fail(t('manager.cacheNeedsEnabled'));
+      if (typeof refreshCliCaches !== 'function') fail(t('manager.cacheUnsupported'));
       await refreshCliCaches();
       return state();
     }
@@ -107,16 +110,16 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       return analysis;
     };
     if (type === 'selectFusion') {
-      if (config.enabled === false) fail('请先启用 Fusion BYOK。');
-      if (!own(buildCatalog(config, observed().models, observed().allowed, roleAnalysis()).fusions, payload.uid)) fail('该 Fusion 组合已不可用，请重新选择。');
+      if (config.enabled === false) fail(t('manager.needsEnabled'));
+      if (!own(buildCatalog(config, observed().models, observed().allowed, roleAnalysis()).fusions, payload.uid)) fail(t('manager.fusionGone'));
       await selectFusion(payload.uid); return state();
     }
     switch (type) {
       case 'saveProvider': {
-        const existing = payload.id ? providerAt(config, payload.id) : null;
-        const name = text(payload.name, '供应商名称', 80), url = baseUrl(payload.baseUrl);
-        if (!['openai-responses', 'openai', 'anthropic'].includes(payload.apiFormat)) fail('请选择 API 类型。');
-        if (own(payload, 'apiKey') && (typeof payload.apiKey !== 'string' || payload.apiKey.length > 8192 || /[\r\n]/.test(payload.apiKey))) fail('API Key 无效。');
+        const existing = payload.id ? providerAt(t, config, payload.id) : null;
+        const name = text(t, payload.name, 'manager.field.providerName', 80), url = baseUrl(t, payload.baseUrl);
+        if (!['openai-responses', 'openai', 'anthropic'].includes(payload.apiFormat)) fail(t('manager.apiTypeRequired'));
+        if (own(payload, 'apiKey') && (typeof payload.apiKey !== 'string' || payload.apiKey.length > 8192 || /[\r\n]/.test(payload.apiKey))) fail(t('manager.apiKeyInvalid'));
         const apiKey = payload.apiKey?.trim() || existing?.apiKey || '';
         if (existing) {
           const previousName = existing.name;
@@ -129,29 +132,29 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         }
         break;
       }
-      case 'deleteProvider': providerAt(config, payload.id); config.providers = config.providers.filter(p => p.id !== payload.id); break;
-      case 'setProviderEnabled': providerAt(config, payload.id).enabled = boolean(payload.enabled, '启用状态'); break;
+      case 'deleteProvider': providerAt(t, config, payload.id); config.providers = config.providers.filter(p => p.id !== payload.id); break;
+      case 'setProviderEnabled': providerAt(t, config, payload.id).enabled = boolean(t, payload.enabled, 'manager.field.enabled'); break;
       case 'refreshModels': {
-        const original = providerAt(config, payload.providerId), fetched = structuredClone(original);
+        const original = providerAt(t, config, payload.providerId), fetched = structuredClone(original);
         pendingImport = undefined;
         await discover(fetched);
         // Read again after the network request so another window's edits survive.
         config = read(); baseline = structuredClone(config);
-        const current = providerAt(config, payload.providerId);
-        if (signature(current) !== signature(original)) fail('供应商配置刚刚发生变化，请重新刷新模型。');
+        const current = providerAt(t, config, payload.providerId);
+        if (signature(current) !== signature(original)) fail(t('manager.providerChanged'));
         // Validate a private candidate catalog, without changing saved models.
         buildCatalog({ ...config, providers: [{ ...current, enabled: true, models: fetched.models }] });
         pendingImport = { providerId: current.id, signature: signature(current), token: randomUUID(), models: fetched.models };
         return state();
       }
       case 'importModels': {
-        const provider = providerAt(config, payload.providerId);
+        const provider = providerAt(t, config, payload.providerId);
         if (!pendingImport || pendingImport.providerId !== provider.id || pendingImport.token !== payload.token ||
-            pendingImport.signature !== signature(provider)) fail('模型列表已失效，请重新获取后选择。');
+            pendingImport.signature !== signature(provider)) fail(t('manager.candidatesExpired'));
         if (!Array.isArray(payload.ids) || !payload.ids.length || payload.ids.some(id => typeof id !== 'string') ||
-            new Set(payload.ids).size !== payload.ids.length) fail('请选择要导入的模型。');
+            new Set(payload.ids).size !== payload.ids.length) fail(t('manager.pickModels'));
         const candidates = new Map(pendingImport.models.map(model => [model.id, model]));
-        if (payload.ids.some(id => !candidates.has(id))) fail('所选模型不在获取的列表中，请重新选择。');
+        if (payload.ids.some(id => !candidates.has(id))) fail(t('manager.pickNotListed'));
         const existing = new Set(provider.models.map(model => model.id));
         normalizeOrders(provider.models);
         for (const id of payload.ids) if (!existing.has(id)) {
@@ -162,33 +165,33 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         break;
       }
       case 'updateModels': {
-        const provider = providerAt(config, payload.providerId);
-        if (!Array.isArray(payload.changes || []) || !Array.isArray(payload.removeIds || [])) fail('模型修改列表无效。');
+        const provider = providerAt(t, config, payload.providerId);
+        if (!Array.isArray(payload.changes || []) || !Array.isArray(payload.removeIds || [])) fail(t('manager.changesInvalid'));
         for (const change of payload.changes || []) {
           const index = provider.models.findIndex(m => m.id === change?.id);
-          if (index < 0) fail('该模型已不存在，请刷新面板。');
-          provider.models[index] = modelPatch(change, provider.models[index]);
+          if (index < 0) fail(t('manager.modelGone'));
+          provider.models[index] = modelPatch(t, change, provider.models[index]);
         }
         provider.models = provider.models.filter(m => !(payload.removeIds || []).includes(m.id));
         break;
       }
       case 'addModel': {
-        const provider = providerAt(config, payload.providerId), input = payload.model;
-        const id = text(input?.id, '模型 ID');
-        if (provider.models.some(m => m.id === id)) fail('该模型已经在列表中。');
+        const provider = providerAt(t, config, payload.providerId), input = payload.model;
+        const id = text(t, input?.id, 'manager.field.modelId');
+        if (provider.models.some(m => m.id === id)) fail(t('manager.modelExists'));
         normalizeOrders(provider.models);
-        provider.models.push(modelPatch(input, { id, label: id, enabled: true, efforts: [], contextWindow: 272000,
+        provider.models.push(modelPatch(t, input, { id, label: id, enabled: true, efforts: [], contextWindow: 272000,
           maxOutputTokens: 131072, source: 'manual', order: nextOrder(provider.models) }));
         break;
       }
       case 'setNativeModelHidden': {
         const raw = Array.isArray(payload.uids) ? payload.uids : [payload.uid];
-        if (!raw.length || raw.length > 256) fail('模型标识无效。');
-        const hidden = boolean(payload.hidden, '显示状态');
+        if (!raw.length || raw.length > 256) fail(t('manager.uidInvalid'));
+        const hidden = boolean(t, payload.hidden, 'manager.field.visibility');
         const observedUids = new Set(observed().models.map(entry => entry?.uid));
         for (const uid of raw) {
-          if (typeof uid !== 'string' || !uid || uid.length > 256 || /^(?:fusion-)?dfbyok-/.test(uid)) fail('模型标识无效。');
-          if (hidden && !observedUids.has(uid)) fail('该官方模型当前未出现在列表中，请刷新后重试。');
+          if (typeof uid !== 'string' || !uid || uid.length > 256 || /^(?:fusion-)?dfbyok-/.test(uid)) fail(t('manager.uidInvalid'));
+          if (hidden && !observedUids.has(uid)) fail(t('manager.nativeNotListed'));
         }
         const targets = new Set(raw), seen = new Set(), list = [];
         for (const value of Array.isArray(config.hiddenNativeModelUids) ? config.hiddenNativeModelUids : []) {
@@ -201,21 +204,21 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       }
       case 'setRoleModel': {
         const role = payload.role;
-        if (role !== 'lead' && role !== 'sidekick') fail('角色类型无效。');
-        const enabled = boolean(payload.enabled, '启用状态');
+        if (role !== 'lead' && role !== 'sidekick') fail(t('manager.roleInvalid'));
+        const enabled = boolean(t, payload.enabled, 'manager.field.enabled');
         const model = payload.model;
-        if (!model || typeof model !== 'object' || Array.isArray(model)) fail('模型参数无效。');
+        if (!model || typeof model !== 'object' || Array.isArray(model)) fail(t('manager.modelParamInvalid'));
         const hasNative = typeof model.nativeUid === 'string' && !!model.nativeUid;
         const hasProvider = typeof model.providerId === 'string' && typeof model.model === 'string' && !!model.providerId && !!model.model;
-        if ((hasNative && hasProvider) || (!hasNative && !hasProvider)) fail('模型身份无效。');
+        if ((hasNative && hasProvider) || (!hasNative && !hasProvider)) fail(t('manager.modelIdentityInvalid'));
         const key = refKey(model);
-        if (!key) fail('模型标识无效。');
+        if (!key) fail(t('manager.uidInvalid'));
 
         const currentRoles = buildRoleLists(config, observed().models, observed().allowed, roleAnalysis());
         const candidateList = currentRoles[role] || [];
         const candidate = candidateList.find(item => refKey(item.ref) === key ||
           hasNative && (item.memberUids || []).some(uid => refKey({ nativeUid: uid }) === key));
-        if (enabled && (!candidate || !candidate.available)) fail('该模型当前不可用，无法添加。');
+        if (enabled && (!candidate || !candidate.available)) fail(t('manager.modelUnavailable'));
 
         if (!config.roleExclusions) config.roleExclusions = { lead: [], sidekick: [] };
         if (!Array.isArray(config.roleExclusions[role])) config.roleExclusions[role] = [];
@@ -244,18 +247,18 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       }
       case 'forgetRoleRef': {
         const role = payload.role;
-        if (role !== 'lead' && role !== 'sidekick') fail('角色类型无效。');
+        if (role !== 'lead' && role !== 'sidekick') fail(t('manager.roleInvalid'));
         const model = payload.model;
-        if (!model || typeof model !== 'object' || Array.isArray(model)) fail('模型参数无效。');
+        if (!model || typeof model !== 'object' || Array.isArray(model)) fail(t('manager.modelParamInvalid'));
         const hasNative = typeof model.nativeUid === 'string' && !!model.nativeUid;
         const hasProvider = typeof model.providerId === 'string' && typeof model.model === 'string' && !!model.providerId && !!model.model;
-        if ((hasNative && hasProvider) || (!hasNative && !hasProvider)) fail('模型身份无效。');
+        if ((hasNative && hasProvider) || (!hasNative && !hasProvider)) fail(t('manager.modelIdentityInvalid'));
         const key = refKey(model);
-        if (!key) fail('模型标识无效。');
+        if (!key) fail(t('manager.uidInvalid'));
         // A native ref is only safe to forget once the catalog has actually
         // been observed — during a pending sync an absent uid may mean "not
         // synced yet", and removing it would silently lose a real pick.
-        if (hasNative && nativeCatalogStatus() !== 'ready') fail('官方目录尚未同步，请刷新后再移除。');
+        if (hasNative && nativeCatalogStatus() !== 'ready') fail(t('manager.catalogNotSynced'));
         for (const list of ['roleInclusions', 'roleExclusions']) {
           const refs = config[list]?.[role];
           if (Array.isArray(refs)) config[list][role] = refs.filter(ref => refKey(ref) !== key);
@@ -263,10 +266,10 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         break;
       }
       case 'moveProvider': {
-        if (payload?.delta !== -1 && payload?.delta !== 1) fail('移动方向无效。');
+        if (payload?.delta !== -1 && payload?.delta !== 1) fail(t('manager.directionInvalid'));
         const ordered = sortByOrder(config.providers);
         const index = ordered.findIndex(provider => provider.id === payload.id);
-        if (index < 0) fail('该供应商已不存在，请刷新面板。');
+        if (index < 0) fail(t('manager.providerGone'));
         const target = index + payload.delta;
         if (target < 0 || target >= ordered.length) return state();
         normalizeOrders(config.providers);
@@ -275,11 +278,11 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         break;
       }
       case 'moveModel': {
-        const provider = providerAt(config, payload.providerId);
-        if (payload?.delta !== -1 && payload?.delta !== 1) fail('移动方向无效。');
+        const provider = providerAt(t, config, payload.providerId);
+        if (payload?.delta !== -1 && payload?.delta !== 1) fail(t('manager.directionInvalid'));
         const ordered = sortByOrder(provider.models);
         const index = ordered.findIndex(model => model.id === payload.id);
-        if (index < 0) fail('该模型已不存在，请刷新面板。');
+        if (index < 0) fail(t('manager.modelGone'));
         const target = index + payload.delta;
         if (target < 0 || target >= ordered.length) return state();
         normalizeOrders(provider.models);
@@ -287,23 +290,23 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         [a.order, b.order] = [b.order, a.order];
         break;
       }
-      case 'setEnabled': config.enabled = boolean(payload.enabled, '启用状态'); break;
-      case 'setGoalEnabled': config.goalEnabled = boolean(payload.enabled, '目标模式'); break;
-      case 'setAutoContinue': config.autoContinueOnProviderError = boolean(payload.enabled, '自动继续'); break;
-      case 'setAutoContinueUntilPlanComplete': config.autoContinueUntilPlanComplete = boolean(payload.enabled, '完成待办时自动继续'); break;
+      case 'setEnabled': config.enabled = boolean(t, payload.enabled, 'manager.field.enabled'); break;
+      case 'setGoalEnabled': config.goalEnabled = boolean(t, payload.enabled, 'manager.field.goal'); break;
+      case 'setAutoContinue': config.autoContinueOnProviderError = boolean(t, payload.enabled, 'manager.field.autoContinue'); break;
+      case 'setAutoContinueUntilPlanComplete': config.autoContinueUntilPlanComplete = boolean(t, payload.enabled, 'manager.field.autoContinuePlan'); break;
       case 'setUpdateProxy': {
         const input = payload?.value;
-        if (typeof input !== 'string') fail('请填写 http:// 或 https:// 开头的代理地址。');
+        if (typeof input !== 'string') fail(t('manager.proxyInvalid'));
         const value = input.trim();
-        if (value.length > 2048) fail('请填写 http:// 或 https:// 开头的代理地址。');
+        if (value.length > 2048) fail(t('manager.proxyInvalid'));
         if (!value) { delete config.updateProxy; break; }
         const stored = typeof config.updateProxy === 'string' ? config.updateProxy : '';
         if (stored && value === maskProxy(stored)) return state();
-        try { parseProxy(value); } catch { fail('请填写 http:// 或 https:// 开头的代理地址。'); }
+        try { parseProxy(value); } catch { fail(t('manager.proxyInvalid')); }
         config.updateProxy = value;
         break;
       }
-      default: fail('不支持的操作。');
+      default: fail(t('manager.unsupported'));
     }
     pruneDanglingRoleRefs(config);
     config.providers = sortByOrder(config.providers);

@@ -38,39 +38,39 @@
     "commands": [
       {
         "command": "devinFusionByok.checkUpdates",
-        "title": "Fusion BYOK：检查更新"
+        "title": "%command.checkUpdates.title%"
       },
       {
         "command": "devinFusionByok.openPanel",
-        "title": "Fusion BYOK：控制面板"
+        "title": "%command.openPanel.title%"
       },
       {
         "command": "devinFusionByok.refreshModels",
-        "title": "Fusion BYOK：导入模型"
+        "title": "%command.refreshModels.title%"
       },
       {
         "command": "devinFusionByok.selectFusion",
-        "title": "Fusion BYOK：选择 Fusion 组合"
+        "title": "%command.selectFusion.title%"
       },
       {
         "command": "devinFusionByok.contextDetails",
-        "title": "Fusion BYOK：上下文与性能"
+        "title": "%command.contextDetails.title%"
       },
       {
         "command": "devinFusionByok.fastContextMcp",
-        "title": "Fusion BYOK：对外提供 MCP 接入配置"
+        "title": "%command.fastContextMcp.title%"
       },
       {
         "command": "devinFusionByok.goal",
-        "title": "Fusion BYOK：目标（Goal）"
+        "title": "%command.goal.title%"
       },
       {
         "command": "devinFusionByok.status",
-        "title": "Fusion BYOK：查看状态"
+        "title": "%command.status.title%"
       },
       {
         "command": "devinFusionByok.disable",
-        "title": "Fusion BYOK：停用并恢复连接"
+        "title": "%command.disable.title%"
       }
     ]
   }

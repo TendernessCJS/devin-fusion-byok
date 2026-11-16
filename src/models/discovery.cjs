@@ -20,13 +20,13 @@ async function discover(provider, { request = directFetch } = {}) {
   // Anthropic's /models is paginated; OpenAI-compatible providers return a single page.
   for (let page = 0; page < 20; page++) {
     const url = new URL(provider.baseUrl.replace(/\/$/, '') + '/models');
-    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('API 地址必须以 http:// 或 https:// 开头');
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('API 地址必须以 http:// 或 https:// 开头'); // i18n-data: matched by activation/errors.cjs safeError
     if (anthropic) { url.searchParams.set('limit', '1000'); if (after) url.searchParams.set('after_id', after); }
     const response = await request(url, { headers, redirect: 'error', signal: AbortSignal.timeout(20000) });
     if (!response.ok) throw new ModelDiscoveryError(response.status);
     const json = await response.json();
     const list = modelList(json);
-    if (!list) throw new Error('API 未返回模型列表');
+    if (!list) throw new Error('API 未返回模型列表'); // i18n-data: matched by activation/errors.cjs safeError
     listed.push(...list);
     if (!anthropic || !json.has_more || typeof json.last_id !== 'string' || json.last_id === after) break;
     after = json.last_id;

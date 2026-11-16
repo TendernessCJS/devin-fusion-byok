@@ -1,0 +1,11 @@
+{
+  "command.checkUpdates.title": "Fusion BYOK：检查更新",
+  "command.openPanel.title": "Fusion BYOK：控制面板",
+  "command.refreshModels.title": "Fusion BYOK：导入模型",
+  "command.selectFusion.title": "Fusion BYOK：选择 Fusion 组合",
+  "command.contextDetails.title": "Fusion BYOK：上下文与性能",
+  "command.fastContextMcp.title": "Fusion BYOK：对外提供 MCP 接入配置",
+  "command.goal.title": "Fusion BYOK：目标（Goal）",
+  "command.status.title": "Fusion BYOK：查看状态",
+  "command.disable.title": "Fusion BYOK：停用并恢复连接"
+}

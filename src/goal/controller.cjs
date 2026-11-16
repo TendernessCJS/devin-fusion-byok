@@ -3,6 +3,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { goalPrompt, commandReplyPrompt } = require('./prompts.cjs');
 const store = require('./store.cjs');
+const { translator } = require('../i18n/index.cjs');
 
 const NEXT_RUN_DELAY_MS = 1500;
 const MISSING_REPORT_LIMIT = 2;
@@ -11,10 +12,9 @@ const CONTINUE_STOP_REASON = 'end_turn';
 const SESSION_STATUSES = ['idle', 'busy', 'unknown'];
 const AUTO_RESUME_STATUSES = ['waiting', 'blocked'];
 const AUTO_RESUME_REASONS = ['manual-prompt', 'session-busy', 'session-not-idle'];
-const STATUS_TEXT = {
-  active: '进行中', retrying: '等待重试', paused: '已暂停', waiting: '等待你的输入', blocked: '受阻',
-  limited: '已达运行上限', review: '待验收', completed: '已完成'
-};
+// Goal status codes with copy (goalCmd.status.<code> in src/i18n); an
+// unknown status is shown as its code.
+const STATUS_CODES = new Set(['active', 'retrying', 'paused', 'waiting', 'blocked', 'limited', 'review', 'completed']);
 
 function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
@@ -23,7 +23,8 @@ function sessionStatus(value) { return SESSION_STATUSES.includes(value) ? value 
 function goalError(code, message) { const error = new Error(message); error.code = code; return error; }
 
 function reportCommandFor({ execPath, reportCliPath, storeRoot, token }) {
-  const example = JSON.stringify({ status: 'progress', evidence: '在这里写本次实际运行的证据' });
+  // Part of the report command handed to the model inside its prompt, not UI copy.
+  const example = JSON.stringify({ status: 'progress', evidence: '在这里写本次实际运行的证据' }); // i18n-data: model-facing prompt example
   return 'ELECTRON_RUN_AS_NODE=1 ' + shellQuote(execPath) + ' ' + shellQuote(reportCliPath) +
     ' --store ' + shellQuote(storeRoot) + ' --capability ' + shellQuote(token) + ' ' + shellQuote(example);
 }
@@ -32,7 +33,7 @@ function createGoalController({
   root, transport, isEnabled = () => true, isTrusted = () => true,
   reportCliPath, execPath = process.execPath,
   scheduler = {}, now = Date.now, owner = crypto.randomBytes(16).toString('hex'),
-  log = () => {}, nextRunDelayMs = NEXT_RUN_DELAY_MS
+  log = () => {}, nextRunDelayMs = NEXT_RUN_DELAY_MS, t = translator()
 } = {}) {
   if (typeof root !== 'string' || !path.isAbsolute(root)) throw new TypeError('root must be an absolute path');
   if (!transport || typeof transport.dispatch !== 'function' || typeof transport.cancel !== 'function') {
@@ -43,6 +44,7 @@ function createGoalController({
   const setTimer = scheduler.setTimeout || setTimeout;
   const clearTimer = scheduler.clearTimeout || clearTimeout;
   const report = (event, data) => { try { log(event, data); } catch {} };
+  const statusText = status => STATUS_CODES.has(status) ? t('goalCmd.status.' + status) : status;
 
   const timers = new Map();
   const inFlight = new Set();
@@ -122,14 +124,14 @@ function createGoalController({
   function requireOwnership(record) {
     const ownership = ownershipOf(record.sessionId);
     if (!ownership || ownership.corrupt || ownership.ownerId !== cleanOwner) {
-      throw goalError('not-owner', '该目标属于另一个窗口或进程，本窗口不操作。');
+      throw goalError('not-owner', t('goalCmd.error.notOwner'));
     }
   }
   function acquire(clean) {
     let acquired;
     try { acquired = store.acquireOwnership(root, clean, { owner: cleanOwner, now }); }
-    catch (error) { storeError = error.message; throw goalError('ownership-unreadable', '无法确认该会话的归属，已拒绝操作。'); }
-    if (!acquired.ok) throw goalError(acquired.reason, '该会话正被另一个窗口或进程占用，本窗口不接管。');
+    catch (error) { storeError = error.message; throw goalError('ownership-unreadable', t('goalCmd.error.ownershipUnreadable')); }
+    if (!acquired.ok) throw goalError(acquired.reason, t('goalCmd.error.sessionHeld'));
     return acquired;
   }
 
@@ -141,7 +143,7 @@ function createGoalController({
     record.status = 'paused';
     record.retryWindow = null;
     record.reason = store.normalizeReason(reason) ?? 'paused';
-    if (!persist(record)) throw goalError('store-write-failed', '目标状态写入失败。');
+    if (!persist(record)) throw goalError('store-write-failed', t('goalCmd.error.writeFailed'));
     return record;
   }
   function releaseLocalRun(record) {
@@ -363,7 +365,7 @@ function createGoalController({
       store.archiveGoal(root, { ...record, archivedAt, updatedAt: archivedAt });
     } catch (error) {
       storeError = error.message;
-      throw goalError('store-write-failed', '归档记录写入失败。');
+      throw goalError('store-write-failed', t('goalCmd.error.archiveWriteFailed'));
     } finally {
       stopOwnedRun(record, running);
     }
@@ -398,16 +400,16 @@ function createGoalController({
       .sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0))[0] || null;
   }
   function describe(record) {
-    const lines = ['目标：' + record.objective, '状态：' + (STATUS_TEXT[record.status] || record.status) +
-      (record.reason ? '（' + record.reason + '）' : ''), '已运行：' + record.runsStarted + ' / ' + record.maxRuns + ' 次'];
+    const lines = [t('goalCmd.describe.objective', { objective: record.objective }), t('goalCmd.describe.status', { status: statusText(record.status) }) +
+      (record.reason ? t('goalCmd.describe.reason', { reason: record.reason }) : ''), t('goalCmd.describe.runs', { runs: record.runsStarted, max: record.maxRuns })];
     const last = record.evidence[record.evidence.length - 1];
-    if (last) lines.push('最近进展：' + last.evidence);
+    if (last) lines.push(t('goalCmd.describe.latest', { evidence: last.evidence }));
     return lines.join('\n');
   }
   function reply(text) { return { prompt: commandReplyPrompt(text), localText: text }; }
   function beginRun(record) {
     const prepared = prepareRun(record);
-    if (!prepared.runId) throw goalError('dispatch-failed', '目标状态写入失败，没有开始运行。');
+    if (!prepared.runId) throw goalError('dispatch-failed', t('goalCmd.error.dispatchWriteFailed'));
     bumpGeneration(prepared.next.id);
     inFlight.add(prepared.next.id);
     report('goal-run-dispatched', { runsStarted: prepared.next.runsStarted, revision: prepared.next.revision, command: true });
@@ -415,12 +417,12 @@ function createGoalController({
   }
   function commandStart(clean, text) {
     const objectiveText = store.normalizeObjective(text);
-    if (!objectiveText) throw goalError('invalid-objective', '目标描述必须是 1 到 ' + store.MAX_OBJECTIVE_LENGTH + ' 字符的文本。');
+    if (!objectiveText) throw goalError('invalid-objective', t('goalCmd.error.objectiveLength', { max: store.MAX_OBJECTIVE_LENGTH }));
     const existing = sessionGoal(clean);
     if (existing) {
       const ownership = ownershipOf(clean);
       if (ownership && (ownership.corrupt || ownership.ownerId !== cleanOwner)) {
-        throw goalError('not-owner', '这个对话的目标正由另一个窗口管理，本窗口不接管。');
+        throw goalError('not-owner', t('goalCmd.error.managedElsewhere'));
       }
       archiveRecord(reclaim(existing));
     }
@@ -439,7 +441,7 @@ function createGoalController({
     catch (error) {
       storeError = error.message;
       store.releaseOwnership(root, clean, { owner: cleanOwner });
-      throw goalError('store-write-failed', '目标状态写入失败。');
+      throw goalError('store-write-failed', t('goalCmd.error.writeFailed'));
     }
     mirror(clean, true);
     report('goal-command-started', {});
@@ -448,11 +450,11 @@ function createGoalController({
   function commandResume(record) {
     const current = reclaim(record);
     requireOwnership(current);
-    if (current.status === 'active') throw goalError('already-active', '目标已经在运行。');
-    if (current.status === 'completed') throw goalError('completed', '目标已经完成。');
+    if (current.status === 'active') throw goalError('already-active', t('goalCmd.error.alreadyRunning'));
+    if (current.status === 'completed') throw goalError('completed', t('goalCmd.error.alreadyDone'));
     if (current.runsStarted >= current.maxRuns) {
       current.maxRuns = Math.min(store.MAX_RUNS, current.runsStarted + store.DEFAULT_MAX_RUNS);
-      if (current.runsStarted >= current.maxRuns) throw goalError('exhausted', '已达最多 ' + store.MAX_RUNS + ' 次运行，不能继续。');
+      if (current.runsStarted >= current.maxRuns) throw goalError('exhausted', t('goalCmd.error.maxRunsReached', { max: store.MAX_RUNS }));
     }
     cancelTimer(current.id);
     current.status = 'active';
@@ -460,7 +462,7 @@ function createGoalController({
     current.repeatCount = 0;
     current.missingRuns = 0;
     current.retryWindow = null;
-    if (!persist(current)) throw goalError('store-write-failed', '目标状态写入失败。');
+    if (!persist(current)) throw goalError('store-write-failed', t('goalCmd.error.writeFailed'));
     mirror(current.sessionId, true);
     return beginRun(readById(current.id) || current);
   }
@@ -472,33 +474,33 @@ function createGoalController({
         const record = sessionGoal(clean);
         if (record) return reply(describe(record));
         const previous = lastArchived(clean);
-        return reply('这个对话当前没有目标。用法：/goal 要达成的目标' +
-          (previous ? '\n\n上一个目标：' + previous.objective + '（' + (STATUS_TEXT[previous.status] || previous.status) + '）' : ''));
+        return reply(t('goalCmd.reply.noGoalUsage') +
+          (previous ? '\n\n' + t('goalCmd.reply.previous', { objective: previous.objective, status: statusText(previous.status) }) : ''));
       }
       if (action === 'pause') {
         const record = sessionGoal(clean);
-        if (!record) return reply('这个对话当前没有目标。');
+        if (!record) return reply(t('goalCmd.reply.noGoal'));
         handle.pause({ id: record.id });
-        return reply('目标已暂停。输入 /goal resume 继续。');
+        return reply(t('goalCmd.reply.paused'));
       }
       if (action === 'clear') {
         const record = sessionGoal(clean);
-        if (!record) return reply('这个对话当前没有目标。');
+        if (!record) return reply(t('goalCmd.reply.noGoal'));
         archiveRecord(reclaim(record));
-        return reply('目标已清除：' + record.objective);
+        return reply(t('goalCmd.reply.cleared', { objective: record.objective }));
       }
       requireBoundary();
-      if (ambiguous || connected === false) throw goalError('ambiguous-session', '这个对话同时连在多个窗口上，无法确定归属，请只在一个窗口里打开它。');
+      if (ambiguous || connected === false) throw goalError('ambiguous-session', t('goalCmd.error.ambiguousSession'));
       if (action === 'resume') {
         const record = sessionGoal(clean);
-        if (!record) return reply('这个对话当前没有目标。用法：/goal 要达成的目标');
+        if (!record) return reply(t('goalCmd.reply.noGoalUsage'));
         return commandResume(record);
       }
       if (action === 'start') return commandStart(clean, text);
       return null;
     } catch (error) {
-      if (error?.code) return reply('/goal 没有执行：' + error.message);
-      return reply('/goal 没有执行：发生了意外错误。');
+      if (error?.code) return reply(t('goalCmd.reply.notRun', { reason: error.message }));
+      return reply(t('goalCmd.reply.notRun', { reason: t('goalCmd.reply.unexpected') }));
     }
   }
 
@@ -522,15 +524,15 @@ function createGoalController({
     }
   }
   function requireBoundary() {
-    if (disposed) throw goalError('disposed', '目标控制器已停用。');
-    if (!isEnabled()) throw goalError('disabled', '请先启用 Fusion BYOK，并在控制面板的「目标」页打开目标模式。');
-    if (!isTrusted()) throw goalError('untrusted', '当前工作区未受信任，不能启动或恢复目标。');
+    if (disposed) throw goalError('disposed', t('goalCmd.error.disposed'));
+    if (!isEnabled()) throw goalError('disabled', t('goalCmd.error.disabled'));
+    if (!isTrusted()) throw goalError('untrusted', t('goalCmd.error.untrusted'));
   }
   function goalOf(id) {
     const clean = store.goalId(id);
-    if (!clean) throw goalError('invalid-id', '目标标识无效。');
+    if (!clean) throw goalError('invalid-id', t('goalCmd.error.invalidId'));
     const record = readById(clean);
-    if (!record) throw goalError('missing-goal', '该目标已不存在。');
+    if (!record) throw goalError('missing-goal', t('goalCmd.error.missingGoal'));
     return record;
   }
   function goalOfOwned(id) {
@@ -541,7 +543,7 @@ function createGoalController({
   function reclaim(record) {
     const ownership = ownershipOf(record.sessionId);
     if (ownership && (ownership.corrupt || ownership.ownerId !== cleanOwner)) {
-      throw goalError('not-owner', '该目标属于另一个窗口或进程，本窗口不操作。');
+      throw goalError('not-owner', t('goalCmd.error.notOwner'));
     }
     if (ownership) return record;
     const acquired = acquire(record.sessionId);
@@ -551,12 +553,12 @@ function createGoalController({
   function startable(clean) {
     let listed;
     try { listed = store.listGoals(root); }
-    catch (error) { storeError = error.message; throw goalError('store-unreadable', '目标状态存储不可读，已拒绝启动。'); }
+    catch (error) { storeError = error.message; throw goalError('store-unreadable', t('goalCmd.error.storeUnreadable')); }
     if (listed.corrupt.some(name => name === store.sessionKey(clean) + '.json')) {
-      throw goalError('store-corrupt', '该会话已有无法解析的目标记录，请先人工处理，本窗口不会覆盖。');
+      throw goalError('store-corrupt', t('goalCmd.error.storeCorrupt'));
     }
     if (listed.goals.some(record => record.sessionId === clean && record.archivedAt === null)) {
-      throw goalError('goal-exists', '该会话已有进行中的目标，请先归档。');
+      throw goalError('goal-exists', t('goalCmd.error.goalExists'));
     }
   }
 
@@ -591,16 +593,16 @@ function createGoalController({
     start({ sessionId, objective, criteria, maxRuns, retryPolicy } = {}) {
       requireBoundary();
       const retry = store.normalizeRetryPolicy(retryPolicy);
-      if (!retry) throw goalError('invalid-retry-policy', '重试间隔须为 1-1440 整数分钟，时限须为 1-168 整数小时。');
+      if (!retry) throw goalError('invalid-retry-policy', t('goalCmd.error.retryPolicy'));
       const clean = store.identifier(sessionId);
-      if (!clean) throw goalError('invalid-session', '请选择有效会话。');
+      if (!clean) throw goalError('invalid-session', t('goalCmd.error.invalidSession'));
       const objectiveText = store.normalizeObjective(objective);
-      if (!objectiveText) throw goalError('invalid-objective', '目标描述必须是 1 到 ' + store.MAX_OBJECTIVE_LENGTH + ' 字符的文本。');
+      if (!objectiveText) throw goalError('invalid-objective', t('goalCmd.error.objectiveLength', { max: store.MAX_OBJECTIVE_LENGTH }));
       const criteriaText = store.normalizeCriteria(criteria);
-      if (!criteriaText) throw goalError('invalid-criteria', '验收标准必须是 1 到 ' + store.MAX_CRITERIA_LENGTH + ' 字符的文本。');
+      if (!criteriaText) throw goalError('invalid-criteria', t('goalCmd.error.criteriaLength', { max: store.MAX_CRITERIA_LENGTH }));
       const runs = store.normalizeMaxRuns(maxRuns);
-      if (runs === null) throw goalError('invalid-max-runs', '运行上限必须是 1 到 ' + store.MAX_RUNS + ' 的整数。');
-      if (statusOfSession(clean) !== 'idle') throw goalError('session-unavailable', '只能对已观察为空闲的会话启动目标。');
+      if (runs === null) throw goalError('invalid-max-runs', t('goalCmd.error.maxRunsRange', { max: store.MAX_RUNS }));
+      if (statusOfSession(clean) !== 'idle') throw goalError('session-unavailable', t('goalCmd.error.startNotIdle'));
       startable(clean);
       acquire(clean);
       startable(clean);
@@ -616,15 +618,15 @@ function createGoalController({
       catch (error) {
         storeError = error.message;
         store.releaseOwnership(root, clean, { owner: cleanOwner });
-        throw goalError('store-write-failed', '目标状态写入失败，未发送任何内容。');
+        throw goalError('store-write-failed', t('goalCmd.error.writeFailedNothingSent'));
       }
       mirror(clean, true);
       return dispatch(readById(record.id) || record);
     },
     pause({ id } = {}) {
       const found = goalOf(id);
-      if (found.archivedAt !== null) throw goalError('archived', '已归档的目标不能暂停。');
-      if (found.status === 'completed') throw goalError('completed', '已完成的目标不能暂停。');
+      if (found.archivedAt !== null) throw goalError('archived', t('goalCmd.error.pauseArchived'));
+      if (found.status === 'completed') throw goalError('completed', t('goalCmd.error.pauseDone'));
       const record = goalOfOwned(id);
       const running = inFlight.has(record.id);
       cancelTimer(record.id);
@@ -635,7 +637,7 @@ function createGoalController({
       record.retryWindow = null;
       record.reason = 'user-paused';
       try {
-        if (!persist(record)) throw goalError('store-write-failed', '目标状态写入失败。');
+        if (!persist(record)) throw goalError('store-write-failed', t('goalCmd.error.writeFailed'));
       } finally {
         stopOwnedRun(record, running);
       }
@@ -644,18 +646,18 @@ function createGoalController({
     resume({ id, maxRuns } = {}) {
       requireBoundary();
       const record = goalOf(id);
-      if (record.archivedAt !== null) throw goalError('archived', '已归档的目标不能恢复。');
-      if (record.status === 'completed') throw goalError('completed', '已完成的目标不能恢复。');
-      if (record.status === 'active') throw goalError('already-active', '该目标已在运行。');
+      if (record.archivedAt !== null) throw goalError('archived', t('goalCmd.error.resumeArchived'));
+      if (record.status === 'completed') throw goalError('completed', t('goalCmd.error.resumeDone'));
+      if (record.status === 'active') throw goalError('already-active', t('goalCmd.error.alreadyRunningThis'));
       let runs = record.maxRuns;
       if (maxRuns !== undefined && maxRuns !== null) {
         const requested = store.normalizeMaxRuns(maxRuns);
-        if (requested === null) throw goalError('invalid-max-runs', '运行上限必须是 1 到 ' + store.MAX_RUNS + ' 的整数。');
-        if (requested <= record.runsStarted) throw goalError('invalid-max-runs', '新的运行上限必须大于已派发的 ' + record.runsStarted + ' 次。');
+        if (requested === null) throw goalError('invalid-max-runs', t('goalCmd.error.maxRunsRange', { max: store.MAX_RUNS }));
+        if (requested <= record.runsStarted) throw goalError('invalid-max-runs', t('goalCmd.error.maxRunsAbove', { runs: record.runsStarted }));
         runs = requested;
       }
-      if (runs <= record.runsStarted) throw goalError('exhausted', '已达运行上限，请先提高运行上限再恢复。');
-      if (statusOfSession(record.sessionId) !== 'idle') throw goalError('session-unavailable', '只能对已观察为空闲的会话恢复目标。');
+      if (runs <= record.runsStarted) throw goalError('exhausted', t('goalCmd.error.raiseLimitFirst'));
+      if (statusOfSession(record.sessionId) !== 'idle') throw goalError('session-unavailable', t('goalCmd.error.resumeNotIdle'));
       const acquired = acquire(record.sessionId);
       const current = readById(record.id) || record;
       current.status = 'active';
@@ -663,7 +665,7 @@ function createGoalController({
       current.repeatCount = 0;
       current.missingRuns = 0;
       current.maxRuns = runs;
-      if (!persist(current)) throw goalError('store-write-failed', '目标状态写入失败，未发送任何内容。');
+      if (!persist(current)) throw goalError('store-write-failed', t('goalCmd.error.writeFailedNothingSent'));
       mirror(current.sessionId, true);
       report('goal-resumed', { stale: acquired.stale === true });
       return dispatch(readById(current.id) || current);
@@ -684,21 +686,21 @@ function createGoalController({
     },
     accept({ id } = {}) {
       const found = goalOf(id);
-      if (found.status !== 'review') throw goalError('not-review', '只有待验收状态的目标可以接受。');
+      if (found.status !== 'review') throw goalError('not-review', t('goalCmd.error.notReview'));
       const record = reclaim(found);
-      if (record.status !== 'review') throw goalError('not-review', '只有待验收状态的目标可以接受。');
-      if (!record.evidence.length) throw goalError('no-evidence', '没有证据的目标不能验收。');
+      if (record.status !== 'review') throw goalError('not-review', t('goalCmd.error.notReview'));
+      if (!record.evidence.length) throw goalError('no-evidence', t('goalCmd.error.noEvidence'));
       record.status = 'completed';
       record.reason = 'accepted';
       invalidateRun(record);
-      if (!persist(record)) throw goalError('store-write-failed', '目标状态写入失败。');
+      if (!persist(record)) throw goalError('store-write-failed', t('goalCmd.error.writeFailed'));
       return readById(record.id) || record;
     },
     archive({ id } = {}) {
       const found = goalOf(id);
-      if (found.archivedAt !== null) throw goalError('archived', '该目标已经归档。');
+      if (found.archivedAt !== null) throw goalError('archived', t('goalCmd.error.alreadyArchived'));
       const record = reclaim(found);
-      if (record.archivedAt !== null) throw goalError('archived', '该目标已经归档。');
+      if (record.archivedAt !== null) throw goalError('archived', t('goalCmd.error.alreadyArchived'));
       return archiveRecord(record);
     },
     dispose() {

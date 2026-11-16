@@ -34,6 +34,8 @@ function transportFixture() {
           { module: hook, exports: hook.exports, require: () => ({ createRequire }) }, { filename: 'acp-hook.cjs' });
         return hook.exports;
       }
+      // goal/continue-hook.cjs reads its UI copy (command description, labels) from the string table.
+      if (name === '../i18n/index.cjs') return require('../src/i18n/index.cjs');
       assert.fail('unexpected require ' + name);
     }
   }, { filename: 'goal/continue-hook.cjs' });

@@ -1,9 +1,12 @@
 'use strict';
-function pageMarkup() {
+const { markupText } = require('./dom.cjs');
+const { translator } = require('../i18n/index.cjs');
+function pageMarkup(t = translator()) {
+  const h = markupText(t);
   return `
-      <div class="section-head"><h2>Fusion 可选模型</h2><span id="role-count" class="hint"></span></div>
+      <div class="section-head"><h2>${h('fusion.title')}</h2><span id="role-count" class="hint"></span></div>
       <p id="fusion-summary" class="hint mb"></p>
-      <p class="hint mb">这里启用的模型会出现在 Devin 官方 Fusion 卡片的 Lead / Sidekick 下拉里；Lead 按系列（Effort 档位）成组，官方默认项已可用，无需手动添加。已在当前会话目录里的条目启用或停用即时生效；新增的模型/组合需开新对话才能看到。停用后模型从下拉移除，相关组合同时失效——正在使用的组合请在 Fusion 卡片里重新选择。</p>
+      <p class="hint mb">${h('fusion.lead')}</p>
       <div class="role-grid"><div id="role-lead"></div><div id="role-sidekick"></div></div>`;
 }
 
@@ -14,15 +17,18 @@ function createFusionView(ui) {
   const roleSearch = selection.roleSearch;
   const roleMoreOpen = selection.roleMoreOpen;
 
-  const FUSION_SOURCES = { mirrored: '插件镜像', official: '官方', unresolved: '已不在可用列表' };
+  const FUSION_SOURCES = { mirrored: t('fusion.source.mirrored'), official: t('fusion.source.official'), unresolved: t('fusion.source.unresolved') };
+  // catalog/roles.cjs emits this one reason as display copy (and its tests pin
+  // the value), so it is translated here at render instead of at the source.
+  const ROLE_REASONS = { '当前未在可用列表中': t('fusion.reason.notListed') }; // i18n-data: value emitted by catalog/roles.cjs
   // Live status for the Fusion tab: how many combinations this extension
   // mirrors into the official card, plus the last combination the card was
   // seen holding. Read-only — the card itself stays the source of truth.
   function fusionSummary() {
     const last = state().lastFusion;
-    return '已镜像 ' + (state().fusionCount || 0) + ' 条组合；' + (last && last.uid
-      ? '最近一次使用：' + (last.label || last.uid) + '（' + (FUSION_SOURCES[last.source] || '未知') + '）'
-      : '还没有在 Fusion 卡片里选过组合');
+    return t('fusion.mirrored', { count: state().fusionCount || 0 }) + (last && last.uid
+      ? t('fusion.lastUsed', { label: last.label || last.uid, source: FUSION_SOURCES[last.source] || t('common.unknown') })
+      : t('fusion.neverUsed'));
   }
 
   function renderRoles() {
@@ -34,11 +40,11 @@ function createFusionView(ui) {
       const container = byId('role-' + role);
       const name = role === 'lead' ? 'Lead' : 'Sidekick';
       container.replaceChildren();
-      const search = element('input', { type: 'search', placeholder: '搜索', 'aria-label': '搜索 ' + name + ' 模型',
+      const search = element('input', { type: 'search', placeholder: t('fusion.search'), 'aria-label': t('fusion.searchAria', { role: name }),
         oninput: event => { roleSearch[role] = event.target.value; renderRoleRows(role); } });
       search.value = roleSearch[role];
       focusTargets.set('role-search-' + role, search);
-      const list = element('div', { id: role + '-role-list', class: 'list scroll', 'aria-label': name + ' 模型列表' });
+      const list = element('div', { id: role + '-role-list', class: 'list scroll', 'aria-label': t('fusion.listAria', { role: name }) });
       scrollTargets.set(role + '-role-list', list);
       container.append(element('h3', { text: name }), element('div', { class: 'toolbar' }, search), list);
       renderRoleRows(role);
@@ -58,25 +64,25 @@ function createFusionView(ui) {
       return element('div', { class: 'row' },
         element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: item.label }),
           item.native ? element('span', { class: 'row-sub',
-            text: '官方' + ((item.memberUids || []).length > 1 ? ' · ' + item.memberUids.length + ' 个变体' : '') })
+            text: t('fusion.official') + ((item.memberUids || []).length > 1 ? ' · ' + t('fusion.variants', { count: item.memberUids.length }) : '') })
             : element('span', { class: 'row-sub',
-              text: 'BYOK' + ((item.variantCount || 0) > 1 ? ' · ' + item.variantCount + ' 档' : '') })),
-        item.available ? switchInput(item.selected === true, '在 ' + name + ' 中启用 ' + item.label,
+              text: 'BYOK' + ((item.variantCount || 0) > 1 ? ' · ' + t('models.tiers', { count: item.variantCount }) : '') })),
+        item.available ? switchInput(item.selected === true, t('fusion.enableInRoleAria', { role: name, label: item.label }),
           value => run(() => request('setRoleModel', { role, model: item.ref, enabled: value }), undefined, catalogSuccess), off())
           : element('div', { class: 'actions nowrap' },
-            element('span', { class: 'hint', text: confirmed ? item.reason || '不可用' : '官方目录未同步，暂无法确认' }),
-            confirmed ? button('移除', () => run(() => request('forgetRoleRef', { role, model: item.ref }), '正在移除…', '已移除。'), 'quiet') : null));
+            element('span', { class: 'hint', text: confirmed ? (item.reason ? ROLE_REASONS[item.reason] || item.reason : t('fusion.unavailable')) : t('fusion.unconfirmed') }),
+            confirmed ? button(t('common.remove'), () => run(() => request('forgetRoleRef', { role, model: item.ref }), t('fusion.removing'), t('fusion.removed')), 'quiet') : null));
     };
     const main = query ? rows : rows.filter(item => !item.native || item.defaultSelected || item.selected || item.explicitIncluded);
     const extra = query ? [] : rows.filter(item => item.native && !item.defaultSelected && !item.selected && !item.explicitIncluded);
     for (const item of main) container.append(row(item));
     if (extra.length) {
-      const details = element('details', { class: 'fold', open: roleMoreOpen[role] }, element('summary', { text: '更多官方模型（' + extra.length + '）' }));
+      const details = element('details', { class: 'fold', open: roleMoreOpen[role] }, element('summary', { text: t('fusion.moreOfficial', { count: extra.length }) }));
       details.addEventListener('toggle', () => { roleMoreOpen[role] = details.open; });
       for (const item of extra) details.append(row(item));
       container.append(details);
     }
-    if (!rows.length) container.append(element('div', { class: 'empty', text: list.length ? '没有匹配的模型。' : '暂无可选模型。' }));
+    if (!rows.length) container.append(element('div', { class: 'empty', text: list.length ? t('models.noMatch') : t('fusion.empty') }));
   }
 
   return { render: renderRoles };

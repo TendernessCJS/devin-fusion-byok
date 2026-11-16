@@ -2,7 +2,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { setupPrompt, snippets, NAME } = require('./setup-prompt.cjs');
-const { createSelfCheck } = require('./self-check.cjs');
+const { createSelfCheck, CHECK_MESSAGES } = require('./self-check.cjs');
+const { translator } = require('../i18n/index.cjs');
 const { ensureLauncher } = require('./launcher.cjs');
 const { readEnabled, writeEnabled } = require('./state.cjs');
 const KINDS = new Set(['prompt', 'json']);
@@ -18,9 +19,9 @@ function stableEntry(context) {
   if (!storageDir) return undefined;
   try { return ensureLauncher({ storageDir, extensionPath: context.extensionPath }); } catch { return undefined; }
 }
-function render(kind, config) {
+function render(kind, config, t) {
   const server = config.mcpServers[NAME];
-  return kind === 'prompt' ? setupPrompt(server) : snippets(server)[kind];
+  return kind === 'prompt' ? setupPrompt({ ...server, t }) : snippets(server)[kind];
 }
 function resolveNode(env = process.env, platform = process.platform) {
   const binary = platform === 'win32' ? 'node.exe' : 'node';
@@ -33,7 +34,7 @@ function isDirectory(value) {
 // Panel host for the Fast Context tab. Roots are limited to open local folders plus folders the user picked here.
 // The external MCP stays off until the user passes the account check and turns it on.
 function createFastContextHost({ vscode, context, resolve = resolveNode, check = createSelfCheck(), entry = () => stableEntry(context),
-  stateDir = context.globalStorageUri?.fsPath } = {}) {
+  stateDir = context.globalStorageUri?.fsPath, t = translator() } = {}) {
   const picked = [];
   let launcher = entry();
   const enabled = () => Boolean(stateDir) && readEnabled({ dir: stateDir });
@@ -65,7 +66,7 @@ function createFastContextHost({ vscode, context, resolve = resolveNode, check =
   function preview(kind, root) {
     if (!KINDS.has(kind)) throw new Error('invalid_kind');
     if (!enabled()) throw new Error('fast_context_not_enabled');
-    return render(kind, build(root));
+    return render(kind, build(root), t);
   }
   async function copy(kind, root) {
     if (vscode.workspace?.isTrusted === false) throw new Error('fast_context_untrusted');
@@ -75,36 +76,39 @@ function createFastContextHost({ vscode, context, resolve = resolveNode, check =
   }
   async function pick() {
     const chosen = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false,
-      openLabel: '允许 Fast Context 搜索此文件夹' });
+      openLabel: t('fc.pickLabel') });
     const folder = chosen?.[0];
     if (!folder || folder.scheme !== 'file' || !isDirectory(folder.fsPath)) return null;
     if (!picked.includes(folder.fsPath)) picked.push(folder.fsPath);
     if (picked.length > 10) picked.shift();
     return folder.fsPath;
   }
-  return { state, copy, pick, build, preview, setEnabled, selfCheck: check.run, checkMessage: check.message };
+  // The reason codes are self-check.cjs's (CHECK_MESSAGES keys); the panel copy
+  // for each lives in src/i18n under fc.check.*. Unknown codes read as unavailable.
+  const checkMessage = code => t('fc.check.' + (Object.hasOwn(CHECK_MESSAGES, code) ? code : 'unavailable'));
+  return { state, copy, pick, build, preview, setEnabled, selfCheck: check.run, checkMessage };
 }
-function registerFastContext({ vscode, context }) {
+function registerFastContext({ vscode, context, t = translator() }) {
   const command = vscode.commands.registerCommand('devinFusionByok.fastContextMcp', async () => {
     const dir = context.globalStorageUri?.fsPath;
     if (!dir || !readEnabled({ dir })) {
-      vscode.window.showWarningMessage('对外 MCP 还没有开启。请在 Fusion BYOK 控制面板的「对外提供 MCP」里先检测账号，再打开开关。'); return;
+      vscode.window.showWarningMessage(t('fc.command.notEnabled')); return;
     }
     if (vscode.workspace.isTrusted === false) {
-      vscode.window.showWarningMessage('请先信任工作区，再生成 Fast Context 配置。'); return;
+      vscode.window.showWarningMessage(t('fc.command.untrusted')); return;
     }
     const folders = (vscode.workspace.workspaceFolders || []).filter(folder => folder.uri.scheme === 'file');
-    if (!folders.length) { vscode.window.showWarningMessage('请先打开一个本地项目文件夹。'); return; }
-    const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: '选择允许 Fast Context 搜索的项目' });
+    if (!folders.length) { vscode.window.showWarningMessage(t('fc.command.noFolder')); return; }
+    const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: t('fc.command.pickFolder') });
     if (!folder || folder.uri.scheme !== 'file') return;
-    const confirm = await vscode.window.showInformationMessage(
-      'Fast Context 使用现有 Devin 账号，会把问题和选中的代码片段发送到官方服务，可能消耗账号额度。配置只允许搜索所选项目，不含密钥。',
-      { modal: true }, '生成配置');
-    if (confirm !== '生成配置') return;
+    // The modal returns the label it was given; compare against the same value.
+    const generate = t('fc.command.generate');
+    const confirm = await vscode.window.showInformationMessage(t('fc.command.confirm'), { modal: true }, generate);
+    if (confirm !== generate) return;
     const config = mcpConfig({ extensionPath: context.extensionPath, root: folder.uri.fsPath, node: resolveNode(), entry: stableEntry(context) });
     const document = await vscode.workspace.openTextDocument({ language: 'json', content: JSON.stringify(config, null, 2) });
     await vscode.window.showTextDocument(document, { preview: false, preserveFocus: false });
-    vscode.window.showInformationMessage('把 fusion-fast-context 项合并到其他 Harness 的 MCP 配置。需要 Node.js 22.16+（推荐 24 LTS）；插件升级后会自动使用新版本，无需重新配置。');
+    vscode.window.showInformationMessage(t('fc.command.done'));
   });
   context.subscriptions.push(command);
 }

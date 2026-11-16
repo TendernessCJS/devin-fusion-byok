@@ -23,7 +23,7 @@ const NATIVE_VENDORS = [
   ['MiniMax', /^minimax\b/i],
   ['Devin', /^(?:swe\b|fusion$|adaptive$|arena|subagent|memory-migration|MODEL_DEVIN|devin)\b/i],
 ];
-const OTHER_VENDOR = '其他';
+const OTHER_VENDOR = '其他'; // i18n-data: vendor grouping value; panel/settings-view.cjs translates it for display
 function nativeVendor(id, label = '') {
   const key = id.startsWith('uid:') ? id.slice(4) : id;
   for (const candidate of [key, label]) {
