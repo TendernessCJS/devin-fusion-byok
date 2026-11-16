@@ -1,10 +1,13 @@
 'use strict';
 
+const { createHash } = require('node:crypto');
+const { version } = require('../../package.json');
 const { isAnthropicFormat, buildAnthropicBody, attachmentUnsupported } = require('./anthropic.cjs');
 const { STATE_PREFIX, MAX_STATE_BYTES, stateScope, replayVerdict } = require('./state-envelope.cjs');
 
 function isChatFormat(format = '') { return /chat[-_\/]?completions|^(?:chat|openai)$/.test(format); }
 const STANDARD_CHAT_FINISH = new Set(['stop', 'length', 'tool_calls', 'content_filter', 'function_call']);
+const USER_AGENT = `devin-fusion-byok/${version}`;
 
 function endpoint(provider) {
   const url = new URL(provider.baseUrl);
@@ -16,6 +19,26 @@ function endpoint(provider) {
   url.search = '';
   url.hash = '';
   return { url, chat, anthropic };
+}
+
+// OpenCode Go rejects requests without a stable per-conversation session id
+// (400 missing_session_id) and asks clients to name themselves in the user
+// agent (https://opencode.ai/docs/go/#where-can-i-use-it). The id is a hash of
+// the conversation's prompt cache key (or, without one, its first message id),
+// so the raw native identifier never leaves the machine. Other hosts get no
+// extra headers.
+const isOpenCodeHost = url => url.hostname === 'opencode.ai' || url.hostname.endsWith('.opencode.ai');
+function conversationKey(request) {
+  if (request?.promptCacheKey) return 'cache:' + request.promptCacheKey;
+  const first = request?.messages?.find(message => message?.messageId)?.messageId;
+  return first ? 'message:' + first : '';
+}
+function providerHeaders(url, request) {
+  if (!isOpenCodeHost(url)) return {};
+  const headers = { 'user-agent': USER_AGENT };
+  const key = conversationKey(request);
+  if (key) headers['x-opencode-session'] = createHash('sha256').update(key).digest('hex').slice(0, 32);
+  return headers;
 }
 
 // A forced/required choice is the only kind a thinking-mode provider refuses;
@@ -149,4 +172,4 @@ function buildRequestBody(request, route, provider, onState = () => {}, options 
   return body;
 }
 
-module.exports = { STANDARD_CHAT_FINISH, endpoint, forcedToolChoice, buildRequestBody };
+module.exports = { STANDARD_CHAT_FINISH, endpoint, providerHeaders, forcedToolChoice, buildRequestBody };
