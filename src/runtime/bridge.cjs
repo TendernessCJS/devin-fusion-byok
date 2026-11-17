@@ -1,6 +1,7 @@
 'use strict';
 const http = require('node:http');
 const https = require('node:https');
+const crypto = require('node:crypto');
 const wire = require('../protocol/wire.cjs');
 const { augmentCatalog, collectNativeModels, collectAllowedUids } = require('../catalog.cjs');
 // Own uids are the only place this marker appears in a catalog payload, so a
@@ -18,6 +19,21 @@ function countOwn(value) {
   if (value && typeof value === 'object') return Object.values(value).reduce((n, v) => n + countOwn(v), 0);
   return 0;
 }
+const authFingerprint = headers => {
+  const raw = headers?.authorization || headers?.['x-api-key'] || '';
+  return raw ? crypto.createHash('sha256').update(String(raw)).digest('hex').slice(0, 12) : 'none';
+};
+// 原生条目按 uid 前缀（第一个 '-' 之前）计数后输出；只出计数，不落 uid 本身。
+const familyHistogram = entries => {
+  const counts = new Map();
+  for (const entry of entries || []) {
+    const uid = typeof entry?.uid === 'string' ? entry.uid : '';
+    const family = /^[a-z]/.test(uid) ? uid.split('-')[0] : 'other';
+    counts.set(family, (counts.get(family) || 0) + 1);
+  }
+  return Object.fromEntries([...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12));
+};
 const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server_pb\.ApiServerService|seat_management_pb\.SeatManagementService)\/(?:GetUserStatus|GetCliModelConfigs|GetCascadeModelConfigs|GetCommandModelConfigs)(?:ForSite)?$|^\/exa\.seat_management_pb\.SeatManagementService\/GetCliTeamSettings$/;
 // Catalog-like RPCs the whitelist does not know still forward untouched — but
 // each method name is reported once per bridge so an upgrade that adds a model
@@ -168,7 +184,7 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
         if (!format.gzip) delete outgoingHeaders['content-encoding'];
         delete outgoingHeaders['connect-content-encoding'];
         delete outgoingHeaders['transfer-encoding']; outgoingHeaders['content-length'] = String(outgoing.length);
-        log('catalog', { rpc: rpc.split('/').pop(), models: catalog.models.length, matrix: catalog.matrixUids?.size ?? 0, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented), ...(skipped ? { skipped } : {}) });
+        log('catalog', { rpc: rpc.split('/').pop(), models: catalog.models.length, matrix: catalog.matrixUids?.size ?? 0, format: format.type, changed: !original.equals(outgoing), before: original.length, after: outgoing.length, keys: format.json ? Object.keys(format.data) : undefined, beforeOwn: countOwn(format.data), afterOwn: countOwn(augmented), auth: authFingerprint(request.headers), native: observed.length, families: familyHistogram(observed), allowedCount: observation?.uids?.length ?? -1, allowedKind: observation?.kind ?? null, ...(catalog.mirrorNativeAllowlist === true ? { mirror: catalog.nativeUids?.length ?? 0 } : {}), ...(skipped ? { skipped } : {}) });
       } catch { log('catalog-error', { code: 'catalog_transform_failed' }); notifyAllowed(null); }
       if (stopped) return;
       finishing = true;

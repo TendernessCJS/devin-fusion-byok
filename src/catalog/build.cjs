@@ -9,7 +9,7 @@ const { discoverOfficialRoles, discoverAdditionalNativeRoles, buildRoleLists } =
 
 function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analysis = null) {
   if (config.enabled === false) {
-    return { models: [], routes: {}, fusions: {}, sidekicks: [], hiddenNativeModelUids: [], hiddenFusionUids: [] };
+    return { models: [], routes: {}, fusions: {}, sidekicks: [], hiddenNativeModelUids: [], hiddenFusionUids: [], nativeUids: [], mirrorNativeAllowlist: false };
   }
   const models = [], routes = {}, fusions = {}, leads = [];
   // The fallback must never point at the hosted API: this value becomes the
@@ -75,6 +75,15 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
     hiddenNativeModelUids.push(uid);
   }
   const hiddenSet = new Set(hiddenNativeModelUids);
+  // Every observed native uid minus the ones the user hid. The mirror option
+  // needs the unfiltered set: `models` below is exactly what the allowlist
+  // already removed, so it cannot be used to widen the allowlist again.
+  const nativeUids = [];
+  for (const entry of Array.isArray(nativeModels) ? nativeModels : []) {
+    const uid = typeof entry?.uid === 'string' ? entry.uid : '';
+    if (!uid || ownUid(uid) || hiddenSet.has(uid) || nativeUids.includes(uid)) continue;
+    nativeUids.push(uid);
+  }
   const officialRoles = analysis ? analysis.catalog.officialRoles : discoverOfficialRoles(nativeModels, hiddenSet, config);
   const { eligibleNativeLeads: additionalNativeLeads, eligibleNativeSidekicks: additionalNativeSidekicks } = analysis
     ? analysis.catalog.additionalRoles : discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles);
@@ -426,6 +435,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   // Matrix entries lead the list, matching the order the picker saw before the
   // named-preset pipeline was retired.
   return { models: [...matrixModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids, matrixUids, nativeHarnessUids, nativeLeadHarnessUids, fastLeadUids, nonFastLeadUids, excludedRoleUids,
+    nativeUids, mirrorNativeAllowlist: config.mirrorNativeAllowlist === true,
     rolePool: Object.fromEntries(Object.entries(candidates).map(([role, items]) => [role, items.map(item => ({ ref: item.ref, label: item.label, uid: item.uid }))])),
     lastFusionSelection: typeof config.lastFusionSelection === 'string' ? config.lastFusionSelection : undefined };
 }

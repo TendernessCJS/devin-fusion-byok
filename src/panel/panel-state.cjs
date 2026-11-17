@@ -33,8 +33,10 @@ function nativeVendor(id, label = '') {
   return { name: OTHER_VENDOR, rank: NATIVE_VENDORS.length };
 }
 function publicState(config, nativeModels = [], autoContinueStatus = 'unavailable', nativeCatalogStatus = 'ready', cliCache, allowedUids, health = null, acpOwnModels = 0) {
-  const allowed = allowedUids instanceof Set ? (allowedUids.size ? allowedUids : null)
+  let allowed = allowedUids instanceof Set ? (allowedUids.size ? allowedUids : null)
     : (Array.isArray(allowedUids) && allowedUids.length ? new Set(allowedUids) : null);
+  // Same scope as the backend when the mirror option is on (see backend.cjs).
+  if (config.mirrorNativeAllowlist === true) allowed = null;
   const analysis = analyzeRoles({ ...config, enabled: true }, nativeModels, allowed);
   const catalog = buildCatalog({ ...config, enabled: true }, nativeModels, allowed, analysis);
   const hidden = new Set(catalog.hiddenNativeModelUids || []);

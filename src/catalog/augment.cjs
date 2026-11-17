@@ -362,6 +362,12 @@ function augmentLocalModelChoices(data, format, catalog, skip = () => {}, retire
     const matrixUids = catalog.matrixUids instanceof Set ? catalog.matrixUids : new Set(catalog.matrixUids || []);
     const isOwn = uid => ownUid(uid) || matrixUids.has(uid);
     const native = new Set(entries.filter(uid => !isOwn(uid)));
+    // Opt-in (config.mirrorNativeAllowlist): also register the native uids we
+    // observed. The CLI rebuilds its model cache as `catalog ∩ f7`, so a
+    // narrower server-side f7 silently drops native models from the picker.
+    const mirrored = catalog.mirrorNativeAllowlist === true && Array.isArray(catalog.nativeUids)
+      ? catalog.nativeUids.filter(uid => typeof uid === 'string' && uid && !isOwn(uid) && !native.has(uid))
+      : [];
     const additions = catalog.models.filter(model => {
       if (!isOwn(model.uid)) return false;
       if (Object.hasOwn(catalog.routes, model.uid)) return true;
@@ -376,12 +382,16 @@ function augmentLocalModelChoices(data, format, catalog, skip = () => {}, retire
     }).map(model => model.uid);
     if (preserveUnemitted) {
       // Additive-only: retain every stored choice; additions merely dedupe.
-      const added = new Set(additions);
-      if (format.json) return { ...data, [key]: [...entries.filter(uid => !added.has(uid)), ...additions] };
-      return concat([...parsed.filter(f => !(f.number === 7 && added.has(f.value.toString('utf8')))).map(f => f.raw), ...additions.map(uid => s(7, uid))]);
+      // Mirrored uids are emitted before additions: on the next pass they are
+      // retained entries, so this order is what makes the rewrite idempotent.
+      const tail = [...mirrored];
+      for (const uid of additions) if (!tail.includes(uid)) tail.push(uid);
+      const added = new Set(tail);
+      if (format.json) return { ...data, [key]: [...entries.filter(uid => !added.has(uid)), ...tail] };
+      return concat([...parsed.filter(f => !(f.number === 7 && added.has(f.value.toString('utf8')))).map(f => f.raw), ...tail.map(uid => s(7, uid))]);
     }
-    if (format.json) return { ...data, [key]: [...entries.filter(uid => !isOwn(uid)), ...additions] };
-    return concat([...parsed.filter(f => !(f.number === 7 && isOwn(f.value.toString('utf8')))).map(f => f.raw), ...additions.map(uid => s(7, uid))]);
+    if (format.json) return { ...data, [key]: [...entries.filter(uid => !isOwn(uid)), ...mirrored, ...additions] };
+    return concat([...parsed.filter(f => !(f.number === 7 && isOwn(f.value.toString('utf8')))).map(f => f.raw), ...mirrored.map(uid => s(7, uid)), ...additions.map(uid => s(7, uid))]);
   } catch { skip('transform-failed'); return data; }
 }
 

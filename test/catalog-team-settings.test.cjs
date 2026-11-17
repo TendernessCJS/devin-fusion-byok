@@ -139,6 +139,62 @@ for (const key of ['allowedModelUids', 'allowed_model_uids']) {
   });
 }
 
+for (const format of [proto, json]) {
+  test(`mirrorNativeAllowlist appends observed native uids to the allowlist (${format.json ? 'JSON' : 'protobuf'})`, () => {
+    const mirroredCatalog = { ...catalog, mirrorNativeAllowlist: true, nativeUids: ['native-a', 'native-b'] };
+    const input = format.json ? { allowedModelUids: ['native-gpt', 'swe-2-max'], opaque: { quota: 37 } } : fixture();
+    const output = apply(input, format, mirroredCatalog);
+    const values = format.json ? output.allowedModelUids : choices(output);
+    const retained = format.json ? ['native-gpt', 'swe-2-max'] : ['native-gpt', 'swe-2-max', 'native-gpt'];
+    // Mirrored uids land between the retained native entries and the own
+    // additions so a second pass retains them in place (idempotency).
+    assert.deepEqual(values.slice(0, retained.length), retained);
+    assert.deepEqual(values.slice(retained.length, retained.length + 2), ['native-a', 'native-b']);
+    assert.deepEqual(values.slice(retained.length + 2).filter(uid => own(uid)), values.slice(retained.length + 2));
+    if (!format.json) assert.deepEqual(otherFields(output), otherFields(input));
+    else assert.equal(output.opaque.quota, 37);
+  });
+
+  test(`mirrorNativeAllowlist stays off without the flag (${format.json ? 'JSON' : 'protobuf'})`, () => {
+    for (const variant of [{ ...catalog, nativeUids: ['native-a', 'native-b'] },
+      { ...catalog, mirrorNativeAllowlist: false, nativeUids: ['native-a', 'native-b'] }]) {
+      const input = format.json ? { allowedModelUids: ['native-gpt', 'swe-2-max'] } : fixture();
+      assert.deepEqual(apply(input, format, variant), apply(input, format));
+    }
+  });
+
+  test(`mirrorNativeAllowlist rewrite is idempotent (${format.json ? 'JSON' : 'protobuf'})`, () => {
+    const mirroredCatalog = { ...catalog, mirrorNativeAllowlist: true, nativeUids: ['native-a', 'native-b'] };
+    const input = format.json ? { allowedModelUids: ['native-gpt', 'swe-2-max'] } : fixture();
+    const output = apply(input, format, mirroredCatalog);
+    assert.deepEqual(apply(output, format, mirroredCatalog), output);
+  });
+}
+
+test('mirrorNativeAllowlist never injects own uids and dedupes entries already allowed', () => {
+  const mirroredCatalog = { ...catalog, mirrorNativeAllowlist: true,
+    nativeUids: ['native-a', 'dfbyok-foreign', 'fusion-dfbyok-foreign', 'swe-2-max', ''] };
+  const values = choices(apply(fixture(), proto, mirroredCatalog));
+  const baseline = choices(apply(fixture(), proto));
+  assert.deepEqual(values, [...baseline.slice(0, 3), 'native-a', ...baseline.slice(3)]);
+  assert.ok(!values.includes('dfbyok-foreign'));
+  assert.ok(!values.includes('fusion-dfbyok-foreign'));
+  assert.equal(values.filter(uid => uid === 'swe-2-max').length, 1);
+});
+
+test('buildCatalog reports the unfiltered observed native uid set and the mirror flag', () => {
+  const natives = [
+    { uid: 'native-a' }, { uid: 'native-a' }, { uid: 'native-b' }, { uid: 'native-hidden' },
+    { uid: 'dfbyok-own-1' }, { uid: 'fusion-dfbyok-own-1' }, { uid: 42 }, { label: 'no uid' },
+  ];
+  const built = buildCatalog({ providers: [], hiddenNativeModelUids: ['native-hidden'] }, natives);
+  assert.deepEqual(built.nativeUids, ['native-a', 'native-b']);
+  assert.equal(built.mirrorNativeAllowlist, false);
+  assert.equal(buildCatalog({ providers: [], mirrorNativeAllowlist: true }, natives).mirrorNativeAllowlist, true);
+  assert.equal(buildCatalog({ enabled: false }, natives).mirrorNativeAllowlist, false);
+  assert.deepEqual(buildCatalog({ enabled: false }, natives).nativeUids, []);
+});
+
 test('only the exact SeatManagement GetCliTeamSettings RPC is changed', () => {
   const input = fixture();
   for (const rpc of ['GetCliTeamSettings', '/exa.api_server_pb.ApiServerService/GetCliTeamSettings',

@@ -227,13 +227,21 @@ test('catalog RPCs report sanitized native models to the observer and keep hidde
     res.end(JSON.stringify(original));
   });
   t.after(() => native.close());
-  const reports = [];
-  const bridge = await createLsBridge(native.port, { getCatalog: () => hiddenCatalog, onNativeModels: entries => reports.push(entries) });
+  const reports = [], events = [];
+  const bridge = await createLsBridge(native.port, { getCatalog: () => hiddenCatalog, onNativeModels: entries => reports.push(entries),
+    log: (event, data) => events.push([event, data]) });
   t.after(() => bridge.close());
   const response = await request(bridge.port, LS + 'GetCliModelConfigs');
   assert.equal(response.status, 200);
   const json = JSON.parse(response.body);
   assert.deepEqual(json.clientModelConfigs.map(model => model.modelUid), [...catalog.models.map(model => model.uid), 'official-shown']);
+  const entry = events.find(([event]) => event === 'catalog');
+  assert.ok(entry, 'a catalog RPC emits the catalog log event');
+  assert.equal(entry[1].auth, 'none', 'no credential header means no fingerprint');
+  assert.equal(entry[1].native, 2, 'both observed native entries are counted');
+  assert.deepEqual(entry[1].families, { official: 2 }, 'the histogram groups by the uid prefix before the first dash');
+  assert.equal(entry[1].allowedCount, -1, 'a non-team-settings RPC has no allowlist observation');
+  assert.equal(entry[1].allowedKind, null);
   assert.equal(reports.length, 1);
   assert.deepEqual(reports[0], [
     { uid: 'official-hidden', label: 'Hidden Official', disabled: true, harnessUids: [], isModelRouter: false, sources: ['cli'] },
@@ -347,12 +355,21 @@ test('the catalog log reports the mirrored combination count', async t => {
   t.after(() => native.close());
   const bridge = await createLsBridge(native.port, { getCatalog: () => matrixCatalog, log: (event, data) => events.push([event, data]) });
   t.after(() => bridge.close());
-  const response = await request(bridge.port, '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings');
+  const secret = 'Bearer secret-token-value-9f8e7d';
+  const response = await request(bridge.port, '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings',
+    { headers: { authorization: secret } });
   assert.equal(response.status, 200);
   const entry = events.find(([event]) => event === 'catalog');
   assert.ok(entry, 'a catalog RPC emits the catalog log event');
   assert.equal(entry[1].matrix, 2, 'mirrored combinations are counted');
   assert.equal(Object.hasOwn(entry[1], 'presets'), false, 'the retired preset counter is gone from the log');
+  assert.match(entry[1].auth, /^[0-9a-f]{12}$/, 'a credential hashes to a 12-hex fingerprint');
+  assert.ok(!secret.includes(entry[1].auth), 'the fingerprint is never a prefix or slice of the credential');
+  assert.ok(!JSON.stringify(events).includes('secret-token'), 'the log never carries the credential itself');
+  assert.equal(entry[1].native, 0, 'a team-settings payload carries no native model entries');
+  assert.deepEqual(entry[1].families, {});
+  assert.equal(entry[1].allowedCount, 1, 'the fixture allowlist holds one uid');
+  assert.equal(entry[1].allowedKind, 'restricted');
 });
 
 test('the catalog log counts every own marker occurrence in the emitted bytes', async t => {

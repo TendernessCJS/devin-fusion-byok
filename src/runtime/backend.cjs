@@ -178,7 +178,11 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     allowedEmptyStreak = 0;
     if (observation?.kind === 'restricted') onAllowedUids(observation);
   };
-  const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedMode === 'unrestricted' ? null : allowedUids); };
+  // The mirror option registers every observed native uid in the picker's
+  // allowlist, so role eligibility must use the same scope — otherwise the
+  // emitted matrix keeps refusing models the picker already grants.
+  const catalogAllowed = current => (allowedMode === 'unrestricted' || current.mirrorNativeAllowlist === true) ? null : allowedUids;
+  const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], catalogAllowed(current)); };
   // Official Fusion uids observed as disabled in catalog responses. Entries
   // that later appear enabled are removed so Pro accounts keep native Fusion.
   // Persisted so a saved locked preference still redirects when a fresh
@@ -262,7 +266,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     try {
       body = await collect(request);
       const format = wire.decode(body, request.headers);
-      const current = config(), catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], allowedMode === 'unrestricted' ? null : allowedUids);
+      const current = config(), catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], catalogAllowed(current));
       if (rpc.endsWith('/AssignModel')) {
         // Anything outside the AssignModelRequest table above means the client
         // started sending intent we never modeled. Observation only: field

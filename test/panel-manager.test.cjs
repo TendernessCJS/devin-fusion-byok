@@ -916,3 +916,22 @@ test('move no-ops at the boundaries without writing, rejects bad deltas, and nor
   assert.equal(m.read().providers.find(p => p.id === 'cpa').models.find(x => x.id === 'lead').order, 0,
     'modelPatch preserved the stored order through unrelated edits');
 });
+
+test('publicState treats the mirror option as an unrestricted allowlist, matching the backend scope', () => {
+  const observed = [
+    { uid: 'swe-2-max', label: 'SWE-2 Max', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6', 'swe-1p5'] },
+    { uid: 'swe-odd', label: 'Odd', disabled: false, isModelRouter: false, harnessUids: ['odd-harness'] },
+    { uid: 'gpt-5-6-luna-high', label: 'GPT-5.6 Luna High', disabled: false, isModelRouter: false, harnessUids: ['gpt-5p6'] },
+  ];
+  const input = fixture();
+  input.roleInclusions = { lead: [], sidekick: [{ nativeUid: 'swe-2-max' }, { nativeUid: 'swe-odd' }, { nativeUid: 'gpt-5-6-luna-high' }] };
+  const restricted = new Set(['swe-2-max']);
+  const sidekickUids = state => (state.roleLists.sidekick || [])
+    .filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean).sort();
+  const off = publicState(input, observed, 'unavailable', 'ready', null, restricted);
+  const on = publicState({ ...input, mirrorNativeAllowlist: true }, observed, 'unavailable', 'ready', null, restricted);
+  const unrestricted = publicState(input, observed, 'unavailable', 'ready', null, null);
+  assert.ok(off.fusionCount < unrestricted.fusionCount, 'the restricted allowlist shrinks the mirrored matrix');
+  assert.equal(on.fusionCount, unrestricted.fusionCount);
+  assert.deepEqual(sidekickUids(on), sidekickUids(unrestricted));
+});

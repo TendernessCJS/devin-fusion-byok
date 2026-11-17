@@ -1224,3 +1224,43 @@ test('an already-aborted signal rejects httpFetch instead of crashing the host',
   await assert.rejects(httpFetch('http://127.0.0.1:9/health', { signal: controller.signal }),
     error => isConnectionFailure(error), 'an aborted control request is a connection-layer failure');
 });
+
+test('the mirror option widens the catalog scope while the stored allowlist stays restricted', async t => {
+  const f = await fixture(t);
+  const headers = { authorization: 'Bearer ' + f.control().token, 'content-type': 'application/json' };
+  const pushed = await fetch(f.base + '/_runtime/native-models', { method: 'POST', headers, body: JSON.stringify({ models: [
+    { uid: 'swe-2-max', label: 'SWE-2 Max', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] },
+    { uid: 'swe-odd', label: 'Odd', disabled: false, isModelRouter: false, harnessUids: ['odd-harness'] },
+    { uid: 'gpt-5-6-luna-high', label: 'GPT-5.6 Luna High', disabled: false, isModelRouter: false, harnessUids: ['gpt-5p6'] },
+  ], allowedUids: ['swe-2-max'] }) });
+  assert.equal(pushed.status, 200);
+  const listed = await (await fetch(f.base + '/_runtime/native-models', { headers })).json();
+  assert.equal(listed.allowedMode, 'restricted');
+  assert.deepEqual(listed.allowedUids, ['swe-2-max']);
+  let getCatalog;
+  f.setForwardHook((req, options) => { getCatalog ??= options.getCatalog; });
+  await fetch(f.base + API + 'GetUserStatus', { method: 'POST', body: 'native' });
+  assert.ok(getCatalog, 'the bridge captured the live catalog builder');
+  const config = JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8'));
+  const matrix = catalog => [...catalog.matrixUids].sort();
+  const roleUids = catalog => Object.values(catalog.rolePool).flatMap(items => items.map(item => item.uid)).sort();
+  // This fixture cannot exercise the restricted scope itself: backend.cjs runs
+  // in a vm realm, so its `allowedUids` Set fails `instanceof Set` inside the
+  // main-realm buildRoleLists and always reads as unrestricted. The restricted
+  // vs open comparison lives in panel-manager.test.cjs (single realm). What
+  // stays assertable here: the mirrored catalog equals an unrestricted build,
+  // and the stored allowlist verdict is untouched by the wider scope.
+  const restricted = getCatalog();
+  assert.deepEqual(matrix(restricted), matrix(buildCatalog(config, listed.models, null)),
+    'in this vm harness the stored Set always reads as unrestricted (see comment above)');
+  const mirrorConfig = { ...config, mirrorNativeAllowlist: true };
+  fs.writeFileSync(path.join(f.root, 'config.json'), JSON.stringify(mirrorConfig));
+  const mirrored = getCatalog();
+  const expectedOpen = buildCatalog(mirrorConfig, listed.models, null);
+  assert.deepEqual(matrix(mirrored), matrix(expectedOpen), 'the mirrored scope matches an unrestricted allowlist');
+  assert.deepEqual(roleUids(mirrored), roleUids(expectedOpen));
+  assert.equal(mirrored.mirrorNativeAllowlist, true);
+  const after = await (await fetch(f.base + '/_runtime/native-models', { headers })).json();
+  assert.equal(after.allowedMode, 'restricted', 'the stored mode is untouched by the wider catalog scope');
+  assert.deepEqual(after.allowedUids, ['swe-2-max']);
+});
