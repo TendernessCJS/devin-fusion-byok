@@ -67,6 +67,19 @@ npm run verify -- --with-tests    # 追加窄测（含从当前 bundle 抽取 AC
 - `catalog-unknown.json` 不存在：没有出现白名单外的原生目录 RPC。
 - **原生 picker 缓存** 1101 条（3.12.43 同期为 1018）；3.12.59 新增原生形态不破坏插件：新 harness `gpt-5p4-persistent`（10 条）由插件原样透传（无白名单），29 条无 `familyUid` 条目是 `fusion`/`fusion-sidekick-*` router 条目与 `MODEL_GPT_OSS_120B`/`adaptive`，`familyUid` 仅用于设置页聚合。
 
+## 3.13.4 运行期观测（2026-11-17）
+
+真机：Devin **3.13.4**（`Info.plist` 2026-11-16 17:20、内置二进制 17:22，此后未变）× 插件 **0.6.10**（重装后宿主 15:03:50 起）。`config.json` 9 键，`mirrorNativeAllowlist` 不存在。
+
+- catalog 事件全部为 **`models=61 / matrix=52`**（8 条 `GetUserStatus` + 1 条 `GetCliModelConfigs` + 1 条 `GetCliTeamSettings`），无 `mirror` 字段；
+- 原生条目数 `GetUserStatus=47` / `GetCliModelConfigs=69`，`allowedCount=69`、`allowedKind=restricted`；`families` 为 `{glm:12, swe:12(13), kimi:9, deepseek:8, nemotron:6}`，**claude / gpt / gemini 各 0**；
+- `team_settings.b0239737b4184efa.bin` = 10,272 B（mirror 开启时为 77,736 B，内部 `claude/gpt/gemini` 各 0 次）；`GetCliTeamSettings` `before 881 → after 1398`、`afterOwn 45`（mirror 时 6,517）；
+- 两把实际生效的凭据（桌面 `accessToken` 与 ACP 递给 CLI 的 key `auth=1efb47a89d33`）**结果一致**（`credentials.toml` 那条 CLI 根本不读，`auth status` 仍报未登录），说明限制是账号级而非凭据级；
+- 官方 `GET /api/v2alpha/models` 实测：全量 **1074**，`allowed:true` 仅 **47**，1011 条 claude/gpt/gemini 全 `allowed:false`，`allowed_model_uids` 与 `allowed_model_tags` 均为 `[]`，带 `org_id` 查询结果与 `ETag`（`32816dd722975ae619236aef434b7917`）完全一致；
+- 上游口径变化（同一安装、同一凭据）：`model_configs` v6 代际 payload **913,664 B**（`2026-11-17T01:58Z`，claude 命中 2601 / gpt 4544）→ v7 代际 **58,299 B**（`05:00Z`，仅 `fusion-sidekick-*`）。故目录收窄发生在服务端准入层，与客户端版本和插件重写无关。
+
+结论：`matrix` 从 229 掉到 52 是 lead 侧 frontier 被准入层移除的连带结果，`mirrorNativeAllowlist` 无法恢复（交集上限 = 原生集合）。判据见 `.devin/rules/model-entitlement-forensics.md`。
+
 ## 官方 Fusion 组合的变更与注入边界（2026-11-13）
 
 解析同一 identity 的 CLI 缓存 `~/.cache/devin/cli/model_configs_v6.22718a016192f32f.bin` 与其 11-06 备份（`.bak`，覆盖本次升级）：

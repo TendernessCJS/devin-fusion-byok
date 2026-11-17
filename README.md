@@ -142,6 +142,14 @@ Devin 的模型选择器读的是 CLI 在 `~/.cache/devin/cli` 下的按身份�
 
 「刷新缓存」是**强制**的：自动检查只看 UID 是否齐全，而「UID 齐全但内容过时」（例如模型换了名字、下拉里的选项多余）它看不到，所以按钮会主动重算一遍，只有内容真的有差异才写盘——连按不会反复改动文件。
 
+**如果整族模型消失（例如 Claude / GPT / Gemini 一个都没有），那不是缓存问题。** 服务端会在更上层按账号准入（套餐、计费方式、区域）过滤目录，插件不会也无法造出账号本来没有的模型：配置里的原生白名单镜像只能放宽用户侧白名单，交集上限仍是服务端下发的原生集合。判定办法是用账号自建的 `cog_` token 调一次官方接口（`Authorization: Bearer cog_...` 只放在请求头里，别贴进命令行参数或聊天）：
+
+```bash
+curl "https://server.codeium.com/api/v2alpha/models?filter=allowlist" -H "Authorization: Bearer $DEVIN_API_KEY"
+```
+
+若返回的模型数远少于全量、且响应里 `allowed_model_uids` 与 `allowed_model_tags` 都是空数组，说明限制在账号准入层而非团队白名单，需要联系官方支持；面板与日志里的 `allowedCount`、`families` 字段可以直接作为报障依据。
+
 ## 隐私与安全
 
 - 密钥只保存在本机用户配置文件（权限 0600），面板不回显已保存的密钥。
@@ -184,7 +192,7 @@ Devin 的模型选择器读的是 CLI 在 `~/.cache/devin/cli` 下的按身份�
 
 ## 当前版本验证
 
-- 本机 macOS + Devin **3.12.43** × 插件 **0.6.7**：自动化全量测试 1764 例 / 0 失败；真机侧 registry/backend 进程、health 与 host-builds 确认 0.6.7 在位，backend `sourceId` 为 `152967d0…5190a`，BYOK（deepseek-flash）对话与工具回合返回 200，Fusion 使用暂未发现问题。以上为本地打包与既有真机证据，非完整端到端验收。
+- 本机 macOS + Devin **3.13.4** × 插件 **0.6.10**：catalog 观测 `models=61 / matrix=52`（原生 47/69、allowlist 69 restricted），自动化全量测试 1803 例 / 0 失败；真机日志确认驱动安装与 diagnostics 字段生效。该轮同时确认目录收窄来自服务端准入层，与插件无关，详见 [`docs/native-compat-verification.md`](docs/native-compat-verification.md)。
 - 历史：本机 macOS + Devin **3.12.43** × 插件 0.6.6 曾做静态契约 `ok`、`npm run verify -- --with-tests` 全项通过、全量测试 1755 例 / 0 失败；该结果不迁移到 0.6.7。
 - 升级后的复验方法与此前各版本的记录见 [`docs/native-compat-verification.md`](docs/native-compat-verification.md)。
 - ACP 终态判定现从当前 bundle 抽取真实谓词：应用目录缺失才跳过，锚点缺失、重复或形状变化一律失败，不再静默 skip。

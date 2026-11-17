@@ -14,3 +14,10 @@ backend 冷启动回显采纳**。bridge 对 GetCliTeamSettings **每请求恰�
 断连/超时/客户端取消）通知 `null` 并打断连续计数。**确认提交（control POST / 已去抖判定）直调
 `onAllowedUids` 立即生效并重置原始空计数，不再等 3**；unrestricted 时 `allowedUids` 为空仍要推，但
 models 必须非空（空 payload 不推），POST 的模式校验在 ingest 之前。旧缓存缺 `allowedMode` 键=restricted。
+
+## 准入层在 f7 之上（2026-11-17 实测）
+
+`GetCliTeamSettings` f7 只是**用户侧白名单**；服务端在更上层还按账号准入（plan / billing / 区域）过滤 `model_configs` 与
+`GetUserStatus`，所以 **f7 加宽不会造出原生目录里没有的条目**（交集上限 = 原生集合）。判定 `restricted` 时不要直接归因
+「团队/组织限制了模型」：`allowedKind=restricted` 与「存储白名单为空」可以同时成立，此时限制来自准入层，页面上那个
+`Reset settings` 是空操作。判据与取证方式见 `model-entitlement-forensics.md`。

@@ -43,6 +43,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/catalog-and-picker.md` | 改 picker 可见性契约、角色白名单、陈旧条目判定与清理、推送门控、`nativeFamilies`、维度 order |
 | `.devin/rules/picker-visibility.md` | 改 picker 行可见性契约、角色白名单或 Lead/Sidekick 门槛时必读 |
 | `.devin/rules/catalog-allowlist.md` | 改 allowlist 三态判定、双通道去抖或 restricted→unrestricted 提交时机时必读 |
+| `.devin/rules/model-entitlement-forensics.md` | **排查「picker 整族变窄 / Claude·GPT·Gemini 全消失 / mirror 加宽无效」时必读**——准入层（plan/区域）在 f7 之上、官方 List Models API 取证、缓存字节判据与已排除路径 |
 | `.devin/rules/catalog-publication.md` | 改原生 `auth-status` 写入、`GetModelStatuses`，或怀疑「改了配置会话看不见」时必读；发布确认链已随 3.12.17 删除 |
 | `.devin/rules/context-and-compaction.md` | 改声明的上下文窗口（ModelInfo `f4`/`maxTokens`）、或怀疑「是不是扩展触发了压缩」 |
 | `.devin/rules/native-observation-and-cli-cache.md` | 改原生目录观测与缓存、CLI 缓存原地重写、配置键分类清理 |

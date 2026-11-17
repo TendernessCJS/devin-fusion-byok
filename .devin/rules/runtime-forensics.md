@@ -64,3 +64,8 @@ description: "Apply when diagnosing why injection or catalog changes appear not 
 - **窗口重载不重启 backend**（2026-11-02 实测）：重载只换扩展宿主，`runtime.log` 的 `ready` 时间与端口都不变
   （重载前后仍是 `02:02:37 / 39842`）。判「是否重载过」看宿主 output 日志的新目录
   `logs/<session>/windowN/exthost/output_logging_<ts>/1-Devin Fusion BYOK.log`，不要用 `ready` 或 `host-build.json`（后者停更在 0.5.6）。
+
+- **catalog 事件的诊断字段（0.6.10 起）**：`auth`（`sha256(authorization || x-api-key)` 前 12 位，无头为 `none`）、`native`（观测到的原生条目数）、
+  `families`（按家族计数）、`allowedCount`/`allowedKind`（allowlist 快照；非 `GetCliTeamSettings` 为 `-1`/`null`）、mirror 开启时另外带 `mirror`。
+  用途：`auth` 用来分辨凭据身份（桌面 `accessToken`、ACP 递给 CLI 的 key、`credentials.toml` 三者指纹各不相同），**同一结果 + 不同 `auth` 即账号级**；
+  `families` 缺哪个家族就是准入层砍掉的那批。判据见 `model-entitlement-forensics.md`。
