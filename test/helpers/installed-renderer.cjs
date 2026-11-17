@@ -190,7 +190,7 @@ function loadFamilyPipeline(root) {
   resolved.Gt = required(source.match(new RegExp(`function (\\w+)\\(e,t\\)\\{let\\{families:\\w+\\}=${grouping[1]}\\(t\\?\\?e\\)`)), 'grouped picker input')[1];
   // Dimension selection with prefix fallback: reads the current model's orders
   // through the collector, then walks back over the earlier dimensions.
-  resolved.Ut = required(source.match(/function ([\w$]+)\(e,t,n,r\)\{let \w+=\w+\(t,e\.dimensions\),\w+=e\.dimensions\[n\]/), 'dimension selection')[1];
+  resolved.Ut = required(source.match(/function ([\w$]+)\(e,t,n,r\)\{let [\w$]+=[\w$]+\(t,e\.dimensions\),[\w$]+=e\.dimensions\[n\]/), 'dimension selection')[1];
   const start = source.indexOf(grouping[0]);
   const rowsStart = source.indexOf(`function ${resolved.Kt}(`);
   if (!(start >= 0 && rowsStart > start)) throw new Error('installed Devin family pipeline range');
