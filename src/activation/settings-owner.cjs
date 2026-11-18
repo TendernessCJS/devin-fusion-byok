@@ -3,65 +3,95 @@ const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } 
 const { globalSetting } = require('./settings.cjs');
 const { RuntimeError } = require('./errors.cjs');
 const { createManagedSettingsGate } = require('./managed-settings.cjs');
-const { BACKEND_URL } = require('../runtime/port.cjs');
+const { buildCliEnvironment } = require('./cli-environment.cjs');
+const { readProxySettings } = require('./proxy-settings.cjs');
 
-// A configured http.proxy routes this window, so the managed CLI env must exempt
-// loopback or devin-cli cannot reach the local backend or the LS bridge. Read
-// the global value first: merged workspace settings are never copied into global
-// settings, and the effective value is only a fallback for the window case.
-function loopbackExemption(vscode) {
-  let proxy;
-  try {
-    const http = vscode.workspace.getConfiguration('http');
-    proxy = http?.inspect?.('proxy')?.globalValue;
-    if (typeof proxy !== 'string' || !proxy.trim()) proxy = http?.get?.('proxy');
-  } catch {}
-  return typeof proxy === 'string' && proxy.trim() ? '127.0.0.1,localhost,::1' : null;
-}
-
-function createSettingsOwner({ root, extensionPath, vscode, globalState, isLive }) {
+function createSettingsOwner({ root, extensionPath, vscode, globalState, isLive, env = process.env }) {
   const gate = createManagedSettingsGate();
   // Every settings write goes through the gate so a disable can drain it before
   // restoring; writes attempted after close are cancelled rather than landing
   // on top of the restored values.
   const write = async fn => {
     if (!isLive()) throw new RuntimeError('cancelled');
-    try { return await gate.critical(fn); }
-    catch (error) { if (error?.code === 'cancelled') throw new RuntimeError('cancelled'); throw error; }
+    // The liveness check is repeated when the entry finally runs: a queued
+    // write accepted before a disable must not land after the restore.
+    try {
+      return await gate.critical(() => {
+        if (!isLive()) throw new RuntimeError('cancelled');
+        return fn();
+      });
+    } catch (error) { if (error?.code === 'cancelled') throw new RuntimeError('cancelled'); throw error; }
   };
   const openWrites = () => gate.open();
   const drainWrites = () => gate.drain();
-  const applyEnvironment = async () => {
+  // The whole leg — reading the current settings, deriving the originals, the
+  // receipt, the globalState backups and the settings write — runs inside one
+  // critical entry. Reading a snapshot outside the gate would let a queued
+  // writer commit an originals map computed from a document that no longer
+  // exists.
+  // `proxyConfig` is the raw configuration the backend already accepted, handed
+  // in by the caller so this write cannot observe a newer, unaccepted policy: a
+  // queued writer must apply the snapshot its own operation settled on. Only an
+  // independent caller omits it and lets the owner read the live settings.
+  const applyEnvironment = async proxyConfig => write(async () => {
     const settings = vscode.workspace.getConfiguration('devin.acp');
     const existing = globalSetting(settings, 'agentEnv');
     const previous = { ...(existing['devin-cli'] || {}) };
-    const desired = { WINDSURF_API_SERVER_URL: BACKEND_URL };
-    const noProxy = loopbackExemption(vscode);
-    if (noProxy) desired.NO_PROXY = noProxy;
-    const saved = { ...globalState.get('savedEnv', {}) }, managed = globalState.get('managedEnv', {});
     const receipt = readReceipt(root, extensionPath);
-    // Migrate this extension's experimental proxy settings without changing any
-    // values the user subsequently edited.
-    for (const [key, value] of Object.entries(managed)) if (!(key in desired) && previous[key] === value) {
-      if (saved[key] == null) delete previous[key]; else previous[key] = saved[key];
+    const saved = { ...globalState.get('savedEnv', {}) };
+    const managed = globalState.get('managedEnv', {});
+    // What the user's own environment would be if this extension had never
+    // written: receipt first, then the older globalState-only backups. Starting
+    // from here (not from the current values) is what stops a shrinking proxy
+    // bypass list from accumulating every host it ever contained.
+    const original = { ...(restoreObject({ 'devin.acp.agentEnv': existing }, receipt.changes)
+      .value['devin.acp.agentEnv']?.['devin-cli'] || {}) };
+    const recorded = key => receipt.changes.some(change =>
+      JSON.stringify(change.path) === JSON.stringify(['devin.acp.agentEnv', 'devin-cli', key]));
+    for (const [key, value] of Object.entries(managed)) {
+      // A receipt entry is authoritative for its original even when that value
+      // happens to equal the managed string; the older globalState backup only
+      // fills the gap where the receipt has no record at all.
+      if (recorded(key)) continue;
+      if (original[key] === value && Object.hasOwn(saved, key)) {
+        if (saved[key] == null) delete original[key]; else original[key] = saved[key];
+      }
     }
-    for (const key of Object.keys(desired)) if (!(key in saved)) saved[key] = previous[key] ?? null;
+    let desired;
+    try {
+      const snapshot = proxyConfig === undefined ? readProxySettings(vscode, env).config : proxyConfig;
+      desired = buildCliEnvironment({ proxyConfig: snapshot, original });
+    }
+    catch { throw new RuntimeError('proxy_unavailable'); }
+    // A managed key that is no longer desired goes back to the user's own value
+    // only while the setting still holds what we last wrote; a later user edit
+    // is theirs.
+    for (const [key, value] of Object.entries(managed)) {
+      if (key in desired || previous[key] !== value) continue;
+      if (Object.hasOwn(original, key)) previous[key] = original[key]; else delete previous[key];
+    }
+    // Always refreshed, not only on first management: with the receipt gone the
+    // legacy backup is the only path back to what the user last set.
+    for (const key of Object.keys(desired)) {
+      saved[key] = Object.hasOwn(original, key) ? original[key] : null;
+    }
+    // `remember` keeps a receipt entry's first original while the setting still
+    // holds the managed value, and adopts the user's own edit otherwise — so a
+    // mid-management NO_PROXY edit survives the next restore.
     for (const [key, value] of Object.entries(desired)) {
       const current = valueAt({ 'devin.acp.agentEnv': existing }, ['devin.acp.agentEnv', 'devin-cli', key]);
-      const legacy = managed[key] === current.value && Object.hasOwn(saved, key)
+      const legacy = Object.hasOwn(managed, key) && managed[key] === current.value && Object.hasOwn(saved, key)
         ? saved[key] == null ? { exists: false } : { exists: true, value: saved[key] } : undefined;
       remember(receipt, ['devin.acp.agentEnv', 'devin-cli', key], current, value, legacy);
     }
     // Commit recovery information before changing the user's settings. The
     // whole write leg is one critical section: a disable that lands mid-write
     // drains it before restoring, and one already draining cancels it.
-    await gate.critical(async () => {
-      saveReceipt(receipt);
-      await globalState.update('savedEnv', saved);
-      await globalState.update('managedEnv', desired);
-      if (Object.keys(managed).some(k => !(k in desired)) || Object.entries(desired).some(([k, v]) => previous[k] !== v)) await settings.update('agentEnv', { ...existing, 'devin-cli': { ...previous, ...desired } }, vscode.ConfigurationTarget.Global);
-    });
-  };
+    saveReceipt(receipt);
+    await globalState.update('savedEnv', saved);
+    await globalState.update('managedEnv', desired);
+    if (Object.keys(managed).some(k => !(k in desired)) || Object.entries(desired).some(([k, v]) => previous[k] !== v)) await settings.update('agentEnv', { ...existing, 'devin-cli': { ...previous, ...desired } }, vscode.ConfigurationTarget.Global);
+  });
   const saveModel = async uid => write(async () => {
     const settings = vscode.workspace.getConfiguration('devin.acp'); const preferences = globalSetting(settings, 'agentPreferences');
     const receipt = readReceipt(root, extensionPath), keys = ['devin.acp.agentPreferences', 'devin-cli', 'model'];

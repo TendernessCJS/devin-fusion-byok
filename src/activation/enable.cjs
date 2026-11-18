@@ -91,7 +91,7 @@ async function pushConfiguredUpstream({ root, vscode, log, state, signal, should
 // compiled-at-host config object, and the key is its JSON (never logged).
 // The key is invalidated before the real POST and only re-recorded on
 // confirmed success, so an A→B→A sequence can never dedupe the second A.
-async function pushConfiguredProxy({ root, vscode, log, state, signal, shouldContinue = () => true, isLive = () => true }) {
+async function pushConfiguredProxy({ root, vscode, log, state, signal, shouldContinue = () => true, isLive = () => true, env = process.env }) {
   if (!isLive()) return { ok: false, reason: 'disabled' };
   try { state.proxyPushAbort?.abort(); } catch {}
   const generation = (state.proxyPushGeneration = (state.proxyPushGeneration || 0) + 1);
@@ -105,15 +105,17 @@ async function pushConfiguredProxy({ root, vscode, log, state, signal, shouldCon
   const run = previous.then(async () => {
     try {
       if (cancelled()) return { ok: false, reason: 'superseded' };
-      const { config: proxyConfig, source } = readProxySettings(vscode);
+      const { config: proxyConfig, source } = readProxySettings(vscode, env);
       const key = JSON.stringify(proxyConfig);
-      if (state.proxyPushedKey === key) return { ok: true, source, skipped: 'dedupe' };
+      if (state.proxyPushedKey === key) return { ok: true, source, skipped: 'dedupe', config: proxyConfig };
       state.proxyPushedKey = undefined;
       const result = await pushProxy({ root, config: proxyConfig, source, signal: composite });
       if (cancelled()) return { ok: false, reason: 'superseded' };
       if (result.ok) state.proxyPushedKey = key;
       log('proxy-push', { ok: result.ok === true, reason: result.reason, source });
-      return result;
+      // The accepted config rides along for the environment write only: it is
+      // memory-only, never logged, and never part of pushProxy's own result.
+      return result.ok ? { ...result, config: proxyConfig } : result;
     } catch { return { ok: false, reason: 'sync_error' }; }
   });
   state.proxyPushChain = run.then(() => {}, () => {});
@@ -121,7 +123,7 @@ async function pushConfiguredProxy({ root, vscode, log, state, signal, shouldCon
   return run;
 }
 
-function createRuntimeSession({ root, extensionPath, subscriptions, config, configFile, vscode, context, nativeMain, log, catalog, catalogSync, settingsOwner, selection, continuation, onPublish, t = translator() }) {
+function createRuntimeSession({ root, extensionPath, subscriptions, config, configFile, vscode, context, nativeMain, log, catalog, catalogSync, settingsOwner, selection, continuation, onPublish, env = process.env, t = translator() }) {
   const state = {
     activationDisposed: false, activationGeneration: 0, reconcileHalted: true,
     connection: undefined, acpObserver: undefined, authStatus: undefined,
@@ -222,7 +224,7 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
     // a failure — the latest settled result is authoritative.
     const syncProxy = async ({ force = false } = {}) => {
       if (force) state.proxyPushedKey = undefined;
-      void pushConfiguredProxy({ root, vscode, log, state, signal: waiting.signal,
+      void pushConfiguredProxy({ root, vscode, log, state, env, signal: waiting.signal,
         shouldContinue: () => !isSuperseded(generation) && config().enabled !== false, isLive });
       let selected, result;
       do {
@@ -269,7 +271,10 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
     // The subscription lives before the remote/native split so remote windows
     // (which share this backend) get hot updates too. workspace-level values
     // are never read: every event re-resolves the global value, and an
-    // identical result dedupes against the in-memory key.
+    // identical result dedupes against the in-memory key. The managed CLI env
+    // follows the policy the backend actually accepted — a rejected policy
+    // leaves the previous environment in place rather than announcing a bypass
+    // list the runtime does not honour.
     try { state.proxySubscription?.dispose?.(); } catch {}
     const onConfigChange = vscode.workspace?.onDidChangeConfiguration;
     if (typeof onConfigChange === 'function') {
@@ -278,10 +283,15 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
           if (event?.affectsConfiguration?.('http.proxy') || event?.affectsConfiguration?.('http.noProxy') ||
               event?.affectsConfiguration === undefined) {
             if (isDisposed() || !isLive() || config().enabled === false) return;
-            const seenGeneration = state.activationGeneration;
-            void pushConfiguredProxy({ root, vscode, log, state,
-              shouldContinue: () => config().enabled !== false && state.activationGeneration === seenGeneration, isLive })
-              .catch(() => log('proxy-push', { ok: false, reason: 'sync_error' }));
+            // Returning the promise keeps the handler awaitable in tests; the
+            // host ignores listener return values.
+            return (async () => {
+              const result = await syncProxy();
+              if (!result?.ok || isSuperseded(generation) || !isLive()) return;
+              await settingsOwner.applyEnvironment(result.config);
+            })().catch(error => {
+              if (safeError(error).code !== 'cancelled') log('proxy-environment-sync-failed');
+            });
           }
         });
       } catch {}
@@ -296,7 +306,7 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
     backendStatus = 'running'; publishPanel();
     state.reconcileHalted = false;
     try {
-      await settingsOwner.applyEnvironment();
+      await settingsOwner.applyEnvironment(latest.config);
       // The preference write registers through saveFusionChoice's own gate
       // entry instead of nesting inside this critical section.
       if (isSuperseded(generation)) return;
@@ -428,17 +438,24 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
   const deactivate = async () => {
     state.activationDisposed = true;
     continuation.dispose();
-    await teardown(state, { continuation, catalogSync });
-    // Disabling in the extension manager restarts the extension host and never runs
-    // the disable command; without this the native CLI keeps pointing at a runtime
-    // that no longer starts. A plain reload or quit keeps the shared settings.
-    try {
-      if (!isHostDisabled({ storageRoot: root })) return;
-      const drained = await settingsOwner.drainWrites();
-      if (!drained) log('managed-settings-drain-timeout', { phase: 'host-disable' });
-      await settingsOwner.restore({ keepReceipt: drained === false });
-      log(drained ? 'host-disabled-settings-restored' : 'host-disabled-settings-restore-pending');
-    } catch {}
+    // Closing the gate here ends the window for new managed writes and waits for
+    // the one that is running; a queued write is cancelled by the same drain.
+    // A plain reload or quit still keeps the shared settings — only a host
+    // disable restores them.
+    const drained = await settingsOwner.drainWrites();
+    if (!drained) log('managed-settings-drain-timeout', { phase: 'deactivate' });
+    try { await teardown(state, { continuation, catalogSync }); }
+    finally {
+      // Disabling in the extension manager restarts the extension host and never
+      // runs the disable command; without this the native CLI keeps pointing at
+      // a runtime that no longer starts.
+      try {
+        if (isHostDisabled({ storageRoot: root })) {
+          await settingsOwner.restore({ keepReceipt: drained === false });
+          log(drained ? 'host-disabled-settings-restored' : 'host-disabled-settings-restore-pending');
+        }
+      } catch {}
+    }
   };
 
   return { ensureEnabled, disable, deactivate, prepareHostSupport,

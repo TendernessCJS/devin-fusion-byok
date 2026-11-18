@@ -32,6 +32,7 @@ function fixture(t, initial = {}) {
     dispose() { authDisposed += 1; },
     status: { state: 'observing', calls: 0, rewrites: 0 },
   };
+  const httpConfig = { ...(initial.http || {}) };
   const updateGates = { settings: new Map(), state: new Map() };
   const makeGate = (map, key) => { let mark, release;
     const started = new Promise(resolve => { mark = resolve; }), promise = new Promise(resolve => { release = resolve; });
@@ -50,7 +51,11 @@ function fixture(t, initial = {}) {
     // automatic language selection keeps choosing it.
     env: { language: 'zh-cn' },
     ConfigurationTarget: { Global: 1 },
-    workspace: { getConfiguration: () => settings,
+    // Only the http section carries a proxy; every other section is the
+    // devin.acp settings object the assertions inspect.
+    workspace: { getConfiguration: section => section === 'http'
+        ? { get: () => undefined, inspect: key => ({ globalValue: httpConfig[key] }) }
+        : settings,
       onDidChangeConfiguration: fn => { preferenceListeners.push(fn); return { dispose() {} }; } },
     extensions: { getExtension: () => ({ extensionPath: '/native', packageJSON: { main: 'main.js', version: 'test' } }) },
     commands: { registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
@@ -177,6 +182,7 @@ function fixture(t, initial = {}) {
     executed: () => executed, authOptions: () => authOptions,
     authDisposed: () => authDisposed,
     acpDisposed: () => acpDisposed, setBridgeDisposeError: error => { bridgeDisposeError = error; },
+    setHttp: patch => Object.assign(httpConfig, patch),
     settle: async (ticks = 20) => { for (let index = 0; index < ticks; index++) await next(); },
     remoteCalls: () => remoteCalls,
     setRemoteEnsure: fn => { remoteEnsure = fn; },
@@ -445,6 +451,23 @@ test('re-enabling from the panel re-arms reconciliation after a disable', async 
   delete f.globals.agentPreferences['devin-cli'].model;
   await f.firePreference();
   assert.equal(f.globals.agentPreferences['devin-cli'].model, 'fusion-dfbyok-selected');
+});
+
+test('an external http.proxy edit reaches the managed CLI environment after activation', async t => {
+  const f = fixture(t, { http: { proxy: 'http://127.0.0.1:7897', noProxy: ['gf.com.cn'] } });
+  await f.activate(f.context);
+  const managed = () => String(f.globals.agentEnv['devin-cli'].NO_PROXY || '').split(',');
+  assert.ok(managed().includes('gf.com.cn'), 'the accepted policy drives the CLI bypass');
+  assert.equal(f.globals.agentEnv['devin-cli'].no_proxy, f.globals.agentEnv['devin-cli'].NO_PROXY);
+  assert.equal(f.globals.agentEnv['devin-cli'].KEEP, 'user-value', 'the user env keys survive the managed write');
+  // The user edits http.noProxy: the new list replaces the old one instead of
+  // accumulating it, and both spellings follow.
+  f.setHttp({ noProxy: ['internal.example'] });
+  await f.firePreference('http.proxy');
+  await f.settle();
+  assert.ok(managed().includes('internal.example'));
+  assert.equal(managed().includes('gf.com.cn'), false, 'the dropped domain is gone from the managed env');
+  assert.ok(managed().includes('localhost'), 'loopback stays exempt');
 });
 
 const oldRuntimeHealth = idle => ({ service: 'devin-fusion-byok', version: '0.1.0', sourceId: 'old', rootId: 'root',
@@ -1180,6 +1203,52 @@ test('a host-disable drain timeout logs pending rather than restored', { timeout
     'the restored event is reserved for a completed drain');
   gate.release();
   await Promise.allSettled([enabling]);
+});
+
+test('deactivate waits for the running managed write and cancels the queued one', async t => {
+  const f = fixture(t);
+  await f.activate(f.context); await f.settle();
+  // Hold the first environment write, then let a second configuration change
+  // queue behind it: only the running one may land.
+  const gate = f.gateSettingsUpdate('agentEnv'); t.after(() => gate.release());
+  f.setHttp({ proxy: 'http://127.0.0.1:7901', noProxy: ['running.example'] });
+  const running = f.firePreference('http.proxy');
+  await gate.started;
+  f.setHttp({ proxy: 'http://127.0.0.1:7902', noProxy: ['queued.example'] });
+  const queued = f.firePreference('http.proxy');
+  await f.settle();
+  const deactivating = f.deactivate();
+  gate.release();
+  await Promise.allSettled([running, queued, deactivating]);
+  const env = f.globals.agentEnv['devin-cli'];
+  const managed = String(env.NO_PROXY || '').split(',');
+  assert.ok(managed.includes('running.example'), 'the write that had started completed before teardown');
+  assert.equal(managed.includes('queued.example'), false, 'the queued write never landed after deactivate');
+  assert.ok(!f.logs.some(line => line.includes('managed-settings-drain-timeout')),
+    'a completed drain reports no timeout');
+});
+
+test('a plain reload keeps the managed settings and only closes the write gate', async t => {
+  const f = fixture(t);
+  await f.activate(f.context); await f.settle();
+  assert.ok(Object.hasOwn(f.globals.agentEnv['devin-cli'], 'WINDSURF_API_SERVER_URL'));
+  await f.deactivate();
+  assert.ok(Object.hasOwn(f.globals.agentEnv['devin-cli'], 'WINDSURF_API_SERVER_URL'),
+    'a reload or quit keeps the shared managed settings');
+  assert.ok(!f.logs.some(line => line.includes('host-disabled-settings')),
+    'host-disable bookkeeping is reserved for an actual disable');
+});
+
+test('a host disable restores the managed settings even when the bridge teardown throws', async t => {
+  const f = fixture(t, { hostDisabled: true });
+  await f.activate(f.context); await f.settle();
+  assert.ok(Object.hasOwn(f.globals.agentEnv['devin-cli'], 'WINDSURF_API_SERVER_URL'));
+  f.setBridgeDisposeError(new Error('bridge gone'));
+  // The teardown failure surfaces from deactivate; the restore still ran.
+  await assert.rejects(f.deactivate(), /bridge gone/);
+  assert.equal(Object.hasOwn(f.globals.agentEnv['devin-cli'], 'WINDSURF_API_SERVER_URL'), false,
+    'the restore runs in a finally and survives the teardown failure');
+  assert.ok(f.logs.some(line => line.includes('host-disabled-settings-restored')));
 });
 
 test('a local window never installs the process-global remote wrappers', async t => {
