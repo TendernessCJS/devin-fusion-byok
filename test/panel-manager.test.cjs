@@ -664,10 +664,10 @@ test('setUpdateProxy is retired: unsupported, never writes, never rebuilds the k
   const f = memory();
   await assert.rejects(f.manager.dispatch('setUpdateProxy', { value: 'http://127.0.0.1:7897' }), PanelInputError);
   assert.equal('updateProxy' in f.read(), false);
-  // A legacy key carried in from an old write is reaped by the next normal save.
+  // Unknown legacy keys are not exposed to the panel.
   f.externalChange(config => { config.updateProxy = 'http://legacy:1'; });
   const state = await f.manager.dispatch('setEnabled', { enabled: true });
-  assert.equal('updateProxy' in f.read(), false, 'the mutator reaps only the retired key');
+  assert.equal(f.read().updateProxy, 'http://legacy:1', 'normal saves preserve unknown keys');
   assert.equal('updateProxy' in state, false, 'the panel state never exposes the retired key');
 });
 

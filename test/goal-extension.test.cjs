@@ -46,6 +46,7 @@ function fixture(t) {
   const root = path.join(directory, 'User/globalStorage/local.devin-fusion-byok'), extensionPath = path.join(directory, 'extension');
   fs.mkdirSync(root, { recursive: true }); fs.mkdirSync(extensionPath);
   const configFile = path.join(root, 'config.json');
+  realRequire('./config/config.cjs').admitStorage(root);
   fs.writeFileSync(configFile, JSON.stringify({ enabled: true, goalEnabled: true, providers: [{ id: 'cpa', name: 'CPA', models: [] }] }));
   const globals = { agentEnv: { 'devin-cli': {} }, agentPreferences: { 'devin-cli': { model: 'native-max' } } };
   const state = new Map(), commands = new Map(), logs = [], notices = [], watchers = [], preferenceListeners = [], subscriptions = [];
@@ -102,7 +103,8 @@ function fixture(t) {
     'node:child_process': { ...require('node:child_process'),
       spawn: () => { const child = new EventEmitter(); child.unref = () => {}; return child; } },
     './config/config.cjs': { readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
-      defaultConfig: realRequire('./config/config.cjs').defaultConfig },
+      defaultConfig: realRequire('./config/config.cjs').defaultConfig,
+      admitStorage: realRequire('./config/config.cjs').admitStorage },
     './catalog.cjs': { buildCatalog: config => ({ models: [], fusions: {}, matrixUids: new Set(), rolePool: { lead: [], sidekick: [] } }) },
     './runtime/host/native-models.cjs': { readNativeModels: async () => ({ status: 'empty', models: [] }),
       isUpstreamUid: realRequire('./runtime/host/native-models.cjs').isUpstreamUid,

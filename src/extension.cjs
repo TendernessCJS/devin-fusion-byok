@@ -2,7 +2,7 @@
 const vscode = require('vscode');
 const fs = require('node:fs');
 const path = require('node:path');
-const { defaultConfig, readConfig, pruneLegacyUpdateProxy } = require('./config/config.cjs');
+const { defaultConfig, readConfig, admitStorage } = require('./config/config.cjs');
 const { readDoc, updateConfig, archiveCorrupt, recoverFromBackup } = require('./config/store.cjs');
 const { buildCatalog } = require('./catalog.cjs');
 const { safeError } = require('./activation/errors.cjs');
@@ -31,10 +31,15 @@ async function activate(context) {
   const i18n = createI18n({ language: () => vscode.env?.language, memento: context.globalState });
   const root = context.globalStorageUri.fsPath, configFile = path.join(root, 'config.json');
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  if (!admitStorage(root)) {
+    log('clean-install-required');
+    vscode.window.showErrorMessage(i18n.t('notify.cleanInstallRequired'));
+    return;
+  }
   const build = publishHostBuild({ root, extensionPath: context.extensionPath, version: context.extension?.packageJSON?.version, activatedAt });
   log('host-build', build ? { id: build.id.slice(0, 12), files: build.files, version: build.version,
     pid: build.pid, instanceId: build.instanceId, activatedAt: build.activatedAt, recordFile: build.recordFile, kind: build.kind } : { unavailable: true });
-  if (!fs.existsSync(configFile)) updateConfig(configFile, doc => Object.assign(doc, defaultConfig()));
+  if (!fs.existsSync(configFile)) updateConfig(configFile, doc => Object.keys(doc).length ? false : Object.assign(doc, defaultConfig()));
   try {
     readDoc(configFile);
   } catch (error) {
@@ -51,13 +56,6 @@ async function activate(context) {
       log('config-reset-corrupt');
       vscode.window.showErrorMessage(i18n.t('notify.configReset'));
     }
-  }
-  // Retired key cleanup runs once per activation through the locked config
-  // transaction — the read filter avoids taking the lock on the common path,
-  // and the mutator's own hasOwnProperty makes a same-key second window a
-  // no-op revision-wise.
-  if (Object.prototype.hasOwnProperty.call(readConfig(configFile), 'updateProxy')) {
-    updateConfig(configFile, pruneLegacyUpdateProxy);
   }
   const config = () => readConfig(configFile);
   const nativeMain = (() => {

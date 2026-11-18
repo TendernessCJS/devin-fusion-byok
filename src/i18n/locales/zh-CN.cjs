@@ -667,6 +667,7 @@ module.exports = Object.freeze({
   'notify.error': 'Fusion BYOK：{message}',
   'notify.configRecovered': 'Fusion BYOK：配置文件已损坏，已从备份恢复。',
   'notify.configReset': 'Fusion BYOK：配置文件已损坏，已重置为默认配置。',
+  'notify.cleanInstallRequired': 'Fusion BYOK：此版本仅支持干净安装，未改动已有数据。请先用旧版恢复受管设置并备份旧存储，再重新安装。',
   'notify.disabled': 'Fusion BYOK 已停用，连接设置已恢复。',
   'notify.disabledPending': 'Fusion BYOK 已停用，但设置写入等待超时；恢复尚未确认，已保留恢复记录，请稍后重试停用。',
   'notify.autoContinuePlanLimit': '已自动继续 10 次仍未结束，已停止自动继续。请检查后手动继续对话。',

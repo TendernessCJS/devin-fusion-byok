@@ -19,6 +19,7 @@ function fixture(t, initial = {}) {
   const root = path.join(directory, 'User/globalStorage/local.devin-fusion-byok'), extensionPath = path.join(directory, 'extension');
   fs.mkdirSync(root, { recursive: true }); fs.mkdirSync(extensionPath);
   const configFile = path.join(root, 'config.json');
+  if (!initial.legacyStorage) realRequire('./config/config.cjs').admitStorage(root);
   fs.writeFileSync(configFile, JSON.stringify({ enabled: true, providers: [{ id: 'cpa', name: 'CPA', models: [] }], ...initial.config }));
   const globals = { agentEnv: { 'devin-cli': { KEEP: 'user-value' } }, agentPreferences: { 'devin-cli': { model: 'native-max', effort: 'high' } }, ...initial.globals };
   const state = new Map(Object.entries(initial.state || {})), commands = new Map(), logs = [], notices = [], watchers = [], preferenceListeners = [];
@@ -86,7 +87,7 @@ function fixture(t, initial = {}) {
     './config/config.cjs': {
       readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
       defaultConfig: realRequire('./config/config.cjs').defaultConfig,
-      pruneLegacyUpdateProxy: realRequire('./config/config.cjs').pruneLegacyUpdateProxy },
+      admitStorage: realRequire('./config/config.cjs').admitStorage },
     './catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: () => [], isOwnUid: realRequire('./catalog/payload.cjs').isOwnUid,
       ownEntriesSignature: realRequire('./catalog/signature.cjs').ownEntriesSignature,
       buildCatalog: config => ({ models: config.providers?.length
@@ -1330,10 +1331,13 @@ test('a failed remote tunnel retries through ensureEnabled without re-running se
   assert.equal(f.remoteCalls().ensure, 2, 'a ready connection stays idempotent');
 });
 
-test('activation prunes a legacy updateProxy key through the config transaction', async t => {
-  const f = fixture(t, { config: { updateProxy: 'http://legacy-proxy:9', lastFusionSelection: 'fusion-dfbyok-selected' } });
-  await f.activate(f.context);
-  const doc = JSON.parse(fs.readFileSync(f.configFile, 'utf8'));
-  assert.equal('updateProxy' in doc, false, 'the retired key is reaped on activation');
-  assert.equal(doc.lastFusionSelection, 'fusion-dfbyok-selected', 'other keys are untouched');
+test('activation rejects an unmarked legacy store without changing it', async t => {
+  const f = fixture(t, { legacyStorage: true, config: { updateProxy: 'http://legacy-proxy:9', lastFusionSelection: 'fusion-dfbyok-selected' } });
+  const before = fs.readFileSync(f.configFile, 'utf8');
+  assert.equal(await f.activate(f.context), undefined);
+  assert.deepEqual(fs.readdirSync(f.root), ['config.json']);
+  assert.equal(fs.readFileSync(f.configFile, 'utf8'), before);
+  assert.equal(f.commands.size, 0);
+  assert.deepEqual(f.updates, []);
+  assert.match(f.notices.join('\n'), /仅支持干净安装/);
 });

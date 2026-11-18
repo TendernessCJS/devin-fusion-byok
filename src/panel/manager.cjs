@@ -1,5 +1,4 @@
 'use strict';
-const { pruneLegacyUpdateProxy } = require('../config/config.cjs');
 const { randomUUID } = require('node:crypto');
 const { analyzeRoles, buildCatalog, buildRoleLists, refKey } = require('../catalog.cjs');
 const { discover: discoverModels } = require('../models/discovery.cjs');
@@ -296,10 +295,6 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       case 'setAutoContinueUntilPlanComplete': config.autoContinueUntilPlanComplete = boolean(t, payload.enabled, 'manager.field.autoContinuePlan'); break;
       default: fail(t('manager.unsupported'));
     }
-    // Retired keys are reaped on every normal save too — a stale updateProxy
-    // dragged in by an old window or an external edit dies here without
-    // touching anything else.
-    pruneLegacyUpdateProxy(config);
     pruneDanglingRoleRefs(config);
     config.providers = sortByOrder(config.providers);
     for (const provider of config.providers) provider.models = sortByOrder(provider.models);

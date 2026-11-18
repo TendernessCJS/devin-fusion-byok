@@ -667,6 +667,7 @@ module.exports = Object.freeze({
   'notify.error': 'Fusion BYOK: {message}',
   'notify.configRecovered': 'Fusion BYOK: the config file was corrupted and has been restored from the backup.',
   'notify.configReset': 'Fusion BYOK: the config file was corrupted and has been reset to the defaults.',
+  'notify.cleanInstallRequired': 'Fusion BYOK: this version requires a clean install. Existing data was not changed. Restore settings with the old version and back up its storage before installing again.',
   'notify.disabled': 'Fusion BYOK is disabled and the connection settings are restored.',
   'notify.disabledPending': 'Fusion BYOK is disabled, but writing the settings timed out. The restore is not confirmed yet; its record was kept, so run Disable again later.',
   'notify.autoContinuePlanLimit': 'Auto-continued 10 times without finishing, so auto-continue has stopped. Check the conversation and continue it by hand.',
