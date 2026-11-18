@@ -62,7 +62,11 @@ function createFusionView(ui) {
     const row = item => {
       const confirmed = !item.native || state().nativeCatalogStatus === 'ready';
       return element('div', { class: 'row' },
-        element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: item.label }),
+        element('div', { class: 'row-main' },
+          element('div', { class: 'fusion-role-title' },
+            element('span', { class: 'row-title', text: item.label }),
+            item.native === true && item.official === true
+              ? element('span', { class: 'badge fusion-preset', text: t('fusion.officialPreset') }) : null),
           item.native ? element('span', { class: 'row-sub',
             text: t('fusion.official') + ((item.memberUids || []).length > 1 ? ' · ' + t('fusion.variants', { count: item.memberUids.length }) : '') })
             : element('span', { class: 'row-sub',

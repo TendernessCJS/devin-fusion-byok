@@ -187,6 +187,7 @@ module.exports = Object.freeze({
   'fusion.searchAria': 'Search {role} models',
   'fusion.listAria': '{role} models',
   'fusion.official': 'Official',
+  'fusion.officialPreset': 'Official preset',
   'fusion.variants': '{count} variants',
   'fusion.enableInRoleAria': 'Enable {label} as {role}',
   'fusion.unavailable': 'Unavailable',

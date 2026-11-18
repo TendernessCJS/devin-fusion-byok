@@ -187,6 +187,7 @@ module.exports = Object.freeze({
   'fusion.searchAria': '搜索 {role} 模型',
   'fusion.listAria': '{role} 模型列表',
   'fusion.official': '官方',
+  'fusion.officialPreset': '官方预设',
   'fusion.variants': '{count} 个变体',
   'fusion.enableInRoleAria': '在 {role} 中启用 {label}',
   'fusion.unavailable': '不可用',

@@ -98,6 +98,9 @@ function panelStyles() {
     button.link-title:hover { background: transparent; text-decoration: underline; }
     .badge { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-pill); background: var(--accent); color: var(--vscode-button-foreground, #fff); white-space: nowrap; }
     .badge.beta { background: transparent; color: var(--accent); border: 1px solid var(--accent); font-size: 10px; padding: 0 6px; vertical-align: 1px; }
+    .fusion-role-title { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 6px; }
+    .fusion-role-title .row-title { min-width: 0; }
+    .badge.fusion-preset { background: transparent; color: var(--muted); border: 1px solid var(--border); font-size: 10px; padding: 0 6px; }
     .goal-doc { max-width: 760px; }
     .goal-doc ul { padding-left: 20px; margin: 6px 0; }
     .goal-doc li { margin: 4px 0; }
