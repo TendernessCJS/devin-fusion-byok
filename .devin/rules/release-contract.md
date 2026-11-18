@@ -20,7 +20,7 @@ description: "Apply when changing self-update behaviour or the release contract 
   不要用 `gh release list` 的输出判断最新版——本仓库裸 `gh` 解析到 `upstream`（见 `upstream-fork-release.md`），读到的是上游 Release。
 - 一键安装仅在 macOS 且 `<appRoot>/bin/devin-desktop` 存在时可用（`createUpdateHost` 里的 `supported` 判断）；其他情况
   `canInstall=false`，只能手动下载 vsix。
-- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。更新检查/下载与 Devin 上游共用用户级 http.proxy/http.noProxy，宿主以 activation/proxy-settings.cjs 取源，经 proxySettings 回调传给 updater，在每次 check/install 编译为 network/proxy-policy.cjs 策略快照。download 在 transferBytes 每一跳通过 allowedUrl 后重新按目标匹配 no-proxy；只对当前更新请求显式选路，不更改宿主全局 fetch/Agent 或环境变量，不影响 BYOK。代理错误绝不回落直连。
+- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。更新检查/下载与 Devin 上游共用用户级 http.proxy/http.noProxy，宿主以 activation/proxy-settings.cjs 取源，经 proxySettings 回调传给 updater，在每次 check/install 编译为 network/proxy-policy.cjs 策略快照。download 在 transferBytes 每一跳通过 allowedUrl 后重新按目标匹配 no-proxy；只对当前更新请求显式选路，不更改宿主全局 fetch/Agent 或环境变量，不影响 BYOK。代理错误绝不回落直连。无效代理配置单独提示；其余仅传输类失败提示检查代理；合法 HTTP 状态、限流、超限与无效 Release 分开提示，403 须明确额度耗尽信号，429 为限流；错误响应正文、代理值不进 UI；不自动按错误重试/切换出口。
   **不要依赖扩展宿主被打过补丁的 `fetch`**：Devin 启动时会把 `globalThis.fetch` 换成 `@vscode/proxy-agent` 的代理感知版本，故更新与模型发现一律走 `src/network/direct-fetch.cjs` 的独立 Agent 或显式策略选路。环境 HTTP(S)_PROXY 只作为读源回落参与策略编译；此功能不写进程级环境变量，也不修改全局 Agent。
   （这些约束只针对**插件运行时代码**；开发者在终端跑 git/gh 命令时按「本机网络路径」一节处理，两者不冲突。）验收方法见 `.devin/skills/release/SKILL.md`。
 - **插件侧请求一律经 `src/network/client-request.cjs` 的 `http.ClientRequest` 构造，绝不用 `http.request`/`https.request`**：宿主补丁不只换 `fetch`，还会替换

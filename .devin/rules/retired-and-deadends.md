@@ -31,21 +31,21 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   `GetChatMessage` 都跟随；但它**优先级低于 env**（env=死端口时 CLI 直接对死端口失败、不回退 meta），而扩展拿不到 key，所以
   「env 是唯一可用入口」的结论不变——**别把这条误读成「meta 那条路根本不存在」**。细节见 `runtime-and-injection.md`。
 
-- **审「这段代码还活着吗」时，`require` 图会漏掉「路径型入口」**。本仓有 **5 个仓库内入口**，其中 **3 个从 `src/extension.cjs` 的 require 图走不到**，另有 **1 个运行期生成入口不在仓库里**：
+- **审「这段代码还活着吗」时，`require` 图会漏掉「路径型入口」**。本仓有 **5 个仓库内入口**，其中 **4 个从 `src/extension.cjs` 的 require 图走不到**，另有 **1 个运行期生成入口不在仓库里**：
 
   | 入口 | 触发方式 |
   | --- | --- |
   | `src/extension.cjs` | `package.json` 的 `main` |
-  | `src/runtime/backend.cjs` | `ensureBackend` 用 `process.execPath` 派生（也被 `extension.cjs` require，故在依赖图内） |
-  | `src/fast-context/server.cjs` | `npm run mcp:fast-context`（自带 `require.main` 块） |
+  | `src/runtime/backend.cjs` | `ensureBackend` 用 `process.execPath` 派生（不在 extension 的字面量 require 图内） |
+  | `src/fast-context/server.cjs` | `npm run mcp:fast-context` 拉起（从不被 require） |
   | `src/goal/report.cjs` | `goal/controller.cjs` 把绝对路径拼进 shell 命令（`extension.cjs` 的 `reportCliPath`） |
   | `src/lifecycle/uninstall.cjs` | `package.json` 的 `vscode:uninstall`，VS Code 卸载扩展时执行 |
   | `<globalStorage>/fusion-mcp.cjs`（**运行期生成，仓库里没有**） | `fast-context/launcher.cjs` 写出，外部 MCP 客户端（Claude Code / Codex / Cursor）按面板复制的配置启动它 → 再拉起 `fast-context/server.cjs` 的最新安装副本 |
 
   最后一行是新形态：入口**不在任何目录里**，它是被生成的。改 `launcher.cjs` 的模板时，已经生成过的旧 `fusion-mcp.cjs` 不会自动更新——判据是用户在面板里重新启用/重载后该文件内容是否变化。
 
-  纯靠模块依赖图做死代码分析会把后三个报成死模块：2026-10-15 误判过一次 `goal/report.cjs`；2026-10-18 审查时又差点误判
-  `lifecycle/uninstall.cjs`——它**只被测试 require、生产无人引用**，看起来正是「只有测试续命的死代码」，实际是 `vscode:uninstall` 入口。
+  纯靠模块依赖图做死代码分析会把走不到的四个路径型入口（backend、server、report、uninstall）报成死模块：2026-10-15 误判过一次 `goal/report.cjs`；2026-10-18 审查时又差点误判
+  `lifecycle/uninstall.cjs`——它**只被测试 require**，看起来正是「只有测试续命的死代码」，实际是 `vscode:uninstall` 入口。
   判死前先搜模块名与文件名（`grep -rn "$(basename X)" src/ test/ scripts/ package.json`），**并检查文件末尾有没有 `require.main === module`**。
 
 ## 阶段三：评估后不实施（别再重复评估）
@@ -84,4 +84,4 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
 
 - **81 个零外部引用导出条目（33 文件）已删**：只删 `module.exports` 项，函数全保留。判据=src/test/scripts 交叉零引用 + 无 `module[变量]` 取用，清理后剩 0。反例：`cli-cache.cjs` 的 `rpcFor` 仍被文件内生产代码调用，只是导出多余。
 - **`src/update/transfer.cjs`（新）**：fetch 与 http.request 两条自更新传输原各抄一份「5 跳重定向 + 限长 + abort/timeout」，现合为 `transferBytes(..., { open })`。**`policy.allowedUrl` 保持成员访问**——`test/proxy.test.cjs` 靠替换它打本地假件。净减 48 行；`attachmentUnsupported` 同时收成 `anthropic.cjs` 单份。
-- **个人使用前提下的兼容层清理（同日）**：monitor 的 `schemaVersion` 概念整体删除（本机 5034 行全为 3；`goal/*`、`context-diagnostics` 的同名字段是另一概念，别删）、`pruneRetiredKeys` 删除（退役键已不在配置中，删后旧键只是静默保留）、`fast_context_search` 别名删除（外部 harness 零引用）、4 个无人导入的 re-export 删除（`mergeNativeEntry`/`backend` 三常量/`parseEvent`/`proxyRequestBytes`）。
+- **个人使用前提下的兼容层清理（同日）**：monitor 的 `schemaVersion` 概念整体删除（本机 5034 行全为 3；`goal/*`、`context-diagnostics` 的同名字段是另一概念，别删）、`pruneRetiredKeys` 删除（退役键已不在配置中，删后旧键只是静默保留）、`fast_context_search` 别名删除（外部 harness 零引用）、4 个无人导入的 re-export 删除（`mergeNativeEntry`/`backend` 三常量/`parseEvent`/`proxyRequestBytes` 门面——本体与 `maskProxy` 在本轮迁测到真实 `download.cjs` 后才删）。

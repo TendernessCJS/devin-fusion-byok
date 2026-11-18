@@ -49,7 +49,7 @@ description: "Apply when a 审查/取证 result is being revisited, when someone
 ## 持久化与发布
 
 - 配置写入是"锁 + 临时文件 + `.bak` + rename + 目录 fsync"，失败清临时文件并抛 `config_write_failed`，不留半写文件；
-  激活时遇 `config_corrupt` 会先归档坏文件再从 `.bak` 恢复。**残余**：`.bak` 也坏时需人工修；**不要**改成"损坏即静默重建"（会丢 provider 与凭据）。
+  激活时遇 `config_corrupt` 有两条路：主文件先归档——有可用 `.bak` 则恢复 `.bak`（含 provider/凭据）并提示；无可用 `.bak` 则归档后生成默认配置并告警，不是把 provider/凭据静默重建回来（默认里没有）。**残余**：`.bak` 也坏时落到默认分支，provider 需人工重配。
 - 版本不变量由构造保证：`vsixmanifest` 的 `Identity` 与输出文件名都从 `package.json` 派生；更新时 `verifyPackage`
   用 tag 推出的版本比对包内版本，不一致直接 `identity` 失败。
 
