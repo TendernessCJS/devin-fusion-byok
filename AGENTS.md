@@ -53,7 +53,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/fast-context-mcp.md` | 改 Fast Context 工具/开关/凭据/SSRF 边界，或外部 MCP 报 `unauthenticated`/`upstream_error` 时必读 |
 | `.devin/rules/config-and-storage.md` | 改 config.json 读写、面板提交、损坏恢复、受管设置的写入/恢复串行边界 |
 | `.devin/rules/monitor-and-panel.md` | 改用量记录/归属/时间筛选、面板 webview 样式、busy 锁定、state 去重与焦点保留 |
-| `.devin/rules/release-contract.md` | 改自更新与发布契约（资产名、tag、digest、`updateProxy`、重启 helper） |
+| `.devin/rules/release-contract.md` | 改自更新与发布契约（资产名、tag、digest、与 Devin 上游共用的代理策略、重启 helper） |
 
 **流程与历史卷**
 
