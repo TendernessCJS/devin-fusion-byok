@@ -3,7 +3,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const net = require('node:net');
+const path = require('node:path');
 const { Duplex } = require('node:stream');
+const { createSandboxLoader } = require('./helpers/sandbox.cjs');
 const { parseProxy } = require('../src/network/proxy-config.cjs');
 const { requestBytes } = require('../src/update/download.cjs');
 const { compileProxyPolicy } = require('../src/network/proxy-policy.cjs');
@@ -175,6 +177,25 @@ test('tunnel rejects immediately when the proxy closes before the CONNECT respon
   const second = tunnel(parseProxy('http://127.0.0.1:1'), 'api.github.com', 443, { connect: () => closed, timeout: 1000 });
   closed.destroy();
   await assert.rejects(second, error => error.message === 'proxy');
+});
+
+test('request construction fails without falling back to host-patched transports', () => {
+  const failure = new Error('client constructor failed');
+  const filename = path.join(__dirname, '../src/network/client-request.cjs');
+  for (const ClientRequest of [undefined, function () { throw failure; }]) {
+    const calls = [];
+    const fallback = protocol => () => { calls.push(protocol); };
+    const loader = createSandboxLoader({ filename, overrides: {
+      'node:http': { ClientRequest, globalAgent: {}, request: fallback('http') },
+      'node:https': { globalAgent: {}, request: fallback('https') },
+    } });
+    const { createRequest } = loader.module.exports;
+    for (const secure of [false, true]) {
+      assert.throws(() => createRequest(secure, {}, () => {}), error =>
+        ClientRequest ? error === failure : error.name === 'TypeError');
+    }
+    assert.deepEqual(calls, []);
+  }
 });
 
 test('request paths never touch the request/get functions patched by the extension host', async t => {

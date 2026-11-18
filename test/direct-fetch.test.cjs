@@ -270,27 +270,19 @@ test('a request error after response headers propagates to the body reader', asy
   } finally { http.ClientRequest = original; }
 });
 
-test('requests fall back to http.request when the ClientRequest constructor fails', async t => {
-  const { EventEmitter } = require('node:events');
-  const { Readable } = require('node:stream');
+test('a failing ClientRequest constructor rejects instead of reaching http.request', async t => {
   const calls = [];
   const originalClientRequest = http.ClientRequest;
   const originalRequest = http.request;
   http.ClientRequest = function () { throw Object.assign(new Error('protocol mismatch'), { code: 'ERR_INVALID_PROTOCOL' }); };
-  http.request = (options, callback) => {
-    calls.push(options.hostname);
-    const req = new EventEmitter();
-    req.end = () => {}; req.destroy = () => {};
-    const res = new Readable({ read() {} });
-    res.statusCode = 204; res.headers = {};
-    process.nextTick(() => { callback(res); res.push(null); });
-    return req;
-  };
+  http.request = options => { calls.push(options.hostname); throw new Error('the host transport must not run'); };
   t.after(() => { http.ClientRequest = originalClientRequest; http.request = originalRequest; });
   const { directFetch } = require('../src/network/direct-fetch.cjs');
-  const response = await directFetch('http://fixture.invalid/x');
-  assert.equal(response.status, 204);
-  assert.deepEqual(calls, ['fixture.invalid'], 'the request went through the http.request fallback');
+  await assert.rejects(directFetch('http://fixture.invalid/x'), error => {
+    assert.equal(error.code, 'ERR_INVALID_PROTOCOL');
+    return true;
+  });
+  assert.deepEqual(calls, [], 'a constructor failure never falls back to http.request');
 });
 
 test('the direct path never touches the request/get functions patched by the extension host', async t => {
