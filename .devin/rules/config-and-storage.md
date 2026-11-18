@@ -64,9 +64,17 @@ description: "改 config.json 读写、面板提交、损坏恢复或受管设�
 
 ## 受管设置的写入/恢复串行边界
 
-`enable()` 里「保存 receipt → 两次 `globalState.update`（`savedEnv`/`managedEnv`）→ 条件 `agentEnv` 写入」是**一个临界区**，由 `src/activation/managed-settings.cjs` 的 `critical()` 包住、同步登记在途 promise。env 与 preference 写入**各自登记**自己的 critical（`settings-owner.cjs` 的 `write()` 包了 `saveModel`/`reconcileSelection` 两条面板侧写路径，`settings-owner.applyEnvironment()` 的 env 段单独一条），进入新写入前复核 `live`/closed，被拒绝时抛 `RuntimeError('cancelled')`；`reconcilePreference` 在 env critical 之外调用，避免在已开始排水的外层里再尝试新的嵌套入闸。UI publish 不占排水预算。
+`settings-owner.cjs` 的 env 与 preference 事务共用 `managed-settings.cjs` 的单实例串行队列：**读取当前设置与 receipt → 计算原值 → 保存 receipt → 更新 globalState → 写设置**全部在入队函数内，不能只排队最后一次写入。入队和实际执行前都复核 `live`；关闭后拒绝新项，已排队未开始的项按 epoch 取消，已经开始的项允许完成。`open()` 不能复活旧 epoch 的项。被取消时抛 `RuntimeError('cancelled')`；不要在 critical 内嵌套并等待另一个 critical。UI publish 不占排水预算。
+
+- CLI 环境由 `activation/cli-environment.cjs` 的纯构造器生成，代理来源复用 `readProxySettings`，不得重新读取合并工作区后的配置。backend 接受的代理快照通过 `applyEnvironment(proxyConfig)` 在内存中传入，排队时不能重读成更新但尚未被接受的配置；含代理地址的快照不进日志或 receipt。
+- 有代理时，合并策略绕过项、用户原 `NO_PROXY`/`no_proxy` 与回环，两种拼写写为同值；不写 `HTTP(S)_PROXY`。每次从 receipt 的 original 重建，不能累积先前合成值。receipt 已有记录时原值权威，legacy `savedEnv` 只补缺；用户中途改值时更新备份，停用仍按 compare-and-restore 恢复。无代理时撤回仍由插件持有的绕过键。
 
 - `disable()` 顺序：置 `enabled=false` → `drain()`（5 s 上限，超时记 `managed-settings-drain-timeout`）→ `teardown` → 恢复。恢复**必须重读**当前设置与 receipt——这是修复成立的机理：在途写入先落地，恢复再基于落地后的状态回滚。
+- `deactivate()` 同样先关闭并排水写队列，再 teardown；只有识别为宿主禁用时才恢复设置，且恢复放在 finally 中。普通 reload/quit 保留共享设置和 backend，不借此重启或终止其他窗口。
 - drain 超时**仍照常恢复**（best-effort），但跳过 `receipt.changes` 清空与 `savedEnv`/`managedEnv` 清除（`keepReceipt`），给下次停用保留补偿依据；此时**不得提示成功**——面板 warning 明示「恢复尚未确认，已保留恢复记录」，runtime session 的 deactivate 恢复段记 `host-disabled-settings-restore-pending` 而非 `restored`。
 - **撤回旧判断**：「停用期间写入仍会完成、但 teardown 会按 receipt 还原」是错的——receipt 只提供回滚依据，**不提供异步顺序**；没有 drain 时恢复的 snapshot 先取、在途写入后落，受管值会残留且 receipt 已被清空。
 - 边界：这只保证**单窗口内**的顺序；跨窗口并发写同一 globalState 不在本机制范围内；超时后的残留靠下次停用补偿，不做自动修复承诺。
+
+## 配置副作用收敛
+
+面板 `afterChange` 与文件 watcher 共用 `config-sync.cjs` 的 reconcile 入口：Goal 有效开关关闭时在任何 await 之前 suspend，自动继续标志仅在实际变化时 reset，重复通知不重复执行这两种副作用；重新打开 Goal 不自动恢复旧运行。后续 runtime/selection 工作按 revision 与 disposed 判据放弃过期结果。watcher 读取失败只记安全日志，面板等待的失败必须上抛；publish 失败不得把已提交的配置误报成写入失败。

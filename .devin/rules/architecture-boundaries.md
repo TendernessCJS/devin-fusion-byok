@@ -27,15 +27,14 @@ description: "Apply when changing module ownership, the src/runtime partition, p
   `provider-request.cjs`）。Fast Context 的 `remote-client.cjs` 反向 import `src/protocol/wire.cjs`，两条路径别混。在 `protocol/` 内增删/改名文件时，除 `SOURCE_FILES` 外还要留意**不靠 `require` 的隐式引用**（按模块名打桩的
   字符串键、`readFileSync` 的路径、`AGENTS.md` 里按路径写的说明），这类漏改不报错、只静默失效——`test/source-identity.test.cjs` 现在会兜住
   `SOURCE_FILES` 那一半（现在校验推导出的哈希集合与 `backend.cjs` 的 require 闭包双向精确相等），但路径字符串与打桩键它管不到。
-- **扩展宿主编排层在 `src/activation/`**（自 725 行 `extension.cjs` 拆出，19 个 `.cjs`）：`errors`（RuntimeError/`safeError` + 叶子 `models/discovery-error.cjs`）、`settings`（`globalSetting`）、`backend-handshake`
+- **扩展宿主编排层在 `src/activation/`**（自 `extension.cjs` 拆出）：`errors`（RuntimeError/`safeError` + 叶子 `models/discovery-error.cjs`）、`settings`（`globalSetting`）、`backend-handshake`
   （`ensureBackend` + 局部 `pause`/`compareVersion`）、`catalog-sync`（原生目录观测/推送 factory）、`effective-origin`（解析原生派生链：
-  LS `--api_server_url` → portal → 默认，含收敛窗口）、`managed-settings`（受管设置写入的 `critical()` 闸门）、`settings-owner`（env/model 写入 + 恢复，私有 gate）、`selection`（Fusion 选择/reconcile）、`enable`
+  LS `--api_server_url` → portal → 默认，含收敛窗口）、`managed-settings`（受管设置事务的串行队列与排水）、`proxy-settings`（共享用户级代理读取）、`cli-environment`（纯 CLI 环境构造，不持有设置或收据）、`settings-owner`（env/model 事务 + 恢复，私有 gate）、`selection`（Fusion 选择/reconcile）、`enable`
   （runtime session：enable/disable/deactivate + LS 注入 + 上游推送）、`commands`（纯命令注册，disable 转发 `runtime.disable()`）、`continuation`（goal/auto-continue 安装与处置）、`panel-install`（panel host：状态栏/控制器/observer 私有）、`host-identity`（宿主构建身份）、`native-contract`（只读探针）、`liveness`（`live`/`superseded` 判据）、`remote-support`（远端窗口反向隧道与远端激活）、`cache-sync`/`config-sync`（CLI 缓存检查、配置监听/afterChange）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate }`。**
   测试直接引用 `activation/backend-handshake.cjs` 与 `activation/errors.cjs`；`package.json` 的 `main` 仍指向 `extension.cjs`。这些文件在扩展宿主运行、**不能进 backend 的 require 闭包**（否则宿主代码被算进重启哈希）。
   拆分后的硬约束：**没有共享可变容器**——服务状态私有于各 factory、按激活实例成套装配、跨服务只走命名接口（`shared`/`stores` 标识符被架构守卫直接禁止）；
   `enableQueue`/`reconcileQueue` 这类序列化队列留在各自工厂闭包内；`generation`/abort 判据一处都不能少。
-  改激活流程前先确认入口：全仓 **5 个入口**中 3 个（`fast-context/server.cjs`、`goal/report.cjs`、`lifecycle/uninstall.cjs`）
-  从 `extension.cjs` 的 require 图走不到（清单见 `retired-and-deadends.md`）。
+  改激活流程前必须同时确认普通 require 与路径型入口：`extension.cjs`、派生进程 `runtime/backend.cjs`、独立 `fast-context/server.cjs`/稳定 `fast-context/launcher.cjs`、报告 CLI `goal/report.cjs`、manifest 卸载入口 `lifecycle/uninstall.cjs`。不能只从 extension 的 require 图判断死代码。
 - **`src/runtime/` 按「谁运行」分区，判据是路径不是文件名**：根目录只留 backend 进程与两侧共享的 9 个模块（`backend.cjs`、`backend-control.cjs`、`bridge.cjs`、`contract.cjs`、`native-cache.cjs`、`port.cjs`、`source-identity.cjs`、`upstream-origin.cjs`、`upstream-proxy.cjs`——`upstream-origin.cjs` 是 `origin` 校验与 `DEFAULT_UPSTREAM` 的实现、`upstream-proxy.cjs` 是 CONNECT 转发 agent（策略编译在 `network/proxy-policy.cjs`），激活侧与 backend 共用），**只在扩展宿主运行的模块一律放 `src/runtime/host/`**。`test/architecture.test.cjs` 按三层判据强制：`src/runtime/` 内部用根目录 9 文件白名单（fail-closed），宿主模块一律进 `host/`；`src/` 顶层用目录级 deny-list（`BACKEND_FORBIDDEN_DIRS`）；**混合目录只能在 `BACKEND_FORBIDDEN_FILES` 按文件名排除**——目前只有 `models/`（`capabilities`/`native-entry` 在 backend 闭包内、`discovery*.cjs` 是宿主专用，目录级规则表达不了）与 `network/` 的三个精确叶子（`proxy-config.cjs`、`proxy-tunnel.cjs`、`proxy-policy.cjs` 可进 backend 闭包，`network/` 其余文件仍被目录级规则禁止）。另有顶层 allow-list 守卫：新宿主侧顶层目录必须显式加进允许集合。放错方向的代价是把「只在宿主生效」的代码算进重启哈希（并让宿主模块被当 backend 代码改动）。
 - **两个根级门面的规矩**：
 
