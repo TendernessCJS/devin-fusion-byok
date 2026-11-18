@@ -12,6 +12,8 @@
 
 ## 安装
 
+**破坏性版本仅支持干净安装。** 已安装旧版的用户，请先在旧版面板停用插件以恢复受管设置，再完全退出 Devin，把插件的旧全局存储目录移出原位置并妥善保留（可能含供应商密钥）。手动安装新版后重新添加供应商，不要把旧存储复制回来。新版检测到旧存储会停止激活，不会替你迁移或删除。
+
 1. 从 [Releases](https://github.com/TendernessCJS/devin-fusion-byok/releases/latest) 下载 `devin-fusion-byok-<版本>.vsix`。
 2. 在 Devin 命令面板运行 **Extensions: Install from VSIX…** 选择该文件，或在终端执行：
 
@@ -21,7 +23,7 @@
 
 3. 重载窗口（**Developer: Reload Window**）或新开一个 Devin 窗口。
 
-之后可以在面板 **设置 → 插件更新** 里检查并一键安装新版本（目前仅 macOS）。
+干净安装之后，同一存储代际的后续版本可以在面板 **设置 → 插件更新** 里检查并一键安装（目前仅 macOS）。不要从旧版面板跨越这次干净安装边界。
 
 ## 快速开始
 
@@ -180,7 +182,7 @@ curl "https://server.codeium.com/api/v2alpha/models?filter=allowlist" -H "Author
 
 ### GitHub 更新
 
-Devin 上游转发与 GitHub 更新检查/下载共用 Devin 用户级 http.proxy/http.noProxy；未配置代理时按 HTTP(S)_PROXY 环境变量回落，否则直连。代理设置在每次更新操作开始时读取，每跳重定向按同一快照重新判断 no-proxy，不影响已开始的操作。BYOK 推理与模型发现保持原网络路径。旧 updateProxy 及其编辑入口已移除；新版首次加载和后续面板保存经配置事务清理遗留键，保留标准备份，不改用户的 Devin 代理设置。
+Devin 上游转发与 GitHub 更新检查/下载共用 Devin 用户级 http.proxy/http.noProxy；未配置代理时按 HTTP(S)_PROXY 环境变量回落，否则直连。代理设置在每次更新操作开始时读取，每跳重定向按同一快照重新判断 no-proxy，不影响已开始的操作。BYOK 推理与模型发现保持原网络路径。旧 updateProxy、其编辑入口与自动迁移已移除；新版不改用户的 Devin 代理设置。
 
 ## 停用与卸载
 

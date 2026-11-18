@@ -15,7 +15,7 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   全部不存在了——只剩 `fusionCount` 这个**语义已改**的字段，现在等于 `matrixUids.size`）。退役前提是矩阵恒开：官方 Fusion 卡片就是唯一选择入口，
   一个平行的「我的预设」目录已无物可描述，它的 OFF 分支也不可能再产出（见上条）。**一次性迁移也一并删除**（2026-10-16）：它只服务「从带
   `fusionPresets`/`defaultFusionUid`/`fusionMatrix` 的旧配置升级」这一条路径，而本机配置早已迁完（实测只剩
-  `enabled`/`providers`/`inferenceServerUrl`/`updateProxy`/`lastFusionSelection`；`updateProxy` 此后也已退役，由 `pruneLegacyUpdateProxy` 经 `updateConfig` 锁内清理），留着就是 250 行只为一条历史路径存在的代码；
+  `enabled`/`providers`/`inferenceServerUrl`/`updateProxy`/`lastFusionSelection`；`updateProxy` 此后也已退役，干净安装版本不迁移旧键），留着就是 250 行只为一条历史路径存在的代码；
   遗留键曾由 `pruneRetiredKeys` 清理（历史行为；该剪枝本身也已退役，见文末「个人使用前提下的兼容层清理」登记）。**代价要记住**：若哪天真从 `config.json.pre-preset-retirement.bak` 恢复旧配置，那些预设引用的
   Lead/Sidekick 不会再生效——需要手工把它们写进 `roleInclusions`。要整体恢复具名预设必须连开关一起重建，不要只加回状态字段。
 - 清单式变更（供应商/模型）会顺带调用 `pruneDanglingRoleRefs`（`panel/manager.cjs`）——`providerId` 引用在配置是权威的，模型消失即永久失效，

@@ -27,8 +27,8 @@ description: "Apply when changing self-update behaviour or the release contract 
   `http.request`/`http.get`（`createHttpPatch` 注入 `PacProxyAgent`，`http.proxySupport` 默认 `override`），把我们的
   `createConnection` CONNECT 隧道顶掉——实测表现为跳过代理直连 `api.github.com` 随即 `ECONNRESET`。`ClientRequest` 是公开构造器、
   不在补丁替换范围（`node:https` 没有同名导出，TLS 仍由传入的 `https.Agent` 处理）；`directFetch` 同样必须走这条路，否则用户一旦在 VS Code 里配置
-  `http.proxy`，「内网地址直连」的保证就失效。`http.ClientRequest` 缺失时才回退到 `http.request`/`https.request`。
-- `updateProxy` 键、面板编辑入口、`setUpdateProxy`/`update.proxy` 消息和代理回显均已退役。新版本激活与正常面板提交使用 `pruneLegacyUpdateProxy`，经 `updateConfig` 锁内清理旧键；仅删该键，不覆盖其他字段、不改configRevision或擦标准`.bak`。更新区不再显示独立代理控件或跟随说明，也不回显代理地址/凭据。
+  `http.proxy`，「内网地址直连」的保证就失效。`http.ClientRequest` 缺失或构造失败时直接报错，不切换到宿主接管的传输路径。
+- 破坏性版本仅支持干净安装；激活拒绝无新版本标记的非空存储，不自动迁移、重置旧配置或接管旧设置。旧版更新器不认识这一边界，发布前须单独验证分发方案，不能只靠发布说明阻止一键覆盖。旧 `updateProxy` 迁移已退役，不影响更新请求的选路。
 - 「重启 Devin」的 detached helper：优先经 `launchctl submit` 注册给 launchd 运行（submit 失败回退 detached `/bin/sh`）——实测
   helper 是 App 后代时其 `open` 请求被归因为 App 自身激活而静默吞掉；已实测从 App 进程树内 `launchctl submit` 的 job 落在用户域 `gui/501`（非 App
   自身的 runningboard 域），因此不随 App 退出被拆除。等 App 退出后只小静置约 3 秒，随后最多 10 轮「先探测再启动」的自适应重试：实测旧实例退出后 ~10 秒内启动的进程会在 ~110ms
