@@ -303,8 +303,6 @@ module.exports = Object.freeze({
   'update.check': '检查更新',
   'update.auto': '自动检查更新',
   'update.release': '发布页面',
-  'update.proxy': '更新代理',
-  'update.proxyHint': '仅用于检查与安装更新，不影响模型请求；留空则更新也直连。',
   'update.current': '当前 {version}',
   'update.ignored': '（已忽略）',
   'update.manualInstall': '暂不支持直接安装，请打开发布页面下载。',
@@ -532,7 +530,6 @@ module.exports = Object.freeze({
   'manager.modelUnavailable': '该模型当前不可用，无法添加。',
   'manager.catalogNotSynced': '官方目录尚未同步，请刷新后再移除。',
   'manager.directionInvalid': '移动方向无效。',
-  'manager.proxyInvalid': '请填写 http:// 或 https:// 开头的代理地址。',
   'manager.unsupported': '不支持的操作。',
 
   // ── 注入健康（runtime/host/injection-health.cjs，仅显示在设置页）──
@@ -690,6 +687,7 @@ module.exports = Object.freeze({
   'errors.runtime.newer_runtime': '另一窗口已加载更新版插件，请重新加载当前窗口。',
   'errors.runtime.control_unavailable': '无法验证本地连接服务的归属，请重新加载窗口后重试。',
   'errors.runtime.startup_failed': '本地连接服务启动失败，请查看状态日志。',
+  'errors.runtime.proxy_unavailable': '无法将已配置的代理应用到连接服务，请检查代理设置后重试。',
   'errors.runtime.cancelled': '操作已取消。',
   'errors.operationFailed': '操作失败，请检查接口配置和连接状态。',
   'errors.discovery.http': '获取模型失败：HTTP {status}',

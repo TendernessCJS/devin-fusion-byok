@@ -6,7 +6,6 @@ function createConfigSync({ config, configFile, vscode, context, log, runtime, s
     if (type === 'setEnabled' && config().enabled === false) await runtime.disable();
     else if (type === 'setGoalEnabled') { if (config().goalEnabled !== true) { try { continuation.suspend({ reason: 'disabled' }); } catch { log('goal-suspend-failed'); } } }
     else if (type === 'setAutoContinue' || type === 'setAutoContinueUntilPlanComplete') continuation.resetAutoContinue();
-    else if (type === 'setUpdateProxy') {}
     else if (config().enabled !== false) { await runtime.ensureEnabled(); await selection.reconcileSelection(); }
     log('config-after-change', { type });
     changed();

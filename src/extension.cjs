@@ -2,10 +2,9 @@
 const vscode = require('vscode');
 const fs = require('node:fs');
 const path = require('node:path');
-const { defaultConfig, readConfig } = require('./config/config.cjs');
+const { defaultConfig, readConfig, pruneLegacyUpdateProxy } = require('./config/config.cjs');
 const { readDoc, updateConfig, archiveCorrupt, recoverFromBackup } = require('./config/store.cjs');
 const { buildCatalog } = require('./catalog.cjs');
-const { ensureBackend } = require('./activation/backend-handshake.cjs');
 const { safeError } = require('./activation/errors.cjs');
 const { createCatalogSync } = require('./activation/catalog-sync.cjs');
 const { createSettingsOwner } = require('./activation/settings-owner.cjs');
@@ -52,6 +51,13 @@ async function activate(context) {
       log('config-reset-corrupt');
       vscode.window.showErrorMessage(i18n.t('notify.configReset'));
     }
+  }
+  // Retired key cleanup runs once per activation through the locked config
+  // transaction — the read filter avoids taking the lock on the common path,
+  // and the mutator's own hasOwnProperty makes a same-key second window a
+  // no-op revision-wise.
+  if (Object.prototype.hasOwnProperty.call(readConfig(configFile), 'updateProxy')) {
+    updateConfig(configFile, pruneLegacyUpdateProxy);
   }
   const config = () => readConfig(configFile);
   const nativeMain = (() => {
@@ -120,4 +126,4 @@ async function deactivate() {
   await session?.deactivate();
 }
 
-module.exports = { activate, deactivate, ensureBackend, safeError };
+module.exports = { activate, deactivate };

@@ -7,6 +7,10 @@ const os = require('node:os');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const actualBackend = require('../src/runtime/backend.cjs');
+const { controlFile } = require('../src/runtime/contract.cjs');
+const { runtimeIdentity } = require('../src/runtime/source-identity.cjs');
+const { PORT } = require('../src/runtime/port.cjs');
+const { resolveUpstreamOrigin } = require('../src/runtime/upstream-origin.cjs');
 const { collect } = require('../src/runtime/bridge.cjs');
 const { buildCatalog, augmentCatalog } = require('../src/catalog.cjs');
 const wire = require('../src/protocol/wire.cjs');
@@ -70,7 +74,7 @@ async function fixture(t) {
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, log: (...event) => logs.push(event) });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: (...event) => logs.push(event) });
   const base = 'http://127.0.0.1:' + backend.port;
   t.after(async () => {
     for (const res of held.values()) res.end();
@@ -78,7 +82,7 @@ async function fixture(t) {
     fs.rmSync(root, { recursive: true, force: true });
   });
   const health = () => fetch(base + '/health').then(r => r.json());
-  const control = () => JSON.parse(fs.readFileSync(actualBackend.controlFile(root), 'utf8'));
+  const control = () => JSON.parse(fs.readFileSync(controlFile(root), 'utf8'));
   const shutdown = (token = control().token) => fetch(base + '/_runtime/shutdown', { method: 'POST', headers: { authorization: 'Bearer ' + token } });
   return { root, config, backend, base, health, control, shutdown, forwarded, chats, logs, held,
     setHold: value => { hold = value; }, setNatives: value => { natives = value; },
@@ -90,7 +94,7 @@ test('runtime health exposes ownership and source identity without exposing its 
   const health = await f.health();
   const control = f.control();
   assert.equal(health.service, 'devin-fusion-byok');
-  assert.equal(health.rootId, actualBackend.runtimeIdentity(f.root).rootId);
+  assert.equal(health.rootId, runtimeIdentity(f.root).rootId);
   assert.match(health.sourceId, /^[a-f0-9]{64}$/);
   assert.equal(health.managementProtocol, 1);
   assert.equal(health.activeRequests, 0);
@@ -98,7 +102,7 @@ test('runtime health exposes ownership and source identity without exposing its 
   assert.match(control.token, /^[a-f0-9]{64}$/);
   assert.ok(!JSON.stringify(health).includes(control.token));
   assert.ok(!JSON.stringify(f.logs).includes(control.token));
-  assert.equal(fs.statSync(actualBackend.controlFile(f.root)).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(controlFile(f.root)).mode & 0o777, 0o600);
   assert.equal((await f.shutdown('wrong-token')).status, 403);
   assert.equal((await f.health()).draining, false);
 });
@@ -146,7 +150,7 @@ test('safe shutdown refuses active RPCs and stops only after the complete respon
   assert.equal((await f.health()).activeRequests, 0);
   assert.equal((await f.shutdown()).status, 200);
   await f.backend.stopped;
-  assert.equal(fs.existsSync(actualBackend.controlFile(f.root)), false);
+  assert.equal(fs.existsSync(controlFile(f.root)), false);
 });
 
 test('public-origin control calls cannot stop the daemon even with a valid token', async t => {
@@ -160,9 +164,9 @@ test('public-origin control calls cannot stop the daemon even with a valid token
 
 test('a second startup on the same port cannot overwrite the running runtime control file', async t => {
   const f = await fixture(t);
-  const previous = fs.readFileSync(actualBackend.controlFile(f.root), 'utf8');
-  await assert.rejects(actualBackend.startBackend({ root: f.root, port: f.backend.port }), { code: 'EADDRINUSE' });
-  assert.equal(fs.readFileSync(actualBackend.controlFile(f.root), 'utf8'), previous);
+  const previous = fs.readFileSync(controlFile(f.root), 'utf8');
+  await assert.rejects(actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root: f.root, port: f.backend.port }), { code: 'EADDRINUSE' });
+  assert.equal(fs.readFileSync(controlFile(f.root), 'utf8'), previous);
 });
 
 test('native model requests, unknown model IDs and wrong RPC services never select a custom provider', async t => {
@@ -238,7 +242,7 @@ test('an own plain model is listed, allowed and callable standalone against a th
     apiFormat: 'openai', apiKey: 'fixture-provider-key', models: [{ id: 'standalone-model', label: 'Standalone' }, { id: 'peer-model', label: 'Peer' }] }],
     sidekicks: [{ providerId: 'third', model: 'standalone-model' }] };
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
-  const backend = await actualBackend.startBackend({ root, port: 0 });
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0 });
   t.after(() => backend.close());
   const catalog = buildCatalog(config);
   const own = Object.keys(catalog.routes)[0];
@@ -362,7 +366,7 @@ test('backend close waits for the monitor write queue to drain', async t => {
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: () => {} });
   t.after(async () => { releaseClose?.(); await backend.close(); fs.rmSync(root, { recursive: true, force: true }); });
   let resolved = false;
   const closing = backend.close().then(() => { resolved = true; });
@@ -396,7 +400,7 @@ test('close drains in-flight RPCs, keeps health during the monitor flush, then r
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: () => {} });
   const base = 'http://127.0.0.1:' + backend.port;
   const health = () => fetch(base + '/health').then(r => r.json());
   t.after(async () => {
@@ -436,7 +440,7 @@ test('close drains in-flight RPCs, keeps health during the monitor flush, then r
   assert.equal(resolved, true);
   await backend.stopped;
   await assert.rejects(fetch(base + '/health'), 'the port is released after the flush completes');
-  assert.equal(fs.existsSync(actualBackend.controlFile(root)), false);
+  assert.equal(fs.existsSync(controlFile(root)), false);
 });
 
 test('close waits for both the client response and the serveChat handler so late metrics land', async t => {
@@ -467,7 +471,7 @@ test('close waits for both the client response and the serveChat handler so late
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: () => {} });
   const base = 'http://127.0.0.1:' + backend.port;
   t.after(async () => { releaseHandler?.(); await Promise.race([backend.close(), new Promise(r => setTimeout(r, 1000))]); fs.rmSync(root, { recursive: true, force: true }); });
   const abort = new AbortController();
@@ -620,12 +624,12 @@ async function stuckFixture(t, drainTimeoutMs = 60) {
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, log: (...event) => logs.push(event), drainTimeoutMs });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: (...event) => logs.push(event), drainTimeoutMs });
   t.after(async () => {
     for (const res of held) res.destroy?.();
     fs.rmSync(root, { recursive: true, force: true });
   });
-  return { root, backend, base: 'http://127.0.0.1:' + backend.port, held, logs, controlFile: actualBackend.controlFile(root) };
+  return { root, backend, base: 'http://127.0.0.1:' + backend.port, held, logs, controlFile: controlFile(root) };
 }
 
 test('a request that never settles cannot block shutdown forever', async t => {
@@ -667,7 +671,7 @@ async function lingeringFixture(t, { drainTimeoutMs = 5000, socketCloseTimeoutMs
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-linger-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
   const logs = [];
-  const backend = await actualBackend.startBackend({ root, port: 0, log: (event, data) => logs.push([event, data]),
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: (event, data) => logs.push([event, data]),
     drainTimeoutMs, socketCloseTimeoutMs });
   // A half-written request line is neither idle nor a counted request: the
   // idle sweep skips it and the drain never sees it, exactly like the sockets
@@ -721,7 +725,7 @@ test('a stuck monitor flush cannot block shutdown either', async t => {
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, log: (...event) => logs.push(event), drainTimeoutMs: 60 });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: (...event) => logs.push(event), drainTimeoutMs: 60 });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const outcome = await Promise.race([
     backend.close().then(() => 'closed'),
@@ -805,7 +809,7 @@ test('close is bounded: an abandoned in-flight request hits drain-timeout and st
   }, { filename });
   // Both budgets pinned: this test is about the drain stage being bounded, not
   // about how long closing the listening socket may take.
-  const backend = await module.exports.startBackend({ root, port: 0, drainTimeoutMs: 20, socketCloseTimeoutMs: 20, log: (...event) => logs.push(event) });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, drainTimeoutMs: 20, socketCloseTimeoutMs: 20, log: (...event) => logs.push(event) });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = 'http://127.0.0.1:' + backend.port;
   const rpc = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
@@ -822,7 +826,7 @@ test('close is bounded: an abandoned in-flight request hits drain-timeout and st
   assert.equal(outcome, 'closed', 'close() is bounded even with a stuck in-flight request');
   await backend.stopped;
   assert.ok(logs.some(([event]) => event === 'drain-timeout'), 'the abandoned request is reported as a drain timeout');
-  assert.equal(fs.existsSync(actualBackend.controlFile(root)), false);
+  assert.equal(fs.existsSync(controlFile(root)), false);
   for (const res of held.values()) res.end();
   await inflight;
   await assert.rejects(fetch(base + '/health'), 'the port is released once stopped resolves');
@@ -853,7 +857,7 @@ test('an oversized native-models push is refused without changing served state',
 });
 
 test('resolveUpstreamOrigin normalizes valid origins and rejects every unsafe shape', () => {
-  const resolve = actualBackend.resolveUpstreamOrigin;
+  const resolve = resolveUpstreamOrigin;
   assert.equal(resolve('https://server-beta.codeium.com'), 'https://server-beta.codeium.com');
   assert.equal(resolve('https://h/p/'), 'https://h/p', 'a path prefix keeps its path and drops trailing slashes');
   assert.equal(resolve('http://127.0.0.1:1234'), 'http://127.0.0.1:1234', 'loopback http is allowed');
@@ -861,7 +865,7 @@ test('resolveUpstreamOrigin normalizes valid origins and rejects every unsafe sh
   assert.equal(resolve(undefined), null, 'an absent value resets to the default upstream');
   for (const value of ['ftp://example.com', 'http://example.com', 'https://user:pw@example.com',
     'https://example.com/x?y=1', 'https://example.com/x#y', '', 42, 'https://',
-    'http://127.0.0.1:' + actualBackend.PORT, 'x'.repeat(2049)]) {
+    'http://127.0.0.1:' + PORT, 'x'.repeat(2049)]) {
     assert.throws(() => resolve(value), /invalid_origin/, `rejected: ${String(value).slice(0, 60)}`);
   }
 });
@@ -904,7 +908,7 @@ test('a pushed upstream origin receives forwarded RPCs and never the control tok
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-upstream-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const backend = await actualBackend.startBackend({ root, port: 0 });
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0 });
   t.after(() => backend.close());
   const base = 'http://127.0.0.1:' + backend.port;
   const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
@@ -934,7 +938,7 @@ test('a path-prefixed upstream origin still receives the augmented catalog', asy
   }));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const logs = [];
-  const backend = await actualBackend.startBackend({ root, port: 0, log: (event, data) => logs.push([event, data]) });
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: (event, data) => logs.push([event, data]) });
   t.after(() => backend.close());
   const base = 'http://127.0.0.1:' + backend.port;
   const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
@@ -962,7 +966,7 @@ test('pushUpstream refuses a foreign runtime without sending anything', async t 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-upstream-id-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const backend = await actualBackend.startBackend({ root, port: 0 });
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0 });
   t.after(() => backend.close());
   const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
   let calls = 0, posts = 0;
@@ -992,8 +996,8 @@ test('a pushed upstream origin is scoped to its own backend instance', async t =
   }, { filename });
   const roots = ['a', 'b'].map(tag => fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-scope-' + tag + '-')));
   for (const root of roots) fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
-  const a = await module.exports.startBackend({ root: roots[0], port: 0 });
-  const b = await module.exports.startBackend({ root: roots[1], port: 0 });
+  const a = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root: roots[0], port: 0 });
+  const b = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root: roots[1], port: 0 });
   t.after(async () => {
     await Promise.all([a.close(), b.close()]);
     for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
@@ -1012,7 +1016,7 @@ test('pushUpstream records an origin-free receipt for success and failure', asyn
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-receipt-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const backend = await actualBackend.startBackend({ root, port: 0 });
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0 });
   t.after(() => backend.close());
   const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
   const receiptFile = path.join(root, 'upstream-push.json');
@@ -1045,7 +1049,7 @@ test('connection failures are retried and the push still lands', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-push-retry-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const backend = await actualBackend.startBackend({ root, port: 0 });
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0 });
   t.after(() => backend.close());
   const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
   let calls = 0;
@@ -1069,7 +1073,7 @@ test('a non-connection failure is not retried and is recorded with its code-free
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-push-fail-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const backend = await actualBackend.startBackend({ root, port: 0 });
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0 });
   t.after(() => backend.close());
   const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
   let calls = 0;
@@ -1087,7 +1091,7 @@ test('exhausted connection retries record the transport code', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-push-exhaust-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const backend = await actualBackend.startBackend({ root, port: 0 });
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0 });
   t.after(() => backend.close());
   const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
   let calls = 0;
@@ -1147,7 +1151,7 @@ test('a stale-instance health answer during handover is retried until identities
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-push-stale-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const backend = await actualBackend.startBackend({ root, port: 0 });
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0 });
   t.after(() => backend.close());
   const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
   const realHealth = await (await fetch('http://127.0.0.1:' + backend.port + '/health')).json();
@@ -1193,7 +1197,7 @@ test('a retriable identity failure lands in the receipt with its detail enum', a
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-backend-push-detail-'));
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ providers: [] }));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const backend = await actualBackend.startBackend({ root, port: 0 });
+  const backend = await actualBackend.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0 });
   t.after(() => backend.close());
   const { pushUpstream } = require('../src/runtime/host/upstream.cjs');
   const realHealth = await (await fetch('http://127.0.0.1:' + backend.port + '/health')).json();

@@ -7,7 +7,9 @@ const path = require('node:path');
 const os = require('node:os');
 const { createRequire } = require('node:module');
 const vm = require('node:vm');
-const { startBackend, controlFile, runtimeIdentity } = require('../src/runtime/backend.cjs');
+const { startBackend } = require('../src/runtime/backend.cjs');
+const { controlFile } = require('../src/runtime/contract.cjs');
+const { runtimeIdentity } = require('../src/runtime/source-identity.cjs');
 const { readNativeModels } = require('../src/runtime/host/native-models.cjs');
 const { collect } = require('../src/runtime/bridge.cjs');
 const { createManager } = require('../src/panel/manager.cjs');
@@ -54,7 +56,7 @@ async function backendFixture(t, { natives = upstream, hold = false } = {}) {
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: () => {} });
   const base = 'http://127.0.0.1:' + backend.port;
   t.after(async () => { for (const res of held.values()) res.end(); await backend.close(); fs.rmSync(root, { recursive: true, force: true }); });
   return { root, backend, base, forwarded, setPayload: value => { payload = value; } };
@@ -98,7 +100,7 @@ test('readNativeModels fails closed on foreign roots, stale receipts and unsuppo
     'a different root id is not this backend');
   const foreign = fs.mkdtempSync(path.join(os.tmpdir(), 'dfbyok-foreign-'));
   fs.writeFileSync(path.join(foreign, 'config.json'), '{}');
-  const foreignBackend = await startBackend({ root: foreign, port: 0, log: () => {} });
+  const foreignBackend = await startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root: foreign, port: 0, log: () => {} });
   t.after(async () => { await foreignBackend.close(); fs.rmSync(foreign, { recursive: true, force: true }); });
   await assert.rejects(readNativeModels({ root: f.root, port: foreignBackend.port }), /native_catalog_identity/,
     'the control file must match the live instance identity');
@@ -107,7 +109,7 @@ test('readNativeModels fails closed on foreign roots, stale receipts and unsuppo
   await assert.rejects(readNativeModels({ root: f.root, port: f.backend.port }), /native_catalog_unavailable/,
     'a stale receipt token is rejected by the live backend');
   await f.backend.close();
-  const restarted = await startBackend({ root: f.root, port: f.backend.port, log: () => {} });
+  const restarted = await startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root: f.root, port: f.backend.port, log: () => {} });
   t.after(() => restarted.close());
   const fresh = JSON.parse(fs.readFileSync(controlFile(f.root), 'utf8'));
   assert.notEqual(fresh.instanceId, control.instanceId);
@@ -616,7 +618,7 @@ async function rawForwardFixture(t, respond) {
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: () => {} });
   t.after(async () => {
     await backend.close();
     await new Promise(resolve => upstream.close(resolve));

@@ -223,4 +223,4 @@ function createMonitor({ root, databasePath = path.join(os.homedir(), '.local/sh
   }
   return { record, snapshot, flush, close };
 }
-module.exports = { createMonitor, summarize, associate, attributionStats };
+module.exports = { createMonitor, associate };

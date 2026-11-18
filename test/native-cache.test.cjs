@@ -5,15 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { CACHE_VERSION, DEFAULT_TTL_MS, MAX_ENTRIES,
-  normalizeNativeEntry, normalizeAllowedUids, loadNativeCache, saveNativeCache } = require('../src/runtime/native-cache.cjs');
+  loadNativeCache, saveNativeCache } = require('../src/runtime/native-cache.cjs');
+const { normalizeNativeEntry, normalizeAllowedUids } = require('../src/models/native-entry.cjs');
 
 const entry = (over = {}) => ({ uid: 'swe-2-medium', label: 'SWE-2 Medium', ...over });
-
-test('the canonical contract lives in src/models/native-entry.cjs and native-cache re-exports it', () => {
-  const leaf = require('../src/models/native-entry.cjs');
-  assert.equal(normalizeNativeEntry, leaf.normalizeNativeEntry, 'same function object, not a copy');
-  assert.equal(normalizeAllowedUids, leaf.normalizeAllowedUids);
-});
 
 test('normalizeNativeEntry preserves the canonical observation fields', () => {
   const normalized = normalizeNativeEntry(entry({
@@ -146,7 +141,6 @@ test('the real filesystem round-trip writes a private readable file', t => {
 
 test('mergeNativeEntry keeps the richer form when a poorer copy arrives later', () => {
   const { mergeNativeEntry } = require('../src/models/native-entry.cjs');
-  const { normalizeNativeEntry } = require('../src/runtime/native-cache.cjs');
   const rich = normalizeNativeEntry({ uid: 'fusion-a-sidekick-swe-2-high', label: 'F', disabled: false, isModelRouter: true,
     harnessUids: ['fusion'], sidekickDimension: { order: 2, name: 'SWE-2 High', fastModeOrder: 0 },
     fusionMetadata: [{ key: 'Sidekick', order: 2, name: 'SWE-2 High', controlType: 3 }] });

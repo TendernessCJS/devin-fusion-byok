@@ -6,6 +6,8 @@ const { createLsBridge } = require('../runtime/bridge.cjs');
 const { installAcpObserver } = require('../runtime/host/acp-observer.cjs');
 const { installAuthStatusInjection } = require('../runtime/host/auth-status.cjs');
 const { pushUpstream } = require('../runtime/host/upstream.cjs');
+const { pushProxy } = require('../runtime/host/proxy.cjs');
+const { readProxySettings } = require('./proxy-settings.cjs');
 const { recordUnknownCatalog } = require('../runtime/host/observations.cjs');
 const { resolveEffectiveOriginWhenAvailable } = require('./effective-origin.cjs');
 const { ensureBackend } = require('./backend-handshake.cjs');
@@ -84,6 +86,41 @@ async function pushConfiguredUpstream({ root, vscode, log, state, signal, should
   } catch { if (!cancelled()) log('upstream-push', { ok: false, reason: 'unavailable' }); else skipped(); }
 }
 
+// The proxy push mirrors the upstream push's discipline — own generation,
+// abort, serialised chain, memory-only dedupe key — but the payload is the
+// compiled-at-host config object, and the key is its JSON (never logged).
+// The key is invalidated before the real POST and only re-recorded on
+// confirmed success, so an A→B→A sequence can never dedupe the second A.
+async function pushConfiguredProxy({ root, vscode, log, state, signal, shouldContinue = () => true, isLive = () => true }) {
+  if (!isLive()) return { ok: false, reason: 'disabled' };
+  try { state.proxyPushAbort?.abort(); } catch {}
+  const generation = (state.proxyPushGeneration = (state.proxyPushGeneration || 0) + 1);
+  const controller = new AbortController();
+  state.proxyPushAbort = controller;
+  const cancelled = () =>
+    (signal?.aborted ?? false) || controller.signal.aborted || !shouldContinue() ||
+    state.proxyPushGeneration !== generation || !isLive();
+  const composite = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const previous = state.proxyPushChain || Promise.resolve();
+  const run = previous.then(async () => {
+    try {
+      if (cancelled()) return { ok: false, reason: 'superseded' };
+      const { config: proxyConfig, source } = readProxySettings(vscode);
+      const key = JSON.stringify(proxyConfig);
+      if (state.proxyPushedKey === key) return { ok: true, source, skipped: 'dedupe' };
+      state.proxyPushedKey = undefined;
+      const result = await pushProxy({ root, config: proxyConfig, source, signal: composite });
+      if (cancelled()) return { ok: false, reason: 'superseded' };
+      if (result.ok) state.proxyPushedKey = key;
+      log('proxy-push', { ok: result.ok === true, reason: result.reason, source });
+      return result;
+    } catch { return { ok: false, reason: 'sync_error' }; }
+  });
+  state.proxyPushChain = run.then(() => {}, () => {});
+  state.proxyLatestResult = run;
+  return run;
+}
+
 function createRuntimeSession({ root, extensionPath, subscriptions, config, configFile, vscode, context, nativeMain, log, catalog, catalogSync, settingsOwner, selection, continuation, onPublish, t = translator() }) {
   const state = {
     activationDisposed: false, activationGeneration: 0, reconcileHalted: true,
@@ -91,6 +128,8 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
     remoteSupport: undefined, nativeContract: undefined, runtimeWaitAbort: undefined,
     upstreamPushGeneration: 0, upstreamPushAbort: undefined, upstreamPushChain: undefined,
     upstreamPushedKey: undefined, upstreamSubscription: undefined,
+    proxyPushGeneration: 0, proxyPushAbort: undefined, proxyPushChain: undefined,
+    proxyLatestResult: undefined, proxyPushedKey: undefined, proxySubscription: undefined,
   };
   let backendStatus = 'stopped', disablePromise = null, enableQueue = Promise.resolve();
   let acpSeq = 0, acpOwnModels = 0;
@@ -159,15 +198,102 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
       onCompatibleRuntime: health => {
         if (waiting.signal.aborted) return;
         log('runtime-update-pending', { version: health.version });
+        // Early compatibility only releases enable() when the running copy can
+        // already answer the proxy gate — a stale backend without a policy
+        // 503s every forward, so the window keeps waiting for the replacement.
+        if (health.proxyProtocol !== 1 || health.proxyReady !== true) return;
         backendStatus = 'running'; publishPanel();
         compatible(health);
       } });
     void upgrade.finally(() => { if (state.runtimeWaitAbort === waiting) state.runtimeWaitAbort = undefined; })
       .catch(error => { const code = safeError(error).code; if (code !== 'cancelled') log('runtime-upgrade-error', { code }); });
-    upgrade.then(() => { backendStatus = 'running'; publishPanel(); },
-      error => { const code = safeError(error).code; if (code !== 'cancelled') { backendStatus = code; publishPanel(); } });
-    await Promise.race([upgrade, compatibleReady]);
+    // A late rejection must not overwrite state owned by a newer generation or
+    // a disabled session — no unconditional 'running' write exists here: the
+    // status only flips after the proxy gate below actually converges.
+    upgrade.then(() => {},
+      error => {
+        if (state.activationGeneration !== generation || !isLive()) return;
+        const code = safeError(error).code;
+        if (code !== 'cancelled') { backendStatus = code; publishPanel(); }
+      });
+    let retriggerUpstream;
+    // One convergence discipline for every sync: enqueue, then keep reading
+    // the newest settled result. A superseded intermediate generation is not
+    // a failure — the latest settled result is authoritative.
+    const syncProxy = async ({ force = false } = {}) => {
+      if (force) state.proxyPushedKey = undefined;
+      void pushConfiguredProxy({ root, vscode, log, state, signal: waiting.signal,
+        shouldContinue: () => !isSuperseded(generation) && config().enabled !== false, isLive });
+      let selected, result;
+      do {
+        selected = state.proxyLatestResult;
+        result = await selected;
+      } while (!isSuperseded(generation) && isLive() && selected !== state.proxyLatestResult);
+      return result;
+    };
+    const outcome = await Promise.race([
+      upgrade.then(health => ({ health, final: true })),
+      compatibleReady.then(health => ({ health, final: false })),
+    ]);
     if (isSuperseded(generation)) return;
+    if (!outcome.final) {
+      // Serving on the old instance while the replacement warms up. The new
+      // backend starts proxy-cold, so its arrival must force a fresh sync even
+      // when the config bytes are identical — the in-memory dedupe key belongs
+      // to whichever instance last answered, never to the config.
+      const seenGeneration = generation;
+      upgrade.then(() => {
+        if (waiting.signal.aborted || isSuperseded(seenGeneration) || !isLive() || config().enabled === false) return;
+        return syncProxy({ force: true });
+      }).then(result => {
+        if (!result || isSuperseded(seenGeneration) || !isLive()) return;
+        if (result.ok) {
+          backendStatus = 'running'; publishPanel();
+          // The replacement owns upstream routing now; re-converge the native
+          // upstream push for this generation.
+          state.upstreamPushedKey = undefined;
+          try { Promise.resolve(retriggerUpstream?.()).catch(() => {}); } catch {}
+        } else {
+          backendStatus = 'proxy_unavailable'; publishPanel();
+          log('proxy-push', { ok: false, reason: result.reason, phase: 'upgrade' });
+        }
+      }, () => {});
+    }
+    // The first proxy sync is a hard gate: the backend refuses every upstream
+    // forward until a policy lands, so an unsynchronised start must surface as
+    // an error instead of silently writing hooks/env on a crippled runtime.
+    // Remote windows share this local backend, so they sync too.
+    const proxyResult = await syncProxy({ force: true });
+    if (isSuperseded(generation)) return;
+    if (!proxyResult.ok) throw new RuntimeError('proxy_unavailable');
+    // The subscription lives before the remote/native split so remote windows
+    // (which share this backend) get hot updates too. workspace-level values
+    // are never read: every event re-resolves the global value, and an
+    // identical result dedupes against the in-memory key.
+    try { state.proxySubscription?.dispose?.(); } catch {}
+    const onConfigChange = vscode.workspace?.onDidChangeConfiguration;
+    if (typeof onConfigChange === 'function') {
+      try {
+        state.proxySubscription = onConfigChange.call(vscode.workspace, event => {
+          if (event?.affectsConfiguration?.('http.proxy') || event?.affectsConfiguration?.('http.noProxy') ||
+              event?.affectsConfiguration === undefined) {
+            if (isDisposed() || !isLive() || config().enabled === false) return;
+            const seenGeneration = state.activationGeneration;
+            void pushConfiguredProxy({ root, vscode, log, state,
+              shouldContinue: () => config().enabled !== false && state.activationGeneration === seenGeneration, isLive })
+              .catch(() => log('proxy-push', { ok: false, reason: 'sync_error' }));
+          }
+        });
+      } catch {}
+    }
+    // The first push raced any concurrent config edit; one closing read +
+    // dedupe closes that window. enable() waits for the newest settled result
+    // before env writes — a superseded intermediate run is not a failure, but
+    // the latest settled result is authoritative.
+    const latest = await syncProxy();
+    if (isSuperseded(generation)) return;
+    if (!latest.ok) throw new RuntimeError('proxy_unavailable');
+    backendStatus = 'running'; publishPanel();
     state.reconcileHalted = false;
     try {
       await settingsOwner.applyEnvironment();
@@ -243,6 +369,7 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
         shouldContinue: () => isLive() && state.upstreamPushGeneration === pushGeneration,
         isLive });
     };
+    retriggerUpstream = () => { state.upstreamPushedKey = undefined; triggerPush(); };
     void triggerPush();
     if (!state.upstreamSubscription) {
       state.upstreamSubscription = vscode.workspace.onDidChangeConfiguration?.(event => {

@@ -10,7 +10,7 @@ const { EventEmitter } = require('node:events');
 const { createSandboxLoader } = require('./helpers/sandbox.cjs');
 const filename = path.resolve(__dirname, '../src/extension.cjs');
 const realRequire = createRequire(filename);
-const actualBackend = require('../src/runtime/backend.cjs');
+const { controlFile } = require('../src/runtime/contract.cjs');
 const { RECEIPT } = require('../src/lifecycle/owned-settings.cjs');
 const next = () => new Promise(resolve => setImmediate(resolve));
 function fixture(t, initial = {}) {
@@ -80,9 +80,9 @@ function fixture(t, initial = {}) {
     } },
     './config/config.cjs': {
       readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
-      defaultConfig: realRequire('./config/config.cjs').defaultConfig },
+      defaultConfig: realRequire('./config/config.cjs').defaultConfig,
+      pruneLegacyUpdateProxy: realRequire('./config/config.cjs').pruneLegacyUpdateProxy },
     './catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: () => [], isOwnUid: realRequire('./catalog/payload.cjs').isOwnUid,
-      catalogSignature: realRequire('./catalog/signature.cjs').catalogSignature,
       ownEntriesSignature: realRequire('./catalog/signature.cjs').ownEntriesSignature,
       buildCatalog: config => ({ models: config.providers?.length
         ? [{ uid: 'dfbyok-own', label: 'own', kind: 'model' },
@@ -93,6 +93,9 @@ function fixture(t, initial = {}) {
     './runtime/host/native-models.cjs': { readNativeModels: options => nativeRead(options),
       isUpstreamUid: realRequire('./runtime/host/native-models.cjs').isUpstreamUid,
       pushNativeModels: options => { pushes.push(options); return Promise.resolve(pushResult); } },
+    // Lifecycle fixtures own no control channel — the proxy handshake stub only
+    // says the backend accepted a policy so the activation gate proceeds.
+    './runtime/host/proxy.cjs': { pushProxy: async () => ({ ok: true, ready: true }) },
     './goal/continue-hook.cjs': { installGoalContinue: () => null },
     './runtime/host/auto-continue.cjs': { installAutoContinue: options => { autoContinueOptions = options;
       return { status: () => ({ installed: true, connections: 0, activeSessions: 0, pendingTimers: 0, autoContinueCount: 0 }), reset() {}, cancelSession: () => false, dispose() {} }; } },
@@ -445,12 +448,15 @@ test('re-enabling from the panel re-arms reconciliation after a disable', async 
 });
 
 const oldRuntimeHealth = idle => ({ service: 'devin-fusion-byok', version: '0.1.0', sourceId: 'old', rootId: 'root',
-  instanceId: 'old-1', managementProtocol: 1, activeRequests: idle ? 0 : 4, draining: false });
+  instanceId: 'old-1', managementProtocol: 1, activeRequests: idle ? 0 : 4, draining: false,
+  // A proxy-capable old instance may release activation early while still busy;
+  // a proxy-blind one must not (it would 503 every forward until the upgrade).
+  proxyProtocol: 1, proxyReady: true });
 const newRuntimeHealth = { service: 'devin-fusion-byok', version: '0.2.0', sourceId: 'expected', rootId: 'root',
   instanceId: 'new-1', managementProtocol: 1, activeRequests: 0, draining: false };
 test('a busy older runtime lets activation finish and upgrades in the background once it idles', async t => {
   const f = fixture(t);
-  fs.writeFileSync(actualBackend.controlFile(f.root), JSON.stringify({ ...oldRuntimeHealth(true), token: 'b'.repeat(64) }), { mode: 0o600 });
+  fs.writeFileSync(controlFile(f.root), JSON.stringify({ ...oldRuntimeHealth(true), token: 'b'.repeat(64) }), { mode: 0o600 });
   let busy = true, shutdowns = 0, gone = false;
   f.setFetch(async url => {
     if (url.endsWith('/_runtime/shutdown')) { shutdowns++; return new Response('{"stopping":true}'); }
@@ -1251,4 +1257,12 @@ test('a failed remote tunnel retries through ensureEnabled without re-running se
   f.watchers[0]();
   await f.settle();
   assert.equal(f.remoteCalls().ensure, 2, 'a ready connection stays idempotent');
+});
+
+test('activation prunes a legacy updateProxy key through the config transaction', async t => {
+  const f = fixture(t, { config: { updateProxy: 'http://legacy-proxy:9', lastFusionSelection: 'fusion-dfbyok-selected' } });
+  await f.activate(f.context);
+  const doc = JSON.parse(fs.readFileSync(f.configFile, 'utf8'));
+  assert.equal('updateProxy' in doc, false, 'the retired key is reaped on activation');
+  assert.equal(doc.lastFusionSelection, 'fusion-dfbyok-selected', 'other keys are untouched');
 });

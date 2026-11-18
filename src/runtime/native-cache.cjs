@@ -53,4 +53,4 @@ function saveNativeCache(file, entries, { now = Date.now, allowedUids, allowedMo
   }
 }
 
-module.exports = { CACHE_VERSION, DEFAULT_TTL_MS, MAX_ENTRIES, normalizeNativeEntry, normalizeAllowedUids, loadNativeCache, saveNativeCache };
+module.exports = { CACHE_VERSION, DEFAULT_TTL_MS, MAX_ENTRIES, loadNativeCache, saveNativeCache };

@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createMonitor, associate, summarize } = require('../src/monitor/store.cjs');
+const { createMonitor, associate } = require('../src/monitor/store.cjs');
+const { summarize } = require('../src/monitor/stats.cjs');
 const { createTracker, usageOf } = require('../src/protocol/tracker.cjs');
 function tracker() {
   let clock = 0;
@@ -486,7 +487,7 @@ test('a tool lookup failure distinguishes lookup-unavailable from no-tool-ids', 
 });
 
 test('ambiguous matches are categorized and attribution counts cover every record', () => {
-  const { attributionStats } = require('../src/monitor/store.cjs');
+  const { attributionStats } = require('../src/monitor/stats.cjs');
   const rows = [
     { message_id: 'call-x', session_id: 'a' },
     { message_id: 'call-x', session_id: 'b' },

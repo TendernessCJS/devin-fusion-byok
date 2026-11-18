@@ -303,8 +303,6 @@ module.exports = Object.freeze({
   'update.check': 'Check for updates',
   'update.auto': 'Check for updates automatically',
   'update.release': 'Release page',
-  'update.proxy': 'Update proxy',
-  'update.proxyHint': 'Used only to check for and install updates, never for model requests. Leave blank to connect directly.',
   'update.current': 'Current {version}',
   'update.ignored': ' (skipped)',
   'update.manualInstall': 'Direct install is not supported here. Download it from the release page.',
@@ -532,7 +530,6 @@ module.exports = Object.freeze({
   'manager.modelUnavailable': 'This model is unavailable right now and cannot be added.',
   'manager.catalogNotSynced': 'The official catalog has not synced yet. Refresh before removing.',
   'manager.directionInvalid': 'Invalid move direction.',
-  'manager.proxyInvalid': 'Enter a proxy URL starting with http:// or https://.',
   'manager.unsupported': 'Unsupported operation.',
 
   // ── Injection health (runtime/host/injection-health.cjs, settings tab only) ──
@@ -690,6 +687,7 @@ module.exports = Object.freeze({
   'errors.runtime.newer_runtime': 'Another window has loaded a newer version of the extension. Reload this window.',
   'errors.runtime.control_unavailable': 'Could not verify who owns the local connection service. Reload the window and retry.',
   'errors.runtime.startup_failed': 'The local connection service failed to start. Check the status log.',
+  'errors.runtime.proxy_unavailable': 'Could not apply the configured proxy to the connection service. Check the proxy setting and retry.',
   'errors.runtime.cancelled': 'Operation cancelled.',
   'errors.operationFailed': 'The operation failed. Check the API settings and the connection.',
   'errors.discovery.http': 'Could not fetch models: HTTP {status}',

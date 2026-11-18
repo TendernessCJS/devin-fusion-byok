@@ -52,7 +52,7 @@ async function fixture(t, { seedCache = true } = {}) {
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: () => {} });
   const base = 'http://127.0.0.1:' + backend.port;
   t.after(async () => { await backend.close(); fs.rmSync(root, { recursive: true, force: true }); });
   return { root, backend, base };
@@ -126,7 +126,7 @@ test('an observation that only adds family metadata is still persisted', async t
       return realRequire(name);
     },
   }, { filename });
-  const backend = await module.exports.startBackend({ root, port: 0, log: () => {} });
+  const backend = await module.exports.startBackend({ initialProxy: { httpProxy: '', httpsProxy: '', noProxy: [] }, root, port: 0, log: () => {} });
   const response = await fetch('http://127.0.0.1:' + backend.port + '/exa.api_server_pb.ApiServerService/GetCliModelConfigs',
     { method: 'POST', body: 'native' });
   assert.equal(response.status, 200);

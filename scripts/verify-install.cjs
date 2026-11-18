@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
+const http = require('node:http');
 
 const DEFAULT_EXT = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf';
 const DEFAULT_STORAGE = path.join(os.homedir(), 'Library/Application Support/Devin/User/globalStorage/local.devin-fusion-byok');
@@ -152,6 +153,90 @@ function verdictOf(checks) {
   return 'ok';
 }
 
+// ---------- live backend health (read-only) ----------
+// One bounded GET against the running backend: it must identify as this
+// extension's service, on this storage root, running the *installed* source.
+// Only the whitelisted fields below may ever leave this function — never the
+// whole /health payload.
+const LIVE_TIMEOUT_MS = 1000;
+
+// Wall-clock bound, not socket idle: a slow-drip response must lose to the
+// timer just like a dead connection. Body capped at 64KiB, 2xx only, redirects
+// never followed — any other outcome resolves to the same WARN shape.
+const LIVE_BODY_LIMIT = 64 * 1024;
+function fetchLiveHealth(port, timeoutMs = LIVE_TIMEOUT_MS) {
+  return new Promise(resolve => {
+    let settled = false;
+    let request, response;
+    const done = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { request?.destroy(); } catch {}
+      try { response?.destroy(); } catch {}
+      resolve(value);
+    };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    timer.unref?.();
+    try {
+      request = http.get({ host: '127.0.0.1', port, path: '/health', agent: false }, incoming => {
+        response = incoming;
+        if (incoming.statusCode < 200 || incoming.statusCode >= 300) { incoming.resume(); return done(null); }
+        const chunks = [];
+        let length = 0;
+        incoming.on('data', chunk => {
+          length += chunk.length;
+          if (length > LIVE_BODY_LIMIT) return done(null);
+          chunks.push(chunk);
+        });
+        incoming.on('end', () => { try { done(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { done(null); } });
+        incoming.on('error', () => done(null));
+        incoming.on('aborted', () => done(null));
+        incoming.on('close', () => done(null));
+      });
+    } catch { return done(null); }
+    request.on('error', () => done(null));
+    request.on('close', () => done(null));
+  });
+}
+
+// Pure verdict: health may be null (unreachable). expected.sourceId may be
+// null when the installed copy's identity module cannot be loaded — that is
+// unverifiable, never a silent pass.
+const NODE_VERSION = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]*)?$/;
+const ISO_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+function evaluateRuntimeHealth(health, expected) {
+  if (!health || typeof health !== 'object') return { level: 'WARN', message: 'live backend 不可达' };
+  if (health.service !== expected.service) return { level: 'FAIL', message: 'live backend 不是本插件服务' };
+  if (health.rootId !== expected.rootId) return { level: 'FAIL', message: 'live backend 属于另一套 storage' };
+  if (!expected.sourceId) return { level: 'WARN', message: '无法从已安装副本计算 sourceId,身份未验证' };
+  if (health.sourceId !== expected.sourceId)
+    return { level: 'FAIL', message: 'live backend 运行代码与已安装副本不一致' };
+  // Whitelisted projection only — health arrives from a socket and every field
+  // is untrusted until its shape proves otherwise.
+  const data = {};
+  const safeVersion = value =>
+    typeof value === 'string' && value.length <= 128 && NODE_VERSION.test(value) ? value : undefined;
+  const startedAt = health.runtime?.startedAt;
+  data.node = safeVersion(health.runtime?.node);
+  data.electron = safeVersion(health.runtime?.electron);
+  if (typeof startedAt === 'string' && startedAt.length <= 64 &&
+      ISO_STAMP.test(startedAt) && !Number.isNaN(Date.parse(startedAt))) data.startedAt = startedAt;
+  if (Number.isSafeInteger(health.pid) && health.pid > 0) data.pid = health.pid;
+  if (/^[0-9a-f-]{36}$/i.test(health.instanceId || '')) data.instanceId = health.instanceId;
+  Object.keys(data).forEach(key => data[key] === undefined && delete data[key]);
+  if (health.proxyProtocol !== 1)
+    return { level: 'WARN', message: 'live backend 版本过旧,无 proxy 状态(unsupported)', data };
+  if (typeof health.proxyReady !== 'boolean')
+    return { level: 'WARN', message: 'live backend proxy 状态字段未知(unknown)', data };
+  if (health.proxyReady !== true)
+    return { level: 'FAIL', message: 'live backend 代理策略尚未同步(proxyReady=false)', data };
+  if (data.pid === undefined || data.instanceId === undefined)
+    return { level: 'WARN', message: 'live backend 进程身份信息不足(unknown)', data };
+  return { level: 'PASS',
+    message: `live backend ok(node=${data.node || '?'} startedAt=${data.startedAt || '?'} proxyReady=true)`, data };
+}
+
 // ---------- main ----------
 
 function usage() {
@@ -160,14 +245,14 @@ function usage() {
 }
 
 if (require.main === module) {
-  try { main(); } catch (error) {
+  main().then(() => {}, error => {
     console.log(`FAIL [internal] ${error && error.message ? error.message : String(error)}`);
     console.log('verdict: fail');
     process.exit(1);
-  }
+  });
 }
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   let hours = 24, json = false, withTests = false, storage = DEFAULT_STORAGE, extensionPath = DEFAULT_EXT;
   for (const arg of args) {
@@ -226,6 +311,22 @@ function main() {
     }
   }
 
+  // C2. live backend health: read-only /health probe, source compared against
+  // the installed copy's identity module (never the repo's — the tree diff in
+  // section C already owns repo-vs-installed).
+  {
+    const { PORT } = require('../src/runtime/port.cjs');
+    let expectedSourceId = null;
+    try {
+      const installedIdentity = require(path.join(installedDir, 'src/runtime/source-identity.cjs'));
+      expectedSourceId = installedIdentity.runtimeIdentity(storage, true).sourceId;
+    } catch {}
+    const health = await fetchLiveHealth(PORT);
+    const { rootIdentity } = require('../src/runtime/contract.cjs');
+    const verdictLine = evaluateRuntimeHealth(health, { service: 'devin-fusion-byok', rootId: rootIdentity(storage).rootId, sourceId: expectedSourceId });
+    push('live-backend', verdictLine.level, verdictLine.message, verdictLine.data);
+  }
+
   // D. runtime log aggregation
   let agg = null;
   const logPath = path.join(storage, 'runtime.log');
@@ -270,4 +371,4 @@ function main() {
   process.exit(exitCode);
 }
 
-module.exports = { parseLogLines, aggregateLog, evaluateLog, evaluateContractCache, compareTrees, verdictOf };
+module.exports = { parseLogLines, aggregateLog, evaluateLog, evaluateContractCache, compareTrees, verdictOf, evaluateRuntimeHealth, fetchLiveHealth };

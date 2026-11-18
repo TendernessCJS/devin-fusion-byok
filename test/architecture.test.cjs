@@ -21,6 +21,11 @@ const srcFiles = () => {
 };
 
 const BACKEND_FORBIDDEN_DIRS = ['activation', 'panel', 'goal', 'fast-context', 'lifecycle', 'network', 'update'];
+// The runtime proxy leaves are the sanctioned exceptions: the backend must
+// parse/tunnel proxies without dragging the update stack into its closure.
+const BACKEND_ALLOWED_NETWORK_FILES = [
+  'network/proxy-config.cjs', 'network/proxy-tunnel.cjs', 'network/proxy-policy.cjs',
+];
 const BACKEND_FORBIDDEN_FILES = [
   'models/discovery.cjs', 'models/discovery-error.cjs', 'update.cjs',
   'extension.cjs',
@@ -28,6 +33,7 @@ const BACKEND_FORBIDDEN_FILES = [
 const BACKEND_RUNTIME_ROOT = [
   'backend.cjs', 'backend-control.cjs', 'bridge.cjs', 'contract.cjs',
   'native-cache.cjs', 'port.cjs', 'source-identity.cjs', 'upstream-origin.cjs',
+  'upstream-proxy.cjs',
 ];
 function backendViolations(graph) {
   const violations = [];
@@ -36,7 +42,8 @@ function backendViolations(graph) {
     const relative = path.relative(srcRoot, file);
     const [top, base] = [relative.split(path.sep)[0], path.basename(file)];
     const runtimeRest = top === 'runtime' ? relative.split(path.sep).slice(1) : [];
-    if (BACKEND_FORBIDDEN_DIRS.includes(top) || BACKEND_FORBIDDEN_FILES.includes(relative) ||
+    if ((BACKEND_FORBIDDEN_DIRS.includes(top) && !(top === 'network' && BACKEND_ALLOWED_NETWORK_FILES.includes(relative))) ||
+      BACKEND_FORBIDDEN_FILES.includes(relative) ||
       (top === 'runtime' && (runtimeRest[0] === 'host' ||
         (runtimeRest.length === 1 && !BACKEND_RUNTIME_ROOT.includes(base))))) violations.push(relative);
   }
@@ -66,7 +73,8 @@ test('every top-level entry in the backend closure sits inside the allow-list', 
     const parts = relative.split(path.sep);
     if (parts.length === 1) {
       if (!BACKEND_ALLOWED_ROOT_FILES.includes(relative)) unexpected.push(relative);
-    } else if (!BACKEND_ALLOWED_TOP_DIRS.includes(parts[0])) unexpected.push(relative);
+    } else if (!BACKEND_ALLOWED_TOP_DIRS.includes(parts[0]) &&
+      !(parts[0] === 'network' && BACKEND_ALLOWED_NETWORK_FILES.includes(relative))) unexpected.push(relative);
   }
   assert.deepEqual(unexpected, [],
     'a new host-side top-level entry must be explicitly added to the allow-list: ' + unexpected.join(', '));
@@ -246,8 +254,9 @@ const updateViolations = (graph, entries = filesUnder('update')) => {
 };
 
 // proxy-config carries panel-facing proxy text handling only; any repository
-// dependency makes it a transport module wearing a config name.
-const LEAF = path.join('update', 'proxy-config.cjs');
+// dependency makes it a transport module wearing a config name. The leaf
+// lives in network/ — network owns pure proxy parsing; no update facade.
+const LEAF = path.join('network', 'proxy-config.cjs');
 const leafViolations = graph => closureOf(graph, LEAF).length === 1 ? [] : [LEAF];
 
 // Model discovery reached the GitHub stack only through the facade before; it
@@ -273,13 +282,16 @@ test('network/ and update/ keep their dependency ceilings, and proxy-config stay
   assert.deepEqual(networkViolations(graph), []);
   assert.deepEqual(updateViolations(graph), []);
   assert.deepEqual(leafViolations(graph), [], 'proxy-config must stay a leaf with only builtin dependencies');
+  assert.equal(fs.existsSync(path.join(srcRoot, 'update', 'proxy-config.cjs')), false,
+    'retired proxy facade must not return');
   assert.deepEqual(discoveryViolations(graph), []);
   const discovery = closureOf(graph, DISCOVERY);
   assert.ok(discovery.includes(path.join('network', 'direct-fetch.cjs')),
     'discovery uses the direct transport at its new path');
-  for (const entry of [path.join('panel', 'manager.cjs'), path.join('panel', 'panel-state.cjs')])
-    assert.ok(closureOf(graph, entry).includes(path.join('update', 'proxy-config.cjs')),
-      entry + ' reads proxy configuration only');
+  for (const entry of [path.join('panel', 'manager.cjs'), path.join('panel', 'panel-state.cjs'), path.join('panel', 'update-view.cjs')])
+    for (const banned of [path.join('update', 'proxy-config.cjs'), path.join('network', 'proxy-policy.cjs'), path.join('network', 'proxy-config.cjs')])
+      assert.ok(!closureOf(graph, entry).includes(banned),
+        entry + ' must not read proxy configuration — the panel has no proxy configuration UI');
 });
 
 const injectedGraph = (patched, specifier) => {
@@ -322,10 +334,10 @@ test('the leaf guard rejects an injected proxy-config -> direct-fetch edge', () 
     'proxy-config must stop being a leaf once it depends on a transport');
 });
 
-test('the discovery guard rejects an injected discovery -> update/proxy-config.cjs edge', () => {
-  const overlay = injectedGraph(DISCOVERY, '../update/proxy-config.cjs');
+test('the discovery guard rejects an injected discovery -> update/updater.cjs edge', () => {
+  const overlay = injectedGraph(DISCOVERY, '../update/updater.cjs');
   // The point is that the violation is reported from discovery's own entry.
-  assert.ok(discoveryViolations(overlay).includes(DISCOVERY + ' -> ' + path.join('update', 'proxy-config.cjs')),
+  assert.ok(discoveryViolations(overlay).includes(DISCOVERY + ' -> ' + path.join('update', 'updater.cjs')),
     'discovery reaching an update module must be reported from its own entry');
 });
 

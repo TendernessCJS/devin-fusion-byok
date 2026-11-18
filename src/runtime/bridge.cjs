@@ -4,6 +4,7 @@ const https = require('node:https');
 const crypto = require('node:crypto');
 const wire = require('../protocol/wire.cjs');
 const { augmentCatalog, collectNativeModels, collectAllowedUids } = require('../catalog.cjs');
+const { createForwardAgent } = require('./upstream-proxy.cjs');
 // Own uids are the only place this marker appears in a catalog payload, so a
 // byte scan of the decoded body counts exactly what the old tree walk counted
 // (measured equal: 207 on a 902KB GetCliModelConfigs body) at 0.31ms instead of
@@ -64,7 +65,7 @@ async function collect(stream, limit = 64 * 1024 * 1024) {
   for await (const chunk of stream) { length += chunk.length; if (length > limit) throw new Error('Message too large'); chunks.push(chunk); }
   return Buffer.concat(chunks, length);
 }
-function forward(request, response, target, { body, rpc = target.pathname, getCatalog, log = () => {}, onFusionStatus, onNativeModels, onAllowedUids, timeouts = {} } = {}) {
+function forward(request, response, target, { body, rpc = target.pathname, getCatalog, log = () => {}, onFusionStatus, onNativeModels, onAllowedUids, timeouts = {}, proxy } = {}) {
   const limits = { connect: 10000, headers: 120000, body: 120000 };
   for (const [key, name] of [[timeouts.connectMs, 'connect'], [timeouts.firstResponseMs, 'headers'], [timeouts.idleMs, 'body']]) {
     if (Number.isInteger(key) && key > 0 && key <= 2147483647) limits[name] = key;
@@ -109,6 +110,9 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
     dropConnectListeners();
     response.off('drain', onDrain);
     response.off('finish', onFinish);
+    // Kills an in-flight CONNECT/TLS handshake too: the request-scoped agent
+    // tracks its pending tunnel sockets and destroys them on destroy().
+    requestAgent?.destroy?.();
   };
   const upstreamDone = () => {
     clearTimeout(connectTimer); clearTimeout(headersTimer); clearTimeout(bodyTimer);
@@ -126,18 +130,27 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
     notifyAllowed(null);
     stop();
     incoming?.destroy();
-    outbound.destroy();
+    outbound?.destroy();
     if (response.destroyed || response.writableFinished) return;
     if (response.headersSent) response.destroy();
     else { response.writeHead(502); response.end(); }
   };
   const headers = { ...request.headers, host: target.host };
   delete headers['proxy-connection'];
+  // Proxy credentials authenticate to the CONNECT hop only; a client-supplied
+  // header (or one smuggled into the request body path) must not reach the
+  // upstream.
+  delete headers['proxy-authorization'];
   if (body !== undefined) {
     headers['content-length'] = String(body.length);
     delete headers['transfer-encoding'];
   }
-  const outbound = (secure ? https : http).request(target, { method: request.method, headers }, async upstream => {
+  let outbound, requestAgent;
+  try {
+    // Per request, per policy snapshot: policy swaps replace the compiled
+    // object, so no socket can leak across two policies through this agent.
+    requestAgent = createForwardAgent(target, proxy, { timeoutMs: limits.connect });
+    outbound = (secure ? https : http).request(target, { method: request.method, headers, agent: requestAgent || undefined }, async upstream => {
     if (stopped) { upstream.destroy(); return; }
     incoming = upstream;
     clearTimeout(connectTimer); clearTimeout(headersTimer);
@@ -192,7 +205,8 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
       drainTimer = setTimeout(() => timedOut('drain'), drainLimit);
       response.writeHead(upstream.statusCode, outgoingHeaders); response.end(outgoing);
     } catch { fail(); }
-  });
+    });
+  } catch { fail(); return; }
   outbound.on('socket', socket => {
     if (stopped) { socket.destroy?.(); return; }
     connectSocket = socket;

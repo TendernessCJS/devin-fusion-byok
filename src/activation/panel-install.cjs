@@ -1,6 +1,7 @@
 'use strict';
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { readProxySettings } = require('./proxy-settings.cjs');
 const { updateConfig, applyKeyDelta } = require('../config/store.cjs');
 const { createManager } = require('../panel/manager.cjs');
 const { statusTooltip } = require('../panel/status-text.cjs');
@@ -60,7 +61,7 @@ function createPanelHost({ vscode, context, config, configFile, root, log, outpu
       selectFusion: uid => selection.saveFusionChoice(uid),
       afterChange });
     const updater = require('../update.cjs').createUpdateHost({ vscode, context,
-      proxy: () => config().updateProxy,
+      proxySettings: () => readProxySettings(vscode).config,
       onChange: () => publishUpdates() });
     // safeError rebuilds the message in the display language; codes stay as they are.
     const displayError = error => safeError(error, t);

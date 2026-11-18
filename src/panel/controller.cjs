@@ -141,11 +141,6 @@ function createPanelController({ vscode, context, manager, safeError, updater, r
           else if (message.type === 'update.ignore') await updater.ignore();
           else if (message.type === 'update.auto' && typeof message.payload?.enabled === 'boolean') await updater.setAutoCheck(message.payload.enabled);
           else if (message.type === 'update.release') await vscode.env.openExternal(vscode.Uri.parse(updater.snapshot().releaseUrl));
-          else if (message.type === 'update.proxy') {
-            await manager.dispatch('setUpdateProxy', { value: message.payload?.value });
-            await postState(current, manager.state(), { force: true });
-            await updater.check({ force: true });
-          }
           await publishUpdates();
           return;
         }

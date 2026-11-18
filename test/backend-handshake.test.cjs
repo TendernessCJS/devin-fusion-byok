@@ -4,27 +4,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
-const { createRequire } = require('node:module');
-const { runtimeIdentity, controlFile } = require('../src/runtime/backend.cjs');
-const { createSandboxLoader } = require('./helpers/sandbox.cjs');
-const filename = path.resolve(__dirname, '../src/extension.cjs');
-const realRequire = createRequire(filename);
-const cacheChecks = [];
-const cliCacheStub = { CACHE_NAME: /(?:)/, defaultDir: () => '/nonexistent-test-cli-cache',
-  inspectCliCaches: () => ({ checked: 0, entries: [], expected: [] }),
-  refreshStaleCliCaches: options => { cacheChecks.push(options); return { checked: options.expectedUids.length, refreshed: [], skipped: [], errors: [] }; } };
-const loader = createSandboxLoader({ filename,
-  overrides: { 'vscode': {}, './runtime/host/cli-cache.cjs': cliCacheStub },
-  globals: { AbortController, AbortSignal, setTimeout, clearTimeout },
-  shareGlobals: file => file.includes(path.sep + 'src' + path.sep + 'activation' + path.sep) });
-const moduleUnderTest = loader.module;
-const { ensureBackend, safeError } = moduleUnderTest.exports;
-
-test('every registered stub is actually hit', () => {
-  loader.assertStubsUsed('backend-handshake');
-});
+const { runtimeIdentity } = require('../src/runtime/source-identity.cjs');
+const { controlFile } = require('../src/runtime/contract.cjs');
+const { ensureBackend } = require('../src/activation/backend-handshake.cjs');
+const { safeError } = require('../src/activation/errors.cjs');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-manager-test-'));
@@ -33,7 +17,7 @@ function fixture(t) {
   const old = { ...expected, version: '0.0.1', sourceId: 'a'.repeat(64), instanceId: 'old-instance' };
   const token = 'b'.repeat(64), logs = [], spawns = [], waits = [];
   fs.writeFileSync(controlFile(root), JSON.stringify({ ...old, token }), { mode: 0o600 });
-  return { root, expected, old, token, logs, spawns, waits, cacheChecks,
+  return { root, expected, old, token, logs, spawns, waits,
     options: { root, extensionPath: path.resolve(__dirname, '..'), log: (...args) => logs.push(args) },
     spawn(...args) { spawns.push(args); const child = new EventEmitter(); child.unref = () => {}; return child; },
     sleep: async ms => { waits.push(ms); },

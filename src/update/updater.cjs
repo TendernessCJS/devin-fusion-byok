@@ -6,14 +6,14 @@ const { promisify } = require('node:util');
 const execFile = promisify(require('node:child_process').execFile);
 const { allowedUrl } = require('./url-policy.cjs');
 const { requestBytes } = require('./download.cjs');
-const { maskProxy, parseProxy } = require('./proxy-config.cjs');
+const { compileProxyPolicy } = require('../network/proxy-policy.cjs');
 const REPOSITORY = 'TendernessCJS/devin-fusion-byok';
 const PAGE = `https://github.com/${REPOSITORY}/releases`;
 const API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
 const INTERVAL = 6 * 60 * 60 * 1000;
 const MAX = 50 * 1024 * 1024;
-const CHECK_FAILED = '检查更新失败：网络不可达。若本机需经代理访问 GitHub，请在「设置」页填写「更新代理」。不代表已是最新版。';
-const PROXY_INVALID = '检查更新失败：updateProxy 代理地址无效，请修正或移除后重试。不代表已是最新版。';
+const CHECK_FAILED = '检查更新失败：网络不可达。若本机需经代理访问 GitHub，请检查 Devin 的 http.proxy / http.noProxy 设置。不代表已是最新版。';
+const PROXY_INVALID = '检查更新失败：Devin 代理配置无效，请检查 http.proxy / http.noProxy 或代理环境变量。不代表已是最新版。';
 function parseVersion(v) {
   if (typeof v !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v)) throw Error('version');
   const parts = v.split('.').map(Number);
@@ -47,17 +47,16 @@ async function verifyPackage(file, version, run = execFile) {
   const fields = Object.fromEntries(attributes.map(m => [m[1], m[2]]));
   if (new Set(attributes.map(m => m[1])).size !== attributes.length || fields.Id !== pkg.name || fields.Publisher !== pkg.publisher || fields.Version !== version) throw Error('identity');
 }
-function createUpdater({ currentVersion, globalState, storagePath, request = requestBytes, install, confirm = async () => false, notify = () => {}, onChange = () => {}, now = Date.now, verify = verifyPackage, proxy = () => '' }) {
+function createUpdater({ currentVersion, globalState, storagePath, request = requestBytes, install, confirm = async () => false, notify = () => {}, onChange = () => {}, now = Date.now, verify = verifyPackage, proxySettings = () => ({ httpProxy: '', httpsProxy: '', noProxy: [] }) }) {
   let saved = globalState?.get('fusionByokUpdate', {}) || {};
   let autoCheck = saved.autoCheck !== false, ignoredVersion = saved.ignoredVersion || '';
   let phase = 'idle', error = '', latest = null, disposed = false, timer, pending, installing, abort, lastCheck = 0, announced;
   let writes = Promise.resolve();
-  const snapshot = () => { let proxyValue = '';
-    try { proxyValue = maskProxy(proxy()); } catch {}
-    return { currentVersion, latestVersion: latest?.version || null, phase, error, autoCheck, ignored: latest?.version === ignoredVersion, notes: latest?.notes || '', releaseUrl: latest?.page || PAGE, canInstall: phase === 'available' && latest?.installable === true && typeof install === 'function', installable: latest?.installable === true, proxy: proxyValue };
-  };
+  const snapshot = () => ({ currentVersion, latestVersion: latest?.version || null, phase, error, autoCheck, ignored: latest?.version === ignoredVersion, notes: latest?.notes || '', releaseUrl: latest?.page || PAGE, canInstall: phase === 'available' && latest?.installable === true && typeof install === 'function', installable: latest?.installable === true });
   const emit = () => { if (!disposed) Promise.resolve().then(() => onChange(snapshot())).catch(() => {}); };
-  const proxyConfig = () => parseProxy(proxy());
+  // Read + compile once per operation: a mid-flight settings change must not
+  // rewrite a snapshot already running, and check/install never share one.
+  const proxyConfig = () => compileProxyPolicy(proxySettings());
   const persist = () => {
     const value = { autoCheck, ignoredVersion };
     writes = writes.then(() => globalState?.update('fusionByokUpdate', value)).catch(() => { error = '更新偏好保存失败，请稍后重试。'; emit(); });
@@ -75,7 +74,7 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
     phase = 'checking'; error = ''; emit(); abort = new AbortController(); const signal = abort.signal;
     pending = (async () => {
       try {
-        const bytes = await request(API, { limit: 1024 * 1024, signal, proxy: via });
+        const bytes = await request(API, { limit: 1024 * 1024, signal, proxyPolicy: via });
         if (disposed) return snapshot();
         latest = releaseInfo(JSON.parse(bytes.toString()));
         const order = compareVersions(latest.version, currentVersion);
@@ -102,7 +101,7 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
       try {
         if (!await confirm(snapshot()) || disposed) { phase = 'available'; return snapshot(); }
         abort = new AbortController();
-        const bytes = await request(target.url, { limit: MAX, signal: abort.signal, proxy: via });
+        const bytes = await request(target.url, { limit: MAX, signal: abort.signal, proxyPolicy: via });
         if (disposed) return snapshot();
         if (bytes.length !== target.size || crypto.createHash('sha256').update(bytes).digest('hex') !== target.digest) throw Error('digest');
         fs.mkdirSync(storagePath, { recursive: true, mode: 0o700 });
@@ -124,11 +123,11 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
     dispose() { disposed = true; clearInterval(timer); abort?.abort(); }
   };
 }
-function createUpdateHost({ vscode, context, onChange, proxy, run = execFile, request }) {
+function createUpdateHost({ vscode, context, onChange, proxySettings, run = execFile, request }) {
   const cli = path.join(vscode.env?.appRoot || '', 'bin', 'devin-desktop');
   const supported = process.platform === 'darwin' && path.isAbsolute(cli) && fs.existsSync(cli);
   let updater;
-  updater = createUpdater({ currentVersion: require('../../package.json').version, globalState: context.globalState, storagePath: context.globalStorageUri.fsPath, onChange, proxy, request,
+  updater = createUpdater({ currentVersion: require('../../package.json').version, globalState: context.globalState, storagePath: context.globalStorageUri.fsPath, onChange, proxySettings, request,
     confirm: async state => await vscode.window.showWarningMessage(`安装 Fusion BYOK ${state.latestVersion}？不会自动重载当前窗口。`, { modal: true }, '安装更新') === '安装更新',
     install: supported ? async ({ path: file }) => { await run(cli, ['--install-extension', file], { timeout: 120000, maxBuffer: 1024 * 1024 }); } : undefined,
     notify: async state => { const action = await vscode.window.showInformationMessage(`Fusion BYOK ${state.latestVersion} 已发布。`, '查看更新', '忽略此版本'); if (action === '查看更新') await vscode.commands.executeCommand('devinFusionByok.openPanel'); else if (action === '忽略此版本') await updater.ignore(); }

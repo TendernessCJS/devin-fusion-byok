@@ -80,6 +80,7 @@ function fixture(t, options = {}) {
     './effective-origin.cjs': { resolveEffectiveOriginWhenAvailable: options.deferResolve
       ? args => new Promise((resolve, reject) => { resolvers.push({ args, resolve, reject }); })
       : async () => effective.current },
+    '../runtime/host/proxy.cjs': { pushProxy: async () => ({ ok: true, ready: true }) },
     '../runtime/host/ls-injection.cjs': { installLsInjection: async () => ({ dispose: async () => {} }) },
     '../runtime/bridge.cjs': { createLsBridge: async () => ({ port: 4567, close() {} }) },
     '../runtime/host/acp-observer.cjs': { installAcpObserver: () => ({ dispose() {} }) },
@@ -103,6 +104,9 @@ function fixture(t, options = {}) {
     onPublish: () => {} });
   t.after(() => loader.assertStubsUsed('upstream-push-log'));
   return { root, pushes, signals, resolvers, logs, handlers, codeium, session, settle, effective, configFile,
+    // Broadcast each event to every registered handler — the suite must not
+    // depend on which slot a handler happens to occupy.
+    fire: e => Promise.all(handlers.map(h => h(e))),
     pushLogs: () => logs.filter(entry => entry.event === 'upstream-push') };
 }
 
@@ -143,13 +147,13 @@ test('a later configuration change re-pushes the re-resolved effective origin', 
   await f.session.ensureEnabled();
   await f.settle();
   assert.equal(f.pushes.length, 1);
-  assert.equal(f.handlers.length, 1);
+  assert.equal(f.handlers.length, 2); // upstream handler + proxy handler
   f.effective.current = { origin: 'https://custom.example.com', source: 'portal' };
-  await f.handlers[0]({ affectsConfiguration: section => section === 'codeium.apiServerUrl' });
+  await f.fire({ affectsConfiguration: section => section === 'codeium.apiServerUrl' });
   await f.settle();
   assert.deepEqual(f.pushes.map(entry => entry.origin), [null, 'https://custom.example.com']);
   // An unrelated configuration event must not re-push.
-  await f.handlers[0]({ affectsConfiguration: () => false });
+  await f.fire({ affectsConfiguration: () => false });
   await f.settle();
   assert.equal(f.pushes.length, 2);
 });
@@ -159,12 +163,12 @@ test('a repeated trigger resolving to the same origin sends no second POST', asy
   await f.session.ensureEnabled();
   await f.settle();
   assert.equal(f.pushes.length, 1);
-  await f.handlers[0]({ affectsConfiguration: section => section === 'windsurf.portalUrl' });
+  await f.fire({ affectsConfiguration: section => section === 'windsurf.portalUrl' });
   await f.settle();
   assert.equal(f.pushes.length, 1, 'the same (origin, source) is deduplicated — no POST, no log');
   assert.equal(f.pushLogs().length, 1);
   f.effective.current = { origin: 'https://other.example.com', source: 'ls-arg' };
-  await f.handlers[0]({ affectsConfiguration: section => section === 'windsurf.portalUrl' });
+  await f.fire({ affectsConfiguration: section => section === 'windsurf.portalUrl' });
   await f.settle();
   assert.equal(f.pushes.length, 2, 'a changed origin always pushes');
 });
@@ -180,10 +184,10 @@ test('a superseded resolution publishes nothing and the newer target wins', asyn
   const enabling = f.session.ensureEnabled();
   await until(() => f.resolvers.length === 1, 'first resolver');
   await enabling;
-  assert.equal(f.handlers.length, 1);
+  assert.equal(f.handlers.length, 2); // upstream handler + proxy handler
   // The handler resolves with the push itself; resolver B is still pending, so
   // this must not be awaited before the deferred is released.
-  void f.handlers[0]({ affectsConfiguration: name => name === 'devin.portalUrl' });
+  void f.fire({ affectsConfiguration: name => name === 'devin.portalUrl' });
   await until(() => f.resolvers.length === 2, 'second resolver');
   f.resolvers[1].resolve({ origin: 'https://new.example.com', source: 'portal' });
   await until(() => f.pushes.length === 1, 'push from the newer resolver');
@@ -241,10 +245,10 @@ test('an aborted in-flight push cannot suppress the re-push of the same origin',
   await until(() => f.pushes.length === 1 && f.pushes.at(-1).origin === A && f.pushes.at(-1).source === 'ls-arg',
     'push A committed and its dedupe key is set');
   f.effective.current = { origin: B, source: 'portal' };
-  void f.handlers[0]({ affectsConfiguration: name => name === 'devin.portalUrl' });
+  void f.fire({ affectsConfiguration: name => name === 'devin.portalUrl' });
   await until(() => f.pushes.length === 2, 'push B in flight');
   f.effective.current = { origin: A, source: 'ls-arg' };
-  const third = f.handlers[0]({ affectsConfiguration: name => name === 'devin.portalUrl' });
+  const third = f.fire({ affectsConfiguration: name => name === 'devin.portalUrl' });
   await third;
   await f.settle();
   assert.deepEqual(f.pushes.map(entry => entry.origin), [A, B, A],
@@ -270,19 +274,19 @@ for (const [label, failure] of [
     await until(() => f.pushes.length === 1 && f.pushes.at(-1).origin === A && f.pushes.at(-1).source === 'ls-arg',
       'push A committed and its dedupe key is set');
     f.effective.current = { origin: B, source: 'portal' };
-    await f.handlers[0]({ affectsConfiguration: name => name === 'devin.portalUrl' });
+    await f.fire({ affectsConfiguration: name => name === 'devin.portalUrl' });
     await f.settle();
     assert.equal(f.pushes.length, 2, 'the failed push still issued its POST');
     assert.equal(backend.origin, B, 'the backend adopted B');
     f.effective.current = { origin: A, source: 'ls-arg' };
-    await f.handlers[0]({ affectsConfiguration: name => name === 'devin.portalUrl' });
+    await f.fire({ affectsConfiguration: name => name === 'devin.portalUrl' });
     await f.settle();
     assert.equal(f.pushes.length, 3, 'returning to A must re-push, not dedupe against a stale key');
     assert.equal(backend.origin, A);
     assert.deepEqual([f.pushes.at(-1).origin, f.pushes.at(-1).source], [A, 'ls-arg']);
     // The failed push left the key invalidated, so B is not deduplicated either.
     f.effective.current = { origin: B, source: 'portal' };
-    await f.handlers[0]({ affectsConfiguration: name => name === 'devin.portalUrl' });
+    await f.fire({ affectsConfiguration: name => name === 'devin.portalUrl' });
     await f.settle();
     assert.equal(f.pushes.length, 4, 'a failed push leaves the key invalidated — the backend state is uncertain');
   });

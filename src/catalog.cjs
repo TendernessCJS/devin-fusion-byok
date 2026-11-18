@@ -5,6 +5,6 @@ const { augmentCatalog, collectNativeModels, collectAllowedUids, staleFusionUids
 const { resolveAssignment } = require('./catalog/assignment.cjs');
 const { analyzeRoles, buildRoleLists } = require('./catalog/roles.cjs');
 const { refKey } = require('./catalog/identity.cjs');
-const { catalogSignature, ownEntriesSignature } = require('./catalog/signature.cjs');
+const { ownEntriesSignature } = require('./catalog/signature.cjs');
 const { validateProtoCatalog, isOwnUid } = require('./catalog/payload.cjs');
-module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, collectAllowedUids, analyzeRoles, buildRoleLists, refKey, staleFusionUids, staleOwnEntries, catalogSignature, ownEntriesSignature, validateProtoCatalog, isOwnUid };
+module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, collectAllowedUids, analyzeRoles, buildRoleLists, refKey, staleFusionUids, staleOwnEntries, ownEntriesSignature, validateProtoCatalog, isOwnUid };

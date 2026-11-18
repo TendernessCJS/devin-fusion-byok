@@ -99,3 +99,34 @@ test('src uses only static require specifiers, so this contract stays decidable'
     assert.equal(calls, literals, path.relative(repoRoot, file) + ' must not compute a require specifier');
   }
 });
+
+test('the runtime proxy leaves sit inside the hashed backend closure', () => {
+  const names = hashedFiles();
+  assert.ok(names.includes('upstream-proxy.cjs'), 'policy compilation is restart-relevant');
+  assert.ok(names.includes('../network/proxy-config.cjs'));
+  assert.ok(names.includes('../network/proxy-tunnel.cjs'));
+  assert.ok(names.includes('../network/proxy-policy.cjs'));
+});
+
+test('a change to the proxy leaf changes sourceId', () => {
+  const filename = path.resolve(__dirname, '../src/runtime/source-identity.cjs');
+  const { createRequire } = require('node:module');
+  const vm = require('node:vm');
+  const realRequire = createRequire(filename);
+  let mutate = false;
+  const module = { exports: {} };
+  const leaf = path.resolve(__dirname, '../src/runtime/upstream-proxy.cjs');
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename), process,
+    require(name) {
+      if (name === 'node:fs') return { ...fs, readFileSync(file, ...args) {
+        const original = fs.readFileSync(file, ...args);
+        return mutate && path.resolve(file) === leaf ? Buffer.concat([original, Buffer.from('\n// change\n')]) : original;
+      } };
+      return realRequire(name);
+    },
+  }, { filename });
+  const before = module.exports.runtimeIdentity('/synthetic-root').sourceId;
+  mutate = true;
+  assert.notEqual(module.exports.runtimeIdentity('/synthetic-root', true).sourceId, before);
+});

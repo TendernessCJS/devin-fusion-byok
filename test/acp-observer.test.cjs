@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { buildCatalog } = require('../src/catalog.cjs');
-const { publicState } = require('../src/panel/manager.cjs');
+const { publicState } = require('../src/panel/panel-state.cjs');
 
 const source = fs.readFileSync(path.join(__dirname, '../src/runtime/host/acp-observer.cjs'), 'utf8');
 const NATIVE_MAIN = '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/dist/extension.js';

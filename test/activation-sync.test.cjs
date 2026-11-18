@@ -176,11 +176,6 @@ test('afterChange routes each mutation type once and always ends with changed()'
   assert.equal(h.enabled.length, 0);
   assert.equal(h.changedCalls.length, 1);
 
-  const i = configSyncFixture(t);
-  await i.sync.afterChange('setUpdateProxy');
-  assert.equal(i.enabled.length, 0);
-  assert.equal(i.changedCalls.length, 1);
-
   const j = configSyncFixture(t);
   await j.sync.afterChange('setProviders');
   assert.equal(j.enabled.length, 1);

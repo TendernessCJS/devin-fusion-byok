@@ -100,13 +100,14 @@ test('controller routes updates separately from model settings and only opens tr
   const updater = { snapshot: () => state, check: async o => actions.push(['check', o.force]), installUpdate: async () => actions.push(['install']), ignore: async () => actions.push(['ignore']), setAutoCheck: async enabled => actions.push(['auto', enabled]) };
   const dispatched = [];
   const controller = createPanelController({ vscode: { ViewColumn: { Active: 1 }, window: { createWebviewPanel: () => panel }, Uri: { parse: x => x }, env: { openExternal: async url => actions.push(['url', url]) } }, context: { subscriptions: [] },
-    manager: { state: () => ({}), dispatch: async (type, payload) => { dispatched.push([type, payload]); if (type !== 'setUpdateProxy') throw Error('must not touch model settings'); return {}; } }, safeError: () => ({ message: 'error' }), updater });
+    manager: { state: () => ({}), dispatch: async (type, payload) => { dispatched.push([type, payload]); throw Error('must not touch model settings'); } }, safeError: () => ({ message: 'error' }), updater });
   controller.open();
   for (const type of ['state','check','install','ignore','auto','release']) await receive({ id: type, type: 'update.' + type, payload: { enabled: false, url: 'https://evil.test' } });
   await receive({ id: 'proxy', type: 'update.proxy', payload: { value: 'http://127.0.0.1:7897' } });
-  assert.deepEqual(actions, [['check', true], ['install'], ['ignore'], ['auto', false], ['url', state.releaseUrl], ['check', true]]);
-  assert.deepEqual(dispatched, [['setUpdateProxy', { value: 'http://127.0.0.1:7897' }]],
-    'update.proxy routes to the dedicated action, never to a same-named model setting');
+  assert.deepEqual(actions, [['check', true], ['install'], ['ignore'], ['auto', false], ['url', state.releaseUrl]],
+    'a retired update.proxy message triggers no check, install or navigation');
+  assert.deepEqual(dispatched, [],
+    'a retired update.proxy message writes no configuration');
   assert.equal(posts.filter(p => p.type === 'update-state').length, 7); panel.dispose();
 });
 test('requestBytes accepts content-length exactly at the limit and enforces streamed size', async () => {
@@ -154,46 +155,80 @@ test('requests without a proxy keep using the injected fetch implementation', as
   assert.equal(body.toString(), 'ok');
   assert.equal(calls, 1);
 });
-test('a configured proxy is parsed once and handed to the request layer', async () => {
+test('a configured proxy compiles to a policy snapshot handed to the request layer', async () => {
   const seen = [];
-  const { updater } = setup({ proxy: () => 'http://user:pass@127.0.0.1:7897',
-    request: async (url, options) => { seen.push(options.proxy); return Buffer.from(JSON.stringify(release('0.3.34'))); } });
+  const { updater } = setup({ proxySettings: () => ({ httpProxy: 'http://user:pass@127.0.0.1:7897',
+      httpsProxy: 'http://user:pass@127.0.0.1:7897', noProxy: [] }),
+    request: async (url, options) => { seen.push(options.proxyPolicy); return Buffer.from(JSON.stringify(release('0.3.34'))); } });
   await updater.check();
   assert.equal(updater.snapshot().phase, 'available');
   assert.equal(seen.length, 1);
-  assert.equal(seen[0].url.hostname, '127.0.0.1');
-  assert.equal(seen[0].url.port, '7897');
-  assert.equal(seen[0].authorization, 'Basic ' + Buffer.from('user:pass').toString('base64'));
+  assert.equal(seen[0].httpsProxy.url.hostname, '127.0.0.1');
+  assert.equal(seen[0].httpsProxy.url.port, '7897');
+  assert.equal(seen[0].httpsProxy.authorization, 'Basic ' + Buffer.from('user:pass').toString('base64'));
+  assert.ok(Object.isFrozen(seen[0]), 'the request sees the immutable snapshot, not live settings');
   updater.dispose();
 });
-test('an invalid updateProxy fails the check without any network request', async () => {
+test('proxy settings are re-read per operation, never cached across check and install', async () => {
+  const seen = [];
+  let current = { httpProxy: 'http://127.0.0.1:1111', httpsProxy: 'http://127.0.0.1:1111', noProxy: [] };
+  const bytes = Buffer.from('artifact');
+  const crypto = require('node:crypto');
+  const info = release('0.3.34');
+  info.assets[0].size = bytes.length;
+  info.assets[0].digest = 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex');
+  const os = require('node:os'), fs = require('node:fs'), path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'update-proxy-swap-'));
+  const { updater } = setup({ storagePath: root, confirm: async () => true,
+    proxySettings: () => current,
+    request: async (url, options) => { seen.push(options.proxyPolicy.httpsProxy?.url.port ?? null);
+      return url.includes('/latest') ? Buffer.from(JSON.stringify(info)) : bytes; },
+    verify: async () => {}, install: async () => {} });
+  try {
+    await updater.check({ force: true });
+    current = { httpProxy: 'http://127.0.0.1:2222', httpsProxy: 'http://127.0.0.1:2222', noProxy: [] };
+    await updater.installUpdate();
+    assert.deepEqual(seen, ['1111', '2222'], 'each operation compiles a fresh snapshot');
+    updater.dispose();
+  } finally { fs.rmSync(root, { recursive: true, force: true }); updater.dispose(); }
+});
+test('an invalid proxy configuration fails the check without any network request or secret echo', async () => {
   let calls = 0;
-  const { updater } = setup({ proxy: () => 'socks5://127.0.0.1:9', request: async () => { calls++; return Buffer.from('{}'); } });
+  const { updater } = setup({ proxySettings: () => ({ httpProxy: 'socks5://127.0.0.1:9', httpsProxy: '', noProxy: [] }),
+    request: async () => { calls++; return Buffer.from('{}'); } });
   await updater.check();
   assert.equal(updater.snapshot().phase, 'error');
-  assert.match(updater.snapshot().error, /updateProxy/);
+  assert.equal(updater.snapshot().error,
+    '检查更新失败：Devin 代理配置无效，请检查 http.proxy / http.noProxy 或代理环境变量。不代表已是最新版。');
   assert.equal(calls, 0);
+  assert.doesNotMatch(JSON.stringify(updater.snapshot()), /socks5/);
   updater.dispose();
 });
 test('update view is plain text and does not expose release payload as HTML', () => {
   const { updateMarkup, updateScript } = require('../src/panel/update-view.cjs');
-  assert.match(updateMarkup(), /update-install/); assert.match(updateMarkup(), /class="actions nowrap"/);
+  assert.match(updateMarkup(), /update-install/); assert.doesNotMatch(updateMarkup(), /http\.proxy|http\.noProxy|update\.proxyFollow/);
+  for (const id of ['update-check', 'update-auto', 'update-release', 'update-status'])
+    assert.match(updateMarkup(), new RegExp('id="' + id + '"'));
+  assert.equal((updateMarkup().match(/class="setting"/g) || []).length, 2, 'no leftover empty proxy card');
+  assert.doesNotMatch(updateMarkup(), /update-proxy|update\.proxy'|update\.proxy"/);
   assert.match(updateScript(), /textContent/); assert.doesNotMatch(updateScript(), /innerHTML/);
   assert.doesNotThrow(() => new Function('vscode', updateScript()));
 });
 
-test('pressing Enter in the proxy field saves it like the button', () => {
-  const { updateScript } = require('../src/panel/update-view.cjs');
+test('the update view carries no proxy editing controls or update.proxy messages', () => {
+  const { updateMarkup, updateScript } = require('../src/panel/update-view.cjs');
+  assert.doesNotMatch(updateMarkup(), /update-proxy|type="text"/, 'no editable proxy input remains');
   const posts = [], elements = new Map();
-  const stub = () => ({ listeners: {}, value: ' http://127.0.0.1:7897 ', checked: false, hidden: false,
+  const stub = () => ({ listeners: {}, value: '', checked: false, hidden: false,
     disabled: false, textContent: '', addEventListener(name, listener) { this.listeners[name] = listener; },
     click() { this.listeners.click?.(); } });
   const document = { getElementById: id => { if (!elements.has(id)) elements.set(id, stub()); return elements.get(id); },
     activeElement: null };
   new Function('vscode', 'document', 'window', updateScript())(
     { postMessage: message => posts.push(message) }, document, { addEventListener() {} });
-  elements.get('update-proxy').listeners.keydown({ key: 'Enter', preventDefault() {} });
-  assert.deepEqual(posts.find(message => message.type === 'update.proxy').payload, { value: 'http://127.0.0.1:7897' });
+  assert.equal(posts.some(message => message.type === 'update.proxy'), false);
+  assert.deepEqual(posts.map(m => m.type), ['update.state'],
+    'script only asks for state on load — every listener is for existing actions');
 });
 
 test('requestBytes defaults to directFetch without touching the ambient fetch', async t => {
@@ -211,27 +246,26 @@ test('requestBytes defaults to directFetch without touching the ambient fetch', 
     'the direct transport is the default; the sandbox has no ambient fetch at all');
 });
 
-test('snapshot echoes a masked proxy for editing without leaking credentials', async () => {
+test('the snapshot never echoes proxy state, addresses or credentials', async () => {
   const secret = 'http://user:s3cret-token@127.0.0.1:7897';
-  const { updater } = setup({ proxy: () => '  ' + secret + '  ', request: async () => { throw new Error('boom'); } });
-  assert.equal(updater.snapshot().proxy, 'http://***@127.0.0.1:7897', 'credentials are masked before reaching the panel');
-  const { updater: plain } = setup({ proxy: () => ' http://127.0.0.1:8080 ' });
-  assert.equal(plain.snapshot().proxy, 'http://127.0.0.1:8080', 'credential-free proxies echo verbatim');
-  plain.dispose();
-  await updater.check();
+  const { updater } = setup({ proxySettings: () => ({ httpProxy: secret, httpsProxy: secret, noProxy: [] }),
+    request: async () => { throw new Error('boom'); } });
   const snap = updater.snapshot();
-  assert.equal(snap.phase, 'error');
-  assert.doesNotMatch(JSON.stringify(snap), /s3cret-token|user:/);
+  assert.equal('proxy' in snap, false);
+  assert.equal('updateProxy' in snap, false);
+  await updater.check();
+  assert.doesNotMatch(JSON.stringify(updater.snapshot()), /s3cret-token|user:|127\.0\.0\.1:7897/);
   updater.dispose();
 });
 
-test('snapshot proxy falls back to empty on non-strings and getter failures', () => {
-  const { updater: throwing } = setup({ proxy: () => { throw new Error('config read failed'); } });
-  assert.equal(throwing.snapshot().proxy, '');
-  throwing.dispose();
-  const { updater: numeric } = setup({ proxy: () => 42 });
-  assert.equal(numeric.snapshot().proxy, '');
-  numeric.dispose();
+test('a throwing proxySettings getter surfaces as the fixed invalid-proxy error', async () => {
+  const { updater } = setup({ proxySettings: () => { throw new Error('config read failed'); } });
+  await updater.check();
+  assert.equal(updater.snapshot().phase, 'error');
+  assert.equal(updater.snapshot().error,
+    '检查更新失败：Devin 代理配置无效，请检查 http.proxy / http.noProxy 或代理环境变量。不代表已是最新版。');
+  assert.doesNotMatch(JSON.stringify(updater.snapshot()), /config read failed/);
+  updater.dispose();
 });
 
 test('src/update.cjs stays a pure compatibility facade over update/updater.cjs', () => {
@@ -275,7 +309,7 @@ test('createUpdateHost installs through execFile argv and never a shell string',
       window: { showWarningMessage: async () => '安装更新', showInformationMessage: async () => undefined } },
     context: { globalState: { get: (k, d) => d, update: async () => {} },
       globalStorageUri: { fsPath: storage }, subscriptions: [] },
-    onChange() {}, proxy: () => '', run,
+    onChange() {}, proxySettings: () => ({ httpProxy: '', httpsProxy: '', noProxy: [] }), run,
     request: async url => url.includes('/download/') ? bytes : Buffer.from(releaseBody)
   });
   try {
@@ -291,4 +325,80 @@ test('createUpdateHost installs through execFile argv and never a shell string',
     assert.ok(path.isAbsolute(argv[1]) && argv[1].endsWith('.vsix'), 'argv1 is the downloaded package path');
     assert.equal('shell' in options, false, 'no shell option may ever appear');
   } finally { updater.dispose(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('requestBytes re-evaluates noProxy per redirect hop on one snapshot', async t => {
+  const path = require('node:path');
+  const { createSandboxLoader } = require('./helpers/sandbox.cjs');
+  const { IncomingMessage } = require('node:http');
+  const direct = [], proxied = [];
+  const fakeResponse = (status, location) => {
+    const socket = new (require('node:stream').Readable)({ read() { this.push(null); } });
+    const res = new IncomingMessage(socket);
+    res.statusCode = status; res.headers = location ? { location } : {};
+    return res;
+  };
+  const loader = createSandboxLoader({ filename: path.resolve(__dirname, '../src/update/download.cjs'),
+    overrides: {
+      [path.resolve(__dirname, '../src/network/direct-fetch.cjs')]: {
+        directFetch: async url => { direct.push(url);
+          return url.endsWith('/final') ? new Response('done')
+            : new Response(null, { status: 302, headers: { location: 'https://release-assets.githubusercontent.com/final' } }); } },
+      [path.resolve(__dirname, '../src/update/proxy-transport.cjs')]: {
+        request: async (target, options) => { proxied.push({ target: target.href, proxy: options.proxy.url.host });
+          return target.href.endsWith('/via-proxy') ? fakeResponse(200)
+            : fakeResponse(302, 'https://api.github.com/final'); },
+      },
+    } });
+  t.after(() => loader.assertStubsUsed('per-hop routing'));
+  const { requestBytes } = loader.module.exports;
+  const policy = { httpProxy: 'http://127.0.0.1:7897', httpsProxy: 'http://127.0.0.1:7897',
+    noProxy: ['release-assets.githubusercontent.com'] };
+  // noProxy covers api.github.com: the start hops direct, the redirect into
+  // release-assets takes the proxy, and its second redirect back onto
+  // api.github.com leaves the proxy again on the same snapshot.
+  const { compileProxyPolicy } = require('../src/network/proxy-policy.cjs');
+  const compiled = compileProxyPolicy({ ...policy, noProxy: ['api.github.com'] });
+  const body = await requestBytes('https://api.github.com/start', { limit: 16, proxyPolicy: compiled });
+  assert.equal(body.toString(), 'done');
+  assert.deepEqual(direct, ['https://api.github.com/start', 'https://api.github.com/final'],
+    'noProxy-listed hosts dial directly on every hop');
+  assert.deepEqual(proxied, [{ target: 'https://release-assets.githubusercontent.com/final', proxy: '127.0.0.1:7897' }],
+    'the redirect target re-evaluates noProxy and takes the proxy');
+
+  // Mirror direction: proxied first hop redirecting to a noProxy bypass.
+  const direct2 = [], proxied2 = [];
+  const loader2 = createSandboxLoader({ filename: path.resolve(__dirname, '../src/update/download.cjs'),
+    overrides: {
+      [path.resolve(__dirname, '../src/network/direct-fetch.cjs')]: {
+        directFetch: async url => { direct2.push(url); return new Response('done'); } },
+      [path.resolve(__dirname, '../src/update/proxy-transport.cjs')]: {
+        request: async (target, options) => { proxied2.push(target.href);
+          return fakeResponse(302, 'https://release-assets.githubusercontent.com/final'); } },
+    } });
+  t.after(() => loader2.assertStubsUsed('per-hop routing mirror'));
+  const compiled2 = compileProxyPolicy({ ...policy, noProxy: ['release-assets.githubusercontent.com'] });
+  const body2 = await loader2.module.exports.requestBytes('https://api.github.com/start', { limit: 16, proxyPolicy: compiled2 });
+  assert.equal(body2.toString(), 'done');
+  assert.deepEqual(proxied2, ['https://api.github.com/start']);
+  assert.deepEqual(direct2, ['https://release-assets.githubusercontent.com/final'],
+    'a redirect into a noProxy host leaves the proxy on the same snapshot');
+});
+
+test('a proxy failure never falls back to a direct retry', async t => {
+  const path = require('node:path');
+  const { createSandboxLoader } = require('./helpers/sandbox.cjs');
+  let directCalls = 0;
+  const loader = createSandboxLoader({ filename: path.resolve(__dirname, '../src/update/download.cjs'),
+    overrides: {
+      [path.resolve(__dirname, '../src/network/direct-fetch.cjs')]: {
+        directFetch: async () => { directCalls++; return new Response('must not dial'); } },
+      [path.resolve(__dirname, '../src/update/proxy-transport.cjs')]: {
+        request: async () => { throw new Error('proxy down'); } },
+    } });
+  t.after(() => loader.assertStubsUsed('no proxy fallback'));
+  const { compileProxyPolicy } = require('../src/network/proxy-policy.cjs');
+  const policy = compileProxyPolicy({ httpProxy: 'http://127.0.0.1:9', httpsProxy: 'http://127.0.0.1:9', noProxy: [] });
+  await assert.rejects(loader.module.exports.requestBytes('https://api.github.com/x', { limit: 10, proxyPolicy: policy }), /proxy down/);
+  assert.equal(directCalls, 0);
 });

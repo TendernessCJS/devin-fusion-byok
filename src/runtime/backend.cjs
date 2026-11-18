@@ -11,12 +11,13 @@ const { serveChat } = require('../protocol/inference.cjs');
 const { createCacheSupport } = require('../protocol/cache-support.cjs');
 const { forward, collect } = require('./bridge.cjs');
 const { createRuntimeControl } = require('./backend-control.cjs');
-const { normalizeNativeEntry, loadNativeCache, saveNativeCache, normalizeAllowedUids } = require('./native-cache.cjs');
-const { mergeNativeEntry } = require('../models/native-entry.cjs');
+const { loadNativeCache, saveNativeCache } = require('./native-cache.cjs');
+const { mergeNativeEntry, normalizeNativeEntry, normalizeAllowedUids } = require('../models/native-entry.cjs');
 const { PORT } = require('./port.cjs');
 const { DEFAULT_UPSTREAM, resolveUpstreamOrigin } = require('./upstream-origin.cjs');
 const { VERSION, MANAGEMENT_PROTOCOL, controlFile } = require('./contract.cjs');
 const { runtimeIdentity } = require('./source-identity.cjs');
+const { compileProxyPolicy } = require('../network/proxy-policy.cjs');
 const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
 // The AssignModelRequest field table, verified against the 3.11.228 descriptor:
 // f1 metadata, f2 model_router_uid, f3 cascade_id, f5 chat_message_prompt,
@@ -44,8 +45,16 @@ const DRAIN_TIMEOUT_MS = 5000;
 const SOCKET_CLOSE_TIMEOUT_MS = 1000;
 
 async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs = DRAIN_TIMEOUT_MS,
-  socketCloseTimeoutMs = SOCKET_CLOSE_TIMEOUT_MS }) {
+  socketCloseTimeoutMs = SOCKET_CLOSE_TIMEOUT_MS, initialProxy }) {
   const identity = runtimeIdentity(root);
+  const startedAt = new Date().toISOString();
+  // Production launches leave initialProxy undefined: the policy is pushed over
+  // the control channel before the host finishes activation. Until then
+  // proxyPolicy stays null and every upstream forward gets a 503 with zero
+  // upstream connections — a cold backend must never silently direct-connect
+  // past the user's configured proxy. Test fixtures opt into direct
+  // forwarding with an explicit {httpProxy:'',httpsProxy:'',noProxy:[]}.
+  let proxyPolicy = initialProxy === undefined || initialProxy === null ? null : compileProxyPolicy(initialProxy);
   const instanceId = crypto.randomUUID();
   const controlToken = crypto.randomBytes(32).toString('hex');
   // Per runtime, not module-scoped: two backends in one process (tests, a dev
@@ -242,6 +251,10 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     monitor, getNativeModels: () => [...observedNatives.values()], getAllowedUids: () => [...allowedUids].sort(), getAllowedMode: () => allowedMode,
     ingest, onAllowedUids, close,
     upstreamProtocol: 1,
+    proxyProtocol: 1,
+    getProxyReady: () => proxyPolicy !== null,
+    setProxyPolicy: policy => { proxyPolicy = policy; log('proxy-policy', { ready: policy !== null }); },
+    runtimeInfo: () => ({ node: process.versions.node, electron: process.versions.electron || null, startedAt }),
     resolveUpstream: resolveUpstreamOrigin,
     setUpstream: resolved => {
       upstreamOrigin = resolved ?? DEFAULT_UPSTREAM;
@@ -259,8 +272,15 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     // Forwarded traffic shares the process log; the client port lets each event
     // be traced back to the connecting process afterwards (lsof -i TCP:<port>).
     const forwardLog = (event, fields) => log(event, { ...fields, peerPort: request.socket?.remotePort });
+    // Snapshot the policy per request: a mid-flight control push must not
+    // retarget this request, and the request keeps its snapshot to the end.
+    const policy = proxyPolicy;
+    const upstreamForward = body => {
+      if (!policy) { response.writeHead(503, { 'content-type': 'application/json' }); response.end('{"error":"proxy_unavailable"}'); return; }
+      forward(request, response, target, { body, rpc, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids, proxy: policy });
+    };
     if (request.method !== 'POST' || ![API_PREFIX + 'AssignModel', API_PREFIX + 'GetChatMessage'].includes(rpc)) {
-      forward(request, response, target, { rpc, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids }); return;
+      upstreamForward(); return;
     }
     let body;
     try {
@@ -307,7 +327,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
       if (response.headersSent) { response.end(); return; }
       // Malformed data must never select a default provider.
     }
-    if (body) forward(request, response, target, { body, rpc, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids });
+    if (body) upstreamForward(body);
     else { response.writeHead(502); response.end(); }
   };
   const server = http.createServer((request, response) => {
@@ -403,4 +423,4 @@ if (require.main === module) {
     log('startup-error', { code: 'startup_failed' }); process.exit(1);
   });
 }
-module.exports = { startBackend, runtimeIdentity, controlFile, PORT, resolveUpstreamOrigin };
+module.exports = { startBackend };

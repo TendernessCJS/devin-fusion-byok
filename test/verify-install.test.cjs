@@ -174,3 +174,116 @@ test('compareTrees: dir on one side vs same-name file on the other is (类型)',
   const { diffs } = compareTrees(installed, repo);
   assert.deepEqual(diffs, ['thing (类型)']);
 });
+
+const { evaluateRuntimeHealth } = require('../scripts/verify-install.cjs');
+const EXPECTED = { service: 'devin-fusion-byok', rootId: 'root-x', sourceId: 'src-y' };
+
+test('evaluateRuntimeHealth: unreachable is WARN, never FAIL', () => {
+  assert.equal(evaluateRuntimeHealth(null, EXPECTED).level, 'WARN');
+});
+
+test('evaluateRuntimeHealth: foreign service or root is FAIL', () => {
+  const base = { service: 'devin-fusion-byok', rootId: 'root-x', sourceId: 'src-y', proxyProtocol: 1, proxyReady: true };
+  assert.equal(evaluateRuntimeHealth({ ...base, service: 'other' }, EXPECTED).level, 'FAIL');
+  assert.equal(evaluateRuntimeHealth({ ...base, rootId: 'other' }, EXPECTED).level, 'FAIL');
+});
+
+test('evaluateRuntimeHealth: source drift is FAIL', () => {
+  const health = { service: 'devin-fusion-byok', rootId: 'root-x', sourceId: 'old', proxyProtocol: 1, proxyReady: true,
+    pid: 1, instanceId: '11111111-2222-3333-4444-555555555555' };
+  assert.equal(evaluateRuntimeHealth(health, EXPECTED).level, 'FAIL');
+  assert.equal(evaluateRuntimeHealth({ ...health, sourceId: 'src-y' }, EXPECTED).level, 'PASS');
+});
+
+test('evaluateRuntimeHealth: a legacy backend without proxy fields is WARN', () => {
+  const health = { service: 'devin-fusion-byok', rootId: 'root-x', sourceId: 'src-y' };
+  const verdict = evaluateRuntimeHealth(health, EXPECTED);
+  assert.equal(verdict.level, 'WARN');
+  const ready = { ...health, proxyProtocol: 1 };
+  assert.equal(evaluateRuntimeHealth(ready, EXPECTED).level, 'WARN');
+});
+
+test('evaluateRuntimeHealth: proxyReady false is FAIL, and a missing expected source is WARN', () => {
+  const health = { service: 'devin-fusion-byok', rootId: 'root-x', sourceId: 'src-y',
+    proxyProtocol: 1, proxyReady: false, runtime: { node: '24.0.0', startedAt: '2026-01-01T00:00:00Z' } };
+  assert.equal(evaluateRuntimeHealth(health, EXPECTED).level, 'FAIL');
+  const noSource = { ...EXPECTED, sourceId: null };
+  assert.equal(evaluateRuntimeHealth({ ...health, proxyReady: true }, noSource).level, 'WARN');
+});
+
+test('evaluateRuntimeHealth: the pass line carries only whitelisted fields', () => {
+  const health = { service: 'devin-fusion-byok', rootId: 'root-x', sourceId: 'src-y',
+    proxyProtocol: 1, proxyReady: true, pid: 4321, instanceId: '11111111-2222-3333-4444-555555555555',
+    runtime: { node: '24.0.0', electron: null, startedAt: '2026-01-01T00:00:00Z' },
+    httpProxy: 'http://secret', token: 'secret' };
+  const verdict = evaluateRuntimeHealth(health, EXPECTED);
+  assert.equal(verdict.level, 'PASS');
+  assert.ok(!JSON.stringify(verdict).includes('secret'), 'policy content never reaches the verdict');
+  assert.equal(verdict.data.node, '24.0.0');
+  assert.equal(verdict.data.startedAt, '2026-01-01T00:00:00Z');
+  assert.equal(verdict.data.pid, 4321);
+  assert.equal(verdict.data.instanceId, '11111111-2222-3333-4444-555555555555');
+});
+
+test('evaluateRuntimeHealth: hostile metadata shapes are never projected', () => {
+  const health = { service: 'devin-fusion-byok', rootId: 'root-x', sourceId: 'src-y',
+    proxyProtocol: 1, proxyReady: true, pid: 'not-a-number', instanceId: '../../etc/passwd',
+    runtime: { node: 'v24\nsecret', startedAt: 'yesterday', electron: { evil: 1 } } };
+  const verdict = evaluateRuntimeHealth(health, EXPECTED);
+  // No trustworthy pid/instanceId — identity insufficient, never a PASS.
+  assert.equal(verdict.level, 'WARN');
+  assert.deepEqual(verdict.data, {});
+  assert.ok(!JSON.stringify(verdict).includes('secret'));
+});
+
+test('evaluateRuntimeHealth: a ready backend without process identity is WARN, not PASS', () => {
+  const health = { service: 'devin-fusion-byok', rootId: 'root-x', sourceId: 'src-y',
+    proxyProtocol: 1, proxyReady: true,
+    runtime: { node: '24.0.0', startedAt: '2026-01-01T00:00:00Z' } };
+  const verdict = evaluateRuntimeHealth(health, EXPECTED);
+  assert.equal(verdict.level, 'WARN');
+  assert.match(verdict.message, /unknown|身份/);
+});
+
+// fetchLiveHealth against real temporary listeners — no Devin port is touched.
+const { fetchLiveHealth } = require('../scripts/verify-install.cjs');
+const http = require('node:http');
+
+async function liveServer(t, handler) {
+  const server = http.createServer(handler);
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => { server.closeAllConnections?.(); return new Promise(r => server.close(r)); });
+  return server.address().port;
+}
+
+test('fetchLiveHealth: a real 2xx returns the parsed body', async t => {
+  const port = await liveServer(t, (req, res) => res.end('{"service":"x"}'));
+  assert.deepEqual(await fetchLiveHealth(port), { service: 'x' });
+});
+
+test('fetchLiveHealth: a server that never answers headers settles inside 1s', async t => {
+  const port = await liveServer(t, () => {});
+  const started = Date.now();
+  assert.equal(await fetchLiveHealth(port), null);
+  assert.ok(Date.now() - started < 3000, 'the wall timer, not idle time, bounds the call');
+});
+
+test('fetchLiveHealth: a slow drip loses to the wall timer', async t => {
+  const port = await liveServer(t, (req, res) => {
+    res.writeHead(200);
+    const drip = setInterval(() => res.write('a'), 100);
+    res.on('close', () => clearInterval(drip));
+  });
+  const started = Date.now();
+  assert.equal(await fetchLiveHealth(port), null);
+  assert.ok(Date.now() - started < 3000);
+});
+
+test('fetchLiveHealth: oversized and non-2xx responses resolve to null', async t => {
+  const big = await liveServer(t, (req, res) => res.end('x'.repeat(70 * 1024)));
+  assert.equal(await fetchLiveHealth(big), null);
+  const redirect = await liveServer(t, (req, res) => { res.writeHead(302, { location: 'http://elsewhere' }); res.end(); });
+  assert.equal(await fetchLiveHealth(redirect), null);
+  const broken = await liveServer(t, (req, res) => res.end('not json'));
+  assert.equal(await fetchLiveHealth(broken), null);
+});

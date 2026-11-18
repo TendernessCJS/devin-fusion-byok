@@ -1,7 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createManager, publicState, PanelInputError } = require('../src/panel/manager.cjs');
+const { createManager, PanelInputError } = require('../src/panel/manager.cjs');
+const { publicState } = require('../src/panel/panel-state.cjs');
 const { buildCatalog, isOwnUid } = require('../src/catalog.cjs');
 
 const nativeSidekick = { nativeUid: 'swe-2-max', label: 'SWE-2 Max' };
@@ -659,37 +660,15 @@ test('officially paired and standalone unlocked natives are offered as Sidekick 
   assert.ok(Object.values(buildCatalog(f.read(), observed).fusions).some(fusion => fusion.sidekickUid === 'gpt-5-6-luna-high'));
 });
 
-test('setUpdateProxy writes, echoes, clears and rejects bad input', async () => {
+test('setUpdateProxy is retired: unsupported, never writes, never rebuilds the key', async () => {
   const f = memory();
-  let state = await f.manager.dispatch('setUpdateProxy', { value: ' http://127.0.0.1:7897 ' });
-  assert.equal(state.updateProxy, 'http://127.0.0.1:7897');
-  assert.equal(f.read().updateProxy, 'http://127.0.0.1:7897');
-  state = await f.manager.dispatch('setUpdateProxy', { value: '' });
-  assert.equal(state.updateProxy, '');
+  await assert.rejects(f.manager.dispatch('setUpdateProxy', { value: 'http://127.0.0.1:7897' }), PanelInputError);
   assert.equal('updateProxy' in f.read(), false);
-  const writesBefore = f.writes.length;
-  for (const value of ['socks5://127.0.0.1:9', 'ftp://127.0.0.1:21', 'not a url', 42, null, undefined]) {
-    await assert.rejects(f.manager.dispatch('setUpdateProxy', { value }), PanelInputError);
-  }
-  assert.equal(f.writes.length, writesBefore, 'rejected input is never written');
-  assert.equal('updateProxy' in f.read(), false);
-});
-
-test('setUpdateProxy masks credentials and keeps them when the mask is saved back', async () => {
-  const f = memory();
-  let state = await f.manager.dispatch('setUpdateProxy', { value: 'http://user:s3cret@127.0.0.1:7897' });
-  assert.equal(state.updateProxy, 'http://***@127.0.0.1:7897', 'the panel only ever sees the mask');
-  assert.equal(f.read().updateProxy, 'http://user:s3cret@127.0.0.1:7897');
-  const writesBefore = f.writes.length;
-  state = await f.manager.dispatch('setUpdateProxy', { value: 'http://***@127.0.0.1:7897' });
-  assert.equal(f.writes.length, writesBefore, 'saving the displayed mask leaves the stored secret untouched');
-  assert.equal(f.read().updateProxy, 'http://user:s3cret@127.0.0.1:7897');
-  assert.equal(state.updateProxy, 'http://***@127.0.0.1:7897');
-  state = await f.manager.dispatch('setUpdateProxy', { value: 'http://other:pw@10.0.0.1:3128' });
-  assert.equal(f.read().updateProxy, 'http://other:pw@10.0.0.1:3128', 'a new full URL replaces the credentials');
-  assert.equal(state.updateProxy, 'http://***@10.0.0.1:3128');
-  await f.manager.dispatch('setUpdateProxy', { value: '' });
-  assert.equal('updateProxy' in f.read(), false);
+  // A legacy key carried in from an old write is reaped by the next normal save.
+  f.externalChange(config => { config.updateProxy = 'http://legacy:1'; });
+  const state = await f.manager.dispatch('setEnabled', { enabled: true });
+  assert.equal('updateProxy' in f.read(), false, 'the mutator reaps only the retired key');
+  assert.equal('updateProxy' in state, false, 'the panel state never exposes the retired key');
 });
 
 test('the panel can ask for a CLI cache refresh and reports the result it got', async () => {

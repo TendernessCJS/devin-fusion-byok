@@ -1,13 +1,16 @@
 'use strict';
 const crypto = require('node:crypto');
 const { collect } = require('./bridge.cjs');
+const { compileProxyPolicy } = require('../network/proxy-policy.cjs');
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_UPSTREAM_BODY_BYTES = 4 * 1024;
+const MAX_PROXY_BODY_BYTES = 64 * 1024;
 
 function createRuntimeControl({ identity, instanceId, controlToken, managementProtocol, nativeModelsProtocol, nativeModelsIngest, monitorProtocol,
   getActiveRequests, getDraining, setDraining, monitor, getNativeModels, getAllowedUids, getAllowedMode, ingest, onAllowedUids, close,
-  upstreamProtocol, resolveUpstream, setUpstream }) {
+  upstreamProtocol, resolveUpstream, setUpstream,
+  proxyProtocol = 0, getProxyReady, setProxyPolicy, runtimeInfo }) {
   const authorized = request => {
     const provided = typeof request.headers.authorization === 'string' ? request.headers.authorization : '';
     const expected = 'Bearer ' + controlToken;
@@ -19,7 +22,8 @@ function createRuntimeControl({ identity, instanceId, controlToken, managementPr
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       response.end(JSON.stringify({ ...identity, pid: process.pid, instanceId, managementProtocol, nativeModelsProtocol,
-        nativeModelsIngest, monitorProtocol, upstreamProtocol, activeRequests: getActiveRequests(), draining: getDraining() }));
+        nativeModelsIngest, monitorProtocol, upstreamProtocol, activeRequests: getActiveRequests(), draining: getDraining(),
+        proxyProtocol, proxyReady: getProxyReady?.() === true, runtime: runtimeInfo?.() }));
       return true;
     }
     if (request.method === 'GET' && request.url === '/_runtime/monitor') {
@@ -83,6 +87,25 @@ function createRuntimeControl({ identity, instanceId, controlToken, managementPr
         if (response.destroyed) return;
         response.writeHead(400, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ instanceId, error: error?.code === 'invalid_origin' ? 'invalid_origin' : 'invalid_payload' }));
+      });
+      return true;
+    }
+    if (request.method === 'POST' && request.url === '/_runtime/proxy') {
+      if (!authorized(request)) { response.writeHead(403); response.end(); return true; }
+      // The payload may carry credentials inside proxy URLs: only `ready` is
+      // ever answered or logged, and an invalid body leaves the live policy
+      // exactly as it was.
+      collect(request, MAX_PROXY_BODY_BYTES).then(body => {
+        let policy;
+        try { policy = compileProxyPolicy(JSON.parse(body.toString('utf8'))); }
+        catch { throw new Error('invalid'); }
+        setProxyPolicy(policy);
+        response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        response.end(JSON.stringify({ instanceId, ready: true }));
+      }).catch(() => {
+        if (response.destroyed) return;
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ instanceId, error: 'invalid_payload' }));
       });
       return true;
     }

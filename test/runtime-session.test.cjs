@@ -78,6 +78,7 @@ test('a superseded session disposes its late injection without touching the live
       '../runtime/host/acp-observer.cjs': { installAcpObserver: () => { acpInstalls += 1; return { dispose() {} }; } },
       '../runtime/host/auth-status.cjs': { installAuthStatusInjection: () => { authInstalls += 1; return { dispose() {} }; } },
       '../runtime/host/upstream.cjs': { pushUpstream: async () => { pushes += 1; return { ok: true }; } },
+      '../runtime/host/proxy.cjs': { pushProxy: async () => ({ ok: true, ready: true }) },
       './effective-origin.cjs': { resolveEffectiveOriginWhenAvailable: async () => ({ origin: null, source: 'default' }) },
       './native-contract.cjs': { checkNativeContract: async () => ({ ok: true }) },
     },

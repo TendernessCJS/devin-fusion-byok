@@ -9,6 +9,12 @@ async function teardown(state, { continuation, catalogSync }) {
   catalogSync.stop();
   state.activationGeneration++; state.runtimeWaitAbort?.abort(); state.reconcileHalted = true;
   try { state.upstreamPushAbort?.abort(); } catch {}
+  try { state.proxyPushAbort?.abort(); } catch {}
+  try { state.proxySubscription?.dispose?.(); } catch {}
+  state.proxySubscription = undefined;
+  // The dedupe key names a backend instance, not the config: a replacement
+  // backend must never inherit "already pushed".
+  state.proxyPushedKey = undefined;
   const auth = state.authStatus;
   if (auth) {
     // Deactivating makes the wrapper inert before the LS bridge dispose runs;

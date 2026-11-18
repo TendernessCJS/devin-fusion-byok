@@ -25,7 +25,6 @@ function fixture({ augmentResult, collectResult, catalog = { models: [] }, enabl
     return realCatalog.augmentCatalog(data, options);
   });
   const collectNativeModels = collectResult || (() => []);
-  const catalogSignature = realCatalog.catalogSignature;
   const isUpstreamUid = uid => typeof uid === 'string' && !!uid && !/^(?:fusion-)?dfbyok-/.test(uid);
   const createRequire = nativePath => { paths.push(nativePath); return name => {
     assert.equal(name, 'vscode'); return { windsurfAuth: api };
@@ -33,7 +32,7 @@ function fixture({ augmentResult, collectResult, catalog = { models: [] }, enabl
   const module = { exports: {} };
   vm.runInNewContext(source, { Buffer, module, exports: module.exports, require(name) {
     if (name === 'node:module') return { createRequire };
-    if (name === '../../catalog.cjs') return { augmentCatalog, collectNativeModels, catalogSignature, validateProtoCatalog: realCatalog.validateProtoCatalog, isOwnUid: realCatalog.isOwnUid };
+    if (name === '../../catalog.cjs') return { augmentCatalog, collectNativeModels, validateProtoCatalog: realCatalog.validateProtoCatalog, isOwnUid: realCatalog.isOwnUid };
     if (name === './native-models.cjs') return { isUpstreamUid };
     if (name === './acp-hook.cjs') {
       const hook = { exports: {} };

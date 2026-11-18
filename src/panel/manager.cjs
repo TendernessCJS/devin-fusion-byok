@@ -1,9 +1,9 @@
 'use strict';
+const { pruneLegacyUpdateProxy } = require('../config/config.cjs');
 const { randomUUID } = require('node:crypto');
 const { analyzeRoles, buildCatalog, buildRoleLists, refKey } = require('../catalog.cjs');
 const { discover: discoverModels } = require('../models/discovery.cjs');
 const { normalizeBaseUrlPath } = require('./base-url.cjs');
-const { parseProxy, maskProxy } = require('../update/proxy-config.cjs');
 const { publicState } = require('./panel-state.cjs');
 const { sortByOrder, nextOrder, normalizeOrders } = require('../models/order.cjs');
 const { translator } = require('../i18n/index.cjs');
@@ -294,20 +294,12 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       case 'setGoalEnabled': config.goalEnabled = boolean(t, payload.enabled, 'manager.field.goal'); break;
       case 'setAutoContinue': config.autoContinueOnProviderError = boolean(t, payload.enabled, 'manager.field.autoContinue'); break;
       case 'setAutoContinueUntilPlanComplete': config.autoContinueUntilPlanComplete = boolean(t, payload.enabled, 'manager.field.autoContinuePlan'); break;
-      case 'setUpdateProxy': {
-        const input = payload?.value;
-        if (typeof input !== 'string') fail(t('manager.proxyInvalid'));
-        const value = input.trim();
-        if (value.length > 2048) fail(t('manager.proxyInvalid'));
-        if (!value) { delete config.updateProxy; break; }
-        const stored = typeof config.updateProxy === 'string' ? config.updateProxy : '';
-        if (stored && value === maskProxy(stored)) return state();
-        try { parseProxy(value); } catch { fail(t('manager.proxyInvalid')); }
-        config.updateProxy = value;
-        break;
-      }
       default: fail(t('manager.unsupported'));
     }
+    // Retired keys are reaped on every normal save too — a stale updateProxy
+    // dragged in by an old window or an external edit dies here without
+    // touching anything else.
+    pruneLegacyUpdateProxy(config);
     pruneDanglingRoleRefs(config);
     config.providers = sortByOrder(config.providers);
     for (const provider of config.providers) provider.models = sortByOrder(provider.models);
@@ -323,4 +315,4 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
     queue = operation.catch(() => {}); return operation;
   } };
 }
-module.exports = { createManager, publicState, PanelInputError };
+module.exports = { createManager, PanelInputError };

@@ -2,7 +2,6 @@
 const { analyzeRoles, buildCatalog, buildRoleLists, isOwnUid } = require('../catalog.cjs');
 const { modelSupportsImages } = require('../models/capabilities.cjs');
 const { sortByOrder } = require('../models/order.cjs');
-const { maskProxy } = require('../update/proxy-config.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 // The settings list mirrors the official picker's provider sections. The wire
 // carries no vendor field, so the family id's prefix decides; codenamed uids
@@ -198,7 +197,6 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     autoContinueOnProviderError: config.autoContinueOnProviderError === true,
     autoContinueUntilPlanComplete: config.autoContinueUntilPlanComplete === true,
     autoContinueStatus: typeof autoContinueStatus === 'string' ? autoContinueStatus : 'unavailable',
-    updateProxy: maskProxy(config.updateProxy),
     health,
   };
 }
