@@ -86,7 +86,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 - 同步上游更新见「fork 同步与发布」一节。
 ## 本机网络路径
 
-GitHub 直连不可用，**必须经代理；代理不可用即停止并报告，不回退直连**。`origin`(SSH) 与 `upstream`(HTTPS) 的通道差异、`gh` 为何只能靠环境变量、URL 限定 git 代理的具体做法见 `.devin/rules/platform-and-network.md`。
+GitHub 必须经本机代理，不可用时停止、不回退直连。执行 git/gh 前按 `.devin/rules/platform-and-network.md` 核对本仓库 remote 与代理通道；编辑器 `http.proxy` 不代表终端已代理。
 
 ## 常用命令
 

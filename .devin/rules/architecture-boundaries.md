@@ -8,7 +8,7 @@ description: "Apply when changing module ownership, the src/runtime partition, p
 模块归属、分区判据、根门面与依赖守卫的实测描述；行为约束仍在 `runtime-and-injection.md`。
 
 - `SOURCE_FILES` 已**不再是手工清单**（R2b-1）：`runtime/source-identity.cjs` 加载期从 `backend.cjs` 字面量 require 图推导哈希输入；`backend.cjs`
-  转导出旧导出面，客户端（`native-models`/`monitor-client`）改依赖 `contract.cjs`+`port.cjs`+`retry.cjs`，`backend-handshake` 用 `source-identity` 做
+  `backend.cjs` 只导出 `startBackend`；共享常量、运行身份与上游校验由各自叶子模块直接提供。客户端（`native-models`/`monitor-client`）依赖 `contract.cjs`+`port.cjs`+`retry.cjs`，`backend-handshake` 用 `source-identity` 做
   fresh 检查。**backend 闭包禁止动态 require**（非字面量 specifier 让推导抛错、起不来）；新模块被正常 `require` 即自动进哈希。
   `test/architecture.test.cjs` 禁绝 backend 闭包进宿主/UI/发现/更新模块并查文件级循环。
 - **`src/protocol/` 是多关注点的混合体，不要按目录名或文件名推断职责**（12 个文件）：① 协议转换 —— `native-chat-codec.cjs`（**Devin 侧**：解析
@@ -30,13 +30,13 @@ description: "Apply when changing module ownership, the src/runtime partition, p
 - **扩展宿主编排层在 `src/activation/`**（自 725 行 `extension.cjs` 拆出，19 个 `.cjs`）：`errors`（RuntimeError/`safeError` + 叶子 `models/discovery-error.cjs`）、`settings`（`globalSetting`）、`backend-handshake`
   （`ensureBackend` + 局部 `pause`/`compareVersion`）、`catalog-sync`（原生目录观测/推送 factory）、`effective-origin`（解析原生派生链：
   LS `--api_server_url` → portal → 默认，含收敛窗口）、`managed-settings`（受管设置写入的 `critical()` 闸门）、`settings-owner`（env/model 写入 + 恢复，私有 gate）、`selection`（Fusion 选择/reconcile）、`enable`
-  （runtime session：enable/disable/deactivate + LS 注入 + 上游推送）、`commands`（纯命令注册，disable 转发 `runtime.disable()`）、`continuation`（goal/auto-continue 安装与处置）、`panel-install`（panel host：状态栏/控制器/observer 私有）、`host-identity`（宿主构建身份）、`native-contract`（只读探针）、`liveness`（`live`/`superseded` 判据）、`remote-support`（远端窗口反向隧道与远端激活）、`cache-sync`/`config-sync`（CLI 缓存检查、配置监听/afterChange）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate, ensureBackend, safeError }`
-  被测试与 `package.json` 依赖**。这些文件在扩展宿主运行、**不能进 backend 的 require 闭包**（否则宿主代码被算进重启哈希）。
+  （runtime session：enable/disable/deactivate + LS 注入 + 上游推送）、`commands`（纯命令注册，disable 转发 `runtime.disable()`）、`continuation`（goal/auto-continue 安装与处置）、`panel-install`（panel host：状态栏/控制器/observer 私有）、`host-identity`（宿主构建身份）、`native-contract`（只读探针）、`liveness`（`live`/`superseded` 判据）、`remote-support`（远端窗口反向隧道与远端激活）、`cache-sync`/`config-sync`（CLI 缓存检查、配置监听/afterChange）、`teardown`。**`extension.cjs` 仍是唯一激活入口，导出面 `{ activate, deactivate }`。**
+  测试直接引用 `activation/backend-handshake.cjs` 与 `activation/errors.cjs`；`package.json` 的 `main` 仍指向 `extension.cjs`。这些文件在扩展宿主运行、**不能进 backend 的 require 闭包**（否则宿主代码被算进重启哈希）。
   拆分后的硬约束：**没有共享可变容器**——服务状态私有于各 factory、按激活实例成套装配、跨服务只走命名接口（`shared`/`stores` 标识符被架构守卫直接禁止）；
   `enableQueue`/`reconcileQueue` 这类序列化队列留在各自工厂闭包内；`generation`/abort 判据一处都不能少。
   改激活流程前先确认入口：全仓 **5 个入口**中 3 个（`fast-context/server.cjs`、`goal/report.cjs`、`lifecycle/uninstall.cjs`）
   从 `extension.cjs` 的 require 图走不到（清单见 `retired-and-deadends.md`）。
-- **`src/runtime/` 按「谁运行」分区，判据是路径不是文件名**：根目录只留 backend 进程与两侧共享的 8 个模块（`backend.cjs`、`backend-control.cjs`、`bridge.cjs`、`contract.cjs`、`native-cache.cjs`、`port.cjs`、`source-identity.cjs`、`upstream-origin.cjs`——`upstream-origin.cjs` 是 `origin` 校验与 `DEFAULT_UPSTREAM` 的实现，激活侧与 backend 共用），**只在扩展宿主运行的模块一律放 `src/runtime/host/`**。`test/architecture.test.cjs` 按三层判据强制：`src/runtime/` 内部用根目录 8 文件白名单（fail-closed），宿主模块一律进 `host/`；`src/` 顶层用目录级 deny-list（`BACKEND_FORBIDDEN_DIRS`）；**混合目录只能在 `BACKEND_FORBIDDEN_FILES` 按文件名排除**——目前只有 `models/`（`capabilities`/`native-entry` 在 backend 闭包内、`discovery*.cjs` 是宿主专用，目录级规则表达不了）。另有顶层 allow-list 守卫：新宿主侧顶层目录必须显式加进允许集合。放错方向的代价是把「只在宿主生效」的代码算进重启哈希（并让宿主模块被当 backend 代码改动）。
+- **`src/runtime/` 按「谁运行」分区，判据是路径不是文件名**：根目录只留 backend 进程与两侧共享的 9 个模块（`backend.cjs`、`backend-control.cjs`、`bridge.cjs`、`contract.cjs`、`native-cache.cjs`、`port.cjs`、`source-identity.cjs`、`upstream-origin.cjs`、`upstream-proxy.cjs`——`upstream-origin.cjs` 是 `origin` 校验与 `DEFAULT_UPSTREAM` 的实现、`upstream-proxy.cjs` 是 CONNECT 转发 agent（策略编译在 `network/proxy-policy.cjs`），激活侧与 backend 共用），**只在扩展宿主运行的模块一律放 `src/runtime/host/`**。`test/architecture.test.cjs` 按三层判据强制：`src/runtime/` 内部用根目录 9 文件白名单（fail-closed），宿主模块一律进 `host/`；`src/` 顶层用目录级 deny-list（`BACKEND_FORBIDDEN_DIRS`）；**混合目录只能在 `BACKEND_FORBIDDEN_FILES` 按文件名排除**——目前只有 `models/`（`capabilities`/`native-entry` 在 backend 闭包内、`discovery*.cjs` 是宿主专用，目录级规则表达不了）与 `network/` 的三个精确叶子（`proxy-config.cjs`、`proxy-tunnel.cjs`、`proxy-policy.cjs` 可进 backend 闭包，`network/` 其余文件仍被目录级规则禁止）。另有顶层 allow-list 守卫：新宿主侧顶层目录必须显式加进允许集合。放错方向的代价是把「只在宿主生效」的代码算进重启哈希（并让宿主模块被当 backend 代码改动）。
 - **两个根级门面的规矩**：
 
   | 门面 | 生产引用 | 护栏 |
@@ -50,4 +50,4 @@ description: "Apply when changing module ownership, the src/runtime partition, p
   `architecture` 测试红（source-identity 派生只跟随 require 图），且会把「只在宿主生效」的代码误当 backend 代码改动。输出确定性约束见 `monitor-and-panel.md`。
 
 
-- **`test/architecture.test.cjs` 是架构的权威表述**：backend 闭包 allow/deny-list、`src/runtime/` 根目录 8 文件白名单、`network/`+`update/` 的依赖上限、`proxy-config` 叶子、文件级零环、动态 require 白名单——**改依赖关系前先读它**，比读散文式文档可靠。
+- **`test/architecture.test.cjs` 是架构的权威表述**：backend 闭包 allow/deny-list、`src/runtime/` 根目录 9 文件白名单、`network/`+`update/` 的依赖上限、`proxy-config` 叶子、文件级零环、动态 require 白名单——**改依赖关系前先读它**，比读散文式文档可靠。

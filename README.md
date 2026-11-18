@@ -161,17 +161,24 @@ curl "https://server.codeium.com/api/v2alpha/models?filter=allowlist" -H "Author
 
 ## 受限网络（需要代理时）
 
-如果本机直连 GitHub 不通，可以在面板 **设置 → 更新代理** 填写 HTTP/HTTPS 代理地址，让**更新检查和一键安装**走该代理；留空表示直连。
+### Devin 上游转发
 
-也可以直接编辑插件配置文件（扩展全局存储目录，macOS 通常是 `~/Library/Application Support/Devin/User/globalStorage/local.devin-fusion-byok/config.json`），加入等价的 `updateProxy` 项：
+在 Devin 的用户设置中保留 `http.proxy`，并用 `http.noProxy` 绕过本机和内网：
 
 ```json
-"updateProxy": "http://127.0.0.1:7897"
+{
+  "http.proxy": "http://127.0.0.1:7897",
+  "http.noProxy": ["localhost", "127.0.0.1", "::1", "gf.com.cn"]
+}
 ```
 
-- 支持 `http://` / `https://` 代理地址，可带 `user:pass@` 凭证；保存后立即生效，无需重载窗口。面板中凭据只显示为掩码（如 `http://***@127.0.0.1:7897`），不会进入面板；直接保存掩码不会丢失凭据，输入完整新地址才会替换。
-- **只影响更新相关请求**：模型发现使用独立直连传输，推理仍由独立 backend 处理；未配置 `updateProxy` 的更新请求同样使用独立直连传输，不依赖宿主全局 `fetch` 或全局 Agent。不要用 VS Code 的 `http.proxy` 设置或 `HTTPS_PROXY` 环境变量替代 `updateProxy`。
-- 代理地址无效时面板会提示 `updateProxy` 配置有误，不影响其他功能。
+插件只读取用户级设置，不采用工作区覆盖。非空 `http.proxy` 优先；未设置时读取 HTTP_PROXY/HTTPS_PROXY 及小写变量，HTTPS 缺省回落 HTTP 代理；no-proxy 合并用户设置与环境值。`gf.com.cn` 同时匹配自身和子域名，不匹配 `notgf.com.cn`。仅支持 HTTP/HTTPS 代理，不支持 SOCKS、PAC 或任意 CIDR 条目；回环始终直连，TLS 校验不会关闭。
+
+独立 backend 经认证的本地控制面接收内存快照，首次同步成功后才启用注入；配置变更影响后续上游转发，不中断已有请求。无效配置保留最后一次成功策略并报告失败；代理连接或认证失败不会自动直连。该设置不接管 BYOK 供应商推理或模型发现。
+
+### GitHub 更新
+
+Devin 上游转发与 GitHub 更新检查/下载共用 Devin 用户级 http.proxy/http.noProxy；未配置代理时按 HTTP(S)_PROXY 环境变量回落，否则直连。代理设置在每次更新操作开始时读取，每跳重定向按同一快照重新判断 no-proxy，不影响已开始的操作。BYOK 推理与模型发现保持原网络路径。旧 updateProxy 及其编辑入口已移除；新版首次加载和后续面板保存经配置事务清理遗留键，保留标准备份，不改用户的 Devin 代理设置。
 
 ## 停用与卸载
 
@@ -192,7 +199,8 @@ curl "https://server.codeium.com/api/v2alpha/models?filter=allowlist" -H "Author
 
 ## 当前版本验证
 
-- 本机 macOS + Devin **3.13.4** × 插件 **0.6.10**：catalog 观测 `models=61 / matrix=52`（原生 47/69、allowlist 69 restricted），自动化全量测试 1803 例 / 0 失败；真机日志确认驱动安装与 diagnostics 字段生效。该轮同时确认目录收窄来自服务端准入层，与插件无关，详见 [`docs/native-compat-verification.md`](docs/native-compat-verification.md)。
+- 本机 macOS + Devin **3.13.4** × 插件 **0.6.10**：catalog 观测 `models=61 / matrix=52`（原生 47/69、allowlist 69 restricted），自动化全量测试 1803 例 / 0 失败；真机日志确认驱动安装与 diagnostics 字段生效。当时的目录收窄定位到服务端准入；后续同凭据网络 A/B 证明独立 backend 的直连出口可触发该限制，旧的‘与插件无关’结论已撤回。详见 [`docs/native-compat-verification.md`](docs/native-compat-verification.md)。
+- 本轮以 macOS Devin **3.14.30819** 为目标完成源码适配与自动化验证；正式覆盖安装、TUN 关闭下的真实 picker/Fusion 验收仍待进行，不能用历史临时补丁结果替代。
 - 历史：本机 macOS + Devin **3.12.43** × 插件 0.6.6 曾做静态契约 `ok`、`npm run verify -- --with-tests` 全项通过、全量测试 1755 例 / 0 失败；该结果不迁移到 0.6.7。
 - 升级后的复验方法与此前各版本的记录见 [`docs/native-compat-verification.md`](docs/native-compat-verification.md)。
 - ACP 终态判定现从当前 bundle 抽取真实谓词：应用目录缺失才跳过，锚点缺失、重复或形状变化一律失败，不再静默 skip。

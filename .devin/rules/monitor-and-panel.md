@@ -45,7 +45,7 @@ description: "Apply when changing usage recording, attribution, time filtering, 
   抢焦点比丢焦点更糟）；③替换子节点（尤其 tbody）会让父滚动容器的 `scrollTop` 被夹到 0，**必须**快照-恢复，不能指望浏览器保留（`monitor-table-wrap` 即此类）。
 
 - **配置键分三类，清理时按类处理**：①**面板可管**（`providers`、`roleInclusions`/`roleExclusions`、`hiddenNativeModelUids`、
-  `updateProxy`、自动继续开关、`enabled`）；②**程序自管**（`lastFusionSelection`
+  自动继续开关、`enabled`）；②**程序自管**（`lastFusionSelection`
   在选组合时记录——不要手工写，也不要期望面板能改）；③**死键**（当前代码零读取，如退役管线的 `sidekicks`）。
   另有一类**派生值**：`inferenceServerUrl`（后端推理地址派生值，非 `ModelInfo.f18`）由运行端口派生——不读配置、不持久化。
   新增/删除配置键时先想清属于哪类；「已关闭的排除条目」在角色列表里渲染为无开关死行，面板提供「移除」按钮走 `forgetRoleRef`：BYOK ref 是配置权威、直接可删；native ref 必须

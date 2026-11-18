@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when changing self-update behaviour or the release contract — asset naming, tags, digests, updateProxy, or the restart helper."
+description: "Apply when changing self-update behaviour or the release contract — asset naming, tags, digests, the shared proxy policy, or the restart helper."
 ---
 
 # 发布契约（release-contract）
@@ -20,21 +20,15 @@ description: "Apply when changing self-update behaviour or the release contract 
   不要用 `gh release list` 的输出判断最新版——本仓库裸 `gh` 解析到 `upstream`（见 `upstream-fork-release.md`），读到的是上游 Release。
 - 一键安装仅在 macOS 且 `<appRoot>/bin/devin-desktop` 存在时可用（`createUpdateHost` 里的 `supported` 判断）；其他情况
   `canInstall=false`，只能手动下载 vsix。
-- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。代理由插件自管：`config.json` 的 `updateProxy` 经
-  `src/update/proxy-transport.cjs` 建 CONNECT 隧道，只作用于更新检查与一键安装，其余流量（模型请求、内网地址）保持直连。`src/proxy.cjs` 兼容门面已删除，生产与测试一律直接 require `update/proxy-config.cjs`、`update/proxy-transport.cjs`、`network/direct-fetch.cjs`。
-  **不要改成读 `http.proxy` 设置或 `HTTPS_PROXY`/`http_proxy`/`ALL_PROXY` 环境变量**——那会全局生效，把内网 HTTPS 地址也送去代理。
-  **也不要依赖扩展宿主被打过补丁的 `fetch`**：Devin 启动时会把 `globalThis.fetch` 换成 `@vscode/proxy-agent` 的代理感知版本（读 VS Code 的
-  `http.proxy` / `http.noProxy`，`http.proxySupport` 默认 `override`），那也是全局的，同样会波及内网地址——配置 `updateProxy` 时走
-  `src/update/proxy-transport.cjs` 的 CONNECT 隧道；未配置代理的更新与模型发现走 `src/network/direct-fetch.cjs`，使用独立 Agent，不依赖宿主全局 `fetch` 或全局 Agent。
+- 更新检查只访问 `api.github.com` 与 GitHub 下载域名（`allowedUrl` 白名单在代理路径同样逐跳校验）。更新检查/下载与 Devin 上游共用用户级 http.proxy/http.noProxy，宿主以 activation/proxy-settings.cjs 取源，经 proxySettings 回调传给 updater，在每次 check/install 编译为 network/proxy-policy.cjs 策略快照。download 在 transferBytes 每一跳通过 allowedUrl 后重新按目标匹配 no-proxy；只对当前更新请求显式选路，不更改宿主全局 fetch/Agent 或环境变量，不影响 BYOK。代理错误绝不回落直连。
+  **不要依赖扩展宿主被打过补丁的 `fetch`**：Devin 启动时会把 `globalThis.fetch` 换成 `@vscode/proxy-agent` 的代理感知版本，故更新与模型发现一律走 `src/network/direct-fetch.cjs` 的独立 Agent 或显式策略选路。环境 HTTP(S)_PROXY 只作为读源回落参与策略编译；此功能不写进程级环境变量，也不修改全局 Agent。
   （这些约束只针对**插件运行时代码**；开发者在终端跑 git/gh 命令时按「本机网络路径」一节处理，两者不冲突。）验收方法见 `.devin/skills/release/SKILL.md`。
 - **插件侧请求一律经 `src/network/client-request.cjs` 的 `http.ClientRequest` 构造，绝不用 `http.request`/`https.request`**：宿主补丁不只换 `fetch`，还会替换
   `http.request`/`http.get`（`createHttpPatch` 注入 `PacProxyAgent`，`http.proxySupport` 默认 `override`），把我们的
   `createConnection` CONNECT 隧道顶掉——实测表现为跳过代理直连 `api.github.com` 随即 `ECONNRESET`。`ClientRequest` 是公开构造器、
   不在补丁替换范围（`node:https` 没有同名导出，TLS 仍由传入的 `https.Agent` 处理）；`directFetch` 同样必须走这条路，否则用户一旦在 VS Code 里配置
   `http.proxy`，「内网地址直连」的保证就失效。`http.ClientRequest` 缺失时才回退到 `http.request`/`https.request`。
-- `updateProxy` 可在面板 **设置 → 更新代理** 编辑（只作用于更新检查与一键安装），清空即直连。`snapshot().proxy` 与面板 `state().updateProxy` 只回显
-  `maskProxy()` 掩码（`http://***@host:port`），**凭据不进入
-  webview**，也不写入日志或错误文案；直接保存掩码视为未改、不覆盖存储值，输入完整新 URL 才会替换。面板侧校验复用 `parseProxy`，非法输入不回显、不写盘。
+- `updateProxy` 键、面板编辑入口、`setUpdateProxy`/`update.proxy` 消息和代理回显均已退役。新版本激活与正常面板提交使用 `pruneLegacyUpdateProxy`，经 `updateConfig` 锁内清理旧键；仅删该键，不覆盖其他字段、不改configRevision或擦标准`.bak`。更新区不再显示独立代理控件或跟随说明，也不回显代理地址/凭据。
 - 「重启 Devin」的 detached helper：优先经 `launchctl submit` 注册给 launchd 运行（submit 失败回退 detached `/bin/sh`）——实测
   helper 是 App 后代时其 `open` 请求被归因为 App 自身激活而静默吞掉；已实测从 App 进程树内 `launchctl submit` 的 job 落在用户域 `gui/501`（非 App
   自身的 runningboard 域），因此不随 App 退出被拆除。等 App 退出后只小静置约 3 秒，随后最多 10 轮「先探测再启动」的自适应重试：实测旧实例退出后 ~10 秒内启动的进程会在 ~110ms

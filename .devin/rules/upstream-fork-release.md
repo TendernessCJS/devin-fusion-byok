@@ -13,9 +13,7 @@ description: "Apply when syncing `upstream`, choosing or bumping the version, pu
 git fetch upstream && git merge upstream/main
 ```
 
-- `upstream` 是 **HTTPS** remote。本机已配 URL 限定代理，所以上面是裸命令；**未配置的机器**上会挂约 75 秒后才失败，此时改用
-  `HTTPS_PROXY=http://127.0.0.1:7897 NO_PROXY=localhost,127.0.0.1 git fetch upstream`（`NO_PROXY` 不可省：给 git
-  加前缀会让该命令触及的所有 HTTPS 都走代理；见「本机网络路径」）。`origin` 是 SSH，`git push` 一律**不要**加这个前缀。
+- fetch/push 前按 `platform-and-network.md` 核对当前代理通道；不要将 Devin 编辑器代理或历史本机配置视作 git 已代理的证明。
 - 用 **merge**，不要用 `git pull upstream`：显式 fetch + merge 能明确来源，冲突时也便于对照 `merge-base`（见「按需重算差异」）；本仓库已设 `pull.rebase=false`，即使误用
   pull 也不会走 rebase 重写历史、不需要 force push。
 - 已启用 `rerere`（`git config --local rerere.enabled true`）：README 等固定位置的重复冲突会自动复用上次解法。但

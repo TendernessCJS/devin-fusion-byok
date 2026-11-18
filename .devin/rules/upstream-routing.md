@@ -100,3 +100,11 @@ backend 转发非拦截 RPC 时，目标 origin **不是常量**，而是跟随�
 - identity 按 `detail` 分级（稳定枚举，可进日志与收据）：不可重试 `service`/`root`（真部署不符，1 次即失败）；
   可重试 `control`/`instance`/`source`/`token`/`post-instance`（竞态可疑，进同一 100/250/500ms 预算共 4 次）。
   `retriable` 只作内部控制流，绝不进日志或收据。
+
+## 上游代理与独立 backend（3.14 适配）
+
+- `activation/proxy-settings.cjs` 只读用户本机全局 http.proxy/http.noProxy，环境 HTTP(S)_PROXY/no_proxy 为回落；不采用工作区覆盖。`runtime/host/proxy.cjs` 用未补丁的 ClientRequest 构造器向认证端点 `POST /_runtime/proxy` 推送 `{httpProxy,httpsProxy,noProxy}`；不改 URL-only 的 upstreamProtocol:1。
+- backend 按实例持有策略，health 声明 proxyProtocol:1/proxyReady；冷启动未同步时转发 503，不先直连。非法载荷 400 且不改变上次成功策略。代理凭据只在内存、认证回环载荷和 CONNECT 头出现，不进日志、health 或收据。
+- 首同步在 env 写入/注入前完成；remote/native 共用相同全局来源。后续配置按代际取消+串行提交收敛，POST 前失效去重键。兼容旧实例服务期间发生后台换代，必须给新实例重推代理并让既有 upstream 推送重收敛；停用后的晚到结果不得更新状态。
+- 每请求固定策略快照，HTTP/HTTPS CONNECT 与 TLS 受连接预算约束，严格校验证书；失败不回退直连。localhost、127/8、::1 强制绕过；LS 回环路径不应用上游代理。GitHub 更新复用相同纯策略与宿主取源，但仍有独立的白名单/重定向传输边界；BYOK供应商不在策略范围。
+- 验收同时看磁盘安装身份、活 sourceId/instance/PID 和真实请求的代理连接；扩展宿主和 detached backend 不可按相同可执行文件名称混为一谈，Reload/Cmd+Q 也不是 backend 重建证据。

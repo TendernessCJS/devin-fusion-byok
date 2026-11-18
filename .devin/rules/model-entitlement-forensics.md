@@ -7,6 +7,8 @@ description: "排查「picker 整族变窄 / Claude·GPT·Gemini 全消失 / mir
 
 ## 结论先行：准入层在 f7 之上
 
+**2026-11-18 更正**：同一凭据走直连与代理可得到不同准入集合。旧的‘同结果+不同auth即账号级’和‘只能上报’推断不充分；先确认独立 backend 的真实出口与代理配置，再讨论账号权益。服务端执行准入过滤，不等于本地转发路径与触发条件无关。
+
 服务端在 `GetUserStatus` / `GetCliModelConfigs` / `GetCliTeamSettings` 三处**各自**按账号准入（plan / billing model / 区域）
 过滤，**早于** 用户侧白名单。所以「整族模型消失」的正确起手是查准入，不是查 `team_settings` f7：
 
@@ -36,8 +38,8 @@ Authorization: Bearer cog_...
 | `allowed_model_uids` / `allowed_model_tags` | 全量里 frontier 条目 | 结论与处置 |
 |---|---|---|
 | 非空 | 存在但 `allowed:false` | 团队/组织白名单裁的 → 带 `If-Match` 的 `PUT` 可自助修 |
-| **两者都为空** | 存在但大量 `allowed:false` | **准入层限制**（plan / billing / 区域）；页面的 `Reset settings` 是空操作，只能上报 |
-| — | 全量里**根本没有**该家族 | 上游不发给这个账号，比上一行更窄；同样只能上报 |
+| **两者都为空** | 存在但大量 `allowed:false` | **准入层限制**（plan / billing / 区域）；页面的 `Reset settings` 是空操作；先核对同凭据经目标代理的对照，出口确认一致仍受限再上报 |
+| — | 全量里**根本没有**该家族 | 上游不发给这个账号，比上一行更窄；同样先核对同凭据经目标代理的对照，出口确认一致仍受限再上报 |
 
 2026-11-17 实测形态：全量 **1074** 条，`allowed:true` 仅 **47** 条，1011 条 claude/gpt/gemini 全 `allowed:false`，
 两个白名单数组均为 `[]`，带 `org_id` 查询的结果与 `ETag` 完全一致（无 org 覆盖）。
@@ -61,7 +63,7 @@ Authorization: Bearer cog_...
 `allowedCount`/`allowedKind`、mirror 开启时的 `mirror`。用法：
 
 - **`auth` 先定性身份**：桌面 `accessToken`、ACP 递给 CLI 的 key、`credentials.toml` 的 `auth` 各不相同；
-  **同一结果 + 不同 `auth` ⇒ 账号级**，不是某把凭据坏了（两跳落点差异见 `runtime-forensics.md`）；
+  **同一结果 + 不同 `auth`** 只能排除单把凭据差异，不能排除共同网络路径限制（两跳落点差异见 `runtime-forensics.md`）；
 - **`families` 缺哪个家族，就是准入层砍掉的那批**（2026-11-17 基线：`{glm:12, swe:12, kimi:9, deepseek:8, nemotron:6}`，
   claude/gpt/gemini 各 0）；
 - `GetUserStatus` 47 条与 `GetCliModelConfigs` 69 条之差是 **22 = 14 条 fusion + 8 条内部 uid**

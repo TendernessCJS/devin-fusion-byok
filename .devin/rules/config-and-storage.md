@@ -60,7 +60,7 @@ description: "改 config.json 读写、面板提交、损坏恢复或受管设�
 
 - 面板提交的 baseUrl 允许任意 host（含 localhost 与私网）——这是 BYOK 的设计意图（Ollama / 本地网关）。
 - 限制只到「scheme 必须 http/https、禁止内嵌凭据/查询串/片段、路径归一化」，**不阻止**向任意地址发带凭据请求；收紧前先想清它会让本地部署不可用。
-- `updateProxy` 是独立路径：凭据只出现在 CONNECT 头，面板只回显掩码。
+- 更新与 Devin 上游只共享显式代理策略来源，不共享全局 Agent；代理凭据只进入 CONNECT，不回显面板。旧 `updateProxy` 的清理由配置事务完成，不能绕过锁直接重写配置。
 
 ## 受管设置的写入/恢复串行边界
 

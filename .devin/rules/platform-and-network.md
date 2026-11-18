@@ -5,22 +5,11 @@ description: "处理非 macOS 分支、macOS 硬编码路径，或对接 GitHub 
 
 ## 本机网络路径
 
-本机直连 GitHub 不可用，必须经代理；代理不可用时停止并报告，不要回退直连。**代理机制与本机配置的权威说明在用户级规则 `~/.devin/global_rules.md` 的「外部网站代理」**（代理地址、
-  `~/.ssh/config` 的 `ProxyCommand`、git 的 URL 限定配置、`gh` 为何只能靠环境变量），本节只记本仓库要用的结论：
+GitHub 必须经本机 `http://127.0.0.1:7897`，不可用时停止，不回退直连。通用命令选路与诊断见 `~/.devin/rules/github-proxy.md`；本仓库只补充：
 
-| 目标 | 协议 | 命令里要不要加 `HTTPS_PROXY` |
-| --- | --- | --- |
-| `origin`（`git push` / `git fetch`） | SSH | **不要**：`~/.ssh/config` 的 `ProxyCommand` 自动代理 |
-| `upstream`（`git fetch`） | HTTPS | **不要**：本机已配 URL 限定代理，裸命令即可；未配置的机器要加 |
-| `gh`（建 Release 等） | HTTPS | **要**：`gh` 没有 proxy 配置项，也不读 git 配置 |
-
-代理只管「怎么连」，「连到哪个仓库」是另一回事：本仓库裸 `gh` 解析到 `upstream`，见上一节。
-
-用 `git remote -v` 确认 remote 属于哪种。HTTPS remote 漏了前缀是**长时间挂起**而非快速报错——卡住 10 秒以上先怀疑这个。
-
-不要用无作用域的 `git config --global http.proxy`：它作用于**所有** HTTPS remote，会把 HTTPS 形态的内网仓库也送进代理（SSH 形态的内网 remote 不受任何
-  `http.proxy` 影响）。改动用户级 git 配置须由用户自行执行。
-
+- `origin` 是 SSH，使用已验证的 SSH 代理通道；`upstream` 是 HTTPS，使用已验证的 GitHub URL 限定代理，缺失时只为当前命令补齐。协议或现有配置变化时重新核实，不把历史本机配置当作当前证明。
+- gh 操作显式带 `--repo TendernessCJS/devin-fusion-byok`，不依赖多 remote 下的默认目标；仓库身份与上游同步约束见 `upstream-fork-release.md`。
+- Devin 编辑器的代理设置不等于终端已配置。插件 Devin 上游与更新请求的代理契约分别见 `upstream-routing.md`、`release-contract.md`；不要把命令行临时环境变量扩展成全局 Agent、系统代理或 BYOK 路由修改。
 
 ## 平台支持
 

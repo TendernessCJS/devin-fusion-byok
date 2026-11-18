@@ -81,7 +81,7 @@ git tag v<version> && git push origin v<version>
 
 `origin` 是本 fork，**永不向 `upstream` 推送**。tag 必须是 `v<major>.<minor>.<patch>` 三段纯数字。
 
-**这一步不要加代理前缀**：`origin` 是 **SSH** remote，`~/.ssh/config` 里 `Host github.com` 的 `ProxyCommand` 会自动把连接送进代理；再套 `HTTPS_PROXY` 既不生效也白搭。第 5 步的 `gh` 是 HTTPS，**必须**带前缀——两者不对称，不要照抄。
+推送前按 `.devin/rules/platform-and-network.md` 与 `~/.devin/rules/github-proxy.md` 确认通道：本仓库 `origin` 是 SSH，`HTTPS_PROXY` 前缀不能代替 SSH 代理；第 5 步 gh 的 API 使用 HTTPS。
 
 ## 5. 建 Release
 
@@ -100,7 +100,7 @@ HTTPS_PROXY=http://127.0.0.1:7897 gh release create v<version> \
 
 **这一步刻意保留人工确认**：`permissions.allow` 未放行 `gh release create`，因为它是对外生效操作。同理 `git push`、`git tag` 与安装 vsix 也未放行。不要为了省一次确认而把它们加进 allow。
 
-`permissions.allow` 里的 `gh release view` / `gh release list` **各写了两条**（带与不带 `HTTPS_PROXY=` 前缀）：`Exec(前缀)` 的语义是「命令以该前缀开头」（见 Devin 文档 `reference/permissions`），而本机调用 `gh` 必须带前缀，只写不带前缀的那条可能永不匹配。若要精简成一条，保留带前缀的那条。
+代理前缀会改变权限匹配的命令形态，现有 `permissions.allow` 同时保留带与不带前缀的只读 gh 命令。按网络规则决定实际选路，不为命中 allow 而移除必要代理或扩大授权；权限匹配不能代替代理验证。
 
 另外 **`gh release view` / `gh release list` 必须带 `--repo TendernessCJS/devin-fusion-byok`**：本仓库多 remote 且 gh 优先取名为
   `upstream` 的那个，裸跑会列出**上游** Release（实测 `gh release list` 返回上游的 v0.3.42/40/39…，本 fork 的 v0.3.48 不在其中）。
@@ -110,21 +110,22 @@ HTTPS_PROXY=http://127.0.0.1:7897 gh release create v<version> \
 
 网页显示正常 ≠ 插件能用。**用已安装副本的代码**跑一遍真实回路。
 
-**走插件自带的代理路径**：`requestBytes` 支持 `proxy` 参数（`src/update/proxy-config.cjs` 的 `parseProxy` 结果）。下面片段显式传 `http://127.0.0.1:7897`（与 `config.json` 的 `updateProxy` 等效），和面板「检查更新」走的是同一条代码路径，不依赖 TUN 与环境变量，结果可复现。
+**走插件自带的代理路径**：下面向 `requestBytes` 显式传入 `compileProxyPolicy` 快照，只验证安装副本的传输与发布契约；面板实际取源于 Devin 用户级 `http.proxy`/`http.noProxy`。该片段不能代替宿主取源验收，也不证明终端环境已配置代理。
 
 ```bash
 EXT="$HOME/.devin/extensions/local.devin-fusion-byok-<version>" \
 node -e "
-const m=require(process.env.EXT+'/src/update.cjs'), p=require(process.env.EXT+'/src/update/proxy-config.cjs'), c=require('node:crypto'), fs=require('fs');
-const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
+const m=require(process.env.EXT+'/src/update.cjs'), p=require(process.env.EXT+'/src/network/proxy-policy.cjs'), c=require('node:crypto'), fs=require('fs');
+const address = process.env.VERIFY_PROXY || 'http://127.0.0.1:7897';
+const proxyPolicy = p.compileProxyPolicy({ httpProxy: address, httpsProxy: address, noProxy: ['localhost', '127.0.0.1', '::1'] });
 (async()=>{
-  const raw = await m.requestBytes('https://api.github.com/repos/'+m.REPOSITORY+'/releases/latest',{limit:1024*1024,proxy});
+  const raw = await m.requestBytes('https://api.github.com/repos/'+m.REPOSITORY+'/releases/latest',{limit:1024*1024,proxyPolicy});
   const i = m.releaseInfo(JSON.parse(raw.toString()));
   const cur = require(process.env.EXT+'/package.json').version;
   console.log('installable:', i.installable, '| 远端:', i.version, '| 本地:', cur);
   console.log('资产名:', i.name, '| digest:', i.digest, '| size:', i.size);
   console.log('面板将显示:', m.compareVersions(i.version,cur)>0 ? '有新版本' : '已是最新');
-  const b = await m.requestBytes(i.url,{limit:50*1024*1024,proxy});
+  const b = await m.requestBytes(i.url,{limit:50*1024*1024,proxyPolicy});
   console.log('字节:', b.length===i.size ? '✓ '+b.length : '✗ '+b.length);
   console.log('sha256:', c.createHash('sha256').update(b).digest('hex')===i.digest ? '✓ 与 Release digest 一致' : '✗');
   const f='/tmp/verify-'+Date.now()+'.vsix'; fs.writeFileSync(f,b);
@@ -165,16 +166,11 @@ const proxy = p.parseProxy(process.env.UPDATE_PROXY || 'http://127.0.0.1:7897');
 - `settings.json` 的 `devin.acp.agentEnv.devin-cli.WINDSURF_API_SERVER_URL` 仍为 `http://127.0.0.1:39842`；模型偏好未被卸载钩子回滚
 - 面板状态行显示「当前 <version> · 已是最新」；**若该版本尚未发布 Release**，则显示「当前 <version> · 高于最新正式版」——本地未发布版本属正常
 
-## 本机网络约束（会让验收假失败）
+## 本机网络与失败判定
 
-- GitHub 访问必须经代理 `http://127.0.0.1:7897`：直连 `api.github.com`、`github.com`、`objects.githubusercontent.com` 均被连接重置。
-- **第 4 步的 `git push` 不要加前缀**（`origin` 是 SSH，`~/.ssh/config` 自动代理）；**第 5 步的 `gh` 必须加**前缀 `HTTPS_PROXY=http://127.0.0.1:7897`（HTTPS，且 `gh` 没有 proxy 配置项）。两者不对称，不要照抄。完整说明以 `AGENTS.md`「本机网络路径」为准。
-- **首选：插件自带代理**（实现在 `src/update/proxy-transport.cjs`；`src/proxy.cjs` 兼容门面已删除，不要再 require 它）。`config.json` 设 `updateProxy` 后，面板「检查更新」与一键安装经 CONNECT 隧道走代理，不受 TUN 与环境变量影响；第 6 步验收片段显式传同一个代理地址，跑的是同一条路径。
-- **备选：环境变量 / TUN**。验收不支持 `requestBytes({proxy})` 的旧版本，或排查直连路径时才需要：
-  - 验收片段改用 `HTTPS_PROXY=http://127.0.0.1:7897 NODE_USE_ENV_PROXY=1 NO_PROXY=localhost,127.0.0.1` 让全局 `fetch` 读环境变量（扩展宿主的 `fetch` 默认不读，缺了它就 ECONNRESET，看起来像「发布失败」）。
-  - Devin 本体不读 shell 环境：TUN 模式，或以 `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897 NO_PROXY=localhost,127.0.0.1` 启动 Devin。
-  - 判定 TUN 是否生效不能看开关，要看实际出口：`route get <api.github.com 的 IP>` 应为 `utun*`（开）或 `en0`（关）；开 TUN 时 DNS 会解析到 fake-IP 段 `198.18.x.x`。TUN 会被用户关掉或断开，验收前先确认。
-- 面板文案对照（字符串取自 `src/panel/update-view.cjs` 的 `labels`，状态行拼法为 `'当前 ' + currentVersion + ' · ' + labels[phase]`）：「检查失败」= 网络不通或 `updateProxy` 未配置/无效；「当前 <版本> · 高于最新正式版」= 仍在读旧的上游版本（也可能只是本版本尚未发布 Release）；「当前 <版本> · 已是最新」= 完全正常。
+- git/gh 与插件更新分别选路：命令行按 `~/.devin/rules/github-proxy.md` 和 `.devin/rules/platform-and-network.md`；插件按 `.devin/rules/release-contract.md`。不要跨层推断配置已生效。
+- 当前插件使用用户级 `http.proxy`/`http.noProxy`，未配置时按实现回落环境读源；第 6 步显式策略片段不依赖 TUN 或 `NODE_USE_ENV_PROXY`。旧安装副本不支持 `proxyPolicy` 时先核对其真实接口，不能把参数被忽略后的直连或打开 TUN 当作新链路验收。
+- “检查失败”只说明未取得有效结果，不等于代理失效或已是最新版；HTTP 403/429 先区分权限与 API 限流，不盲目重试、换出口或关闭证书校验。“高于最新正式版”也可能是本地尚未发布，不能单凭文案断言读错仓库。
 
 ## 验收时的两个坑
 

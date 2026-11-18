@@ -15,7 +15,7 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   全部不存在了——只剩 `fusionCount` 这个**语义已改**的字段，现在等于 `matrixUids.size`）。退役前提是矩阵恒开：官方 Fusion 卡片就是唯一选择入口，
   一个平行的「我的预设」目录已无物可描述，它的 OFF 分支也不可能再产出（见上条）。**一次性迁移也一并删除**（2026-10-16）：它只服务「从带
   `fusionPresets`/`defaultFusionUid`/`fusionMatrix` 的旧配置升级」这一条路径，而本机配置早已迁完（实测只剩
-  `enabled`/`providers`/`inferenceServerUrl`/`updateProxy`/`lastFusionSelection`），留着就是 250 行只为一条历史路径存在的代码；
+  `enabled`/`providers`/`inferenceServerUrl`/`updateProxy`/`lastFusionSelection`；`updateProxy` 此后也已退役，由 `pruneLegacyUpdateProxy` 经 `updateConfig` 锁内清理），留着就是 250 行只为一条历史路径存在的代码；
   遗留键曾由 `pruneRetiredKeys` 清理（历史行为；该剪枝本身也已退役，见文末「个人使用前提下的兼容层清理」登记）。**代价要记住**：若哪天真从 `config.json.pre-preset-retirement.bak` 恢复旧配置，那些预设引用的
   Lead/Sidekick 不会再生效——需要手工把它们写进 `roleInclusions`。要整体恢复具名预设必须连开关一起重建，不要只加回状态字段。
 - 清单式变更（供应商/模型）会顺带调用 `pruneDanglingRoleRefs`（`panel/manager.cjs`）——`providerId` 引用在配置是权威的，模型消失即永久失效，
@@ -73,7 +73,7 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
 ## 2026-11-07 退役登记：Devin 3.12.17 断供后的整链删除
 
 - **发布确认链**：`src/activation/catalog-publication.cjs`（协调器）+ `lifecycle.publication`/`createPublication`/`onPublication` 事件面 + 面板「刷新模型目录」按钮 + 注入健康检查 `catalog` 项 + 停用路径的 `drain`/`restore` 验证（`teardown` 的 `{restore}` 形参、`desktop-catalog-restore` 日志、`auth-status.cjs` 的 `emittedOwnUids`/`restoreProbe`/`drainWaiters`/`hasField32`/`isResidual` 与 passthrough 残余扫描）。判据：**版本实测**——3.12.17 全包 3257 个 JS 文件里 `devin.refreshUserStatus` 命令 0 命中，确认链永久停在 `unsupported`，再无发射器可挂。auth-status 的重写 + `collect`/`onNativeModels` 观测 + `shadowed`/`deactivate`/`dispose` 保留——picker 改写面仍活着。
-- **`src/proxy.cjs` compatibility facade**：判据**零消费者**——生产与测试均直接 require `update/proxy-config.cjs`、`update/proxy-transport.cjs`、`network/direct-fetch.cjs`。
+- **`src/proxy.cjs` compatibility facade**：判据**零消费者**——生产与测试均直接 require `network/proxy-config.cjs`、`update/proxy-transport.cjs`、`network/direct-fetch.cjs`（代理解析直接由 `network/proxy-config.cjs` 提供；`update/proxy-config.cjs` 兼容门面已删除）。
 - **`installed-renderer.cjs` 旧 chat-client 半区**（`loadFamilyPicker`/`loadAcpPicker`/`loadGroupSorter`/`legacyAvailable`/`rendererFile`/`load`）：判据**零消费者 + 版本实测**——四者无引用，且 3.12.17 的 `windsurf-chat-client/index.js` 里 `familyUid`/`catalogMisses` 命中数为 0。webapp bundle 探测仍是唯一探测面。
 - **`cli-cache.cjs` 的 `CACHE_RPC` 表**：判据**零消费者**——且表内含已不存在的 `model_configs_v5` 条目；`rpcFor`/`CACHE_PREFIX_RPC` 保留（生产在用）。
 - **若 Devin 恢复 `devin.refreshUserStatus`**：从 git 历史恢复上述删除（2026-11-07 前的版本含完整实现与测试），不要凭记忆重写。

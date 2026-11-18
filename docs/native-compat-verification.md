@@ -6,7 +6,7 @@
 
 ## 复验方法
 
-一条命令覆盖「静态契约 → 运行期契约缓存 → 已安装扩展身份 → 运行日志聚合」：
+一条命令覆盖「静态契约 → 运行期契约缓存 → 已安装扩展身份 → 活 backend 身份/代理就绪 → 运行日志聚合」：
 
 ```bash
 npm run verify                    # 默认 24h 日志窗口
@@ -74,11 +74,19 @@ npm run verify -- --with-tests    # 追加窄测（含从当前 bundle 抽取 AC
 - catalog 事件全部为 **`models=61 / matrix=52`**（8 条 `GetUserStatus` + 1 条 `GetCliModelConfigs` + 1 条 `GetCliTeamSettings`），无 `mirror` 字段；
 - 原生条目数 `GetUserStatus=47` / `GetCliModelConfigs=69`，`allowedCount=69`、`allowedKind=restricted`；`families` 为 `{glm:12, swe:12(13), kimi:9, deepseek:8, nemotron:6}`，**claude / gpt / gemini 各 0**；
 - `team_settings.b0239737b4184efa.bin` = 10,272 B（mirror 开启时为 77,736 B，内部 `claude/gpt/gemini` 各 0 次）；`GetCliTeamSettings` `before 881 → after 1398`、`afterOwn 45`（mirror 时 6,517）；
-- 两把实际生效的凭据（桌面 `accessToken` 与 ACP 递给 CLI 的 key `auth=1efb47a89d33`）**结果一致**（`credentials.toml` 那条 CLI 根本不读，`auth status` 仍报未登录），说明限制是账号级而非凭据级；
+- 两把实际生效的凭据（桌面 `accessToken` 与 ACP 递给 CLI 的 key `auth=1efb47a89d33`）**结果一致**（`credentials.toml` 那条 CLI 根本不读，`auth status` 仍报未登录）——当时据此推断限制是账号级而非凭据级，该推断已被同凭据网络 A/B 修正，见「3.14.30819 源码适配状态」；
 - 官方 `GET /api/v2alpha/models` 实测：全量 **1074**，`allowed:true` 仅 **47**，1011 条 claude/gpt/gemini 全 `allowed:false`，`allowed_model_uids` 与 `allowed_model_tags` 均为 `[]`，带 `org_id` 查询结果与 `ETag`（`32816dd722975ae619236aef434b7917`）完全一致；
-- 上游口径变化（同一安装、同一凭据）：`model_configs` v6 代际 payload **913,664 B**（`2026-11-17T01:58Z`，claude 命中 2601 / gpt 4544）→ v7 代际 **58,299 B**（`05:00Z`，仅 `fusion-sidekick-*`）。故目录收窄发生在服务端准入层，与客户端版本和插件重写无关。
+- 上游口径变化（同一安装、同一凭据）：`model_configs` v6 代际 payload **913,664 B**（`2026-11-17T01:58Z`，claude 命中 2601 / gpt 4544）→ v7 代际 **58,299 B**（`05:00Z`，仅 `fusion-sidekick-*`）。故当时判定目录收窄发生在服务端准入层、与客户端版本和插件重写无关——「与插件无关」部分后被撤回，见下节。
 
 结论：`matrix` 从 229 掉到 52 是 lead 侧 frontier 被准入层移除的连带结果，`mirrorNativeAllowlist` 无法恢复（交集上限 = 原生集合）。判据见 `.devin/rules/model-entitlement-forensics.md`。
+
+## 3.14.30819 源码适配状态（2026-11-18）
+
+本轮原生字段/探针专项测试 40/40 通过。REA 对 proxy-agent、生产目录映射和已安装插件选中模块共 7 个 JS 文件做有界静态分析，语义图为 partial；未完成 CLI/LS 原生反编译，不据此宣称所有私有 API 已验证。适配集中在代理下发、backend 显式 CONNECT 转发和活进程身份诊断，不改 Fusion 角色、protobuf 或供应商线格式。
+
+正式实现的本机覆盖安装尚未验收。此前安装副本临时补丁曾得到 allowedCount=1097，这不是本次正式代码的真机结果。验收需同时确认安装文件、活 sourceId/instance/PID、新一次目录请求以及实际代理连接；Reload/Cmd+Q 不保证 detached backend 被重建。
+
+后续网络 A/B 已推翻本页旧的“同凭据同结果即账号级、与插件无关”推断：同一凭据经代理可取到官方家族，backend 直连时受限。应先核对每一跳的真实出口，再讨论账号权益。历史数字保留作当时观测，不代表当前目录规模。
 
 ## 官方 Fusion 组合的变更与注入边界（2026-11-13）
 
@@ -111,6 +119,8 @@ npm run verify -- --with-tests    # 追加窄测（含从当前 bundle 抽取 AC
 ## verify 的 installed 判定口径
 
 `verify` 的 `installed` 项曾对「仅已安装侧多出的空目录」报 FAIL（0.6.7 vsix 打包时仓库仍含空的 `src/activation/stores/`，随后仓库删除了它）。判定已改为 WARN（建议重新打包安装）；代码内容哈希不一致仍是 FAIL。
+
+`live-backend` 独立读取回环 `/health`，将活进程 `sourceId` 与已安装副本的新鲜源码身份比较，并报告受限的 PID、instanceId、Node/Electron 版本、启动时间。磁盘一致不等于进程已加载新代码。`proxyReady=false` 是 FAIL；旧 backend 无能力字段、不可达或无法计算安装身份是 WARN/unknown，不是通过。探测仅有界只读，不重启进程、不更改控制面。
 
 ## 夹具与版本的绑定关系
 
