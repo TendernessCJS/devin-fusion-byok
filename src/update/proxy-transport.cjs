@@ -2,7 +2,6 @@
 const tls = require('node:tls');
 const { createRequest } = require('../network/client-request.cjs');
 const { tunnel } = require('../network/proxy-tunnel.cjs');
-const { transferBytes } = require('./transfer.cjs');
 
 function request(target, { proxy, signal, connect }) {
   const secure = target.protocol === 'https:';
@@ -26,17 +25,4 @@ function request(target, { proxy, signal, connect }) {
   });
 }
 
-async function proxyRequestBytes(url, { proxy, limit, signal, timeout = 30000, connect }) {
-  return transferBytes(url, { limit, signal, timeout, open: async (target, { signal }) => {
-    const response = await request(target, { proxy, signal, connect });
-    return {
-      status: response.statusCode,
-      location: response.headers.location,
-      length: response.headers['content-length'],
-      body: response,
-      cancel: () => { response.destroy(); }
-    };
-  } });
-}
-
-module.exports = { request, proxyRequestBytes };
+module.exports = { request };

@@ -136,8 +136,11 @@ test('requestBytes rejects a redirect without Location and honours pre-call and 
   await assert.rejects(requestBytes('https://api.github.com/x', { limit: 10, fetchImpl: async () => new Response(null, { status: 302 }) }),
     error => error.message === 'redirect');
   const pre = new AbortController(); pre.abort();
+  let preCalls = 0;
   await assert.rejects(requestBytes('https://api.github.com/x', { limit: 10, signal: pre.signal,
-    fetchImpl: () => { throw Error('must not be called'); } }));
+    fetchImpl: () => { preCalls++; throw Error('must not be called'); } }),
+    error => error.message === 'aborted');
+  assert.equal(preCalls, 0);
   const mid = new AbortController();
   let cancelled = false;
   const stream = new ReadableStream({
@@ -383,6 +386,59 @@ test('requestBytes re-evaluates noProxy per redirect hop on one snapshot', async
   assert.deepEqual(proxied2, ['https://api.github.com/start']);
   assert.deepEqual(direct2, ['https://release-assets.githubusercontent.com/final'],
     'a redirect into a noProxy host leaves the proxy on the same snapshot');
+});
+
+test('check failures classify transport errors into fixed diagnostics without echo', async () => {
+  const MARKER = 'fixture-marker';
+  const CHECK_FAILED_TEXT = '检查更新失败：无法连接 GitHub。若需经代理访问，请检查 Devin 的 http.proxy / http.noProxy 设置。不代表已是最新版。';
+  const RELEASE_INVALID_TEXT = '检查更新失败：GitHub 返回的正式版数据无效。不代表已是最新版。';
+  const RATE_LIMITED = '检查更新失败：GitHub 请求受限，请稍后手动重试。';
+  const cases = [
+    ['403 with an exhausted quota header is rate limiting', async () => new Response(MARKER, { status: 403, headers: { 'x-ratelimit-remaining': '0' } }), RATE_LIMITED],
+    ['403 without the header stays a plain refusal', async () => new Response(MARKER, { status: 403 }), '检查更新失败：GitHub 拒绝访问（HTTP 403）。'],
+    ['a duplicated header is not an exact quota signal', async () => new Response(MARKER, { status: 403, headers: { 'x-ratelimit-remaining': '0, 0' } }), '检查更新失败：GitHub 拒绝访问（HTTP 403）。'],
+    ['a malformed header is not an exact quota signal', async () => new Response(MARKER, { status: 403, headers: { 'x-ratelimit-remaining': '00' } }), '检查更新失败：GitHub 拒绝访问（HTTP 403）。'],
+    ['429 needs no header to be rate limiting', async () => new Response(MARKER, { status: 429 }), RATE_LIMITED],
+    ['404 reports the missing release', async () => new Response(MARKER, { status: 404 }), '检查更新失败：未找到正式版（HTTP 404）。'],
+    ['other statuses echo only the numeric code', async () => new Response(MARKER, { status: 503 }), '检查更新失败：GitHub 返回 HTTP 503。'],
+    ['malformed JSON is an invalid release, not a transport failure', async () => new Response(MARKER), RELEASE_INVALID_TEXT],
+    ['an unparseable tag is an invalid release', async () => new Response(JSON.stringify({ tag_name: MARKER })), RELEASE_INVALID_TEXT],
+    ['an oversized content-length is a size failure', async () => new Response('x', { headers: { 'content-length': String(2 * 1024 * 1024) } }), '检查更新失败：GitHub 响应超过大小限制。'],
+    ['a transport error carries only the fixed connectivity copy', async () => { throw new Error(MARKER); }, CHECK_FAILED_TEXT],
+  ];
+  for (const [name, respond, expected] of cases) {
+    let calls = 0;
+    const fetchImpl = async (...args) => { calls++; return respond(...args); };
+    const { updater } = setup({ request: (url, options) => requestBytes(url, { ...options, fetchImpl }) });
+    await updater.check({ force: true });
+    const snap = updater.snapshot();
+    assert.equal(snap.phase, 'error', name);
+    assert.equal(snap.error, expected, name);
+    assert.equal(snap.latestVersion, null, name + ': a failed check is not a latest release');
+    assert.equal(snap.canInstall, false, name + ': a failed check is not installable');
+    assert.doesNotMatch(JSON.stringify(snap), new RegExp(MARKER), name + ': no payload text reaches the snapshot');
+    assert.equal(calls, 1, name + ': the transport ran exactly once');
+    updater.dispose();
+  }
+});
+
+test('a synchronously throwing request cannot poison the pending cache', async () => {
+  let calls = 0;
+  const { updater } = setup({
+    request: (url, options) => {
+      calls++;
+      if (calls === 1) throw new Error('sync transport failure');
+      return requestBytes(url, { ...options, fetchImpl: async () => new Response(JSON.stringify(release('0.3.34'))) });
+    }
+  });
+  await updater.check({ force: true });
+  assert.equal(calls, 1);
+  assert.equal(updater.snapshot().phase, 'error');
+  assert.equal(updater.snapshot().latestVersion, null);
+  await updater.check({ force: true });
+  assert.equal(calls, 2, 'a second forced check runs the transport again instead of returning a stale pending promise');
+  assert.equal(updater.snapshot().phase, 'available');
+  updater.dispose();
 });
 
 test('a proxy failure never falls back to a direct retry', async t => {

@@ -6,14 +6,28 @@ const { promisify } = require('node:util');
 const execFile = promisify(require('node:child_process').execFile);
 const { allowedUrl } = require('./url-policy.cjs');
 const { requestBytes } = require('./download.cjs');
+const { TransferError } = require('./transfer.cjs');
 const { compileProxyPolicy } = require('../network/proxy-policy.cjs');
 const REPOSITORY = 'TendernessCJS/devin-fusion-byok';
 const PAGE = `https://github.com/${REPOSITORY}/releases`;
 const API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
 const INTERVAL = 6 * 60 * 60 * 1000;
 const MAX = 50 * 1024 * 1024;
-const CHECK_FAILED = '检查更新失败：网络不可达。若本机需经代理访问 GitHub，请检查 Devin 的 http.proxy / http.noProxy 设置。不代表已是最新版。';
+const CHECK_FAILED = '检查更新失败：无法连接 GitHub。若需经代理访问，请检查 Devin 的 http.proxy / http.noProxy 设置。不代表已是最新版。';
+const RELEASE_INVALID = '检查更新失败：GitHub 返回的正式版数据无效。不代表已是最新版。';
 const PROXY_INVALID = '检查更新失败：Devin 代理配置无效，请检查 http.proxy / http.noProxy 或代理环境变量。不代表已是最新版。';
+function checkFailure(error) {
+  if (!(error instanceof TransferError)) return CHECK_FAILED;
+  if (error.code === 'http') {
+    if (error.rateLimited) return '检查更新失败：GitHub 请求受限，请稍后手动重试。';
+    if (error.status === 404) return '检查更新失败：未找到正式版（HTTP 404）。';
+    if (error.status === 403) return '检查更新失败：GitHub 拒绝访问（HTTP 403）。';
+    return error.status ? `检查更新失败：GitHub 返回 HTTP ${error.status}。` : '检查更新失败：GitHub 返回异常 HTTP 状态。';
+  }
+  if (error.code === 'size') return '检查更新失败：GitHub 响应超过大小限制。';
+  if (error.code === 'redirect' || error.code === 'url') return '检查更新失败：GitHub 更新地址或重定向无效。';
+  return CHECK_FAILED;
+}
 function parseVersion(v) {
   if (typeof v !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v)) throw Error('version');
   const parts = v.split('.').map(Number);
@@ -76,16 +90,17 @@ function createUpdater({ currentVersion, globalState, storagePath, request = req
       try {
         const bytes = await request(API, { limit: 1024 * 1024, signal, proxyPolicy: via });
         if (disposed) return snapshot();
-        latest = releaseInfo(JSON.parse(bytes.toString()));
-        const order = compareVersions(latest.version, currentVersion);
+        let candidate, order;
+        try { candidate = releaseInfo(JSON.parse(bytes.toString())); order = compareVersions(candidate.version, currentVersion); }
+        catch { phase = 'error'; error = RELEASE_INVALID; return snapshot(); }
+        latest = candidate;
         phase = order > 0 ? 'available' : order < 0 ? 'ahead' : 'current'; lastCheck = now();
         if (!force && shouldNotify && autoCheck && phase === 'available' && ignoredVersion !== latest.version && announced !== latest.version) {
           announced = latest.version; Promise.resolve().then(() => { if (!disposed && autoCheck) return notify(snapshot()); }).catch(() => {});
         }
-      } catch { if (!disposed) { phase = 'error'; error = CHECK_FAILED; } }
-      finally { pending = null; emit(); }
+      } catch (errorValue) { if (!disposed) { phase = 'error'; error = checkFailure(errorValue); } }
       return snapshot();
-    })();
+    })().finally(() => { pending = null; emit(); });
     return pending;
   };
   const installUpdate = () => {

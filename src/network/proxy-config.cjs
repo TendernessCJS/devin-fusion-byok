@@ -1,15 +1,4 @@
 'use strict';
-// Echo form for panel editing: credential-bearing proxies are masked so
-// secrets never reach the webview; saving the mask back is a no-op.
-function maskProxy(value) {
-  if (typeof value !== 'string' || !value.trim()) return '';
-  const trimmed = value.trim();
-  let url;
-  try { url = new URL(trimmed); } catch { return ''; }
-  if (!url.username && !url.password) return trimmed;
-  return `${url.protocol}//***@${url.host}`;
-}
-
 function parseProxy(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
   let url;
@@ -24,4 +13,4 @@ function parseProxy(value) {
   return { url, authorization };
 }
 
-module.exports = { parseProxy, maskProxy };
+module.exports = { parseProxy };

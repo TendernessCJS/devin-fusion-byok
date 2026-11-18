@@ -148,6 +148,8 @@ function fixture(t, initial = {}) {
     vscode.extensions.getExtension = () => undefined;
   }
   const loader = createSandboxLoader({ filename, overrides, globals: {
+    // Lifecycle fixtures must not inherit the developer shell's proxy policy.
+    process: Object.assign(Object.create(process), { env: {} }),
     AbortController, AbortSignal, setInterval, clearInterval, setTimeout: (fn, _ms) => setTimeout(fn, 0), clearTimeout,
     fetch: (...args) => fetchImpl(...args),
     // The managed-settings gate keeps a real drain budget: under the zero-delay

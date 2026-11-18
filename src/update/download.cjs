@@ -21,6 +21,7 @@ async function requestBytes(url, { limit, signal, fetchImpl, timeout = 30000, pr
         status: response.statusCode,
         location: response.headers.location,
         length: response.headers['content-length'],
+        rateLimitRemaining: response.headers['x-ratelimit-remaining'],
         body: response,
         cancel: () => { response.destroy(); }
       };
@@ -31,6 +32,7 @@ async function requestBytes(url, { limit, signal, fetchImpl, timeout = 30000, pr
       status: response.status,
       location: response.headers.get('location'),
       length: response.headers.get('content-length'),
+      rateLimitRemaining: response.headers.get('x-ratelimit-remaining'),
       body: reader && { async *[Symbol.asyncIterator]() {
         for (;;) { const { done, value } = await reader.read(); if (done) return; yield Buffer.from(value); }
       } },
