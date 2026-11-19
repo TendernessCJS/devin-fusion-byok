@@ -31,7 +31,7 @@ const REQUIRED = {
     'reconnectingMaxDelay']
 };
 const INFORMATIONAL = {
-  cli: ['model_configs_v6', 'max_turn_requests', 'end_turn', 'refusal', 'assignment_jwt'],
+  cli: ['model_configs_v7', 'max_turn_requests', 'end_turn', 'refusal', 'assignment_jwt'],
   ls: ['GetUserStatus', 'GetCliModelConfigsForSite', 'GetCascadeModelConfigsForSite', 'GetCommandModelConfigsForSite', 'assignment_jwt', 'GetModelStatuses'],
   // devin.refreshUserStatus was deleted in 3.12.17 and the extension no longer
   // calls it; absence is the steady state, presence on older builds is trivia.
@@ -48,7 +48,7 @@ const SIZE_CAP = 400 * 1024 * 1024;
 // Bump whenever the marker tables or probe semantics change: cached verdicts
 // are keyed on probe, otherwise an old 'ok' would be reused forever and new
 // markers would never be scanned.
-const PROBE_VERSION = 8;
+const PROBE_VERSION = 9;
 
 const ARTIFACT_KEYS = ['cli', 'ls', 'desktop', 'chat', 'acp'];
 const APP_ANCHOR = path.join('out', 'vs', 'workbench', 'workbench.desktop.main.js');

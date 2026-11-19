@@ -350,6 +350,19 @@ test('a cache from an older probe version is always rescanned', async () => {
   assert.equal(rewritten.probe, PROBE_VERSION);
 });
 
+test('the v7 cache marker replaces v6 without making older CLIs drift', async () => {
+  const markers = ALL_CLI.filter(marker => !marker.startsWith('model_configs_v'));
+  const older = fakeApp({ cliMarkers: [...markers, 'model_configs_v6'] });
+  const olderResult = await checkNativeContract({ extensionPath: older.extensionPath, cacheFile: older.cacheFile });
+  assert.equal(olderResult.status, 'ok');
+  assert.deepEqual(olderResult.informational.cli, ['model_configs_v7']);
+
+  const current = fakeApp({ cliMarkers: [...markers, 'model_configs_v7'] });
+  const currentResult = await checkNativeContract({ extensionPath: current.extensionPath, cacheFile: current.cacheFile });
+  assert.equal(currentResult.status, 'ok');
+  assert.equal(currentResult.informational.cli, undefined);
+});
+
 test('a matching probe version still reuses the cache', async () => {
   const { extensionPath, cacheFile } = fakeApp();
   await checkNativeContract({ extensionPath, cacheFile });

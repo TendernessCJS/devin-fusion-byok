@@ -27,8 +27,9 @@ npm run verify -- --with-tests    # 追加窄测（含从当前 bundle 抽取 AC
 | 3.12.32 | 2026-11-09 10:03 | `ok`，`missing {}` | `ok`，`appVersion 3.12.32` | 128 / 0 / 0 | 1755 全绿 | 兼容；同日新增 `npm run verify` 复验脚本 |
 | 3.12.43 | 2026-11-10 08:13 | `ok`，`missing {}` | `ok`，`appVersion 3.12.43` | 128 / 0 / 0 | 1755 全绿 | 兼容；夹具 11/11 仍成立（见下节） |
 | 3.12.59 | 2026-11-13 上午 | `ok`，`missing {}` | `ok`，`appVersion 3.12.59` | 130 / 0 / 0 | 1764 全绿 | 兼容；未发现需适配的实现改动；installed 差异为空目录残留，判定已降为 WARN（见下） |
+| 3.14.30825 | 2026-11-19 上午 | `ok`，`missing {}` | `ok`，`appVersion 3.14.30825`（probe 8），已安装身份 `ok` | 130 / 0 / 0（改动前 `verify --with-tests`） | 1954 全绿（改动后，含新增回归） | 仅诊断标记适配：informational `model_configs_v6` → `model_configs_v7`、`PROBE_VERSION` 8 → 9；缓存写入资格与运行时行为未变 |
 
-四版共同的稳态项：informational 只有 `desktop: devin.refreshUserStatus`（3.12.17 起官方删除该命令，插件已不再调用，缺失是稳态不是漂移），`catalog-unknown.json` 均不存在。
+3.12.x 四版共同的稳态项：informational 只有 `desktop: devin.refreshUserStatus`（3.12.17 起官方删除该命令，插件已不再调用，缺失是稳态不是漂移），`catalog-unknown.json` 均不存在。
 
 ## 3.12.43 产物指纹（2026-11-10）
 
@@ -87,6 +88,24 @@ npm run verify -- --with-tests    # 追加窄测（含从当前 bundle 抽取 AC
 正式实现的本机覆盖安装尚未验收。此前安装副本临时补丁曾得到 allowedCount=1097，这不是本次正式代码的真机结果。验收需同时确认安装文件、活 sourceId/instance/PID、新一次目录请求以及实际代理连接；Reload/Cmd+Q 不保证 detached backend 被重建。
 
 后续网络 A/B 已推翻本页旧的“同凭据同结果即账号级、与插件无关”推断：同一凭据经代理可取到官方家族，backend 直连时受限。应先核对每一跳的真实出口，再讨论账号权益。历史数字保留作当时观测，不代表当前目录规模。
+
+## 3.14.30825 原生兼容复验（2026-11-19）
+
+- Devin Desktop 3.14.30825 / 内置 CLI 3000.14.30825，已安装插件 0.7.0。改动前 `npm run verify -- --with-tests` 全部 PASS：静态契约、运行期缓存（probe 8）、已安装身份、活 backend（`proxyReady=true`）、未知目录 RPC 收据及日志检查，窄测 130 通过 / 0 失败 / 0 跳过。
+- 本次 Desktop 进程启动后（10:26:38 +0800）的日志快照：45 条目录注入、65 条 `chat-complete` 均为 200、没有 `request-error` 或 `chat-error`；最后的 `GetUserStatus` 为 `models=420 / matrix=411 / own 0 → 687`。这是被动运行观测，不是本轮主动发起的端到端会话。
+- CLI 产物命中 `model_configs_v7`、不再命中 v6；按现有插件检查器只读检查，本机两份 v7 缓存通过信封与载荷校验，其中一份含插件条目。将 INFORMATIONAL 标记从 v6 更新为 v7，并将 probe 从 8 升为 9。缓存读写资格仍由内容决定，`coverage.dynamic` 的 >6 判据未变；未改变 ACP 注入、应用本体或网络配置。
+- REA MCP 有界分析选中 `chunk-modelCatalogSource-BVOnAsca.js` 和 `chunk-atifToAcpUpdates-BAk86ka1.js`，2/2 解析、0 解析失败，图覆盖仍为 partial（未选中 1981 个产物）；Evidence: `ev_01c9f460bc24e89d80526ea67634acd6a848bf6732ce010e50e5c9c09ef0b8d7`。主 ACP bundle 在 25 秒分析预算内超时，0 个 JS 源文件解析完成；partial Evidence: `ev_d3e1ded7b7c814fd3de04f03c764249b2277a2e09f4fec7472ca8e1825ec13dc`。静态探针和测试独立核对相关契约；REA 未证明后台 session 重连或 ACP hook 运行，也未反编译 CLI/LS。
+- 改动后的本机静态报告仅缺旧 `devin.refreshUserStatus` 诊断项。同日按 0.7.0 覆盖安装并重载：`extensions.json` 只余该目录、新 backend pid 的 `sourceId` 与安装目录重算值一致、`runtime.log` 出现 `ready port 39842 version 0.7.0`、契约缓存 `probe: 9`。后台 session 跨 Desktop/CLI 重连、BYOK Sidekick 与 `assignment_jwt` 运行时校验不在已验证范围。
+
+## 3.14.30825 产物指纹（2026-11-19）
+
+| 产物 | 路径 | 字节 | sha256 |
+| --- | --- | --- | --- |
+| cli | `…/extensions/windsurf/devin/bin/devin` | 231,418,304 | `6f346215ad29aeb86b7f44ed5b8b4a3c8f5dd0227e4b85346878dcdf3fa38aa5` |
+| ls | `…/extensions/windsurf/bin/language_server_macos_arm` | 146,975,216 | `d684ab862bfb46a635ddabf00b6a017014d88b2cd5987feb1e39631feb482b61` |
+| desktop | `…/out/vs/workbench/workbench.desktop.main.js` | 23,737,766 | `49af90c4c10b0d49501f8c12125f71970e036d13d1fb6c87bfdd23ecf72f8ec8` |
+| chat | `…/out/vs/workbench/windsurf-chat-client/index.js` | 37,538,824 | `c58fb4d8a47728d05dada330ebfc49e0680b85120ee569124b144b1160b50a70` |
+| acp | `…/extensions/windsurf/dist/extension.js` | 6,562,629 | `72c8248e2dad213ea663a8f88e825b7b475040931e10e0fd1fbdb20a900c43c2` |
 
 ## 官方 Fusion 组合的变更与注入边界（2026-11-13）
 

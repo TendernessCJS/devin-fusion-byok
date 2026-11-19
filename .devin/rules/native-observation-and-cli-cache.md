@@ -24,7 +24,7 @@ description: "Apply when changing native catalog observation or its cache, CLI c
 
 - `augmentLocalModelChoices` 的门控是「Fusion 需要其原生 uid 出现在字段 7 允许列表里、普通 BYOK 不需要」——盲窗（原生观测为空）下 Fusion 整组被丢而普通
   BYOK 全留，现象会被误读成「非 Fusion 模型缺失」，排障时先看这里而不是重查目录生成。
-- CLI 的模型选择器是「`~/.cache/devin/cli/` 的按身份持久缓存（`user_status`/`model_configs_v<代际>`（本机当前 v6）/`team_settings` 的
+- CLI 的模型选择器是「`~/.cache/devin/cli/` 的按身份持久缓存（`user_status`/`model_configs_v<代际>`（3.14.30825 为 v7；写入按内容判定）/`team_settings` 的
   `.<digest>.bin` JSON 信封，payload 为 base64 proto）∩ 白名单」；配置改动会改普通模型 uid（digest 含
   `provider.id`/`model.id`/`effort`），缓存陈旧期普通条目整批丢失，而镜像的 `fusion-<lead>-sidekick-<side>` 条目只要两侧 uid 未变就仍能命中。
   `src/runtime/host/cli-cache.cjs` 按「payload 含 `dfbyok` 判定我方身份、含 dfbyok 但缺当前 uid 判定陈旧」**原地重写 payload**：改写前先按
