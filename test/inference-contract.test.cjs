@@ -184,6 +184,46 @@ for (const scenario of RESPONSES) {
   });
 }
 
+test('Responses cache writes are optional monitoring data and do not change ACP usage', async t => {
+  for (const [reported, expected] of [[20, 20], [0, 0], [undefined, undefined], ['20', undefined], [-1, undefined], [1.5, undefined], [101, undefined]]) {
+    await t.test(String(reported), async t => {
+      const usage = { input_tokens: 100, output_tokens: 5, input_tokens_details: {
+        cached_tokens: 30, cache_write_tokens: reported, cache_write_tokens_details: { ttl_12h_tokens: 900 }
+      } };
+      const observation = await run(t, { format: 'openai-responses', frames: RESP_DELTA('hi') + COMPLETED({ usage }) });
+      assertObservation(observation, { text: 'hi', stop: 2, usage: [{ input: 100, output: 5 }], usageComplete: true, hits: 1 });
+      assert.equal(observation.metrics[0].cachedTokens, 30);
+      assert.equal(Object.hasOwn(observation.metrics[0], 'cacheWriteTokens'), expected !== undefined);
+      assert.equal(observation.metrics[0].cacheWriteTokens, expected);
+      const { messages } = unpackFrames(observation.res.frames);
+      assert.ok(messages.flatMap(message => fields(message, 7)).every(field => fields(field.value, 4).length === 0));
+    });
+  }
+});
+
+test('only recognized Anthropic quota details specialize a 429', async t => {
+  const hardText = 'Provider account has insufficient balance.';
+  const genericText = 'Provider returned HTTP 429.';
+  for (const { name, format, error, hard } of [
+    { name: 'contract', format: 'anthropic', error: { details: { error_code: 'contract_spend_limit_reached' } }, hard: true },
+    { name: 'enforced', format: 'anthropic', error: { details: { error_code: 'enforced_spend_limit_reached' } }, hard: true },
+    { name: 'ramp', format: 'anthropic', error: { details: { error_code: 'ramp_limit_exceeded' }, message: 'Your usage quota has been exhausted.' } },
+    { name: 'different format', format: 'openai-responses', error: { details: { error_code: 'contract_spend_limit_reached' } } },
+    { name: 'different shape', format: 'anthropic', error: { code: 'contract_spend_limit_reached' } },
+    { name: 'unknown', format: 'anthropic', error: { details: { error_code: 'vendor_unknown_limit' } } },
+    { name: 'omitted', format: 'anthropic', error: {} }
+  ]) {
+    await t.test(name, async t => {
+      const observation = await run(t, { format, handler: ({ up }) => {
+        up.writeHead(429, { 'content-type': 'application/json' });
+        up.end(JSON.stringify({ error: { type: 'rate_limit_error', message: 'opaque-detail-sentinel', ...error } }));
+      } });
+      assertObservation(observation, { code: hard ? 'upstream_quota' : 'upstream_http', text: hard ? hardText : genericText, stop: 13, hits: 1 });
+      assert.ok(!JSON.stringify(observation.logs).includes('opaque-detail-sentinel'));
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Chat completions: `finish_reason` is terminal, `[DONE]` closes the stream,
 // and a usage chunk may arrive between them.

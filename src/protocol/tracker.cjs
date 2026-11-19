@@ -4,11 +4,14 @@ const { token, identifier, deriveUsageMetrics } = require('../monitor/stats.cjs'
 function usageOf(data, chat) {
   const u = chat ? data?.usage : data?.response?.usage;
   if (!u || typeof u !== 'object') return null;
+  const inputTokens = token(chat ? u.prompt_tokens : u.input_tokens);
+  const cacheWriteTokens = chat ? null : token(u.input_tokens_details?.cache_write_tokens);
   return {
-    inputTokens: token(chat ? u.prompt_tokens : u.input_tokens),
+    inputTokens,
     outputTokens: token(chat ? u.completion_tokens : u.output_tokens),
     cachedTokens: token((chat ? u.prompt_tokens_details : u.input_tokens_details)?.cached_tokens ?? u.prompt_cache_hit_tokens),
-    reasoningTokens: token((chat ? u.completion_tokens_details : u.output_tokens_details)?.reasoning_tokens)
+    reasoningTokens: token((chat ? u.completion_tokens_details : u.output_tokens_details)?.reasoning_tokens),
+    ...(inputTokens !== null && cacheWriteTokens !== null && cacheWriteTokens <= inputTokens ? { cacheWriteTokens } : {})
   };
 }
 function semanticOutput(event, chat) {
@@ -100,6 +103,7 @@ function createTracker({ id, route, provider, now = () => performance.now(), sta
       const record = { firstResponseMs: firstResponse, id, startedAt, model: route.model, providerId: provider.id || route.providerId || '', effort: route.effort || null,
         status, code, httpStatus, inputTokens: usage?.inputTokens ?? null, outputTokens: usage?.outputTokens ?? null,
         cachedTokens: usage?.cachedTokens ?? null, reasoningTokens: usage?.reasoningTokens ?? null,
+        ...(usage?.cacheWriteTokens !== undefined ? { cacheWriteTokens: usage.cacheWriteTokens } : {}),
         firstOutputMs: firstOutput, firstTextMs: firstText, durationMs,
         outputSpanMs: firstOutput !== null && lastOutput > firstOutput ? lastOutput - firstOutput : null,
         decodeMs, hasTools, hasReasoning,

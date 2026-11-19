@@ -121,6 +121,26 @@ test('persists private-safe records, resolves real SQLite IDs read-only and surv
   assert.equal(missing.records[0].attributionReason, 'lookup-unavailable');
 });
 
+test('optional cache writes survive monitor reload without changing input totals', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-cache-write-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const options = { root, databasePath: path.join(root, 'missing.db') };
+  const monitor = createMonitor(options);
+  const record = { ...tracker().value.finish('success', 200), inputTokens: 100, outputTokens: 5, cachedTokens: 30 };
+  monitor.record({ ...record, id: 'reported', cacheWriteTokens: 25 });
+  monitor.record({ ...record, id: 'zero', cacheWriteTokens: 0 });
+  monitor.record({ ...record, id: 'missing' });
+  monitor.record({ ...record, id: 'invalid', cacheWriteTokens: 101 });
+  await monitor.close();
+  const { records, summary } = await createMonitor(options).snapshot();
+  const byId = new Map(records.map(row => [row.id, row]));
+  assert.equal(byId.get('reported').cacheWriteTokens, 25);
+  assert.equal(byId.get('zero').cacheWriteTokens, 0);
+  assert.equal(Object.hasOwn(byId.get('missing'), 'cacheWriteTokens'), false);
+  assert.equal(Object.hasOwn(byId.get('invalid'), 'cacheWriteTokens'), false);
+  assert.deepEqual(summary.inputTokens, { value: 400, reported: 4 });
+});
+
 test('attribution reads only the indexed tool table', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'byok-monitor-isolation-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

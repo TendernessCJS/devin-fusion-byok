@@ -111,12 +111,17 @@ function classifyErrorDetail(detail) {
 // rewrite: the reference uses an unbounded `.*`, we bound it to 40 chars and
 // forbid `.` so two unrelated JSON fields cannot pair up. Returns a fixed enum
 // token, never the detail itself.
-function classifyQuotaDetail(detail) {
+function classifyQuotaDetail(detail, { anthropicRateLimit = false } = {}) {
   if (typeof detail !== 'string' || !detail) return null;
   // A structured exact code wins outright: it cannot be confused with the
   // rate-limit wording the text heuristics must guard against.
   try {
     const parsed = JSON.parse(detail);
+    if (anthropicRateLimit) {
+      const code = parsed?.error?.details?.error_code;
+      if (code === 'contract_spend_limit_reached' || code === 'enforced_spend_limit_reached') return 'quota-exhausted';
+      if (code === 'ramp_limit_exceeded') return null;
+    }
     if (parsed?.error?.code === 'insufficient_quota' || parsed?.code === 'insufficient_quota') {
       return 'quota-exhausted';
     }

@@ -18,6 +18,8 @@ function normalize(record) {
   // `"attribution":"unassigned","role":"unknown"` while the same records were
   // attributed to sessions in the panel, and `role` is read nowhere at all.
   for (const key of ['inputTokens', 'outputTokens', 'cachedTokens', 'reasoningTokens']) result[key] = token(record[key]);
+  const cacheWriteTokens = token(record.cacheWriteTokens);
+  if (result.inputTokens !== null && cacheWriteTokens !== null && cacheWriteTokens <= result.inputTokens) result.cacheWriteTokens = cacheWriteTokens;
   for (const key of ['firstOutputMs', 'firstTextMs', 'durationMs', 'outputSpanMs']) result[key] = timing(record[key]);
   result.toolIds = Array.isArray(record.toolIds) ? [...new Set(record.toolIds.map(identifier).filter(Boolean))].slice(-32) : [];
   result.hasTools = typeof record.hasTools === 'boolean' ? record.hasTools : null;

@@ -5,24 +5,24 @@ description: "Apply when judging whether a provider wire field is legitimate, up
 
 # 供应商 SDK 对照（provider-sdk-parity）
 
-## 基线版本（2026-10-31 更新）
+## 基线版本（2026-11-19 更新）
 
 | 包 | `.refs/` 目录 | 版本 | tag | commit |
 | --- | --- | --- | --- | --- |
-| `@anthropic-ai/sdk` | `anthropic-sdk-typescript` | **1.3.0** | `sdk-v1.3.0` | `cb5fba41` |
-| `openai` | `openai-node` | **7.47.0** | `v7.47.0` | `c717857c` |
+| `@anthropic-ai/sdk` | `anthropic-sdk-typescript` | **1.10.0** | `sdk-v1.10.0` | `3f13f603` |
+| `openai` | `openai-node` | **7.60.0** | `v7.60.0` | `b1d43788` |
 
 参照物（不是我们的对照实现）：Devin.app 自带 **`@anthropic-ai/sdk 0.82.0`**，**没有** `openai`。
 
-**2026-10-26 那条「未发布预警」已结案**：当时远端 HEAD 领先 `v7.43.0`，其中 `d8931e7f` 给 Responses 的显式缓存断点加 `ttl?: '30m' | '12h'`。**现已发布并已同步到 7.47.0**——`responses.ts` 里 `ttl?: '30m' | '12h'` 的出现次数 7.43.0 是 3 处、7.47.0 是 9 处，且 `prompt_cache_retention` 已被 SDK 标注 `@deprecated`（改用 `prompt_cache_options.ttl`）。**重评结论：仍然不发**（理由见下文「刻意不发」表）。
+**2026-10-26 那条「未发布预警」已结案**：当时远端 HEAD 领先 `v7.43.0`，其中 `d8931e7f` 给 Responses 的显式缓存断点加 `ttl?: '30m' | '12h'`。**已发布并在 7.47.0 基线核实**——`responses.ts` 里 `ttl?: '30m' | '12h'` 的出现次数 7.43.0 是 3 处、7.47.0 是 9 处，且 `prompt_cache_retention` 已被 SDK 标注 `@deprecated`（改用 `prompt_cache_options.ttl`）。**重评结论：仍然不发**（理由见下文「刻意不发」表）。
 
 ## 更新方式：必须是 git 克隆，不能是 npm tarball
 
 `test/sdk-contract.test.cjs` 读的是 `src/resources/messages/messages.ts` 这类 **TypeScript 源码**；npm 包里只有编译产物（`resources/*.mjs` 与 `.d.mts`），**没有 `src/`**——拿 tarball 覆盖会让契约测试解析不出而红。
 
 ```bash
-HTTPS_PROXY=http://127.0.0.1:7897 git -C .refs/<repo> fetch --tags origin
-git -C .refs/<repo> checkout <tag>
+git -C .refs/<repo> fetch --tags origin  # 先按 github-proxy.md 确认 GitHub URL 限定代理
+git -C .refs/<repo> switch --detach <稳定 tag>
 node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 ```
 
@@ -97,6 +97,13 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 - **openai 7.41.0 → 7.43.0**：`ResponseCreateParamsBase` 仅新增 `max_tool_calls`；`ResponseStreamEvent` 联合**零增删**；`shared.ts` 新增带 `detail?: 'low'|'high'|'auto'|'original'` 的 `input_image` 形状（我们已符合，`detail` 可选）。
 - **openai 7.43.0 → 7.47.0**：`ResponseCreateParamsBase` 顶层字段**零增删**（脚本逐字段比对，不是目测）；`shared.ts` 仅 `AllModels`/`ChatModel` 注释与新增模型字面量 `gpt-6.1-terra`（模型清单来自目录，与我们无关）；`responses.ts` 的净增量是 WebSocket warmup、agent session/tool settings、text format 解析、realtime/SIP/组织密钥等**我们不发**的域，另有 `ttl` 正式化（见上）。契约测试 10/10 绿、`skipped 0`。
 - 结论：三次升级对我们的发送面**零动作**。
+
+## 2026-11-19 同步：值得跟进的变化
+
+- **OpenAI 7.47.0 → 7.60.0**：Responses 用量新增 `input_tokens_details.cache_write_tokens` 与可选的 TTL 分桶 `cache_write_tokens_details`（`ttl_30m_tokens` / `ttl_12h_tokens`）。插件已读 `cached_tokens`（缓存读取）；`usageSnapshot` 仍不读 Responses 的缓存写入，ACP 侧不发这个数，写入计数只落到监控记录（见下条实现边界）。真实完成帧、缺失字段兼容性与计费口径仍属未来工作，不把写入数加到总输入。12 小时保留、`background_options` 仍不主动发送；`ResponseStreamEvent` 联合仍为 59 个成员，逐项无增删。
+- **Anthropic 1.3.0 → 1.10.0**：新增细分计费/限额错误，包括 `linked_organization_spend_limit_reached`（SDK 归类为 402）、`contract_spend_limit_reached` / `enforced_spend_limit_reached` / `ramp_limit_exceeded`（SDK 均归类为 429）。后续用实际 JSON 包络区分账单/硬额度与暂时限流，不按 HTTP 状态一刀切；不记录原始错误正文。稳定 Messages 的停止原因、effort、工具选择与签名通过现有契约测试，暂不改发包。
+
+**兼容接口实现边界**：Responses 仅在完成链路收到有效的总缓存写入计数时附加到监控记录；缺报/无效不置零，不解析 TTL 分桶，不改总量、面板汇总或 ACP。Anthropic 仅在 HTTP 429 且收到明确的 `error.details.error_code` 时区分硬上限和 ramp，其余保留旧判断。官方 SDK 类型和合成场景不是任一兼容供应商的能力证明；未发真实请求。
 
 ## 纪律
 

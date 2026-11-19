@@ -69,6 +69,7 @@ DeepSeek Anthropic provider 的 4816 条记录中有 8 条非 success；当时�
   2. **HTTP 400/429** 读一次 body 分类：先试 `JSON.parse` 结构化精确白名单（`error.code`/`code` 精确等于 `insufficient_quota` → 配额，`type`/`message` 里的限流词不挡）；**未命中精确白名单 code 时**正文启发式限流优先——`rate limit`/`too many requests`/`retry-after`/`per minute` 等先短路返回 null（否则 Gemini 每分钟限流的 `Quota exceeded … per minute` 会被误判成余额不足），之后才试配额模式（逐字来自 `.refs/WindsurfAPI/src/devin-connect.js` 的 `classifyUpstreamError` QUOTA 分支：`insufficient…`、`out of …`、`(credit|quota|balance|allowance|usage)…(exceeded|exhausted|depleted|used up)`、`on.?demand…`、`running out of…`，含真机补上的 `…quota has been exhausted` body；唯一改写是 `insufficient…` 由无界 `.*` 收紧为 ≤40 字符且不跨 `.`；早期加的 `credit balance is too low` 与中文 `余额不足` 已移除，无本项目实测依据）；400 同时保留签名取证；
   3. **流内帧三处位置**都取 `data.error.code || data.response.error.code || data.code` 写入 `err.providerCode`，精确等于 `insufficient_quota` 时提升 `upstream_stream_error` → `upstream_quota`（chat 与 responses 路径相同），其它 code 与无 code 的帧维持 `upstream_stream_error`。
   隐私与预算不变：响应体只归约成**布尔标记**，原文不落日志、不进文案；命中时 `chat-error` 带 `diagnostic: 'quota-exhausted'`；该类错误在 `TERMINAL_BLOCKER_RE` 内 **0 次自动重试**；响应体无标记的限流类 429 仍是 `upstream_http`，照常可重试 5 次。边界：启发式来自参考实现 + 合成测试，**本项目尚无真实 quota 样本**；流内路径实机 0 次命中、仅测试覆盖，真机出现再扩表白名单。
+- Anthropic HTTP 429 的额外精确分支：`error.details.error_code` 为 `contract_spend_limit_reached` / `enforced_spend_limit_reached` 走配额终态，为 `ramp_limit_exceeded` 保留临时 429，其余走原判据。只覆盖已有有界读取，不扩大到 SSE 或改重试预算；用合成报文验证，真实兼容端点未验证。
 
 ## 供应商侧首字节前连接失败的有界重试（Devin 3.11.216 / CLI 3000.11.216）
 

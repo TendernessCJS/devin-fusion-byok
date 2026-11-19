@@ -208,7 +208,7 @@ async function serveChat({ request, route, provider, res, signal, log = () => {}
         try {
           const detail = await readDetail(upstream);
           if (upstream.status === 400) signatureMentioned = classifyErrorDetail(detail) !== null;
-          quotaExhausted = classifyQuotaDetail(detail) !== null;
+          quotaExhausted = classifyQuotaDetail(detail, { anthropicRateLimit: anthropic && upstream.status === 429 }) !== null;
         } catch { /* triage only */ }
       }
       classifiedCode = quotaExhausted ? 'upstream_quota' : 'upstream_http';
