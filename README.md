@@ -203,13 +203,9 @@ Devin 上游转发与 GitHub 更新检查/下载共用 Devin 用户级 http.prox
 - 思考档位按模型 ID 规则提供，不是对供应商能力的检测。
 - 一键更新和“重启 Devin”目前仅支持 macOS。
 
-## 当前版本验证
+## 升级后复验
 
-- 本机 macOS + Devin **3.13.4** × 插件 **0.6.10**：catalog 观测 `models=61 / matrix=52`（原生 47/69、allowlist 69 restricted），自动化全量测试 1803 例 / 0 失败；真机日志确认驱动安装与 diagnostics 字段生效。当时的目录收窄定位到服务端准入；后续同凭据网络 A/B 证明独立 backend 的直连出口可触发该限制，旧的‘与插件无关’结论已撤回。详见 [`docs/native-compat-verification.md`](docs/native-compat-verification.md)。
-- 本轮以 macOS Devin **3.14.30819** 为目标完成源码适配与自动化验证；正式覆盖安装、TUN 关闭下的真实 picker/Fusion 验收仍待进行，不能用历史临时补丁结果替代。
-- 历史：本机 macOS + Devin **3.12.43** × 插件 0.6.6 曾做静态契约 `ok`、`npm run verify -- --with-tests` 全项通过、全量测试 1755 例 / 0 失败；该结果不迁移到 0.6.7。
-- 升级后的复验方法与此前各版本的记录见 [`docs/native-compat-verification.md`](docs/native-compat-verification.md)。
-- ACP 终态判定现从当前 bundle 抽取真实谓词：应用目录缺失才跳过，锚点缺失、重复或形状变化一律失败，不再静默 skip。
+升级 Devin 后运行 `npm run verify -- --with-tests`。兼容范围、历次结果与未验收项见 [原生兼容复验记录](docs/native-compat-verification.md)。静态契约与自动化通过不等于真实会话端到端验收。
 
 ## 开发
 

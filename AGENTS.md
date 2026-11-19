@@ -3,9 +3,7 @@
 Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三方模型（OpenAI Responses / Chat Completions / Anthropic
   Messages）注入 Devin 原生模型列表，并把 BYOK/原生模型的组合镜像进 Devin 官方的 Fusion 卡片。
 
-## 为什么行为约束不在本文件里（2026-10-17 实测后改成分卷）
-
-规则注入有**每文件 16,384 字节上限**，超出部分**静默丢弃**；窗口是**零和预算**，新增内容必然挤掉现有内容，唯一扩容方式是移出成独立文件。因此本文件只留索引、短节与最高危禁令速查。完整实测（本文件曾 62,731 字节、只有前 26% 进入上下文）与拆卷纪律见 `.devin/rules/rule-authoring.md`。
+规则单文件必须小于 16,384 字节，超限部分静默丢弃；行为约束按下方索引分卷。取证与拆卷纪律见 `.devin/rules/rule-authoring.md`。
 
 ## 最高危禁令速查（漏了会静默坏）
 
@@ -20,13 +18,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 
 ## 主题卷索引（按需加载）
 
-下面两类卷都**不常驻**：`devin rules list` 里无论 `trigger: glob` 还是 `trigger: model_decision`，规则都只登记为
-  **`agent-decidable`**（按模型判断注入，**不保证加载**）。所以「漏读会安静地做错」的知识不能靠「放在哪个文件」保证送达，
-  索引必须给出**何时必读**——这也是上面「为什么不把约束留在本文件里」的同一组实测约束逼出来的结论。
-  **缺 frontmatter 的卷登记为 `manual`**（模型永远选不中它，索引里的「何时必读」就成了不可执行的声明），
-  `test/rule-budget.test.cjs` 硬拦缺 `trigger`/`description` 的卷。
-
-**体积纪律**：每卷必须 < 16,384 字节，超限部分静默丢弃；`test/rule-budget.test.cjs` 硬拦超限卷与「新卷没进本索引」，判据以测试为准。接近上限时**先拆卷再加内容**；拆卷纪律（逐字搬运、`scripts/rule-split-check.cjs`、豁免语法与 2026-10-27 事故依据）见 `.devin/rules/rule-authoring.md`。
+`glob` 与 `model_decision` 卷均按需加载，不保证自动注入；改动前按索引读取。`test/rule-budget.test.cjs` 检查体积、索引和 `trigger` / `description`；接近上限先按 `.devin/rules/rule-authoring.md` 拆卷。
 
 **行为锚定卷**（改代码前按需读）
 
@@ -41,8 +33,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/fusion-matrix.md` | 改 Fusion 矩阵 emit 规则、Lead/Sidekick 资格与命名、harness、Fast Mode |
 | `.devin/rules/fusion-matrix-dims-and-harness.md` | 改家族/服务器家族判定、控制维度处理或 harness 执行通道时必读 |
 | `.devin/rules/catalog-and-picker.md` | 改 picker 可见性契约、角色白名单、陈旧条目判定与清理、推送门控、`nativeFamilies`、维度 order |
-| `.devin/rules/picker-visibility.md` | 改 picker 行可见性契约、角色白名单或 Lead/Sidekick 门槛时必读 |
-| `.devin/rules/catalog-allowlist.md` | 改 allowlist 三态判定、双通道去抖或 restricted→unrestricted 提交时机时必读 |
+| `.devin/rules/picker-visibility.md` | 改 picker 行可见性、角色白名单、Lead/Sidekick 门槛，或 CLI allowlist 三态、双通道去抖与放行提交时机时必读 |
 | `.devin/rules/model-entitlement-forensics.md` | **排查「picker 整族变窄 / Claude·GPT·Gemini 全消失 / mirror 加宽无效」时必读**——准入层（plan/区域）在 f7 之上、官方 List Models API 取证、缓存字节判据与已排除路径 |
 | `.devin/rules/catalog-publication.md` | 改原生 `auth-status` 写入、`GetModelStatuses`，或怀疑「改了配置会话看不见」时必读；发布确认链已随 3.12.17 删除 |
 | `.devin/rules/context-and-compaction.md` | 改声明的上下文窗口（ModelInfo `f4`/`maxTokens`）、或怀疑「是不是扩展触发了压缩」 |
@@ -76,14 +67,8 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/platform-and-network.md` | 处理非 macOS 分支、macOS 硬编码路径，或对接 GitHub 与代理时必读 |
 
 ## 仓库与 remote
-- `origin` = 本仓库的 fork（`git@github.com:TendernessCJS/devin-fusion-byok.git`），是日常推送目标。
-- `upstream` = 上游原项目（`https://github.com/kuobibulaien/devin-fusion-byok.git`），只读，**不要向 upstream 推送**。
-- 本地 `main` 跟踪 `origin/main`。新克隆或首次拉取后需先执行 `git fetch origin`，否则 `git status` 会显示 `[origin/main: gone]`。
-- 两个 remote 走**不同的网络通道**（`origin` 是 SSH、`upstream` 是 HTTPS），代理要求不同——见下节。
-- **裸 `gh` 在本仓库指向 `upstream`，不是 `origin`**：多 remote 时 `gh` 按**名字**优先选 `upstream`（实测：`origin`+`upstream` → 上游；
-  只留 `origin` 或把上游仓改名 → `origin`）。所以 `gh release view/list/create` 一律显式带 `--repo TendernessCJS/devin-fusion-byok`，
-  否则读到上游 Release、把「本 fork 最新版本」判错。细节见 `.devin/rules/upstream-fork-release.md`。
-- 同步上游更新见「fork 同步与发布」一节。
+- `origin` 是本 fork 的 SSH 推送目标；`upstream` 是上游 HTTPS 只读参考。同步规则见 `.devin/rules/upstream-fork-release.md`。
+- `gh` 一律显式带 `--repo TendernessCJS/devin-fusion-byok`，防止误操作上游。
 ## 本机网络路径
 
 GitHub 必须经本机代理，不可用时停止、不回退直连。执行 git/gh 前按 `.devin/rules/platform-and-network.md` 核对本仓库 remote 与代理通道；编辑器 `http.proxy` 不代表终端已代理。
@@ -93,23 +78,14 @@ GitHub 必须经本机代理，不可用时停止、不回退直连。执行 git
 ```bash
 npm test                                      # node --test test/*.test.cjs
 npm run package                               # 生成 .vsix（依赖 /usr/bin/zip）
-npm run verify                                # 升级后复验:契约、已安装身份、运行日志聚合
+npm run verify -- --with-tests                # 升级后复验:契约、已安装身份、运行日志聚合
 npm run mcp:fast-context -- --root /abs/proj  # 单独运行 Fast Context MCP
-node scripts/rule-split-check.cjs b4a9da7 .devin/rules/runtime-and-injection.md .devin/rules/architecture-boundaries.md --allow=激活失效判据  # 拆卷后守恒核对
 FUSION_FAST_CONTEXT_LIVE=1 node scripts/fast-context-smoke.cjs   # 真实接口验收，消耗官方额度
 ```
 
-改动后至少跑 `npm test`。测试用 `node:test`，无需安装依赖，也没有 lint/typecheck 步骤。
-## 测试基线
+改动后至少跑 `npm test`（`node:test`，无依赖安装、lint 或 typecheck），要求 0 失败，**不得为过测改弱断言**。
 
-全量测试应全绿（0 失败）。
-
-历史说明：`test/native-models-sync.test.cjs` 曾稳定失败——同一端口重启 backend 后，对该 origin 的首次请求复用了 undici 连接池中已被旧服务关闭的
-  keep-alive socket（`ECONNRESET`），第二次请求自愈。这是**客户端连接复用缺口**，已由 `src/runtime/host/retry.cjs` 的 `withConnectionRetry`
-  修复：`readNativeModels` 与 `readMonitor` 对连接层失败做一次重试。
-
-纪律保留：**不要为了通过测试而修改断言**；`withConnectionRetry` 只重试连接层失败（按 `error.cause.code` / `error.code` 判定），
-  `native_catalog_identity` / `monitor_identity` / `native_catalog_unavailable` 这类校验错误不得被重试绕过或伪装成成功。
+`withConnectionRetry` 只按 `error.cause.code` / `error.code` 重试连接层失败；`native_catalog_identity` / `monitor_identity` / `native_catalog_unavailable` 不得被重试绕过或伪装成成功。
 
 ## 平台支持
 

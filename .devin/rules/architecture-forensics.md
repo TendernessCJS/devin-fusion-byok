@@ -6,9 +6,7 @@ description: "Apply when touching module ownership/activation coupling, host-bui
 
 ## 激活层耦合度量（2026-10-26 架构审查）
 
-- **`shared`/`deps.stores` 已整体移除（2026-11 每激活实例重构）**：四个 store 全部消失（`stores/` 目录不复存在），状态私有于各 factory——`catalogSync`/`cacheSync`/`settingsOwner`/`selection`/`continuation`/panel host/runtime session；跨服务只走命名接口，`shared`/`stores` 标识符被架构守卫（注释剥离后扫描）直接禁止。下面的槽数/写者数是 2026-10-26 快照，**别再用**。
-- 归属分组（历史快照）：`deps.stores.nativeCatalog` 23 槽、`cacheSync` 4 槽、`acpObservation` 2 槽（**owner 是 `enable`**，读者才是 `cache-sync`+`panel-install`——正因写者在外，它不能并进 cacheSync 私有状态；现由 runtime session 私有持有）、`panel` 4 槽（现由 panel host 私有持有）；`shared` 当时剩 10 槽。
-- 失效判据分布：`enable.cjs` 有 **5 处** `superseded(lifecycle, config, generation)`（**3 处字面相同**，第 5 处在 auth hook 的 `isEnabled` 回调）；`catalog-sync` 同样按 generation 校验。**刻意不记 file:line**——旧记录在 2026-10-28 复核时已全部指错行。
+- **`shared`/`deps.stores` 已整体移除（2026-11 每激活实例重构）**：四个 store 全部消失（`stores/` 目录不复存在），状态私有于各 factory——`catalogSync`/`cacheSync`/`settingsOwner`/`selection`/`continuation`/panel host/runtime session；跨服务只走命名接口，`shared`/`stores` 标识符被架构守卫（注释剥离后扫描）直接禁止。
 - **历史判断已推翻**：曾认为「禁用发生在 enable 写入段的 `await` 期间时，写入仍会完成、teardown 会按 receipt 自愈还原」——75222e4 与后续收口已证明 receipt **不提供异步顺序**（恢复 snapshot 先取、在途写入后落，receipt 已被清空），现由 `managed-settings.cjs` 的 `critical`/`drain` 保证顺序，恢复**必须重读**设置与 receipt。
 - 本次审查的两处误判（已更正，别再重复）：① `catalog → runtime` **不是**层方向倒置，`port.cjs` 留在 `runtime/` 才能待在 backend 闭包内；② `goal/controller` 与 `auto-continue` **不是**「补丁 + 状态机」混排——前者本身就是 store/状态机（补丁在独立文件 `goal/continue-hook.cjs`），后者没有替换式补丁（走 `loadAcpApi`），它真实的混排是「错误文本匹配器 / 连接挂载 / 续跑状态机」三件事。
 

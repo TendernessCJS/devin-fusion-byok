@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "改 picker 行可见性契约、角色白名单或 Lead/Sidekick 门槛时必读"
+description: "改 picker 行可见性、角色白名单、Lead/Sidekick 门槛，或 CLI allowlist 三态与去抖时必读"
 ---
 
 ## picker 可见性与白名单
@@ -28,3 +28,23 @@ description: "改 picker 行可见性契约、角色白名单或 Lead/Sidekick �
 - **Lead/Sidekick 门槛的机制依据（App bundle proto/schema 坐实）**：官方客户端**不做资格计算**——可选组合就是服务端枚举的 fusion 条目集，picker
   只做「维度元组→uid」查表（`nr6`，无匹配静默不切换）。AssignModel 双 router 字段：`model_router_uid`（f2）分配 sidekick、
   `fusion_lead_router_uid`（f6）分配 lead；**组合条目的 `harnessUids` 携带 `['fusion', lead真harness]`——lead 的执行通道由组合条目替它声明**，所以成员 lead 无自带 harness 也可当 lead（实测 29 个），而 sidekick 经独立 router 解析、组合条目不携带其 harness，故必须自带（实测 11/11）。**发射侧与 `resolveAssignment`（AssignModel 路径）必须同规则**：`leadNative ? leadHarnessUids : ['fusion']`（`leadHarnessUids` 在 catalog.cjs 里已含 `'fusion'`）。发射侧此前一律只写 `['fusion']`，与契约不一致，2026-10-16 修正（实测 336 条 native-Lead 组合各补上其 Lead harness、112 条 BYOK-Lead 保持 `['fusion']`；改前实测官方 586 个可解析样本中该规则 **390/390 零例外**）。**改这两处中任意一处，必须同时改另一处**，并跑那条逐条比对的回归断言。ModelInfo 官方 schema：`inferenceServerUrl/harnessUids/displayOption/modelFamilyUid/isModelRouter`——与我方 emit 字段名逐一对齐（f18 `inferenceServerUrl` JS 层零消费者，见 `retired-and-deadends.md`）。**字段级实测（2026-10-16 解 CLI 缓存 `model_configs_v5.*.bin`）**：`f4 = 声明窗口`（官方原生值 262000/1000000/200000 与其真实窗口精确相等；我方 BYOK 发 1024000），它同时就是喂给「context-window-based」压缩默认值的那个数——见 `context-and-compaction.md`；`f20 = harnessUids`（repeated，是**候选列表**），assignment 落的是**单个** `harness_uid`（`ModelAssignmentInfo`）；`f25 = isModelRouter`（官方原生不写＝默认 false，我方 fusion 条目写 1）；`f22 = displayOption`；`f23 = familyUid`。**`f5` 是一条「我方永不发、官方部分条目发」的字段**（值恒为 `LLAMA_WITH_SPECIAL`，语义未确证）；我方 `encodeConfig` 全部不发。**影响未验证，拿到证据前不要改**，也不要写成「官方一律发」——条目计数见 `native-observation-and-cli-cache-forensics.md`。
+
+## CLI 白名单与服务端准入
+
+### allowlist 三态与 restricted→unrestricted 链路
+
+`collectAllowedUids` 返回三态：`{kind:'restricted',uids}` / `{kind:'unrestricted'}` / `null`（非该 RPC 或形状坏）。
+proto3 repeated 无法区分「存在但空」与「不存在」，**空是弱信号**，**两条通道各自 N=3 去抖**：
+宿主 `observeAllowedUids` 与 backend 原始观测 `onObservedAllowedUids`（`allowedEmptyStreak`）都要连续 3 次
+unrestricted 才翻转，反向 restricted 单次立即恢复；**从未建立受限权威的宿主不因空 streak 翻转，只能经
+backend 冷启动回显采纳**。bridge 对 GetCliTeamSettings **每请求恰好通知一次**，任何失败（非 200/坏 JSON/
+断连/超时/客户端取消）通知 `null` 并打断连续计数。**确认提交（control POST / 已去抖判定）直调
+`onAllowedUids` 立即生效并重置原始空计数，不再等 3**；unrestricted 时 `allowedUids` 为空仍要推，但
+models 必须非空（空 payload 不推），POST 的模式校验在 ingest 之前。旧缓存缺 `allowedMode` 键=restricted。
+
+### 准入层在 f7 之上（2026-11-17 实测）
+
+`GetCliTeamSettings` f7 只是**用户侧白名单**；服务端在更上层还按账号准入（plan / billing / 区域）过滤 `model_configs` 与
+`GetUserStatus`，所以 **f7 加宽不会造出原生目录里没有的条目**（交集上限 = 原生集合）。判定 `restricted` 时不要直接归因
+「团队/组织限制了模型」：`allowedKind=restricted` 与「存储白名单为空」可以同时成立，此时限制来自准入层，页面上那个
+`Reset settings` 是空操作。判据与取证方式见 `model-entitlement-forensics.md`。

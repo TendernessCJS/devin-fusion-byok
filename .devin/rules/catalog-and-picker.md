@@ -58,5 +58,5 @@ picker 可见性契约、角色白名单与门槛依据、陈旧 emit 条目的�
 
 - **上下文压缩（声明窗口 `f4`/`maxTokens` 是唯一杠杆、压缩由 CLI 云端调度、四项排障信号）已分卷到 `context-and-compaction.md`**：那一卷含三次自我推翻的定论与实验样本，**改声明窗口或怀疑「扩展触发了压缩」前必读**，不要在这里凭印象重推阈值。
 
-- allowlist 三态与 restricted→unrestricted 放行链路见 `catalog-allowlist.md`。
+- CLI allowlist 三态与 restricted→unrestricted 放行链路见 `picker-visibility.md` 的「CLI 白名单与服务端准入」。
 - **桌面 auth 目录写入与 `GetModelStatuses` 结论已分卷到 `catalog-publication.md`**：`windsurfAuth.setAuthStatus` 的原地改写契约在那一卷，**改 `auth-status` 前必读**。发布确认链（`catalog-publication.cjs`、预算/看门狗/停用恢复）已随 3.12.17 删除 `devin.refreshUserStatus` 整链退役，勿重建，历史见该卷与 `retired-and-deadends.md`。

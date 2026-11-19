@@ -70,7 +70,9 @@ tail -c +<偏移> <bundle> | head -c 600
 
 另一份**独立逆向**落在同一组字段号上：`dwgx/WindsurfAPI`（本地克隆 `.refs/WindsurfAPI`，2026-11-13 更新至 tag `v3.141.592661`，commit `fe98f0bc`；上一版是 `08a750d1` / v3.141.592658）是 CLI → `server.codeium.com` 的上游 Connect-RPC 代理，与我们客户端侧实现逆的是同一批 `exa.api_server_pb`/`exa.chat_pb` 消息。该仓没有 `.proto`，字段号写在手写的 `parseFields` 与注释里（`.refs/WindsurfAPI/src/devin-connect-catalog.js` 顶部 `F_*` 常量）。
 
-**锚点校验（2026-11-13 复核，v3.141.592661）**：`git diff b00b3b9..HEAD -- .refs/WindsurfAPI/src/devin-connect-catalog.js` 仍为空，`F_*` 仍为 14 处（7 个常量），该文件最后一次改动仍是 `c90e30a8`（2026-10-22）。也就是说初版互证用的锚点 `b00b3b9` 虽然旧，但**被引用的文件内容未变，下表结论不受影响**；后续再同步 `.refs` 时按同一命令复核即可，不必重做对照。658→661 的 128 个提交里产品面只动 8 个 `src/` 文件（身份中和、JSON Schema 预算、SSE 增量扫描等），未触及字段号。
+**锚点校验（2026-11-13 复核，v3.141.592661）**：`git -C .refs/WindsurfAPI diff b00b3b9..HEAD -- src/devin-connect-catalog.js` 仍为空，`F_*` 仍为 14 处（7 个常量），该文件最后一次改动仍是 `c90e30a8`（2026-10-22）。也就是说初版互证用的锚点 `b00b3b9` 虽然旧，但**被引用的文件内容未变，下表结论不受影响**；后续再同步 `.refs` 时按同一命令复核即可，不必重做对照。658→661 的 128 个提交里产品面只动 8 个 `src/` 文件（身份中和、JSON Schema 预算、SSE 增量扫描等），未触及字段号。
+
+**2026-11-19 复核**：最新稳定 tag 仍是 `v3.141.592661`，本地保持该 tag；`origin/master` 领先 10 个提交，仅文档、发布工作流与资源图变化，目录锚点文件无差异。
 
 | 字段 | 我们（`src/catalog/codec.cjs`） | 对方 |
 | --- | --- | --- |

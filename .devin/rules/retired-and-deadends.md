@@ -24,12 +24,7 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
   也是「偏好被清空时恢复什么」的记忆。**记录它不等于改写偏好**——`reconcilePreference` 对任何 `fusion-` 形状的选择（官方的也算）只调 `rememberFusion` 记录、绝不
   `saveFusionChoice` 改写：用户/Devin 在官方卡片里选的组合必须原样保留，被改掉就是静默撤销用户操作。
 - 关掉一个官方模型的显示（`config.hiddenNativeModelUids`）会**同时**把它踢出角色候选池——`discoverOfficialRoles`/`discoverAdditionalNativeRoles` 都吃 `hiddenSet`，而 `nativeHarnessUids`/`nativeLeadHarnessUids` 只由入选者构建；因此正在使用的组合会失去 harness 而无法解析（`resolveAssignment` 返回 null，不会自动回退）。同理，`roleExclusions` 排除 Lead/Sidekick 也会让存量组合失效。面板文案不得承诺「不影响已保存的组合」。
-- ACP 通道的实际机制是 env 注入（`devin.acp.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL`，进程 spawn 时生效、覆盖 CLI 全部网络路径），
-  **不是**握手 `_meta.api_server_url` 改写——后者的模块已在审查后删除（`acp-injection.cjs` 自 fork 初始提交起从未接线）。排障
-  ACP 流量先看 settings.json 的 agentEnv 与 backend 日志，不要去复活握手改写。
-  **2026-10-18 实测补正一处措辞**：`authenticate._meta.api_server_url`（须同时给 `meta.api_key`）**确实**能接管 api server 面，连
-  `GetChatMessage` 都跟随；但它**优先级低于 env**（env=死端口时 CLI 直接对死端口失败、不回退 meta），而扩展拿不到 key，所以
-  「env 是唯一可用入口」的结论不变——**别把这条误读成「meta 那条路根本不存在」**。细节见 `runtime-and-injection.md`。
+- **不要复活 `acp-injection.cjs` 的握手改写**：该模块从未接线；扩展走 `devin.acp.agentEnv`。握手能否接管、凭据条件与 env 优先级见 `runtime-forensics.md`。
 
 - **审「这段代码还活着吗」时，`require` 图会漏掉「路径型入口」**。本仓有 **5 个仓库内入口**，其中 **4 个从 `src/extension.cjs` 的 require 图走不到**，另有 **1 个运行期生成入口不在仓库里**：
 
@@ -53,9 +48,8 @@ description: "Apply when cleaning up config keys, auditing whether a code path i
 结论是结构性的，遇到同样现象不要重新立项：
 
 - **tps 口径不改**：`tracker.finish()` 的 `tps` 要求 `!hasTools`；agentic 回合几乎都带工具，`decodeMs`（首字→终止）又含工具参数生成时间，算出的「正文 TPS」必然偏低且不可比（实机 4803/5102 为 null 即此）。面板已写明口径（`正文 TPS（不含工具）`、`含工具回合不计算`），另以 `throughputTps`（含等待）覆盖另一视角。
-- **zero-size 只作基线不作阈值**：0.3.50 重载后 `usageRejections.zero-size` 3 / `acceptedUsageUpdates` 40、`missing-size` 0，属启动期用量回放的既有现象；判据是 `missing-size` 是否增长，不是 zero-size 占比。
-- **目录载荷 gzip 已于 2026-10-19 实施**：桥侧 `GetUserStatus` 由 `before 47,222 → after 1,358,627`（28.77×）降到 `after 73,935`（1.566×）；残留倍数来自真实新增（`afterOwn 629`、`beforeOwn 0`），非编码膨胀。原「不改」理由是 loopback 往返约 96 次/天、收益小于风险，推翻依据是同为 loopback 每次省约 1.28MB，且保留上游 `content-encoding: gzip` 只是恢复透传语义而非新增行为。
-- **生命周期计数不落诊断**：`close-timeout`/`startup-error` 由旧进程写进 `runtime.log`，新进程读不到内存计数；每 15s 扫日志换低频计数不值得，仍以直接查 `runtime.log` 为准。
+- **目录桥已保留传输层 gzip**；前后测量和排障见 `runtime-forensics.md`。
+- **生命周期计数不做周期性面板扫描**：查旧进程写入的 `runtime.log`；`close-timeout` 判读见 `runtime-forensics.md`。
 - **`response.reasoning.delta` 保留**：非死分支，`inference.cjs` 与 `tracker.cjs` 仍处理它（上游同名实现也有；早期引用的 `.refs/devin-fusion-byok` 副本已不在本机 `.refs/` 里），属防御性透传；只有 `retried` 是真死代码（已删）。
 - **历史 NO_PROXY 结论已被替代（2026-10-22，`293fefe`）**：2026-10-19「未配置 `http.proxy`」的取证仍有效，但不能当现行「不注入」禁令。现在 `enable()` 检测到代理配置时经 receipt 管理 `NO_PROXY=127.0.0.1,localhost,::1`；无代理的后续 enable 会还原仍匹配受管值的旧值。它不证明代理变量被下传，也不是 `http.proxy` 变更后的即时协调（已有连接时 enable 会跳过）；固定值不合并用户既有豁免，合并与动态协调属后续改进，勿写成现有保证。
 
