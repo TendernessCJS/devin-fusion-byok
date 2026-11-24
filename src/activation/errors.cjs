@@ -3,7 +3,7 @@ const { ModelDiscoveryError, discoveryNotice } = require('../models/discovery-er
 const { translator } = require('../i18n/index.cjs');
 
 // The copy for each code is errors.runtime.<code> in src/i18n.
-const RUNTIME_CODES = new Set(['port_in_use', 'different_storage', 'legacy_runtime', 'newer_runtime', 'control_unavailable', 'startup_failed', 'cancelled', 'proxy_unavailable']);
+const RUNTIME_CODES = new Set(['port_in_use', 'different_storage', 'legacy_runtime', 'newer_runtime', 'control_unavailable', 'startup_failed', 'cancelled', 'proxy_unavailable', 'remote_support_unavailable']);
 const runtimeMessage = (code, t) => RUNTIME_CODES.has(code) ? t('errors.runtime.' + code) : undefined;
 // error.message itself stays the zh-CN copy: it is never shown directly (safeError
 // rebuilds the text in the display language) and keeping it stable keeps logs

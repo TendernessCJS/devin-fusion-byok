@@ -11,6 +11,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture(t, { install } = {}) {
   const installCalls = [], logs = [], disposed = [];
   const behavior = install || (() => ({
+    sshForward: true, tunnel: true,
     status: () => ['tunnel'], ensureCurrentRemoteWindowTunnel: () => Promise.resolve(39842),
     dispose() { disposed.push(true); } }));
   const loader = createSandboxLoader({ filename, overrides: {
@@ -103,7 +104,7 @@ test('the local-window probe installs inert wrappers, disposes them and reports 
   const logs = []; let disposed = 0, inert = null;
   const loader = createSandboxLoader({ filename, overrides: {
     '../runtime/host/remote-tunnel.cjs': { installRemoteSupport: options => {
-      inert = options.isEnabled(); return { dispose() { disposed++; } }; } },
+      inert = options.isEnabled(); return { sshForward: true, tunnel: true, dispose() { disposed++; } }; } },
   } });
   t.after(() => loader.assertStubsUsed('remote-support'));
   const ok = loader.module.exports.probeRemoteSupport({
@@ -130,6 +131,34 @@ test('the local-window probe keeps the cause of a failed install', t => {
   assert.equal(logs[0].event, 'remote-support-probe');
   assert.equal(logs[0].code, 'ERR_PROBE');
   assert.equal(logs[0].message, 'Cannot set property spawn');
+});
+
+test('the local-window probe reports an unusable host and keeps its per-segment errors', t => {
+  const logs = [];
+  const loader = createSandboxLoader({ filename, overrides: {
+    '../runtime/host/remote-tunnel.cjs': { installRemoteSupport: () => ({
+      sshForward: false, tunnel: false,
+      errors: [{ event: 'remote-exec-unavailable', code: 'Error', message: 'x' }],
+      dispose() {} }) },
+  } });
+  t.after(() => loader.assertStubsUsed('remote-support'));
+  const ok = loader.module.exports.probeRemoteSupport({
+    vscode: { extensions: { getExtension: () => undefined } }, root: '/root',
+    log: (event, data) => logs.push({ event, ...data }) });
+  assert.equal(ok, false);
+  assert.deepEqual(logs, [{ event: 'remote-support-probe', installed: false,
+    errors: [{ event: 'remote-exec-unavailable', code: 'Error', message: 'x' }] }]);
+});
+
+test('capabilities reflect the installed install and clear on stop', async t => {
+  const manager = { sshForward: true, tunnel: false,
+    ensureCurrentRemoteWindowTunnel() {}, status() { return []; }, dispose() {} };
+  const f = fixture(t, { install: () => manager });
+  assert.equal(f.support.capabilities(), null, 'no install yet means no capability report');
+  await f.support.start();
+  assert.deepEqual({ ...f.support.capabilities() }, { sshForward: true, tunnel: false });
+  f.support.stop();
+  assert.equal(f.support.capabilities(), null);
 });
 
 test('stop disposes the manager and clears status', async t => {

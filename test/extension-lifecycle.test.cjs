@@ -130,7 +130,7 @@ function fixture(t, initial = {}) {
   };
   if (initial.hostDisabled) overrides['./lifecycle/host-disabled.cjs'] = { isHostDisabled: () => true };
   const remoteCalls = { start: 0, stop: 0, ensure: 0, probe: 0 };
-  let remoteEnsure = () => Promise.resolve();
+  let remoteEnsure = () => initial.deadTunnel ? Promise.reject(new Error('remote_exec_unavailable')) : Promise.resolve();
   // Installed unconditionally so a local window can assert it never starts the
   // process-global remote wrappers.
   overrides['./activation/remote-support.cjs'] = {
@@ -141,6 +141,7 @@ function fixture(t, initial = {}) {
       start() { remoteCalls.start++; return Promise.resolve(); },
       stop() { remoteCalls.stop++; },
       status: () => [],
+      capabilities: () => initial.deadTunnel ? { sshForward: false, tunnel: false } : { sshForward: true, tunnel: true },
       ensureCurrentRemoteWindowTunnel() { remoteCalls.ensure++; return remoteEnsure(); },
     }),
   };
@@ -1279,6 +1280,16 @@ test('a remote window without the native extension activates through the reverse
   assert.ok(f.logs.some(line => line.includes('activated-remote')));
   await f.deactivate();
   assert.equal(f.remoteCalls().stop, 1, 'teardown stops the tunnel support');
+});
+
+test('a remote window without a working tunnel restores the stale loopback redirect', async t => {
+  const f = fixture(t, { remote: true, deadTunnel: true });
+  await f.activate(f.context);
+  await f.settle();
+  assert.equal(Object.hasOwn(f.globals.agentEnv['devin-cli'], 'WINDSURF_API_SERVER_URL'), false,
+    'the managed agentEnv write is rolled back when no remote path can be established');
+  assert.equal(f.globals.agentEnv['devin-cli'].KEEP, 'user-value');
+  assert.ok(f.notices.some(text => text.includes('无法建立到本机连接服务的隧道')));
 });
 
 test('an initially-disabled remote window starts the tunnel only on enable', async t => {

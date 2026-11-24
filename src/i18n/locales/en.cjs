@@ -690,6 +690,7 @@ module.exports = Object.freeze({
   'errors.runtime.control_unavailable': 'Could not verify who owns the local connection service. Reload the window and retry.',
   'errors.runtime.startup_failed': 'The local connection service failed to start. Check the status log.',
   'errors.runtime.proxy_unavailable': 'Could not apply the configured proxy to the connection service. Check the proxy setting and retry.',
+  'errors.runtime.remote_support_unavailable': 'This remote window cannot tunnel to the local connection service. Devin native connection settings were restored; enable the extension locally and reconnect the remote window.',
   'errors.runtime.cancelled': 'Operation cancelled.',
   'errors.operationFailed': 'The operation failed. Check the API settings and the connection.',
   'errors.discovery.http': 'Could not fetch models: HTTP {status}',

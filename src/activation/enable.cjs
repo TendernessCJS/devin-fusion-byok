@@ -322,8 +322,20 @@ function createRuntimeSession({ root, extensionPath, subscriptions, config, conf
       // Remote window: the native extension runs on the remote side, so no
       // catalog injection is possible — the only deliverable here is the
       // reverse tunnel plus the agentEnv write that already happened above.
-      let remoteState = 'connecting';
       const support = state.remoteSupport;
+      if (!support?.capabilities?.()) await support?.start?.();
+      if (isSuperseded(generation)) return;
+      // With neither the SSH -R path nor the exec-server tunnel usable the
+      // agentEnv write above would point the remote CLI at a dead loopback —
+      // roll the managed settings back instead of stranding it.
+      const capabilities = support?.capabilities?.() || null;
+      if (!capabilities || (capabilities.sshForward === false && capabilities.tunnel === false)) {
+        const drained = await settingsOwner.drainWrites();
+        try { await settingsOwner.restore({ keepReceipt: drained === false }); log('settings-restored', { reason: 'remote-support-unavailable' }); }
+        catch { log('settings-restore-failed'); }
+        throw new RuntimeError('remote_support_unavailable');
+      }
+      let remoteState = 'connecting';
       let connecting = null;
       const connect = () => {
         if (!support) { remoteState = 'unavailable'; return Promise.reject(new Error('remote_support_unavailable')); }

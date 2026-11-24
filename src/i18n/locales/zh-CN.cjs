@@ -690,6 +690,7 @@ module.exports = Object.freeze({
   'errors.runtime.control_unavailable': '无法验证本地连接服务的归属，请重新加载窗口后重试。',
   'errors.runtime.startup_failed': '本地连接服务启动失败，请查看状态日志。',
   'errors.runtime.proxy_unavailable': '无法将已配置的代理应用到连接服务，请检查代理设置后重试。',
+  'errors.runtime.remote_support_unavailable': '当前远程窗口无法建立到本机连接服务的隧道，已恢复 Devin 原生连接设置。请在本机启用插件后重新连接远程窗口。',
   'errors.runtime.cancelled': '操作已取消。',
   'errors.operationFailed': '操作失败，请检查接口配置和连接状态。',
   'errors.discovery.http': '获取模型失败：HTTP {status}',

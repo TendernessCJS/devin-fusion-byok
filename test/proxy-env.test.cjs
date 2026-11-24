@@ -96,6 +96,18 @@ function fixture(t, options = {}) {
       if (options.pushImpl) return options.pushImpl({ config: proxyConfig, call: pushed.length });
       return options.pushProxy ? options.pushProxy({ config: proxyConfig }) : { ok: true, ready: true };
     } },
+    './remote-support.cjs': {
+      discoverRemoteMain: () => null,
+      describeError: () => ({ code: 'stub' }),
+      probeRemoteSupport: () => Promise.resolve(),
+      createRemoteSupport: () => ({
+        start() { return Promise.resolve(); },
+        stop() {},
+        status: () => [],
+        capabilities: () => ({ sshForward: true, tunnel: true }),
+        ensureCurrentRemoteWindowTunnel() { return Promise.resolve(); },
+      }),
+    },
     './backend-handshake.cjs': { ensureBackend: args => {
       if (options.ensureBackendImpl) return options.ensureBackendImpl(args);
       args.onCompatibleRuntime?.({ version: 'test' });
@@ -117,6 +129,7 @@ function fixture(t, options = {}) {
       dispose: () => {}, autoContinueStatus: () => 'unavailable', goalController: () => undefined },
     onPublish: () => {} });
   let session = makeSession();
+  session.prepareHostSupport();
   t.after(() => loader.assertStubsUsed('proxy-env'));
   return { globals, session: () => session, settingsOwner, setHttp: patch => Object.assign(httpConfig, patch), pushed, updates,
     configFile, configListeners,

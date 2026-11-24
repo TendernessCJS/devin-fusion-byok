@@ -68,6 +68,7 @@ function createRemoteSupport({ vscode, root, nativeMain, isEnabled = () => true,
   return {
     start,
     stop,
+    capabilities: () => manager ? { sshForward: manager.sshForward === true, tunnel: manager.tunnel === true } : null,
     status: () => manager?.status?.() || [],
     ensureCurrentRemoteWindowTunnel() {
       if (!manager) { try { log('remote-tunnel-unavailable'); } catch {} return Promise.reject(new Error('remote_tunnel_unavailable')); }
@@ -92,9 +93,11 @@ function probeRemoteSupport({ vscode, root, nativeMain, log = () => {} }) {
     try { log('remote-support-probe', describeError(error)); } catch {}
     return false;
   }
-  try { installed.dispose(); } catch {}
-  try { log('remote-support-probe', { installed: true }); } catch {}
-  return true;
+  try {
+    const usable = installed.sshForward === true || installed.tunnel === true;
+    try { log('remote-support-probe', usable ? { installed: true } : { installed: false, errors: installed.errors || [] }); } catch {}
+    return usable;
+  } finally { try { installed.dispose(); } catch {} }
 }
 
 module.exports = { discoverRemoteMain, createRemoteSupport, describeError, probeRemoteSupport };

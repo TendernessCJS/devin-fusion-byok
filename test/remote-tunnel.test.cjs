@@ -61,7 +61,7 @@ test('SSH spawn and resolver wrappers are scoped, reversible and do not wait for
     getRemoteExecServer() { throw new Error('not ready'); } };
   const source = fs.readFileSync(MODULE_PATH, 'utf8');
   vm.runInNewContext(source, { module, Buffer, URL, setTimeout, clearTimeout, process,
-    require(name) { if (name === 'node:module') return { createRequire: () => key => key === 'vscode' ? { workspace } : child }; return moduleRequire(name); } });
+    require(name) { if (name === 'node:child_process') return child; if (name === 'node:module') return { createRequire: () => key => key === 'vscode' ? { workspace } : child }; return moduleRequire(name); } });
   const originalSpawn = child.spawn, originalRegister = workspace.registerRemoteAuthorityResolver;
   const handle = module.exports.installRemoteSupport({ vscode: { workspace: {} }, opensshMainPath: '/ssh/main.js', root: '/missing' });
   const args = ['-v', '-T', '-D', '1234'];
@@ -73,17 +73,42 @@ test('SSH spawn and resolver wrappers are scoped, reversible and do not wait for
   handle.dispose(); assert.equal(child.spawn, originalSpawn); assert.equal(workspace.registerRemoteAuthorityResolver, originalRegister);
 });
 
-test('a failed install unwinds the wrappers it already installed', () => {
+test('a failed resolver install keeps the ssh forward wrapper', () => {
   const vm = require('node:vm'), module = { exports: {} };
   const child = { spawn() { return 'spawned'; } };
   // Accessor-only property: assignment throws in strict mode, after spawn is wrapped.
   const workspace = { get registerRemoteAuthorityResolver() { return () => 'registered'; } };
   vm.runInNewContext(fs.readFileSync(MODULE_PATH, 'utf8'), { module, Buffer, URL, setTimeout, clearTimeout, process,
-    require(name) { if (name === 'node:module') return { createRequire: () => key => key === 'vscode' ? { workspace } : child }; return moduleRequire(name); } });
+    require(name) { if (name === 'node:child_process') return child; if (name === 'node:module') return { createRequire: () => key => key === 'vscode' ? { workspace } : child }; return moduleRequire(name); } });
   const originalSpawn = child.spawn;
-  assert.throws(() => module.exports.installRemoteSupport({ vscode: { workspace: {} }, opensshMainPath: '/ssh/main.js', root: '/missing' }),
-    /only a getter/);
-  assert.equal(child.spawn, originalSpawn, 'the spawn wrapper is unwound when the resolver wrap throws');
+  const handle = module.exports.installRemoteSupport({ vscode: { workspace: {} }, opensshMainPath: '/ssh/main.js', root: '/missing' });
+  assert.equal(handle.sshForward, true, 'the -R segment survives the resolver segment failure');
+  assert.equal(handle.tunnel, false);
+  assert.notEqual(child.spawn, originalSpawn, 'the spawn wrapper is kept when only the resolver wrap throws');
+  handle.dispose();
+  assert.equal(child.spawn, originalSpawn);
+});
+
+test('SSH -R injection is installed when the vscode API is unavailable', async () => {
+  const vm = require('node:vm'), module = { exports: {} }, logs = [];
+  const child = { spawn() { return 'spawned'; } };
+  vm.runInNewContext(fs.readFileSync(MODULE_PATH, 'utf8'), { module, Buffer, URL, setTimeout, clearTimeout, process,
+    require(name) {
+      if (name === 'node:child_process') return child;
+      if (name === 'node:module') return { createRequire: () => key => { if (key === 'vscode') throw new Error('vscode unavailable'); return child; } };
+      return moduleRequire(name);
+    } });
+  const originalSpawn = child.spawn;
+  const handle = module.exports.installRemoteSupport({ vscode: { workspace: {} }, opensshMainPath: '/ssh/main.js', root: '/missing', port: 39842,
+    log: (event, detail) => logs.push({ event, ...detail }) });
+  assert.equal(handle.sshForward, true);
+  assert.equal(handle.tunnel, false);
+  assert.equal(await handle.ensureCurrentRemoteWindowTunnel(), 39842,
+    'the -R path alone still reaches the port');
+  assert.ok(handle.errors.some(entry => entry.event === 'remote-exec-unavailable'));
+  assert.ok(logs.some(entry => entry.event === 'remote-exec-unavailable'));
+  handle.dispose();
+  assert.equal(child.spawn, originalSpawn);
 });
 
 test('WSL resolver fallback handles empty windows, CRLF and direct reprobes', async t => {
@@ -99,7 +124,7 @@ test('WSL resolver fallback handles empty windows, CRLF and direct reprobes', as
   const ssh = makeWorkspace(), wsl = makeWorkspace(), sshOriginal = ssh.registerRemoteAuthorityResolver, wslOriginal = wsl.registerRemoteAuthorityResolver;
   const child = { spawn() {} }, source = fs.readFileSync(MODULE_PATH, 'utf8');
   vm.runInNewContext(source, { module, Buffer, URL, setTimeout, clearTimeout, process,
-    require(name) { if (name === 'node:module') return { createRequire: file => key => key === 'vscode' ? { workspace: file === '/wsl' ? wsl : ssh } : child }; return moduleRequire(name); } });
+    require(name) { if (name === 'node:child_process') return child; if (name === 'node:module') return { createRequire: file => key => key === 'vscode' ? { workspace: file === '/wsl' ? wsl : ssh } : child }; return moduleRequire(name); } });
   const handle = module.exports.installRemoteSupport({ vscode: { workspace: {} }, opensshMainPath: '/ssh', wslMainPath: '/wsl', root });
   wsl.registerRemoteAuthorityResolver('wsl', { async resolve() { return 'ok'; } });
   assert.equal(await registrations[0].resolver.resolve('wsl+Debian'), 'ok');
