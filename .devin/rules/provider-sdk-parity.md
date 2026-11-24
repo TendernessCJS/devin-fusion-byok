@@ -5,12 +5,12 @@ description: "Apply when judging whether a provider wire field is legitimate, up
 
 # 供应商 SDK 对照（provider-sdk-parity）
 
-## 基线版本（2026-11-19 更新）
+## 基线版本（2026-11-24 更新）
 
 | 包 | `.refs/` 目录 | 版本 | tag | commit |
 | --- | --- | --- | --- | --- |
-| `@anthropic-ai/sdk` | `anthropic-sdk-typescript` | **1.10.0** | `sdk-v1.10.0` | `3f13f603` |
-| `openai` | `openai-node` | **7.60.0** | `v7.60.0` | `b1d43788` |
+| `@anthropic-ai/sdk` | `anthropic-sdk-typescript` | **1.13.0** | `sdk-v1.13.0` | `a58021f8` |
+| `openai` | `openai-node` | **7.63.0** | `v7.63.0` | `7baf8c73` |
 
 参照物（不是我们的对照实现）：Devin.app 自带 **`@anthropic-ai/sdk 0.82.0`**，**没有** `openai`。
 
@@ -104,6 +104,12 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 - **Anthropic 1.3.0 → 1.10.0**：新增细分计费/限额错误，包括 `linked_organization_spend_limit_reached`（SDK 归类为 402）、`contract_spend_limit_reached` / `enforced_spend_limit_reached` / `ramp_limit_exceeded`（SDK 均归类为 429）。后续用实际 JSON 包络区分账单/硬额度与暂时限流，不按 HTTP 状态一刀切；不记录原始错误正文。稳定 Messages 的停止原因、effort、工具选择与签名通过现有契约测试，暂不改发包。
 
 **兼容接口实现边界**：Responses 仅在完成链路收到有效的总缓存写入计数时附加到监控记录；缺报/无效不置零，不解析 TTL 分桶，不改总量、面板汇总或 ACP。Anthropic 仅在 HTTP 429 且收到明确的 `error.details.error_code` 时区分硬上限和 ramp，其余保留旧判断。官方 SDK 类型和合成场景不是任一兼容供应商的能力证明；未发真实请求。
+
+## 2026-11-24 同步：值得跟进的变化
+
+- **Anthropic 1.10.0 → 1.13.0**：`MessageCreateParamsBase` 字段零增删，`StopReason` 与 effort 联合未变，10/10 契约测试通过、`skipped 0`。新增错误类 `ImageDimensionsTooLargeError`（400，`error_code: image_dimensions_too_large`，details 带 `max_side_length_pixels` 与 `paths`）及一批 beta/组织/外部存储错误；`DEPRECATED_MODELS` 与 `MODELS_TO_WARN_WITH_THINKING_ENABLED` 移入 `internal/data`（`claude-sonnet-4-5` 2026-11-30 弃用、`claude-opus-4-5` EOL 2027-01-22）。发送面零动作；图片错误可作「超大图」诊断候选，但 ACP 侧无尺寸控制位，暂不特殊处理。
+- **OpenAI 7.60.0 → 7.63.0**：`src/resources/responses/**` 与 `src/resources/shared.ts` **零变化**（`ResponseStreamEvent` 联合仍 59 个成员）；仅 `chat/completions.ts` 的 `n` 注释变化——新模型拒绝显式 `n`（含 `n=1`），本仓不发 `n`，无影响。新增 Live WebRTC、agent session spending limits 等均不在本仓发送面。
+- **WindsurfAPI `v3.141.592661` → `v3.2.11`**（外部实现，非 SDK 契约）：改动集中在服务端 ACP/pool/cache/SSE（SSE 错误体保留、rate-limit retry hints、按预算拒绝请求等）。没有可直接移植的发送面变化，仅作行为旁证。
 
 ## 纪律
 
