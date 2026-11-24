@@ -34,6 +34,7 @@ description: "Apply before changing Responses/Anthropic/Chat semantics — measu
 - **状态信封不支持 `custom_tool_call` 是刻意的**：`validStateItem`（`state-envelope.cjs`）拒绝它——自定义工具参数是原始串，
   `replayMatches` 的 JSON 规范化校验不适用。现在 `finish()` 会因此在 `runtime.log` 记一条 `state-envelope-skipped`（`reason` 为
   `custom-tool` 或 `invalid-item`，每次请求最多一条）。这是可观测性，不是新故障——看到该日志不等于回放坏了。
+- **Kimi Responses 面实测（2026-11-24，`kimi-k3.1-pro`，`api.moonshot.cn/v1/responses`）**：本仓实际发送的 `store:false`、`include:['reasoning.encrypted_content']`、`reasoning:{effort,summary}`、`prompt_cache_key`、`max_output_tokens` 与扁平 `tools`/`tool_choice` **全部 200**；reasoning item **无 `encrypted_content`**（与本卷既有结论一致，信封每轮 `invalid-item` 跳过）。回放 reasoning、省略 reasoning、连续两轮 tool-call 全部省略 reasoning 的第二/三轮均 200。流式只发 summary 通道（`response.reasoning_summary_part.*` / `response.reasoning_summary_text.delta/done`，无 `response.reasoning_text.*`），本仓已处理。`reasoning.effort:'none'` **400**（`not supported`），`high` 200；`response.incomplete` 由小 `max_output_tokens` 正常返回。自动缓存有效：首次 `cache_write_tokens 1280`，后续 `cached_tokens 1280`；`prompt_cache_key` 不影响命中。
 
 Anthropic 与 Chat 两个协议面的契约已按**协议面**逐字拆到 `provider-measurements-anthropic-chat.md`（2026-10-26）；本卷保留 Responses 面与跨面契约。
 

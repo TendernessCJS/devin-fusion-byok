@@ -44,6 +44,16 @@ description: "provider-measurements 的实测依据——Proxy/DeepSeek 各面�
 
 - Anthropic **15/15** success/200/usageComplete（14 工具回合 + 1 纯文本）；Chat **3/3**（2 工具 + 1 纯文本）；Responses **7/7**（7 工具）。仅作样本计数，**不做性能排名**。
 
+### 无签名 thinking 回放反证（2026-11-24）
+
+- **配置**：`kimi-k3.1-pro` + `api.moonshot.cn/anthropic/v1`，非流式，临时探针（已删，不落盘）。
+- **单轮工具结果**：第一轮强制工具调用后，第二轮分别以 ①省略 thinking ②回放 `{type:'thinking',thinking}`（无 signature）③`signature:'_'` 构造 assistant tool-call 历史，**均 200 `end_turn`**；模型都正常继续思考。
+- **两轮连续工具调用**：第一轮与第二轮 assistant tool-call 历史**全部省略 thinking**，第三轮仍 **200**（`max_tokens:256` 时 stop=`max_tokens`，思考耗尽预算，不影响状态码判断）；对照臂全部回放 unsigned thinking 同样 200。
+- **Chat 面**：`/v1/chat/completions` 省略 `reasoning_content` 的单轮工具结果请求 **200**（未覆盖 `/coding` 端点）。
+- **判据**：厂商 `kimi-code` 2026-05-29 的 `preserve unsigned thinking` 修复与 hermes 的 `/coding` 400 记录**不在本仓配置的端点上复现**；本仓「无签名则不回放」在该配置下是安全的，禁止仅凭外部实现改动 Anthropic 回放分支。
+- **Responses / Chat 面（同日第二批探针，同一 key，非流式 + 流式）**：`/v1/responses` 接受本仓全部字段（`store:false`、`include`、`reasoning:{effort,summary}`、`prompt_cache_key`、`max_output_tokens`、扁平 tools）；reasoning item 无 `encrypted_content`；回放/省略 reasoning 与两轮工具链均 200。流式只出现 `response.reasoning_summary_*`，无 `response.reasoning_text.*`。`reasoning.effort:'none'` 400、`'high'` 200；Chat `reasoning_effort:'none'/'high'` 均 200。缓存：相同前缀第二次起 `cached_tokens 1280`，`prompt_cache_key` 不影响命中。
+- **对照臂与局限**：每个回放臂单独发送（完整/省略/去字段），不是单臂归因；未测 `/coding` 端点，也未测长会话下多轮 reasoning 回放。
+
 ## `tool-pair-*` 诊断词表（2026-10-26 新增，纯观测）
 
 五个探针在 `serveChat` **构造报文之前**运行，只回报、不改报文；`record` 自身已吞日志异常，探针外层再包一层，失败时记 `tool-pair-probe-failed`。

@@ -31,6 +31,7 @@ description: "Apply before changing Anthropic or Chat wire semantics — the per
 - **Kimi 的强制工具降级按协议面区分**：Anthropic 在默认思考下强制选择 400，注入 `thinking:{type:'disabled'}` 后 200 并保留指定工具；Chat 也能这样解除，但现有 Chat 链直接降 `auto`，会丢强制语义，只有真机需要时再改。Responses 的 `thinking:{type:'disabled'}` 仍 400，只能降 `auto`；`reasoning.effort:'none'` 也 400，不能作为关闭思考的替代。
 - **Kimi Chat 同时执行两种输出上限字段**：`max_tokens:32` 与 `max_completion_tokens:32` 都恰好输出 32 token、`finish_reason:'length'`。因此继续默认发 `max_tokens`，**不新增 `maxTokensField` 配置**；DeepSeek 的「后者被忽略」不能推广到 Kimi。
 - **Kimi Responses 可用但不返回 `encrypted_content`**（2026-10-25，7/7 success/200）：信封每轮 `invalid-item` 安全跳过；**不得放宽 `validStateItem`** 把无加密 reasoning 当可回放。
+- **Moonshot 标准 Messages API 不要求 unsigned thinking 回放（2026-11-24 补测，`kimi-k3.1-pro`）**：第二轮工具结果请求分别「省略 thinking」「回放不带 signature 的 thinking」「`signature:'_'`」均 200；连续两轮 tool-call 历史全部省略 thinking 的第三轮仍 200。厂商 `kimi-code` 的 unsigned-thinking 400 只在其客户端/特定端点，`luwanglin` fork 的同帧/哨兵改动在本配置下无需采纳；**不要据此改 `buildAnthropicBody`**。方法与局限见 `provider-measurements-forensics.md`。
 
 ## Chat 面（`apiFormat: 'openai'`）实测（2026-10-22 DeepSeek `/v1`）
 
@@ -48,3 +49,4 @@ description: "Apply before changing Anthropic or Chat wire semantics — the per
 - `effort` 来自 provider 配置而非模型名：`efforts: []` + `manual` → 单档 `null`，不发 `reasoning_effort`。
 - **判路由两条通道**：`monitor.jsonl` 每行有 `providerId`（`runtime.log` 的 `inference` 没有）＝谁真服务了请求；
   `acp-messages/*.db` 的 `sessions.model` ＝用户选中哪个。两者互证。
+- **Kimi 标准 Chat 端点不强制 `reasoning_content` 回放（2026-11-24，`kimi-k3.1-pro`，`/v1/chat/completions`）**：连续两轮 assistant tool-call 历史全部省略 `reasoning_content` 的第二/三轮均 200；流式 delta 键为 `content`/`reasoning_content`/`role`。`reasoning_effort:'none'` 与 `'high'` 均 200（与 Responses 面 `reasoning.effort:'none'` 400 不同）。`/coding` 端点未测，不能据本条推广。
