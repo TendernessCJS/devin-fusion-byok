@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when diagnosing why injection or catalog changes appear not to work, attributing catalog events to bridge vs backend, or tracing agentEnv credential flow — the measured evidence behind runtime-and-injection.md."
+description: "排查「注入/目录改写改了没生效」、日志归属或凭据优先级时必读。"
 ---
 
 # 运行时实测与排障（runtime-forensics）

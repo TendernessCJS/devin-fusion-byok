@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when changing the declared context window (ModelInfo f4 / maxTokens), when compaction is suspected of being caused by the extension, or when reconstructing why a session compacted."
+description: "改声明的上下文窗口（ModelInfo f4/maxTokens），或怀疑扩展触发压缩时必读。"
 ---
 
 # 上下文与压缩（context-and-compaction）

@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when changing module ownership, the src/runtime partition, protocol/ responsibilities, root facades, or the test/architecture.test.cjs guards — the measured topology facts behind the dependency guards."
+description: "改模块归属、src/runtime 分区、protocol/ 职责、根门面或 architecture.test.cjs 守卫时必读——模块拓扑与依赖守卫。"
 ---
 
 # 架构边界与模块拓扑（从 runtime-and-injection 拆出）
@@ -22,7 +22,7 @@ description: "Apply when changing module ownership, the src/runtime partition, p
   Anthropic Messages 的独立实现。`inference.cjs` 的导出面被下游依赖（`backend.cjs` 取 `serveChat`，测试取 `buildRequestBody`/`STATE_PREFIX`），
   再拆时**保持这三个导出不变**；② 字节层 —— `wire.cjs` 是**全仓共享**的 proto 读写/framing/gzip 工具，`catalog/*`、`fast-context/`、
   `runtime/` 都直接依赖它，**不是协议专用**；③ 埋点 —— `tracker.cjs` 是计量（→ monitor），它落在 `protocol/` 是**依赖图决定而非语义决定**：为消除
-  `protocol → runtime` 反向依赖才从 `runtime/monitor.cjs` 移出，**不能搬回 `runtime/`**（`runtime/backend.cjs` 本就 import `protocol/inference.cjs`，
+  `protocol → runtime` 反向依赖才从 `runtime/` 移出到 `src/monitor/`，**不能搬回 `runtime/`**（`runtime/backend.cjs` 本就 import `protocol/inference.cjs`，
   搬回即成环）。旧名对照：`chat.cjs → acp.cjs → native-chat-codec.cjs`、`responses.cjs → inference.cjs`——旧名正是误读源头（前者与 Chat Completions 无关，OpenAI Chat 的请求体在
   `provider-request.cjs`）。Fast Context 的 `remote-client.cjs` 反向 import `src/protocol/wire.cjs`，两条路径别混。在 `protocol/` 内增删/改名文件时，除 `SOURCE_FILES` 外还要留意**不靠 `require` 的隐式引用**（按模块名打桩的
   字符串键、`readFileSync` 的路径、`AGENTS.md` 里按路径写的说明），这类漏改不报错、只静默失效——`test/source-identity.test.cjs` 现在会兜住

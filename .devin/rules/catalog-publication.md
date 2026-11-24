@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when changing the native auth-status catalog write (windsurfAuth.setAuthStatus rewrite + observation), or GetModelStatuses handling. The publication confirmation chain was deleted with Devin 3.12.17 — this file also records what was retired and why."
+description: "改原生 auth-status 目录写入、GetModelStatuses，或怀疑「改了配置会话看不见」时必读；发布确认链已随 3.12.17 删除。"
 ---
 
 # 目录写入（catalog-publication，已退役记录 + 仍有效契约）

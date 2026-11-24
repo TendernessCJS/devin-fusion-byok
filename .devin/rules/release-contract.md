@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when changing self-update behaviour or the release contract — asset naming, tags, digests, the shared proxy policy, or the restart helper."
+description: "改自更新与发布契约（资产名、tag、digest、代理策略、重启 helper）时必读。"
 ---
 
 # 发布契约（release-contract）

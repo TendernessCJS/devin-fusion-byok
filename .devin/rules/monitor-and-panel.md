@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when changing usage recording, attribution, time filtering, panel/webview styling, busy locking, or state de-duplication and focus retention."
+description: "改用量记录/归属/时间筛选、面板 webview 样式、busy 锁定或 state 去重与焦点保留时必读。"
 ---
 
 # 监控与面板（monitor-and-panel）

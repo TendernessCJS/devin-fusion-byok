@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when touching module ownership/activation coupling, host-builds snapshots, or the LS/ACP injection boundary measured against the shipped Devin artifacts — the evidence behind architecture-boundaries.md."
+description: "改模块归属/激活耦合、host-builds 快照读法或 LS/ACP 注入边界时必读——出厂产物核对证据。"
 ---
 # 架构与出厂产物核对（architecture-forensics）
 

@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply before changing Anthropic or Chat wire semantics — the per-protocol contracts split out of provider-measurements.md."
+description: "改 Anthropic 或 Chat 线格式语义前必读——强制选择×思考降级、签名闭环、max_tokens 与路由判定。"
 ---
 
 # 供应商面实测：Anthropic 与 Chat 两个协议面

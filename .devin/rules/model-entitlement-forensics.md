@@ -12,7 +12,7 @@ description: "排查「picker 整族变窄 / Claude·GPT·Gemini 全消失 / mir
 服务端在 `GetUserStatus` / `GetCliModelConfigs` / `GetCliTeamSettings` 三处**各自**按账号准入（plan / billing model / 区域）
 过滤，**早于** 用户侧白名单。所以「整族模型消失」的正确起手是查准入，不是查 `team_settings` f7：
 
-- `model_configs` 缓存**本身就是准入 + f7 过滤后的集合**（桌面端不读 f7 这一层，见 `picker-visibility.md`）；
+- `model_configs` 缓存**本身就是准入 + f7 过滤后的集合**（桌面端不读 f7 这一层，见 `catalog-and-picker.md`）；
 - `mirrorNativeAllowlist` 只能放宽 f7，**交集上限 = 服务端下发的原生集合**，造不出原本没有的条目。2026-11-17 实测：
   f7 放宽到 1162 条、`matrix` 229，picker 里 claude/gpt 仍是 0——没有可保的条目；
 - `allowedKind=restricted` **不等于**「团队配了白名单」：它与「存储白名单为空」可以同时成立（见下）。

@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when judging whether a provider wire field is legitimate, updating the .refs SDK copies, or wondering why an SDK capability we could send is deliberately omitted — SDK parity baseline, the fields native cannot express, and why REA does not govern this layer."
+description: "判断某个 provider 线格式字段是否合法、该不该发，或更新 .refs 里的 SDK 时必读。"
 ---
 
 # 供应商 SDK 对照（provider-sdk-parity）
@@ -91,17 +91,14 @@ node --test test/sdk-contract.test.cjs     # 判据：pass 全绿且 skipped 0
 
 也就是说：原生不跟这两家 API 说话，**漏了字段也没有补偿层**；字段合法性只能以 SDK/API 为准。
 
-## 版本间实际变化（2026-10-31 实测）
+## 早期版本变化（2026-10-31 前，仅存结论）
 
-- **anthropic 1.1.0 → 1.3.0**：`messages.ts` 只有文档注释改动（22 增 5 删），`MessageCreateParamsBase` 字段**零增删**；`StopReason` 未变。
-- **openai 7.41.0 → 7.43.0**：`ResponseCreateParamsBase` 仅新增 `max_tool_calls`；`ResponseStreamEvent` 联合**零增删**；`shared.ts` 新增带 `detail?: 'low'|'high'|'auto'|'original'` 的 `input_image` 形状（我们已符合，`detail` 可选）。
-- **openai 7.43.0 → 7.47.0**：`ResponseCreateParamsBase` 顶层字段**零增删**（脚本逐字段比对，不是目测）；`shared.ts` 仅 `AllModels`/`ChatModel` 注释与新增模型字面量 `gpt-6.1-terra`（模型清单来自目录，与我们无关）；`responses.ts` 的净增量是 WebSocket warmup、agent session/tool settings、text format 解析、realtime/SIP/组织密钥等**我们不发**的域，另有 `ttl` 正式化（见上）。契约测试 10/10 绿、`skipped 0`。
-- 结论：三次升级对我们的发送面**零动作**。
+- anthropic 1.1.0 → 1.3.0、openai 7.41.0 → 7.43.0 → 7.47.0 三次升级均为**发送面零动作**（字段零增删、`ResponseStreamEvent` 零变化）；逐版本明细已删。当前基线以本卷顶部表格为准。`input_image.detail` 为可选字段、我方形状已符合；`max_tool_calls` 结论见上方发放表。
 
 ## 2026-11-19 同步：值得跟进的变化
 
-- **OpenAI 7.47.0 → 7.60.0**：Responses 用量新增 `input_tokens_details.cache_write_tokens` 与可选的 TTL 分桶 `cache_write_tokens_details`（`ttl_30m_tokens` / `ttl_12h_tokens`）。插件已读 `cached_tokens`（缓存读取）；`usageSnapshot` 仍不读 Responses 的缓存写入，ACP 侧不发这个数，写入计数只落到监控记录（见下条实现边界）。真实完成帧、缺失字段兼容性与计费口径仍属未来工作，不把写入数加到总输入。12 小时保留、`background_options` 仍不主动发送；`ResponseStreamEvent` 联合仍为 59 个成员，逐项无增删。
-- **Anthropic 1.3.0 → 1.10.0**：新增细分计费/限额错误，包括 `linked_organization_spend_limit_reached`（SDK 归类为 402）、`contract_spend_limit_reached` / `enforced_spend_limit_reached` / `ramp_limit_exceeded`（SDK 均归类为 429）。后续用实际 JSON 包络区分账单/硬额度与暂时限流，不按 HTTP 状态一刀切；不记录原始错误正文。稳定 Messages 的停止原因、effort、工具选择与签名通过现有契约测试，暂不改发包。
+- **OpenAI 7.47.0 → 7.60.0**：Responses 用量新增 `input_tokens_details.cache_write_tokens` 与可选 TTL 分桶 `cache_write_tokens_details`（`ttl_30m_tokens` / `ttl_12h_tokens`）；`ResponseStreamEvent` 联合仍 59 个成员；`background_options` 仍不主动发送。实现边界见下。
+- **Anthropic 1.3.0 → 1.10.0**：新增细分计费/限额错误 `linked_organization_spend_limit_reached`（402）、`contract_spend_limit_reached` / `enforced_spend_limit_reached` / `ramp_limit_exceeded`（429）。稳定 Messages 的停止原因、effort、工具选择与签名仍通过契约测试，不改发包；不记录原始错误正文。
 
 **兼容接口实现边界**：Responses 仅在完成链路收到有效的总缓存写入计数时附加到监控记录；缺报/无效不置零，不解析 TTL 分桶，不改总量、面板汇总或 ACP。Anthropic 仅在 HTTP 429 且收到明确的 `error.details.error_code` 时区分硬上限和 ramp，其余保留旧判断。官方 SDK 类型和合成场景不是任一兼容供应商的能力证明；未发真实请求。
 

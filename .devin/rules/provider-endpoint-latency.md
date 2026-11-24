@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when diagnosing slow first response, upstream_timeout / upstream_stream_error failures, or deciding timeout budgets for a provider endpoint."
+description: "排查首响慢、upstream_timeout/upstream_stream_error，或要动超时预算时必读。"
 ---
 
 # 端点延迟与超时判据（provider-endpoint-latency）

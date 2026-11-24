@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when cleaning up config keys, auditing whether a code path is still reachable, or wondering why an old field still exists — retired pipelines, dangling-ref cleanup, and the \"path entry point\" audit trap."
+description: "清理配置键、审「这段代码还活着吗」或疑惑旧字段为何还在时必读。"
 ---
 
 ## 待办与死角

@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply when a 审查/取证 result is being revisited, when someone proposes to 'fix' a suspicious-looking gap in security, retry economics, protobuf reads or config recovery, or when deciding whether an audit finding is a defect or an accepted trade-off — the closed-out residual register of the 2026-10-28 five-dimension audit."
+description: "想「修」某个看着像缺陷或漏做的取舍前必读——已核残余与已排除怀疑的登记。"
 ---
 
 # 审查残余登记（audit-residuals）

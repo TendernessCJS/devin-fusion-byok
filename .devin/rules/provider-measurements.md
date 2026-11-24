@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "Apply before changing Responses/Anthropic/Chat semantics — measured provider-surface facts, several of which overturned earlier conclusions."
+description: "改 Responses 面或跨面契约前必读——供应商面实测事实；Anthropic/Chat 单面见同名卷。"
 ---
 
 # 供应商面实测（provider-measurements）

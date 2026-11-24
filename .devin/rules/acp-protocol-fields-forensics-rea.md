@@ -11,10 +11,6 @@ trigger: model_decision
 
 上述大型 Devin bundle 的预算结论**不推翻也不涵盖插件小型交付包**：对 0.6.2 VSIX 解包副本的 121 个 JavaScript 文件，REA 全部解析成功、零解析失败；但后续关键链路的语义图仍是 partial，含 unknowns。它只能提供静态关系线索，本轮两项收尾缺陷与一项诊断遗漏均由源码核对和有界合成复现确认，不能称为自动扫描发现或“无漏洞”证明。证据在 `/tmp/rea-review-0.6.2/`，是本次分析留档，不是永久权威来源。
 
-## 3.12.28 / 0.6.6 本轮有界产物分析（2026-11-09）
-
-对**交付物**（0.6.6 VSIX 解包 `extension/`，119 个 JS）与两个 webapp bundle 文件（`modelCatalogSource-*`、`model-picker-concept-*`）做了一次有界 REA 分析：插件侧 0 解析失败但语义图 partial、含 unknowns；两 bundle 文件 2/2 解析、0 失败。注意 `model-picker-concept-*.js` 自身声明是 **non-production mock/playground**，不得当生产 picker 证据。这些数字来自一次性有界分析，证据目录在 `/tmp`、已不可复现，不作永久权威来源。本条不改变上文对大型原生 bundle 的预算结论——后者只证明「大型 bundle 拿不到可用图」，小型有界产物是可以分析的。
-
 ## REA 的原生面与语义图预算（2026-10-28 复测，REA 6.8.0）
 
 - **原生面整体不可用**，错误码是 `provider_unavailable`（旧的 `capability_unavailable` 记录已过期）：候选
@@ -62,8 +58,7 @@ trigger: model_decision
 （顺序 `cli:ls:desktop:chat:acp`；2026-10-28 复核 ls=第 2 段 `9d9fad2b…`、acp=第 5 段 `fa7fbaba…`），
 可复用确认「两边看的是同一份产物」。
 
-## 3.11.228 字段复核（2026-10-27）
+## 逐版本复核（3.11.228 / 3.12.28，结论）
 
-当时的目录字段未发现漂移；当前断言见 `test/native-field-contract.test.cjs` 的 `EXPECTED_FIELDS` / `EXPECTED_REFS`。取证方法见 `acp-protocol-fields-forensics.md`：找对应 `typeName`，读紧跟的 `newFieldList`。`AssignModelRequest`、`ModelAssignment`、`ModelStatusInfo` 的已用字段见测试；本地指派故意不发 `assignment_jwt`。`GetModelStatusesRequest` 的 f1 是 `metadata`，响应 f1 是 repeated `model_status_infos`；`ModelStatus` 当时为 `UNSPECIFIED=0`、`INFO=1`、`WARNING=2`，调用点与徽标语义见 `catalog-publication.md`。
-
-`ClientModelSort.groups` 的内层类型没有独立 `typeName`，组内 f1 `name` / f2 `label` 仍靠夹具覆盖，不能宣称已由描述符断言。
+- 两个版本的产物复核均未发现字段号变化；有界产物分析的具体中间步骤已删。字段号以 `acp-protocol-fields.md` 与 `acp-protocol-fields-forensics.md` 的现行表为准。
+- 保留判据：`model-picker-concept-*.js` 自身声明是 **non-production mock/playground**，不得当生产 picker 证据；小型有界产物可分析（语义图 partial、含 unknowns），不改变「大型原生 bundle 拿不到可用图」的预算结论。`GetModelStatusesRequest` f1=`metadata`、响应 f1=repeated `model_status_infos`；`ModelStatus` 三态（`UNSPECIFIED=0`/`INFO=1`/`WARNING=2`）语义见 `catalog-publication.md`；`ClientModelSort.groups` 内层类型无独立 `typeName`，f1 `name`/f2 `label` 仅靠夹具覆盖，不能宣称已由描述符断言；本地指派故意不发 `assignment_jwt`；字段断言在 `test/native-field-contract.test.cjs` 的 `EXPECTED_FIELDS`/`EXPECTED_REFS`。
