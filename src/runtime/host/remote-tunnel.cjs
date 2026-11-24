@@ -142,7 +142,7 @@ function createRemoteTunnelManager({ workspace, vscode, root, port = PORT, isEna
 // reports `errors` instead of leaving the remote CLI pointed at a dead port.
 function installRemoteSupport({ vscode, nativeMainPath, opensshMainPath, wslMainPath, root, port = PORT, isEnabled = () => true, log = () => {} }) {
   const restores = [], errors = [];
-  let manager, sshForward = false, tunnel = false;
+  let manager, sshForward = false, tunnel = false, resolverWrapped = false;
   function wrap(obj, key, make) { const original = obj?.[key]; if (typeof original !== 'function') return; const descriptor = Object.getOwnPropertyDescriptor(obj, key), wrapper = make(original); obj[key] = wrapper; restores.push(() => { if (obj[key] === wrapper) { if (descriptor) Object.defineProperty(obj, key, descriptor); else delete obj[key]; } }); }
   function unwindTo(mark) { while (restores.length > mark) { try { restores.pop()(); } catch {} } }
   function report(event, error) {
@@ -152,6 +152,14 @@ function installRemoteSupport({ vscode, nativeMainPath, opensshMainPath, wslMain
     errors.push({ event, ...detail });
     try { log(event, detail); } catch {}
   }
+  const stubManager = () => ({
+    ensureTunnel: () => Promise.reject(new Error('remote_exec_unavailable')),
+    resolveRemoteServerUrl: () => Promise.reject(new Error('remote_exec_unavailable')),
+    ensureCurrentRemoteWindowTunnel: () => sshForward ? Promise.resolve(port) : Promise.reject(new Error('remote_exec_unavailable')),
+    recordResolvedAuthority() {},
+    status: () => [],
+    dispose() {},
+  });
   if (opensshMainPath) {
     const mark = restores.length;
     try {
@@ -169,31 +177,31 @@ function installRemoteSupport({ vscode, nativeMainPath, opensshMainPath, wslMain
     const apiPath = opensshMainPath || wslMainPath || nativeMainPath;
     if (!apiPath) throw new Error('remote_api_unavailable');
     const workspace = createRequire(apiPath)('vscode').workspace;
-    const installed = createRemoteTunnelManager({ workspace, vscode, root, port, isEnabled, log });
+    // getRemoteExecServer is a hidden API (absent from the shipped vscode d.ts):
+    // a host without it cannot tunnel, but its resolver can still be wrapped.
+    const execApi = typeof workspace?.getRemoteExecServer === 'function';
+    const installed = execApi
+      ? createRemoteTunnelManager({ workspace, vscode, root, port, isEnabled, log })
+      : stubManager();
     const workspaces = new Set([workspace]);
     if (wslMainPath) workspaces.add(createRequire(wslMainPath)('vscode').workspace);
     for (const targetWorkspace of workspaces) wrap(targetWorkspace, 'registerRemoteAuthorityResolver', original => function (prefix, resolver, ...rest) {
       if (['ssh-remote', 'wsl'].includes(prefix) && typeof resolver?.resolve === 'function') {
         const proxy = Object.create(resolver), resolve = resolver.resolve;
-        proxy.resolve = async function (authority, ...args) { const result = await Reflect.apply(resolve, resolver, [authority, ...args]); installed.recordResolvedAuthority(authority); if (isEnabled()) void installed.ensureTunnel(authority, { strictPort: true }).catch(() => { try { log('remote-tunnel-unavailable'); } catch {} }); return result; };
+        proxy.resolve = async function (authority, ...args) { const result = await Reflect.apply(resolve, resolver, [authority, ...args]); installed.recordResolvedAuthority(authority); if (execApi && isEnabled()) void installed.ensureTunnel(authority, { strictPort: true }).catch(() => { try { log('remote-tunnel-unavailable'); } catch {} }); return result; };
         resolver = proxy;
       }
       return Reflect.apply(original, this, [prefix, resolver, ...rest]);
     });
     manager = installed;
-    tunnel = true;
+    resolverWrapped = true;
+    tunnel = execApi;
+    if (!execApi) report('remote-exec-unavailable', new Error('getRemoteExecServer missing'));
   } catch (error) {
     report('remote-exec-unavailable', error);
     unwindTo(mark);
-    manager = {
-      ensureTunnel: () => Promise.reject(new Error('remote_exec_unavailable')),
-      resolveRemoteServerUrl: () => Promise.reject(new Error('remote_exec_unavailable')),
-      ensureCurrentRemoteWindowTunnel: () => sshForward ? Promise.resolve(port) : Promise.reject(new Error('remote_exec_unavailable')),
-      recordResolvedAuthority() {},
-      status: () => [],
-      dispose() {},
-    };
+    manager = stubManager();
   }
-  return { ...manager, sshForward, tunnel, errors, dispose() { manager.dispose(); for (const restore of restores.reverse()) restore(); } };
+  return { ...manager, sshForward, tunnel, resolver: resolverWrapped, errors, dispose() { manager.dispose(); for (const restore of restores.reverse()) restore(); } };
 }
 module.exports = { locationToAuthority, injectSshRemoteForwardArgs, createRemoteTunnelManager, installRemoteSupport };

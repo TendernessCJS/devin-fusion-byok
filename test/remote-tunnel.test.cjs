@@ -77,16 +77,51 @@ test('a failed resolver install keeps the ssh forward wrapper', () => {
   const vm = require('node:vm'), module = { exports: {} };
   const child = { spawn() { return 'spawned'; } };
   // Accessor-only property: assignment throws in strict mode, after spawn is wrapped.
-  const workspace = { get registerRemoteAuthorityResolver() { return () => 'registered'; } };
+  const workspace = { get registerRemoteAuthorityResolver() { return () => 'registered'; },
+    getRemoteExecServer() { return {}; } };
   vm.runInNewContext(fs.readFileSync(MODULE_PATH, 'utf8'), { module, Buffer, URL, setTimeout, clearTimeout, process,
     require(name) { if (name === 'node:child_process') return child; if (name === 'node:module') return { createRequire: () => key => key === 'vscode' ? { workspace } : child }; return moduleRequire(name); } });
   const originalSpawn = child.spawn;
   const handle = module.exports.installRemoteSupport({ vscode: { workspace: {} }, opensshMainPath: '/ssh/main.js', root: '/missing' });
   assert.equal(handle.sshForward, true, 'the -R segment survives the resolver segment failure');
   assert.equal(handle.tunnel, false);
+  assert.equal(handle.resolver, false);
+  assert.ok(handle.errors.some(entry => entry.event === 'remote-exec-unavailable'));
   assert.notEqual(child.spawn, originalSpawn, 'the spawn wrapper is kept when only the resolver wrap throws');
   handle.dispose();
   assert.equal(child.spawn, originalSpawn);
+});
+
+test('a resolver workspace without getRemoteExecServer keeps the -R path', async () => {
+  const vm = require('node:vm'), module = { exports: {} };
+  const child = { spawn() { return 'spawned'; } };
+  const workspace = { registerRemoteAuthorityResolver() {} };
+  vm.runInNewContext(fs.readFileSync(MODULE_PATH, 'utf8'), { module, Buffer, URL, setTimeout, clearTimeout, process,
+    require(name) { if (name === 'node:child_process') return child; if (name === 'node:module') return { createRequire: () => key => key === 'vscode' ? { workspace } : child }; return moduleRequire(name); } });
+  const originalSpawn = child.spawn;
+  const handle = module.exports.installRemoteSupport({ vscode: { workspace: {} }, opensshMainPath: '/ssh/main.js', root: '/missing', port: 39842 });
+  assert.equal(handle.sshForward, true);
+  assert.equal(handle.tunnel, false, 'a missing hidden API must not advertise the exec tunnel');
+  assert.equal(handle.resolver, true, 'the resolver wrap still installs without the exec API');
+  assert.equal(await handle.ensureCurrentRemoteWindowTunnel(), 39842, 'the -R path alone still reaches the port');
+  const failure = handle.errors.find(entry => entry.event === 'remote-exec-unavailable');
+  assert.ok(failure && failure.message.includes('getRemoteExecServer'));
+  handle.dispose();
+  assert.equal(child.spawn, originalSpawn);
+});
+
+test('without -R and without getRemoteExecServer nothing is usable', async () => {
+  const vm = require('node:vm'), module = { exports: {} };
+  const child = { spawn() { return 'spawned'; } };
+  const workspace = { registerRemoteAuthorityResolver() {} };
+  vm.runInNewContext(fs.readFileSync(MODULE_PATH, 'utf8'), { module, Buffer, URL, setTimeout, clearTimeout, process,
+    require(name) { if (name === 'node:child_process') return child; if (name === 'node:module') return { createRequire: () => key => key === 'vscode' ? { workspace } : child }; return moduleRequire(name); } });
+  const handle = module.exports.installRemoteSupport({ vscode: { workspace: {} }, nativeMainPath: '/native/main.js', root: '/missing' });
+  assert.equal(handle.sshForward, false);
+  assert.equal(handle.tunnel, false);
+  assert.equal(handle.resolver, true);
+  await assert.rejects(handle.ensureCurrentRemoteWindowTunnel(), /remote_exec_unavailable/);
+  handle.dispose();
 });
 
 test('SSH -R injection is installed when the vscode API is unavailable', async () => {

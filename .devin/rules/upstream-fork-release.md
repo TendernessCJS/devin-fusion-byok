@@ -108,14 +108,13 @@ node -e "const v=require('./package.json').version; if(!/^(0|[1-9]\d*)\.(0|[1-9]
 `createRequire(apiPath)('vscode')` 之后才安装 SSH `-R` 包装，vscode/proposed API 解析失败会连带跳过唯一可用的 `-R` 路径；exec-server
 tunnel 失败后 `remoteSupport` 为空，而 `agentEnv` 已把远端 CLI 指向 `127.0.0.1:<port>`，远端 agent 卡在 connection refused。
 
-- 移植了：`-R` 改用 `require('node:child_process')` 独立安装；exec-server manager 降级为 best-effort stub（`sshForward` 为真时
-  `ensureCurrentRemoteWindowTunnel()` 直接返回端口）；暴露 `sshForward` / `tunnel` / `errors`；`enable()` 在两条路都不可用时
-  drain + 恢复 owned settings 并抛 `remote_support_unavailable`（新增 runtime 错误码与 zh-CN/en 文案）。
+- 移植了：`-R` 改用 `require('node:child_process')` 独立安装；exec-server manager 降级为 stub（`sshForward` 为真时
+  `ensureCurrentRemoteWindowTunnel()` 直接返回端口）；暴露 `sshForward`/`tunnel`/`errors`；`enable()` 在两条路都不可用时
+  drain + 恢复 owned settings 并抛 `remote_support_unavailable`（含 zh-CN/en 文案）。
 - fork 差异（不要照抄上游）：`probeRemoteSupport` 原本依赖 install 抛错判断「host 能否被 patch」，移植后改读能力位
-  （`sshForward || tunnel`），失败原因经 `errors` 投影保留；`test/remote-tunnel.test.cjs` 的「failed install unwinds」改为
-  「resolver 段失败只回滚自身、-R 段保留」。
-- 未验证：远端链路仍无真机验收，只能看 `activated-remote` / `remote-tunnel-unavailable` / `remote-ssh-forward-unavailable` /
-  `remote-exec-unavailable` 日志。
+  （`sshForward || resolver`），失败原因经 `errors` 投影保留；「failed install unwinds」测试改为「resolver 段失败只回滚自身」。
+  install 检测 `getRemoteExecServer`：缺失即 `tunnel=false`、`resolver` 仍装；不取 native workspace 回退（remote 下 `nativeMain` 恒 null）。
+- 未验证：远端链路仍无真机验收，只能看 `activated-remote` 与 `remote-*-unavailable` 日志。
 
 看上游有没有值得参考的新改动：
 

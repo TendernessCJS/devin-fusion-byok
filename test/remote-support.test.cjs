@@ -11,7 +11,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture(t, { install } = {}) {
   const installCalls = [], logs = [], disposed = [];
   const behavior = install || (() => ({
-    sshForward: true, tunnel: true,
+    sshForward: true, tunnel: true, resolver: true,
     status: () => ['tunnel'], ensureCurrentRemoteWindowTunnel: () => Promise.resolve(39842),
     dispose() { disposed.push(true); } }));
   const loader = createSandboxLoader({ filename, overrides: {
@@ -104,7 +104,7 @@ test('the local-window probe installs inert wrappers, disposes them and reports 
   const logs = []; let disposed = 0, inert = null;
   const loader = createSandboxLoader({ filename, overrides: {
     '../runtime/host/remote-tunnel.cjs': { installRemoteSupport: options => {
-      inert = options.isEnabled(); return { sshForward: true, tunnel: true, dispose() { disposed++; } }; } },
+      inert = options.isEnabled(); return { sshForward: true, tunnel: true, resolver: true, dispose() { disposed++; } }; } },
   } });
   t.after(() => loader.assertStubsUsed('remote-support'));
   const ok = loader.module.exports.probeRemoteSupport({
@@ -137,7 +137,7 @@ test('the local-window probe reports an unusable host and keeps its per-segment 
   const logs = [];
   const loader = createSandboxLoader({ filename, overrides: {
     '../runtime/host/remote-tunnel.cjs': { installRemoteSupport: () => ({
-      sshForward: false, tunnel: false,
+      sshForward: false, tunnel: false, resolver: false,
       errors: [{ event: 'remote-exec-unavailable', code: 'Error', message: 'x' }],
       dispose() {} }) },
   } });
@@ -148,6 +148,20 @@ test('the local-window probe reports an unusable host and keeps its per-segment 
   assert.equal(ok, false);
   assert.deepEqual(logs, [{ event: 'remote-support-probe', installed: false,
     errors: [{ event: 'remote-exec-unavailable', code: 'Error', message: 'x' }] }]);
+});
+
+test('probe accepts a host that can only wrap the resolver', t => {
+  const logs = [];
+  const loader = createSandboxLoader({ filename, overrides: {
+    '../runtime/host/remote-tunnel.cjs': { installRemoteSupport: () => ({
+      sshForward: false, tunnel: false, resolver: true, dispose() {} }) },
+  } });
+  t.after(() => loader.assertStubsUsed('remote-support'));
+  const ok = loader.module.exports.probeRemoteSupport({
+    vscode: { extensions: { getExtension: () => undefined } }, root: '/root',
+    log: (event, data) => logs.push({ event, ...data }) });
+  assert.equal(ok, true);
+  assert.deepEqual(logs, [{ event: 'remote-support-probe', installed: true }]);
 });
 
 test('capabilities reflect the installed install and clear on stop', async t => {

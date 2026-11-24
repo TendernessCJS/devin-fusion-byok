@@ -94,7 +94,7 @@ function probeRemoteSupport({ vscode, root, nativeMain, log = () => {} }) {
     return false;
   }
   try {
-    const usable = installed.sshForward === true || installed.tunnel === true;
+    const usable = installed.sshForward === true || installed.resolver === true;
     try { log('remote-support-probe', usable ? { installed: true } : { installed: false, errors: installed.errors || [] }); } catch {}
     return usable;
   } finally { try { installed.dispose(); } catch {} }
