@@ -13,7 +13,7 @@ description: "改 picker 可见性与角色白名单/Lead·Sidekick 门槛、CLI
   2026-10-15 明确表示只统一控制，故删除了成员级开关与 `nativeOpen`；`setNativeModelHidden` 仍兼容单 `uid`（能力保留，面板只用 uids 形态）。族标签取「无标记 uid」成员的 label 剥掉档位/开关尾词（单成员族不剥，故 `SWE-2.1 Ultrafast` 这类单成员族名保持原样；
   族分组 uid 词表含 `lightning`（`swe-2-medium-lightning` 是变体），但 label 不剥 `Lightning`/`Ultrafast`——`Nemotron 3.5 Lightning` 的 `Lightning` 属于家族名，剥了就与 `Nemotron 3.5` 撞族；`SWE-1.7 Lightning` 已下线，不再作反例），并全局去重。角色侧词表见 `identity.cjs` 的
   `NATIVE_EFFORT_SUFFIX`/`NATIVE_FAST_SUFFIX`：`<档位>-lightning` 是 fast 标记，裸 `swe-2-1-lightning` 无档位 token、靠观测；只含 fast
-  成员的 Lead 家族不进角色列表（永不能发射，列了就是死控件）。
+  成员的 Lead 家族不进角色列表（永不能发射，列了就是死控件）。同一族在两处会差 1：设置页按服务器家族计 SWE-2.1 **12** 条，Fusion 按 uid 档位基计 **11** 条——裸 `swe-2-1-lightning` 自成基且成员全 fast 被滤掉，这是正常现象而非漏算。
 - **「官方模型显示」的筛选是状态投影，默认只列可用家族**（2026-10-29）：胶囊顺序固定 `全部 → 可用 → 已隐藏 → 不可用 → 内部`，前四者对非内部家族构成**互斥加和分解**（`可用 + 已隐藏 + 不可用 = 全部 − 内部`）——隐藏的族**只计入「已隐藏」**，否则默认「可用」会把用户已关掉的族又铺出来。胶囊文案用**状态词**，动词只留在批量按钮上；每个胶囊带 `title` 说明自己的判据。`内部` 胶囊**平铺**渲染（不出 vendor 头、不出 `details.fold`）。`nativeFilter` 默认与非法值兜底都是 `available`；空态必须区分「有搜索词」「筛选后为空」「目录为空」三种文案，不能一律显示同步失败。
 - **emit 最终标签按「家族」整体唯一，同一家族不得被拆到不同 Lead 维度值**（2026-10-28，`catalog/build.cjs` 的 `claim`/`reserved` 循环）：先把每个家族的 `familyLabel` 与每个 lead 的最终标签登记进 `owners`；**只有撞名家族**（`owners` 集合 >1）才加后缀——未撞名家族的全部标签先进入 `reserved`，所以候选必须同时避开「familyLabel + effort 名」形态（否则 `Foo`+High 与 `Foo High`+无档位仍会撞）；撞名家族按 `family.key` 排序，后缀初值 `digest(family.key).slice(0,8)`，被占用再递增 `-2`/`-3`，命中后**整族统一改写** `familyLabel`，并把该族全部最终标签并入 `reserved`。**禁止退化成按 lead 逐个加后缀**（一族会散到不同 Lead 维度值，picker 同一模型出现两行）；原生 mapper 同 label 后写覆盖 → 组内丢 uid，证据见 `native-observation-and-cli-cache-forensics.md`。
 
