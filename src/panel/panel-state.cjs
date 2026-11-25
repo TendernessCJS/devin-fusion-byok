@@ -9,18 +9,14 @@ const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, ke
 // Truly unrecognized entries land in 其他 rather than inventing a name.
 const NATIVE_VENDORS = [
   ['Anthropic', /^(?:claude|opus|MODEL_CLAUDE)\b/i],
-  ['OpenAI', /^(?:gpt|o[0-9]|codex|chatgpt|MODEL_(?:CHAT_)?GPT|MODEL_CHAT_O)\b/i],
+  ['OpenAI', /^(?:gpt|MODEL_(?:CHAT_)?GPT)\b/i],
   ['Google', /^(?:gemini|MODEL_GOOGLE)\b/i],
-  ['xAI', /^(?:grok|xai|MODEL_XAI)\b/i],
+  ['xAI', /^grok\b/i],
   ['DeepSeek', /^deepseek\b/i],
   ['Moonshot', /^kimi\b/i],
   ['Zhipu AI', /^(?:glm|zhipu|zai)\b/i],
   ['NVIDIA', /^(?:nemotron|nvidia)\b/i],
-  ['Mistral', /^(?:mistral|magistral|devstral|codestral|pixtral|voxtral)\b/i],
-  ['Meta', /^llama\b/i],
-  ['Alibaba', /^qwen\b/i],
-  ['MiniMax', /^minimax\b/i],
-  ['Devin', /^(?:swe\b|fusion$|adaptive$|arena|subagent|memory-migration|MODEL_DEVIN|devin)\b/i],
+  ['Devin', /^(?:swe\b|fusion$|adaptive$|arena|subagent|memory-migration)\b/i],
 ];
 const OTHER_VENDOR = '其他'; // i18n-data: vendor grouping value; panel/settings-view.cjs translates it for display
 function nativeVendor(id, label = '') {
@@ -102,14 +98,13 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
     // Adaptive/Fusion render in the official picker (kind 3) but are routing
     // surfaces, not real models, so the user wants them folded into internal.
     // The team settings allowlist is the authoritative gate once observed — a
-    // catalog row whose uid is absent from it (o3, Opus Review, Codex Spark)
-    // is a retired leftover no picker renders. A `pickerListed === false`
-    // verdict (the label is absent from every sort group of a sorts-carrying
-    // payload) likewise means no picker row, which also covers allowlisted-
-    // but-unlisted rows like SWE-check when the allowlist itself has not
-    // landed yet. Before the first allowlist, fall back to observation-source
-    // and capability heuristics: `listed` keeps retired-but-offered rows
-    // visible (GPT-4.1 vs o3), entitlement/command-only entries are hidden,
+    // catalog row whose uid is absent from it is a retired leftover no picker
+    // renders. A `pickerListed === false` verdict (the label is absent from
+    // every sort group of a sorts-carrying payload) likewise means no picker
+    // row, which also covers allowlisted-but-unlisted rows like SWE-check when
+    // the allowlist itself has not landed yet. Before the first allowlist,
+    // fall back to observation-source and capability heuristics: entitlement-
+    // only entries (MODEL_GPT_OSS_120B, pudding-jelly-*, arena-*) are hidden,
     // and harness/metadata mark real picker rows for sourceless legacy
     // observations.
     const internal = family.members.every(member => {
@@ -119,7 +114,6 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
       if (allowed && !allowed.has(member.uid)) return true;
       if (entry.pickerListed === false) return true;
       if (allowed) return false;
-      if (entry.listed === true) return false;
       if (Array.isArray(entry.sources) && entry.sources.length
         && !entry.sources.some(source => source === 'cli' || source === 'cascade')) return true;
       if (Array.isArray(entry.harnessUids) && entry.harnessUids.length) return false;

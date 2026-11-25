@@ -246,7 +246,7 @@ async function fakeCatalogBackend(t, { models, allowedUids }) {
 test('readNativeModels returns canonical observation fields through the shared normalizer', async t => {
   const backend = await fakeCatalogBackend(t, { models: [
     { uid: 'swe-full', label: 'SWE Full', disabled: false, isModelRouter: false, harnessUids: ['h1'],
-      familyUid: 'fam-full', kind: 3, listed: true, pickerListed: false, sources: ['cli'],
+      familyUid: 'fam-full', kind: 3, pickerListed: false, sources: ['cli'],
       maxTokens: 200000, maxOutputTokens: 4096, supportsImages: true,
       sidekickDimension: { order: 2, name: 'S', fastModeOrder: 1 },
       fusionMetadata: [{ key: 'Sidekick', order: 2, name: 'S' }] },
@@ -256,7 +256,6 @@ test('readNativeModels returns canonical observation fields through the shared n
   const [record] = result.models;
   assert.equal(record.familyUid, 'fam-full');
   assert.equal(record.kind, 3);
-  assert.equal(record.listed, true);
   assert.equal(record.pickerListed, false, 'a false verdict survives the endpoint round trip');
   assert.deepEqual(record.sources, ['cli']);
   assert.deepEqual(record.sidekickDimension, { order: 2, name: 'S', fastModeOrder: 1 });

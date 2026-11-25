@@ -35,7 +35,7 @@ const familyHistogram = entries => {
   return Object.fromEntries([...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12));
 };
-const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server_pb\.ApiServerService|seat_management_pb\.SeatManagementService)\/(?:GetUserStatus|GetCliModelConfigs|GetCascadeModelConfigs|GetCommandModelConfigs)(?:ForSite)?$|^\/exa\.seat_management_pb\.SeatManagementService\/GetCliTeamSettings$/;
+const CATALOG = /^\/exa\.(?:language_server_pb\.LanguageServerService|api_server_pb\.ApiServerService|seat_management_pb\.SeatManagementService)\/(?:GetUserStatus|GetCliModelConfigs|GetCascadeModelConfigs)(?:ForSite)?$|^\/exa\.seat_management_pb\.SeatManagementService\/GetCliTeamSettings$/;
 // Catalog-like RPCs the whitelist does not know still forward untouched — but
 // each method name is reported once per bridge so an upgrade that adds a model
 // surface shows up in the persisted record instead of silently dropping BYOK.

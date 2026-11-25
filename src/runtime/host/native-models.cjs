@@ -63,7 +63,6 @@ async function readOnce({ root, port, signal, request }) {
     if (entry.supportsImages === true) next.supportsImages = true;
     if (typeof entry.familyUid === 'string' && entry.familyUid && entry.familyUid.length <= 128) next.familyUid = entry.familyUid;
     if (Number.isSafeInteger(entry.kind)) next.kind = entry.kind;
-    if (entry.listed === true) next.listed = true;
     if (typeof entry.pickerListed === 'boolean') next.pickerListed = entry.pickerListed;
     if (Array.isArray(entry.sources)) {
       const sources = entry.sources.filter(value => typeof value === 'string' && value.length <= 32).slice(0, 8);

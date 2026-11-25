@@ -7,8 +7,8 @@
 // config change keeps the old dfbyok uids and silently drops every entry whose
 // uid digest drifted (fusion presets survive because their uid derives only
 // from the preset id). Renaming a stale file aside is NOT viable: measured
-// 2026-10-24, deleting every model_configs file brought back only the v6
-// generation (both identities, within a minute) while v1..v5 stayed gone, and
+// 2026-10-24, deleting every model_configs file brought back only the then-
+// current v6 generation (both identities, within a minute) while v1..v5 stayed gone, and
 // which path or trigger performs that rebuild is unconfirmed — so the picker
 // can stay empty until the file is restored by hand. Instead the payload is
 // rewritten in place through the same catalog augmentation the backend
@@ -21,9 +21,10 @@ const { parseFields } = require('../../protocol/wire.cjs');
 const { validateProtoCatalog, isOwnUid } = require('../../catalog/payload.cjs');
 
 const CACHE_NAME = /^(user_status|team_settings)\.[0-9a-f]{16}\.bin$/;
-// Every model_configs* filename is a write candidate — v6 is simply the
-// generation this CLI currently creates (deleting them all brought back only
-// v6, measured 2026-10-24). Writability is decided by the file contents, not
+// Every model_configs* filename is a write candidate — v7 is the generation
+// this CLI creates as of 2026-11-25 (two live files, b023…/ca58…; deleting all
+// files brought back only the then-current v6 when measured 2026-10-24).
+// Writability is decided by the file contents, not
 // the generation number: a candidate whose envelope and payload validate is
 // supported regardless of its _vN suffix, while JSON-but-malformed candidates
 // are flagged for the panel as a future format this build does not adapt.

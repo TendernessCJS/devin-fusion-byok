@@ -71,12 +71,25 @@ test('ForSite catalog RPCs resolve to the same payload shape as their base metho
   for (const [service, method] of [
     ['/exa.api_server_pb.ApiServerService/', 'GetCliModelConfigs'],
     ['/exa.api_server_pb.ApiServerService/', 'GetCascadeModelConfigs'],
-    ['/exa.api_server_pb.ApiServerService/', 'GetCommandModelConfigs'],
     ['/exa.language_server_pb.LanguageServerService/', 'GetCliModelConfigs'],
     ['/exa.seat_management_pb.SeatManagementService/', 'GetUserStatus'],
   ]) {
     assert.deepEqual(rpcShape(service + method + 'ForSite'), rpcShape(service + method), method + 'ForSite');
   }
+});
+
+test('GetCommandModelConfigs forwards untouched — the command surface is not observed', async t => {
+  const upstream = { clientModelConfigs: [{ modelUid: 'official', label: 'Official' }] };
+  const native = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(upstream));
+  });
+  t.after(() => native.close());
+  const bridge = await createLsBridge(native.port, { getCatalog: () => catalog });
+  t.after(() => bridge.close());
+  const response = await request(bridge.port, '/exa.api_server_pb.ApiServerService/GetCommandModelConfigs');
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.body), upstream, 'the command surface passes through unaugmented');
 });
 
 test('a ForSite catalog response is augmented exactly like the base RPC', async t => {

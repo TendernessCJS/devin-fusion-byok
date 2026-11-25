@@ -287,7 +287,6 @@ test('collectNativeModels keeps canonical observation fields through the shared 
   const protoEntry = cat(s(1, 'K'), s(22, 'swe-kind'), v(6, 1), m(23, cat(s(20, 'h'), v(25, 0), v(22, 8), s(23, 'fam-k'))));
   const [protoRecord] = collectNativeModels(cat(m(1, protoEntry)), { rpc: 'GetCliModelConfigs', format: proto });
   assert.equal(protoRecord.kind, 8);
-  assert.equal(protoRecord.listed, true);
   assert.equal(protoRecord.familyUid, 'fam-k');
   assert.deepEqual(protoRecord.sources, ['cli']);
 });

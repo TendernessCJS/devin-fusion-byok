@@ -12,21 +12,18 @@ const entry = (over = {}) => ({ uid: 'swe-2-medium', label: 'SWE-2 Medium', ...o
 
 test('normalizeNativeEntry preserves the canonical observation fields', () => {
   const normalized = normalizeNativeEntry(entry({
-    familyUid: 'fam-9', kind: 8, listed: true, pickerListed: false,
+    familyUid: 'fam-9', kind: 8, pickerListed: false,
     fusionMetadata: [{ key: 'Sidekick', order: 2, name: 'S' }],
     sources: ['cli', 'cascade', 'x'.repeat(40), 7, ...Array.from({ length: 9 }, () => 'extra')],
   }));
   assert.equal(normalized.familyUid, 'fam-9');
   assert.equal(normalized.kind, 8);
-  assert.equal(normalized.listed, true);
   assert.equal(normalized.pickerListed, false, 'a false verdict is a verdict and survives');
   assert.deepEqual(normalized.fusionMetadata, [{ key: 'Sidekick', order: 2, name: 'S' }]);
   assert.deepEqual(normalized.sources, ['cli', 'cascade', 'extra', 'extra', 'extra', 'extra', 'extra', 'extra'],
     'non-strings and overlong sources are filtered; the list is bounded at 8');
   assert.equal(normalizeNativeEntry(entry({ familyUid: 'x'.repeat(129) })).familyUid, undefined);
   assert.equal(normalizeNativeEntry(entry({ pickerListed: 'yes' })).pickerListed, undefined);
-  assert.equal(normalizeNativeEntry(entry({ listed: false })).listed, undefined,
-    'an absent listed flag stays absent — false is not a positive signal');
   assert.deepEqual(normalizeAllowedUids(['swe-2', 'dfbyok-own', 'fusion-dfbyok-x', 'swe-2', '', 9]), ['swe-2']);
 });
 

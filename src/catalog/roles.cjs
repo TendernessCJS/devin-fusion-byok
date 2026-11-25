@@ -1,5 +1,5 @@
 'use strict';
-const { ownUid, has, refKey, nativeUid, leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, stableOrders, leadFamilyLabel, normalizeAllowedUids, expandHiddenByFamily } = require('./identity.cjs');
+const { ownUid, has, refKey, nativeUid, leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, stableOrders, leadFamilyLabel, normalizeAllowedUids, expandHiddenByFamily, isFastLeadUid, fastLeadSets } = require('./identity.cjs');
 
 function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = null) {
   const observed = Array.isArray(nativeModels) ? nativeModels : [];
@@ -440,7 +440,15 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
       family.label = dim.name || nativeLead.uid;
     }
   }
-  const orderedFamilies = [...leadFamilies.values()].map(family => {
+  // An all-fast family is never emitted (the matrix cannot carry its Fast
+  // Mode order), so offering it in the role list would be a dead control. The
+  // verdict mirrors the emission filter: observed dimensions first, the uid
+  // suffix only when nothing was observed — a member record may not carry
+  // fusionMetadata (official entries don't), so the observation is read off
+  // the raw native entries, not the member records.
+  const { fast: fastLeadUids, nonFast: nonFastLeadUids } = fastLeadSets(nativeModels);
+  const orderedFamilies = [...leadFamilies.values()].filter(family =>
+    family.members.some(member => !isFastLeadUid(member.uid, fastLeadUids, nonFastLeadUids))).map(family => {
     family.members.sort((a, b) => a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0);
     family.uids = family.members.map(member => member.uid);
     if (!family.label) family.label = family.members[0].familyLabelBase || family.members[0].label || family.members[0].uid;

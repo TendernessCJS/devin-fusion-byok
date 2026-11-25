@@ -3,7 +3,7 @@ const { parseFields, str, num, m } = require('../protocol/wire.cjs');
 const { concat, ownUid, has, nativeUid } = require('./identity.cjs');
 const { normalizeNativeEntry } = require('../models/native-entry.cjs');
 
-const OBSERVE_SOURCE = { GetCliModelConfigs: 'cli', GetCascadeModelConfigs: 'cascade', GetCommandModelConfigs: 'command', GetUserStatus: 'entitlement' };
+const OBSERVE_SOURCE = { GetCliModelConfigs: 'cli', GetCascadeModelConfigs: 'cascade', GetUserStatus: 'entitlement' };
 function rpcShape(rpc) {
   let value = typeof rpc === 'string' ? rpc : rpc?.path || rpc?.name || '';
   try { if (value.includes('://')) value = new URL(value).pathname; } catch { return null; }
@@ -13,7 +13,7 @@ function rpcShape(rpc) {
   // the base method's shape, so they observe and augment identically.
   const base = method.replace(/ForSite$/, '');
   if (base === 'GetUserStatus') return { status: true, field: 1, sorts: true, source: OBSERVE_SOURCE[base] };
-  if (['GetCliModelConfigs', 'GetCascadeModelConfigs', 'GetCommandModelConfigs'].includes(base)) return { status: false, sorts: base === 'GetCascadeModelConfigs', source: OBSERVE_SOURCE[base] };
+  if (['GetCliModelConfigs', 'GetCascadeModelConfigs'].includes(base)) return { status: false, sorts: base === 'GetCascadeModelConfigs', source: OBSERVE_SOURCE[base] };
   return null;
 }
 
@@ -354,7 +354,7 @@ function isOwnUid(uid) {
 function nativeEntries(entries, isJson, source, pickerLabels) {
   const seen = [];
   for (const entry of entries) {
-    let uid, label, disabled, meta, dimension, fusionMeta, listed;
+    let uid, label, disabled, meta, dimension, fusionMeta;
     if (isJson) {
       uid = nativeUid(entry);
       label = typeof entry?.label === 'string' ? entry.label : '';
@@ -369,10 +369,6 @@ function nativeEntries(entries, isJson, source, pickerLabels) {
       meta = protoMetadata(entry);
       fusionMeta = protoFusionMetadata(entry);
       dimension = extractSidekickDimension(fusionMeta);
-      // Top-level field 6 marks legacy entitlement rows the picker still lists
-      // (GPT-4.1/GPT-4o); its absence on an otherwise identical row (o3) is how
-      // the picker drops retired models.
-      listed = num(entry, 6) === 1;
     }
     if (typeof uid !== 'string' || !uid || uid.length > 256 || ownUid(uid)) continue;
     // The field extraction above keeps each source's own pass-through and
@@ -383,7 +379,6 @@ function nativeEntries(entries, isJson, source, pickerLabels) {
       ...(dimension ? { sidekickDimension: dimension } : {}),
       ...(fusionMeta ? { fusionMetadata: fusionMeta } : {}),
       ...(meta.kind !== undefined ? { kind: meta.kind } : {}),
-      ...(listed ? { listed: true } : {}),
       ...(meta.maxTokens ? { maxTokens: meta.maxTokens } : {}),
       ...(meta.maxOutputTokens ? { maxOutputTokens: meta.maxOutputTokens } : {}),
       ...(meta.supportsImages ? { supportsImages: true } : {}),

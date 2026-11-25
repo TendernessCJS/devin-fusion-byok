@@ -2,7 +2,7 @@
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { modelEfforts, modelSupportsImages } = require('../models/capabilities.cjs');
 const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, leadFamilyBase, stableOrders,
-  NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE, BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, isFastLeadUid } = require('./identity.cjs');
+  NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE, BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, isFastLeadUid, fastLeadSets } = require('./identity.cjs');
 const { sortByOrder } = require('../models/order.cjs');
 const { configFor } = require('./codec.cjs');
 const { discoverOfficialRoles, discoverAdditionalNativeRoles, buildRoleLists } = require('./roles.cjs');
@@ -186,21 +186,14 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   // also treat a fast lead uid as illegitimate — not emitting keeps all three
   // in step. Which uids are fast is read from the observed Fast Mode dimension
   // rather than a uid suffix: the upstream catalog marks the same concept as
-  // `-fast` on Claude models and `-priority` on the GPT ones. Sidekicks are
+  // `-fast` on Claude models, `-priority` on the GPT ones and `-lightning`
+  // behind a tier token on the SWE Ultrafast variants. Sidekicks are
   // untouched: the official Sidekick dimension has no sub-tiers, so a fast
   // sidekick uid is a legitimate value of its own.
-  const fastLeadUids = new Set(), nonFastLeadUids = new Set();
-  for (const entry of Array.isArray(nativeModels) ? nativeModels : []) {
-    const uid = typeof entry?.uid === 'string' ? entry.uid : '';
-    if (!uid || uid.startsWith('fusion-') || ownUid(uid)) continue;
-    const dims = Array.isArray(entry.fusionMetadata) ? entry.fusionMetadata : [];
-    const fast = dims.find(dim => dim?.key === 'Fast Mode');
-    if (fast && fast.order !== 0) { fastLeadUids.add(uid); continue; }
-    // Only an explicit observation counts as non-fast: a Fast Mode=0 record,
-    // or another sub-tier dimension (Speed) proving the series exists without
-    // Fast Mode. Missing metadata says nothing — the suffix fallback decides.
-    if (fast || dims.some(dim => dim?.key === 'Speed')) nonFastLeadUids.add(uid);
-  }
+  // Only an explicit observation counts as non-fast: a Fast Mode=0 record,
+  // or another sub-tier dimension (Speed) proving the series exists without
+  // Fast Mode. Missing metadata says nothing — the suffix fallback decides.
+  const { fast: fastLeadUids, nonFast: nonFastLeadUids } = fastLeadSets(nativeModels);
   const selectedNativeLeadUids = new Set(), selectedNativeSidekickUids = new Set();
   for (const [role, items, set] of [['lead', roleSelection.lead, selectedNativeLeadUids], ['sidekick', roleSelection.sidekick, selectedNativeSidekickUids]]) {
     for (const item of items) {

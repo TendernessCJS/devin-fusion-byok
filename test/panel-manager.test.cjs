@@ -750,7 +750,7 @@ test('publicState groups observed natives into server families without fusion en
   assert.equal(fastSwe.vendor, 'Devin');
   assert.equal(solo.vendor, '其他', 'an unrecognized uid falls into the catch-all vendor');
   const vendorRank = id => ['Anthropic', 'OpenAI', 'Google', 'xAI', 'DeepSeek', 'Moonshot', 'Zhipu AI',
-    'NVIDIA', 'Mistral', 'Meta', 'Alibaba', 'MiniMax', 'Devin', '其他'].indexOf(state.nativeFamilies.find(family => family.id === id).vendor);
+    'NVIDIA', 'Devin', '其他'].indexOf(state.nativeFamilies.find(family => family.id === id).vendor);
   const ranks = state.nativeFamilies.map(family => vendorRank(family.id));
   assert.deepEqual([...ranks].sort((a, b) => a - b), ranks, 'families are sorted by vendor order');
 
@@ -776,14 +776,13 @@ test('families no picker can select are classified as internal entries', async (
   assert.equal(byId('uid:private-1').internal, true);
 });
 
-test('picker visibility uses kind enum, observation source and the listed flag', async () => {
+test('picker visibility uses kind enum and observation source', async () => {
   const observed = [
     { uid: 'review-a', label: 'Review A', disabled: false, isModelRouter: false, harnessUids: ['h'], kind: 4, sources: ['cli'] },
     { uid: 'route-a', label: 'Route A', disabled: false, isModelRouter: true, harnessUids: [], kind: 6, sources: ['cli'] },
-    { uid: 'legacy-listed', label: 'Legacy Listed', disabled: false, isModelRouter: false, harnessUids: [], listed: true, sources: ['entitlement'] },
     { uid: 'legacy-retired', label: 'Legacy Retired', disabled: false, isModelRouter: false, harnessUids: [],
       fusionMetadata: [{ key: 'Effort', order: 1, name: 'High' }], sources: ['entitlement'] },
-    { uid: 'command-only', label: 'Command Only', disabled: false, isModelRouter: false, harnessUids: ['h'], sources: ['command'] },
+    { uid: 'entitlement-harnessed', label: 'Entitlement Harnessed', disabled: false, isModelRouter: false, harnessUids: ['h'], sources: ['entitlement'] },
     { uid: 'cli-dim', label: 'Cli Dim', disabled: false, isModelRouter: false, harnessUids: [],
       fusionMetadata: [{ key: 'Effort', order: 1, name: 'High' }], sources: ['cli', 'entitlement'] },
   ];
@@ -791,9 +790,8 @@ test('picker visibility uses kind enum, observation source and the listed flag',
   const byId = id => state.nativeFamilies.find(family => family.id === 'uid:' + id);
   assert.equal(byId('review-a').internal, true, 'kind 4 review rows stay internal even inside a catalog');
   assert.equal(byId('route-a').internal, true, 'kind 6 routing pseudo-entries stay internal');
-  assert.equal(byId('legacy-listed').internal, false, 'the listed flag keeps an entitlement-only row visible');
   assert.equal(byId('legacy-retired').internal, true, 'dimensions observed only via entitlement do not make a picker row');
-  assert.equal(byId('command-only').internal, true, 'command-catalog-only entries are not in the model picker');
+  assert.equal(byId('entitlement-harnessed').internal, true, 'entitlement-only entries stay internal even with a harness');
   assert.equal(byId('cli-dim').internal, false, 'a selectable-catalog observation makes a harnessless dimension member visible');
 });
 

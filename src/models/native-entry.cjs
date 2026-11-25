@@ -16,7 +16,6 @@ function normalizeNativeEntry(entry) {
       ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } } : {}),
     ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
     ...(Number.isSafeInteger(entry.kind) ? { kind: entry.kind } : {}),
-    ...(entry.listed === true ? { listed: true } : {}),
     ...(typeof entry.pickerListed === 'boolean' ? { pickerListed: entry.pickerListed } : {}),
     ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
     ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
@@ -56,8 +55,7 @@ function mergeNativeEntry(prior, incoming) {
   if (prior.harnessUids?.length && !incoming.harnessUids?.length) carried.harnessUids = prior.harnessUids;
   if (prior.familyUid && !incoming.familyUid) carried.familyUid = prior.familyUid;
   if (prior.kind !== undefined && incoming.kind === undefined) carried.kind = prior.kind;
-  if (prior.listed === true && incoming.listed !== true) carried.listed = prior.listed;
-  // A sorts-carrying observation delivers a fresh verdict (listed or not); a
+  // A sorts-carrying observation delivers a fresh verdict (picker-listed or not); a
   // flat-catalog observation leaves the prior verdict untouched.
   if (prior.pickerListed !== undefined && incoming.pickerListed === undefined) carried.pickerListed = prior.pickerListed;
   const merged = Object.keys(carried).length ? { ...incoming, ...carried } : { ...incoming };

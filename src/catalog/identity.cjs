@@ -37,11 +37,12 @@ function stableOrders(keys, reserved) {
 }
 
 // A native uid ends with its effort tier slug, optionally followed by a fast
-// marker (-fast / -priority); a scale qualifier (-1m) may sit after the tier.
+// marker (-fast / -priority / -lightning); a scale qualifier (-1m) may sit
+// after the tier.
 // Everything before that is the family base, with the qualifier kept on it.
 // Bare uids whose label carries a tier (`swe-1-7` is "SWE-1.7 Max") keep
 // themselves as the base — the label, not the uid, decides the tier for them.
-const NATIVE_EFFORT_SUFFIX = /-(none|minimal|low|medium|high|xhigh|max|ultra)(?:-fast|-priority)?$/;
+const NATIVE_EFFORT_SUFFIX = /-(none|minimal|low|medium|high|xhigh|max|ultra)(?:-fast|-priority|-lightning)?$/;
 function leadFamilyBase(uid) {
   const scale = /-(\d+m)$/.exec(uid);
   const head = scale ? uid.slice(0, -scale[0].length) : uid;
@@ -105,16 +106,44 @@ function normalizeAllowedUids(allowedUids) {
 }
 // A lead uid is fast when the observed Fast Mode dimension says so
 // (`observedFastUids`), or — absent any explicit observation — its suffix
-// marks it (-fast on Claude, -priority on GPT). An explicit non-fast
+// marks it (-fast on Claude, -priority on GPT, <tier>-lightning on the SWE
+// Ultrafast variants). An explicit non-fast
 // observation wins over the suffix guess: `swe-1-6-fast`'s Speed variant is a
 // legitimate series, not Fast Mode. Shared by the emission filter, the stale
 // probe and assignment so all three agree on what must never resolve.
 // Sidekicks are never fast-gated.
+// `-lightning` only counts behind a tier token: in `swe-2-1-lightning` or
+// `nemotron-3-5-lightning-high` the word is the family name itself, so the
+// bare form stays undecided and defers to the observed Fast Mode dimension.
+const NATIVE_FAST_SUFFIX = /(?:-(?:fast|priority)|-(?:none|minimal|low|medium|high|xhigh|max|ultra)-lightning)$/;
 function isFastLeadUid(uid, observedFastUids, observedNonFastUids) {
   if (typeof uid !== 'string') return false;
   if (observedFastUids?.has(uid)) return true;
   if (observedNonFastUids?.has(uid)) return false;
-  return uid.endsWith('-fast') || uid.endsWith('-priority');
+  return NATIVE_FAST_SUFFIX.test(uid);
+}
+// Tri-state: true = observed Fast Mode != 0; false = explicit non-fast
+// (Fast Mode=0 or a Speed sub-tier); null = no observation, suffix decides.
+function observedFastState(entry) {
+  const dims = Array.isArray(entry?.fusionMetadata) ? entry.fusionMetadata : [];
+  const fast = dims.find(dim => dim?.key === 'Fast Mode');
+  if (fast && fast.order !== 0) return true;
+  if (fast || dims.some(dim => dim?.key === 'Speed')) return false;
+  return null;
+}
+// One pass over the observed catalog shared by the emission filter and the
+// role list: Fast Mode != 0 is fast, Fast Mode = 0 or a Speed sub-tier is
+// explicitly non-fast, and everything else stays unclassified for the suffix.
+function fastLeadSets(nativeModels) {
+  const fast = new Set(), nonFast = new Set();
+  for (const entry of Array.isArray(nativeModels) ? nativeModels : []) {
+    const uid = typeof entry?.uid === 'string' ? entry.uid : '';
+    if (!uid || uid.startsWith('fusion-') || ownUid(uid)) continue;
+    const state = observedFastState(entry);
+    if (state === true) fast.add(uid);
+    else if (state === false) nonFast.add(uid);
+  }
+  return { fast, nonFast };
 }
 function nativeUid(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return '';
@@ -126,4 +155,5 @@ function nativeUid(entry) {
 module.exports = { OWN_GROUP, SIDEKICK_HARNESSES, ownUid, has, digest, slug, concat, positive, refKey,
   NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE,
   BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, stableOrders,
-  leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, leadFamilyLabel, effortMetadata, expandHiddenByFamily, normalizeAllowedUids, nativeUid, isFastLeadUid };
+  leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, leadFamilyLabel, effortMetadata, expandHiddenByFamily, normalizeAllowedUids, nativeUid, isFastLeadUid,
+  fastLeadSets };

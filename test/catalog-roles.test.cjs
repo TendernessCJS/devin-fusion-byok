@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, buildRoleLists } = require('../src/catalog.cjs');
+const { leadFamilyBase, leadFamilyTier, leadFamilyLabel, isFastLeadUid } = require('../src/catalog/identity.cjs');
 const { fields, str, s, v, m } = require('../src/protocol/wire.cjs');
 const { cat, proto, json, config, OBSERVED_SWE, catalog, getNested, configs, dimEntry, fam } = require('./helpers/catalog-fixtures.cjs');
 
@@ -746,6 +747,60 @@ test('official Fast Mode siblings join the official family and inherit its dimen
       'a non-fast official lead reuses the official Lead value: ' + model.uid);
     assert.deepEqual(dims.Effort, { order: 3, name: 'High', controlType: 1 }, model.uid);
   }
+});
+
+test('lightning is a fast marker in uids but never a label suffix', () => {
+  // The SWE Ultrafast variants spell Fast Mode as <tier>-lightning; the tier
+  // token is what makes it a marker, so a bare -lightning stays undecided.
+  assert.deepEqual([leadFamilyBase('swe-2-1-high-lightning'), leadFamilyTier('swe-2-1-high-lightning')],
+    ['swe-2-1', 'high']);
+  assert.deepEqual([leadFamilyBase('swe-2-flash-medium-lightning'), leadFamilyTier('swe-2-flash-medium-lightning')],
+    ['swe-2-flash', 'medium']);
+  // In `nemotron-3-5-lightning-high` the word is the family name itself, not a
+  // marker — the base keeps it and labels never strip it.
+  assert.deepEqual([leadFamilyBase('nemotron-3-5-lightning-high'), leadFamilyTier('nemotron-3-5-lightning-high')],
+    ['nemotron-3-5-lightning', 'high']);
+  assert.equal(leadFamilyLabel('SWE-1.7 Lightning'), 'SWE-1.7 Lightning');
+  assert.equal(leadFamilyLabel('Nemotron 3.5 Lightning High'), 'Nemotron 3.5 Lightning');
+  // `swe-2-1-lightning` is structurally identical to a Lightning family name:
+  // no tier token, so the suffix deliberately does not decide — the observed
+  // Fast Mode dimension does.
+  assert.equal(leadFamilyBase('swe-2-1-lightning'), 'swe-2-1-lightning');
+  assert.equal(isFastLeadUid('swe-2-1-lightning', null, null), false);
+  assert.equal(isFastLeadUid('swe-2-1-high-lightning', null, null), true);
+});
+
+test('a tier-qualified -lightning lead is refused even without Fast Mode metadata', () => {
+  const natives = [OFFICIAL_SIDEKICK, nativeLead('nova-high-lightning', 'Nova High Ultrafast')];
+  const probe = buildCatalog(config(), natives);
+  assert.ok(isFastLeadUid('nova-high-lightning', probe.fastLeadUids, probe.nonFastLeadUids),
+    'the <tier>-lightning suffix marks fast when no metadata was observed');
+  const cfg = { ...config(), roleInclusions: { lead: [{ nativeUid: 'nova-high-lightning' }] } };
+  const matrix = buildCatalog(cfg, natives).models
+    .filter(model => model.kind === 'matrix').map(model => model.uid);
+  assert.ok(!matrix.some(uid => uid.startsWith('fusion-nova-high-lightning-sidekick-')),
+    'a fast lead never emits, even when explicitly included');
+  const observed = buildCatalog(cfg, [OFFICIAL_SIDEKICK,
+    nativeLead('nova-high-lightning', 'Nova High Ultrafast', [{ key: 'Fast Mode', order: 0 }])]);
+  assert.ok(observed.nonFastLeadUids.has('nova-high-lightning'),
+    'an explicit Fast Mode=0 observation beats the suffix guess');
+  assert.ok(observed.models.some(model => model.kind === 'matrix' &&
+    model.uid.startsWith('fusion-nova-high-lightning-sidekick-')), 'the non-fast twin emits');
+});
+
+test('a lead family whose members are all fast is not offered in the role list', () => {
+  const roles = buildRoleLists(config(), [OFFICIAL_SIDEKICK,
+    nativeLead('swe-2-1-lightning', 'SWE-2.1 Ultrafast', [{ key: 'Fast Mode', order: 1 }]),
+    nativeLead('swe-2-1-high', 'SWE-2.1 High'),
+    nativeLead('swe-2-1-high-lightning', 'SWE-2.1 Ultrafast High', [{ key: 'Fast Mode', order: 1 }])]);
+  const nativeLeads = roles.lead.filter(item => item.native);
+  const offered = new Set(nativeLeads.flatMap(item => item.memberUids || [item.ref.nativeUid]));
+  assert.ok(!offered.has('swe-2-1-lightning'),
+    'an all-fast family can never emit — listing it would be a dead control');
+  const family = nativeLeads.find(item => (item.memberUids || []).includes('swe-2-1-high'));
+  assert.ok(family, 'a mixed family with a non-fast member stays offered');
+  assert.ok(family.memberUids.includes('swe-2-1-high-lightning'),
+    'aggregation still keeps the fast sibling for the emission filter');
 });
 
 test('a non-fast non-official uid with a tier token joins the official family', () => {
