@@ -40,7 +40,7 @@ description: "排查「这个数字/结论是哪来的」「某条判据为何�
 ## 顶层 f6 = `supports_legacy`（曾被当成 picker `listed` 标记）
 
 - 旧读法：f6=1 曾按经验当作「picker 仍列出的退役 entitlement 行」（GPT-4.1/GPT-4o 有、o3 无），面板在**白名单尚未落地**时用它把这类行显示出来。`listed` 是我们起的代理名，不是字段真名。
-- 2026-11-25 权威字段表（Devin 3.12.x `sessions.desktop.main.js` 里的 protobuf-es descriptor，`grep -abo` 取偏移 + `dd` 读窗口）：`exa.codeium_common_pb.ClientModelConfig` 的 **f6 = `supports_legacy`（bool）**；全表里没有 `listed`。同表核对一致：f22 `model_uid`、f4 `disabled`、f30 `model_family_metadata`、f23 `model_info`。
+- 2026-11-25 权威字段表（已安装 Devin 3.14.30833 的 `sessions.desktop.main.js` 里的 protobuf-es descriptor，`grep -abo` 取偏移 + `dd` 读窗口）：`exa.codeium_common_pb.ClientModelConfig` 的 **f6 = `supports_legacy`（bool）**；全表里没有 `listed`。同表核对一致：f22 `model_uid`、f4 `disabled`、f30 `model_family_metadata`、f23 `model_info`。
 - 同日实测：337 条原生里 f6 为 1 的 **0 条**；白名单一旦存在该兜底本就不参与判定。整条链路（`payload.cjs` 读取 → `native-entry.cjs` 归一/合并 → `native-models.cjs` 透传 → `panel-state.cjs` 兜底）已删除，`pickerListed`（排序区 label 判定，与 f6 无关）保留。
 
 ## Fusion 维度容器与两个未读字段（2026-11-25）
