@@ -13,8 +13,9 @@ const MAX_REDIRECTS = 5;
 
 // GetCliTeamSettings field numbers, used to honour team and user switches.
 const SETTINGS = { DISABLED: 3, WEB_SEARCH_ENABLED: 4 };
-// KnowledgeBaseItem fields 3/4/7 are the result URL, title and extracted text.
-const ITEM = { url: 3, title: 4, text: 7 };
+// exa.codeium_common_pb.KnowledgeBaseItem: the body is f2, url f3, title f4 and
+// a server-side summary f7 (f6 is the chunks list, not text).
+const ITEM = { url: 3, title: 4, text: 2, summary: 7 };
 const LIMITS = { results: 20, query: 4000, domain: 253, text: 512 * 1024, page: 100000 };
 
 function htmlToText(html) {
@@ -120,7 +121,7 @@ function readResults(response) {
       if (name) item[name] = child.value.toString('utf8');
     }
     if (!/^https?:\/\//i.test(item.url || '')) continue;
-    results.push({ url: item.url.slice(0, 2048), title: (item.title || item.url).slice(0, 500), text: (item.text || '').slice(0, 8000) });
+    results.push({ url: item.url.slice(0, 2048), title: (item.title || item.url).slice(0, 500), text: (item.text || item.summary || '').slice(0, 8000) });
   }
   return results;
 }

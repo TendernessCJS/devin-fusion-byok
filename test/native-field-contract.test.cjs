@@ -271,8 +271,9 @@ const enumeration = (name, repeated = false) => field(name, 'enum', null, repeat
 const EXPECTED_FIELDS = {
   'exa.codeium_common_pb.UserStatus': { 33: message('cascade_model_config_data') },
   'exa.codeium_common_pb.ClientModelConfig': {
-    1: scalar('label', 9), 4: scalar('disabled', 8), 5: scalar('supports_images', 8), 10: enumeration('provider'),
-    18: scalar('max_tokens', 5), 22: scalar('model_uid', 9), 23: message('model_info'), 30: message('model_family_metadata'),
+    1: scalar('label', 9), 4: scalar('disabled', 8), 5: scalar('supports_images', 8), 6: scalar('supports_legacy', 8),
+    10: enumeration('provider'), 18: scalar('max_tokens', 5), 21: message('fast_status'), 22: scalar('model_uid', 9),
+    23: message('model_info'), 30: message('model_family_metadata'), 32: message('model_dimensions', true),
   },
   'exa.codeium_common_pb.ModelInfo': {
     3: enumeration('model_type'), 4: scalar('max_tokens', 5), 6: message('model_features'), 13: scalar('max_output_tokens', 5),
@@ -296,6 +297,15 @@ const EXPECTED_FIELDS = {
   },
   'exa.codeium_common_pb.CascadeModelConfigData': {
     1: message('client_model_configs', true), 2: message('client_model_sorts', true), 3: message('default_override_model_config', false, true),
+  },
+  'exa.seat_management_pb.GetCliTeamSettingsRequest': { 1: message('metadata') },
+  'exa.seat_management_pb.GetCliTeamSettingsResponse': {
+    1: scalar('allow_mcp_servers', 8), 3: scalar('disable_fast_context', 8),
+    4: scalar('cascade_web_search_enabled', 8), 7: scalar('allowed_model_uids', 9, true),
+  },
+  'exa.codeium_common_pb.FastStatus': { 1: scalar('is_active', 8), 2: scalar('tooltip', 9) },
+  'exa.codeium_common_pb.KnowledgeBaseItem': {
+    2: scalar('text', 9), 3: scalar('url', 9), 4: scalar('title', 9), 7: scalar('summary', 9),
   },
   'exa.codeium_common_pb.ModelStatusInfo': {
     1: enumeration('model'), 2: scalar('message', 9), 3: enumeration('status'), 4: scalar('model_uid', 9),

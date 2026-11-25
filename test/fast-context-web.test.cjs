@@ -27,8 +27,8 @@ function fakeServer({ webSearch = true, disabled = false, results = [], status =
   };
   return { request, calls };
 }
-const item = ({ id = 'r1', url = 'https://example.com/a', title = 'Example A', text = 'snippet' } = {}) =>
-  Buffer.concat([s(1, id), s(3, url), s(4, title), s(7, text)]);
+const item = ({ id = 'r1', url = 'https://example.com/a', title = 'Example A', text = 'snippet', summary } = {}) =>
+  Buffer.concat([s(1, id), ...(text ? [s(2, text)] : []), s(3, url), s(4, title), ...(summary ? [s(7, summary)] : [])]);
 
 test('web search asks the official origin only, without redirects or TLS opting out', async () => {
   const server = fakeServer({ results: [item()] });
@@ -41,6 +41,15 @@ test('web search asks the official origin only, without redirects or TLS opting 
   assert.equal(search.options.redirect, 'error');
   assert.equal(search.options.headers['content-type'], 'application/proto');
   assert.ok(search.options.signal);
+});
+
+test('a result body wins over the server summary, and the summary is the fallback', async () => {
+  const both = fakeServer({ results: [item({ text: 'body', summary: 'one line' })] });
+  assert.equal((await createWebClient({ key: KEY, request: both.request }).search({ query: 'x' })).results[0].text, 'body');
+  const summaryOnly = fakeServer({ results: [item({ text: '', summary: 'one line' })] });
+  assert.equal((await createWebClient({ key: KEY, request: summaryOnly.request }).search({ query: 'x' })).results[0].text, 'one line');
+  const neither = fakeServer({ results: [item({ text: '' })] });
+  assert.equal((await createWebClient({ key: KEY, request: neither.request }).search({ query: 'x' })).results[0].text, '');
 });
 
 test('web search honours the account switch and team ban without bypassing them', async () => {

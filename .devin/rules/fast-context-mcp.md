@@ -8,7 +8,7 @@ description: "改 Fast Context 工具/开关/凭据/SSRF 边界，或外部 MCP 
 `src/fast-context/` —— 把检索能力以 stdio MCP 暴露给外部 harness 的唯一模块。四个工具：`code_search`、`web_search`、`web_read_url`、`fast_context_status`。
 
 - **开关**：`external-mcp.json`（0600、原子写）。standalone 启动时读一次、**每次工具调用前再读**；关闭时 `tools/list` 返回空数组、`tools/call` 回 `isError` 文案；`main()` 未开启时 stderr + 退出码 1。
-- **原生耦合点（改动必查）**：`GetUserJwt`、`GetWebSearchResults`、`GetCliTeamSettings` 的字段 3/4，搜索结果项字段 3/4/7；凭据来自 `state.vscdb` 的 `ItemTable.windsurfAuthStatus`（二进制里搜不到，属数据面契约——探针的 `authStore` 只报告，不算 drift）。
+- **原生耦合点（改动必查）**：`GetUserJwt`、`GetWebSearchResults`、`GetCliTeamSettings` 的字段 3/4，搜索结果项字段 2/3/4（正文/URL/标题；f7 是 summary，仅正文缺失时回落）；凭据来自 `state.vscdb` 的 `ItemTable.windsurfAuthStatus`（二进制里搜不到，属数据面契约——探针的 `authStore` 只报告，不算 drift）。2026-11-25 纠正：`exa.codeium_common_pb.KnowledgeBaseItem` 的 f7 是 `summary`、正文在 f2，此前把 f7 当正文会静默只返回摘要；同名的 `exa.knowledge_base_pb.KnowledgeBaseItem`（f6 `content`、f7 `last_crawled_at`）是连接器消息，别混用。
 - **失败语义**：`credentials_unavailable`/`unauthenticated`/`permission_denied`/`web_search_disabled`/`upstream_http_NNN` 必须显式返回，不得静默降级成空结果。
 - **SSRF 边界**：https only、每跳重新阻断私有/本地字面量与内嵌凭据、最多 5 跳、4 MB、content-type 白名单、20 s。**DNS 结果不检查**（代理 fake-IP 模式会把公网域名解析进保留段）——`127.0.0.1.nip.io` 只能靠 https + 证书拦；改这条前先读 `web.cjs` 顶部注释。
 - **根目录**：`--root` 必须绝对 + realpath + 目录；面板 roots 只来自工作区或用户在对话框显式选择（最多保留 10 个）。
