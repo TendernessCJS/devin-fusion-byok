@@ -99,3 +99,29 @@ Anthropic 12 / Google 8 / Moonshot 4 / Z.ai 3 / xAI 2 / Meta 1 / NVIDIA 3 / Deep
 所以分组字段在那面必然缺席，`mergeNativeEntry` 必须成对 carry `pickerGroup` 与 `pickerGroupRank`。
 
 若厂商改了 section 名：回落为「第一个至少含一个命名组的 section」；全为无名组时不写分组字段，面板走启发式厂商表。
+
+## REA 取证：sorts 与 provider 枚举的两条消费路径（2026-11-26，Devin 3.15.14）
+
+REA `analyze_javascript_application` 对 4 个 webapp chunk（54,655 B）成功：4/4 解析、`evidence_id ev_ec56cd43d173…`；语义图仍是 partial（8,878 unknowns），
+整包依旧超时/超堆，故只作**字节级静态观察**，不能当「不存在」的证明。
+
+**picker 消费排序区**（`chunk-modelCatalogSource-Btz8hEjS.js`）：`clientModelSorts` 被映射成
+`{name, isDefault: name==='All'||name==='Recommended', displayMetric, groups:[{name: groupName, modelUids}]}`；label→uid 用
+`Map(label, modelUid)` 解析，**解析不到的组被丢弃**，全空段也被丢弃。⇒ 段名/组名是纯数据（客户端只特判 `All`/`Recommended`），
+我们的 label 必须唯一（重复 label 后者覆盖，前者在 sorts 里永远解析不到）。`Sa()` 另把「组内选项全是 `model-router`」的组标 `isFeatured`。
+
+**设置页（允许列表）不读 sorts**（`chunk-AllowlistedModelsSection-p9l5yx_a.js`）：`Vt()` 按每行 `provider` 枚举分组，顺序来自客户端常量数组；
+组内 `Bt()` 按 `modelInfo.modelFamilyUid` 分族、`modelFamilyMetadata.modelFamilyLabel` 取名，族内按维度 order 排序；表头名来自 `providerNames`
+（服务端映射），副标题是「启用族数/总族数」。默认成员用 `ModelFamilyMetadata.f3 is_default_model_in_family`，缺失则取首个非 disabled。
+
+**两条来源实测等价**：`clientModelConfigs` 里 318 行同时有 `f10` 与 Provider 段归属，1:1 无跨组——`WINDSURF(1) ⇄ Cognition`、`ZAI(9) ⇄ Z.ai`、
+`META(13) ⇄ Meta`，`adaptive`/`fusion`/工具行也都是 1。枚举全表：`WINDSURF 1 / OPENAI 2 / ANTHROPIC 3 / GOOGLE 4 / XAI 5 / DEEPSEEK 6 / MOONSHOT 7 /
+QWEN 8 / ZAI 9 / MINIMAX 10 / NVIDIA 11 / THINKING_MACHINES 12 / META 13`。⇒ `pickerGroup` 以 sorts 为准、`f10` 作兜底（CLI 面无排序区）。
+
+**f32 判据实测**：`model_configs_v7.ca58930127d504dd.bin` 451 条 `fusion-*` 全部带 f32（0 条缺）；被扩展重写过的 `b0239737b4184efa.bin` 778 条里
+327 条缺 f32，恰等于发射集。⇒ proto 观测可直接剔除 f32-less fusion 行。
+
+**schema 有、数据没有**：`ClientModelConfig.f21 fast_status`（780 行 0 条）、`ModelFamilyMetadata.f3 is_default_model_in_family`（55 族 0 族置位）。
+所以 Fast Mode 只能读 Fusion 维度、族默认成员只能按 uid/label 推断；不要在评审里把它们当漏读。
+
+**`displayOption` 语义**（`y()`）：`0→standard-picker`、`3→model-router`、`4→quick-review`、`2/5/6/7→invisible`——与我们 emit 组合写 3、声明行写 6 一致。

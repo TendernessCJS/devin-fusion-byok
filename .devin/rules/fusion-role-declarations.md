@@ -24,6 +24,17 @@ description: "改 Fusion Lead/Sidekick 准入判定、或排查「官方侧手�
 - **侧手的 harness 判定要覆盖两处，不能只覆盖侧手自己那处**：组合的 `Lead` claim 也要过同一个谓词（`sidekickHarnessOk`）。
   否则侧手模型行一旦失去 harness，被顺带拿掉的是**整个 Lead 家族**（实测：只改侧手那一处时，harness 移到声明行后 leads 26 → 0、sidekicks 仍 10）。
 
+## 侧手 order 漂移（2026-11-26 实测）
+
+- **纯官方载荷里每个侧手只有一个 order**：两个 identity 的 451 条组合中没有任何侧手出现第二个 order（order 1..10 各一）。
+  历史那条「四个侧手各有两个相邻 order」的观测，来源是**我们自己发射的镜像**被服务端回传后参与投票。
+- **`min(order)` 只是护栏**：`eligibleNativeSidekicks` 取声明集合里最小的 order，真实载荷上等价于唯一值；不要把它当成
+  「厂商会按 Lead 变 order」的证据。
+- **自产镜像现在在观测层就剔除**：proto 里 `fusion-*` 且无 f32 能力记录 ⇒ 我们的行（官方 451/451 带 f32；被使用过的缓存里
+  恰好 327 条不带 = 当前发射集），`nativeEntries` 直接跳过；JSON 面无已验证判据，仍靠 backend 的 `emittedUids`。
+- **漂移要上报而不是静默**：`discoverOfficialRoles` 返回 `sidekickOrderDrift`（uid + 升序 orders），`buildCatalog` 透传，
+  backend 记一次 `sidekick-order-drift`。线上再出现漂移，先查是不是镜像回流，再怀疑厂商改版。
+
 ## Lead 没有声明面（2026-11-26 复核）
 
 - 780 条里 **0 条** uid 或 label 含 `lead`；非 `fusion-` 的 router 行只有 `adaptive` / `fusion` / `subagent-default` /
