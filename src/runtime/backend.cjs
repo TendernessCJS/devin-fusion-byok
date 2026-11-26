@@ -137,19 +137,46 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
   // (a full seed never changes it) meant that improvement was never written —
   // every restart re-seeded the poorer form and the mirrored combinations
   // flipped between complete and empty.
-  const onNativeModels = entries => {
+  // The selectable-catalog RPC is a complete list, so the vendor's preset space
+  // (the `fusion-*` rows: combinations plus the sidekick roster) is synced
+  // rather than accumulated — a retired combination must stop voting on the
+  // dimensions instead of lingering in the union forever. Plain natives keep
+  // accumulating, because the entitlement channel carries rows this RPC never
+  // sends. User state is not touched here: enable/disable lives in the extension
+  // config, and a uid that survives keeps whatever `disabled` the vendor now
+  // reports. The one thing observation must never do is read back our own
+  // mirrors: they wear official-shaped uids, so the CLI serves them straight
+  // back and they would vote on the very dimensions they copy.
+  let emittedUids = new Set();
+  const onEmitted = uids => { emittedUids = uids instanceof Set ? uids : new Set(uids || []); };
+  const onNativeModels = (entries, meta = {}) => {
     if (!Array.isArray(entries)) return;
     let improved = false;
+    // `meta.rpc` is the full service path (`/svc/GetCliModelConfigs`), so
+    // comparing it to the bare method name silently disabled the sync below.
+    const method = String(meta.rpc || '').split('/').pop();
+    const complete = method === 'GetCliModelConfigs';
+    const seen = complete ? new Set() : null;
     for (const entry of entries) {
       const normalized = normalizeNativeEntry(entry);
-      if (!normalized) continue;
+      if (!normalized || emittedUids.has(normalized.uid)) continue;
       const prior = observedNatives.get(normalized.uid);
       const merged = mergeNativeEntry(prior, normalized);
       const dimsOf = value => JSON.stringify([value.sidekickDimension ?? null, value.fusionMetadata ?? null]);
       if (!prior || prior.disabled !== merged.disabled || prior.label !== merged.label ||
         dimsOf(prior) !== dimsOf(merged)) improved = true;
       observedNatives.set(normalized.uid, merged);
+      if (seen) seen.add(normalized.uid);
     }
+    let pruned = 0;
+    if (seen) {
+      for (const uid of [...observedNatives.keys()]) {
+        if (seen.has(uid) || !uid.startsWith('fusion-')) continue;
+        observedNatives.delete(uid);
+        pruned++;
+      }
+    }
+    if (pruned) { improved = true; log('native-pruned', { count: pruned }); }
     const grew = observedNatives.size !== observedSize;
     if (grew) { observedSize = observedNatives.size; log('native-observed', { count: observedSize }); }
     if (grew || improved) scheduleNativeCacheSave();
@@ -277,7 +304,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     const policy = proxyPolicy;
     const upstreamForward = body => {
       if (!policy) { response.writeHead(503, { 'content-type': 'application/json' }); response.end('{"error":"proxy_unavailable"}'); return; }
-      forward(request, response, target, { body, rpc, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids, proxy: policy });
+      forward(request, response, target, { body, rpc, getCatalog, log: forwardLog, onFusionStatus, onNativeModels, onAllowedUids: onObservedAllowedUids, onEmitted, proxy: policy });
     };
     if (request.method !== 'POST' || ![API_PREFIX + 'AssignModel', API_PREFIX + 'GetChatMessage'].includes(rpc)) {
       upstreamForward(); return;

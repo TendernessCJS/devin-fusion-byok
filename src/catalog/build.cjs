@@ -283,6 +283,20 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   // effort variant of the family and all of them become selectable values.
   const sidekickReps = [...sidekickPools.values()].flatMap(variants =>
     variants[0].native ? [variants[0]] : variants);
+  // One Lead's dropdown carries every selected sidekick at once and the picker
+  // drops a duplicate order silently, so a shared official number has to be
+  // settled here: the first claimant (by order, then uid) keeps it and the rest
+  // fall into the native band with their official name intact — the value keeps
+  // merging by name, only its position moves.
+  const officialSideOrders = new Map();
+  const takenSideOrders = new Set();
+  for (const sidekick of sidekickReps
+    .filter(item => item.native && item.dimension && Number.isSafeInteger(item.dimension.order))
+    .sort((a, b) => a.dimension.order - b.dimension.order || (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0))) {
+    if (takenSideOrders.has(sidekick.dimension.order)) continue;
+    takenSideOrders.add(sidekick.dimension.order);
+    officialSideOrders.set(sidekick.uid, sidekick.dimension.order);
+  }
   const pairs = [], customLeadSlots = new Map(), customSideSlots = new Map();
   for (const lead of candidates.lead) {
     for (const sidekick of sidekickReps) {
@@ -308,10 +322,11 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
         : sidekick.familyLabel + (sidekick.effort ? ` ${effortMetadata(sidekick.effort).name}` : '');
       if (!(lead.native && lead.leadDimension)) customLeadSlots.set(leadDim,
         { providerId: lead.native ? '' : lead.providerId, key: lead.native ? '' : lead.key });
-      if (!(sidekick.native && sidekick.dimension)) {
+      const officialSide = sidekick.native && sidekick.dimension && officialSideOrders.has(sidekick.uid);
+      if (!officialSide) {
         customSideSlots.set(sideDim, {
           base: sidekick.native ? `native:${sidekick.uid}` : `byok:${sidekick.key}`,
-          slot: effortMetadata(sidekick.effort).order,
+          slot: sidekick.native ? (sidekick.dimension ? sidekick.dimension.order : 0) : effortMetadata(sidekick.effort).order,
           providerId: sidekick.native ? '' : sidekick.providerId,
           key: sidekick.native ? '' : sidekick.key,
           effort: sidekick.native ? null : (sidekick.effort ?? null),
@@ -399,7 +414,8 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
     const leadOrder = lead.native && lead.leadDimension ? lead.leadDimension.order : leadOrders.get(leadDim);
     const effort = lead.native ? lead.effortDimension || null
       : lead.effort ? effortMetadata(lead.effort) : null;
-    const sideOrder = sidekick.native && sidekick.dimension ? sidekick.dimension.order : sideOrders.get(sideDim);
+    const sideOrder = sidekick.native && sidekick.dimension && officialSideOrders.has(sidekick.uid)
+      ? officialSideOrders.get(sidekick.uid) : sideOrders.get(sideDim);
     fusions[uid] = { uid, label, leadUid: lead.uid, sidekickUid: sidekick.uid,
       leadNative: lead.native, sidekickNative: sidekick.native,
       ...(lead.native ? { leadHarnessUids: lead.leadHarnessUids } : {}),

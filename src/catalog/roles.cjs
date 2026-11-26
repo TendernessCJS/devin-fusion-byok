@@ -15,7 +15,7 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
 
   const reservedOrders = new Set(), reservedLeadOrders = new Set();
   const leadNamesByOrder = new Map(), leadClaimsByTuple = new Map();
-  const sidekickClaimsByUid = new Map(), sidekickClaimsByOrder = new Map();
+  const sidekickClaimsByUid = new Map();
   const officialCombos = [];
 
   for (const entry of observed) {
@@ -69,8 +69,6 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
         const rec = sidekickClaimsByUid.get(sideCandidate);
         rec.orders.add(sidekickDim.order);
         rec.names.add(sidekickDim.name);
-        if (!sidekickClaimsByOrder.has(sidekickDim.order)) sidekickClaimsByOrder.set(sidekickDim.order, new Set());
-        sidekickClaimsByOrder.get(sidekickDim.order).add(sideCandidate);
       }
     }
 
@@ -127,10 +125,18 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
     }
   }
 
+  // A Sidekick order is the value's position in the Lead's own dropdown, not a
+  // global identity: the same uid sits at different numbers depending on which
+  // siblings that Lead offers. Measured on Devin 3.15.14, four of the eleven
+  // declared sidekicks claim two adjacent orders each (gpt-5-6-sol-high 6/7,
+  // glm-5-2 7/8, claude-sonnet-5-5-medium 8/9, claude-haiku-5-5-medium 9/10),
+  // so every claimant of the contested numbers — including swe-2-1-medium,
+  // which the vendor newly pairs with Claude leads — poisoned the whole block.
+  // Only a disagreement about the NAME poisons a uid: two names cannot merge
+  // into one picker value, while a repeated order is settled at emit time.
   const sidekickConflicts = new Set();
-  for (const uids of sidekickClaimsByOrder.values()) if (uids.size > 1) for (const u of uids) sidekickConflicts.add(u);
   for (const [u, rec] of sidekickClaimsByUid) {
-    if (rec.orders.size !== 1 || rec.names.size !== 1) sidekickConflicts.add(u);
+    if (rec.names.size !== 1) sidekickConflicts.add(u);
   }
 
   const eligibleNativeLeads = new Map();
@@ -153,7 +159,14 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
   for (const [uid, rec] of sidekickClaimsByUid) {
     if (sidekickConflicts.has(uid)) continue;
     const native = nativeModelsMap.get(uid);
-    const sidekickOrder = [...rec.orders][0];
+    // The representative order is the SMALLEST claimed one, not the most
+    // frequent: a persisted cache carries two kinds of noise that only ever add
+    // larger numbers — combinations the vendor already retired, and the mirrors
+    // we emitted ourselves (their uids look official, so they come back through
+    // observation). Measured 2026-11-26: GLM-5.2 High is 7 in every live
+    // combination and 8 only in our own mirror; the majority rule picked 8 and
+    // the picker then showed the value twice (vendor 7 + ours 8).
+    const sidekickOrder = [...rec.orders].sort((a, b) => a - b)[0];
     const sidekickName = [...rec.names][0];
     eligibleNativeSidekicks.set(uid, {
       uid, label: sidekickName || native.label || uid,

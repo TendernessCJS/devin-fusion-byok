@@ -18,6 +18,15 @@ const officialCombo = (leadUid, leadOrder, leadName, effortOrder) =>
       { key: 'Lead', order: leadOrder, name: leadName, controlType: 3 },
       { key: 'Effort', order: effortOrder, name: OFFICIAL_EFFORT_NAMES[effortOrder], controlType: 1 },
       { key: 'Sidekick', order: 3, name: 'SWE-2 Max', controlType: 3 }] });
+// name → emitted Sidekick order, over every matrix entry a build produced.
+const emittedSidekickOrders = result => {
+  const map = new Map();
+  for (const model of result.models.filter(model => model.kind === 'matrix' && model.json)) {
+    const side = model.json.modelFamilyMetadata?.entries?.find(entry => entry.key === 'Sidekick');
+    if (side) map.set(side.value.name, side.value.order);
+  }
+  return map;
+};
 const officialSeries = (base, leadOrder, leadName) => Object.entries(OFFICIAL_EFFORT_ORDERS).flatMap(([tier, effortOrder]) => {
   const uid = `${base}-${tier}`;
   return [nativeLead(uid, `${leadName} ${OFFICIAL_EFFORT_NAMES[effortOrder]}`), officialCombo(uid, leadOrder, leadName, effortOrder)];
@@ -342,17 +351,25 @@ test('official Sidekick bindings give canonical dimension and full harness; conf
     { uid: 'fusion-b-sidekick-swe-2-high', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], sidekickDimension: { order: 7, name: 'Renamed' } }]);
   const high = conflicts.sidekicks.find(item => item.uid === 'swe-2-high');
   assert.equal(high, undefined, 'conflicting bindings discard the borrowed dimension and candidate');
-  const conflicted = buildCatalog(config(), [...natives,
+  // Two natives on one order are not a conflict: a Sidekick order is a position
+  // inside its own Lead's dropdown, so the repeat is settled where the matrix is
+  // emitted (see `emittedSidekickOrders` below).
+  const shared = buildCatalog(config(), [...natives,
     { uid: 'fusion-lead-a-sidekick-swe-2-max', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], sidekickDimension: { order: 3, name: 'SWE-2 Max' } },
     { uid: 'fusion-a-sidekick-gpt-5-6-luna-high', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], sidekickDimension: { order: 4, name: 'Luna' } },
     { uid: 'fusion-b-sidekick-swe-2-high', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], sidekickDimension: { order: 4, name: 'Squatter' } }]);
-  assert.equal(conflicted.sidekicks.find(item => item.uid === 'gpt-5-6-luna-high'), undefined,
-    'an order claimed by two natives unlocks neither the dimension nor the unfamiliar harness');
+  assert.deepEqual(shared.sidekicks.find(item => item.uid === 'gpt-5-6-luna-high').dimension, { order: 4, name: 'Luna' });
+  assert.deepEqual(shared.sidekicks.find(item => item.uid === 'swe-2-high').dimension, { order: 4, name: 'Squatter' });
+  const sharedOrders = emittedSidekickOrders(shared);
+  assert.equal(new Set(sharedOrders.values()).size, sharedOrders.size,
+    'two Sidekick values never land on one emitted order');
+  assert.ok(sharedOrders.has('Luna') && sharedOrders.has('Squatter'), 'both values stay selectable');
   const claimedThree = buildCatalog(config(), [...natives,
     { uid: 'fusion-lead-a-sidekick-swe-2-max', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], sidekickDimension: { order: 3, name: 'SWE-2 Max' } },
     { uid: 'fusion-a-sidekick-swe-odd', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], sidekickDimension: { order: 3, name: 'Odd' } }]);
-  assert.equal(claimedThree.sidekicks.find(item => item.uid === 'swe-2-max'), undefined,
-    'contested order 3 drops swe-2-max eligibility');
+  assert.deepEqual(claimedThree.sidekicks.find(item => item.uid === 'swe-odd').dimension, { order: 3, name: 'Odd' },
+    'a second claimant of a taken order keeps its declared binding');
+  assert.deepEqual(claimedThree.sidekicks.find(item => item.uid === 'swe-2-max').dimension, { order: 3, name: 'SWE-2 Max' });
 });
 
 test('Fast Mode dimension parses strictly and FastMode variants never bind', () => {
@@ -382,33 +399,64 @@ test('suffix binding is exact: invented tails never bind the base uid', () => {
     'an unknown suffix tail must not grant the base uid unfamiliar-harness eligibility');
 });
 
-test('order and uid claim conflicts poison both the uids and the contested orders', () => {
+test('a repeated Sidekick order keeps every claimant; a second name poisons only its uid', () => {
   const natives = ['swe-a', 'swe-b', 'swe-c', 'swe-d', 'swe-2-max'].map(uid =>
     ({ uid, label: uid, disabled: false, isModelRouter: false, harnessUids: uid === 'swe-2-max' ? ['swe-1p6', 'swe-1p5'] : ['odd-' + uid] }));
   const bind = (fusionUid, order, name, disabled = false) =>
     ({ uid: fusionUid, label: 'F', disabled, isModelRouter: true, harnessUids: ['fusion'], sidekickDimension: { order, name } });
   const maxOfficial = bind('fusion-lead-a-sidekick-swe-2-max', 3, 'SWE-2 Max');
-  const threeClaimers = buildCatalog(config(), [...natives, maxOfficial,
-    bind('fusion-x-sidekick-swe-a', 9, 'A'), bind('fusion-y-sidekick-swe-b', 9, 'B'), bind('fusion-z-sidekick-swe-c', 9, 'C')]);
+  const share = (...extra) => buildCatalog(config(), [...natives, maxOfficial, ...extra]);
+  // Devin 3.15.14 pairs one Sidekick at different numbers under different Leads
+  // (gpt-5-6-sol-high 6/7, glm-5-2 7/8, claude-sonnet-5-5-medium 8/9,
+  // claude-haiku-5-5-medium 9/10), so a shared number must not poison a uid —
+  // that is exactly how swe-2-1-medium disappeared. Every claimant keeps its
+  // declared name and the emitted card gives each one its own order.
+  const threeClaimers = share(bind('fusion-x-sidekick-swe-a', 9, 'A'), bind('fusion-y-sidekick-swe-b', 9, 'B'),
+    bind('fusion-z-sidekick-swe-c', 9, 'C'));
   for (const uid of ['swe-a', 'swe-b', 'swe-c'])
-    assert.equal(threeClaimers.sidekicks.find(item => item.uid === uid), undefined, uid + ' shares a contested order');
-  const orderNineLater = buildCatalog(config(), [...natives, maxOfficial,
-    bind('fusion-x-sidekick-swe-a', 9, 'A'), bind('fusion-y-sidekick-swe-b', 9, 'B'),
-    bind('fusion-w-sidekick-swe-d', 9, 'D')]);
-  assert.equal(orderNineLater.sidekicks.find(item => item.uid === 'swe-d'), undefined,
-    'a poisoned order never becomes claimable by a later contender');
-  const uidConflict = buildCatalog(config(), [...natives, maxOfficial,
-    bind('fusion-x-sidekick-swe-a', 9, 'A'), bind('fusion-y-sidekick-swe-a', 11, 'B'),
-    bind('fusion-z-sidekick-swe-d', 11, 'B')]);
-  assert.equal(uidConflict.sidekicks.find(item => item.uid === 'swe-a'), undefined, 'inconsistent claims conflict the uid');
-  assert.equal(uidConflict.sidekicks.find(item => item.uid === 'swe-d'), undefined,
-    'an order touched by a conflicting uid poisons unrelated claimers at that order');
+    assert.ok(threeClaimers.sidekicks.find(item => item.uid === uid), uid + ' keeps a declared binding on a shared order');
+  const orders = emittedSidekickOrders(threeClaimers);
+  assert.equal(new Set(orders.values()).size, orders.size, 'no two emitted Sidekick values share an order');
+  const orderNineLater = share(bind('fusion-x-sidekick-swe-a', 9, 'A'), bind('fusion-y-sidekick-swe-b', 9, 'B'),
+    bind('fusion-w-sidekick-swe-d', 9, 'D'));
+  assert.ok(orderNineLater.sidekicks.find(item => item.uid === 'swe-d'), 'a later claimant of the same order still binds');
+  const uidConflict = share(bind('fusion-x-sidekick-swe-a', 9, 'A'), bind('fusion-y-sidekick-swe-a', 11, 'B'),
+    bind('fusion-z-sidekick-swe-d', 11, 'B'));
+  assert.equal(uidConflict.sidekicks.find(item => item.uid === 'swe-a'), undefined, 'two names for one uid still conflict it');
+  assert.ok(uidConflict.sidekicks.find(item => item.uid === 'swe-d'), 'a poisoned uid never blocks another claimant of its order');
   const maxModel = uidConflict.models.find(model => model.kind === 'matrix' && uidConflict.fusions[model.uid].sidekickUid === 'swe-2-max');
   const poisonedThree = buildCatalog(config(), [...natives,
     bind('fusion-x-sidekick-swe-a', 3, 'A'), bind('fusion-y-sidekick-swe-b', 3, 'B')]);
   assert.equal(poisonedThree.sidekicks.find(item => item.uid === 'swe-2-max'), undefined,
     'unpaired swe-2-max cannot join sidekicks without an official pairing');
   assert.ok(maxModel && uidConflict.sidekicks.find(item => item.uid === 'swe-2-max').dimension.order === 3, 'swe-2-max keeps canonical order 3 when officially bound');
+});
+
+test('a Sidekick value keeps the smallest observed order, so mirrors and stale rows cannot shift it', () => {
+  // Live catalog 2026-11-26: claude-haiku-5-5-medium is 9 in every official
+  // combination; the extra 10 came from combinations we mirrored ourselves.
+  // Taking the smallest claim keeps us on the vendor's number even when the
+  // stale/self-mirrored rows outnumber the live ones, which is exactly the
+  // shape that made GLM-5.2 High render twice (vendor 7 + our 8).
+  const natives = [
+    { uid: 'claude-haiku-5-5-medium', label: 'Claude Haiku 5.5 Medium', disabled: false, isModelRouter: false, harnessUids: ['strawberry-pancake'] },
+    { uid: 'swe-2-1-medium', label: 'SWE-2.1 Medium', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6-exec'] },
+  ];
+  const bind = (leadUid, order, name) =>
+    ({ uid: `fusion-${leadUid}-sidekick-${name === 'SWE-2.1 Medium' ? 'swe-2-1-medium' : 'claude-haiku-5-5-medium'}`,
+      label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], sidekickDimension: { order, name } });
+  const observed = [...natives,
+    bind('lead-a', 9, 'Claude Haiku 5.5 Medium'),
+    bind('lead-c', 10, 'Claude Haiku 5.5 Medium'), bind('lead-d', 10, 'Claude Haiku 5.5 Medium'),
+    bind('lead-e', 10, 'Claude Haiku 5.5 Medium'), bind('lead-f', 10, 'SWE-2.1 Medium')];
+  const result = buildCatalog(config(), observed);
+  const haiku = result.sidekicks.find(item => item.uid === 'claude-haiku-5-5-medium');
+  const swe = result.sidekicks.find(item => item.uid === 'swe-2-1-medium');
+  assert.deepEqual(haiku.dimension, { order: 9, name: 'Claude Haiku 5.5 Medium' }, 'the smallest claim wins even when it is the minority');
+  assert.deepEqual(swe.dimension, { order: 10, name: 'SWE-2.1 Medium' }, 'a neighbour on the contested position still binds');
+  const orders = emittedSidekickOrders(result);
+  assert.ok(orders.has('SWE-2.1 Medium') && orders.has('Claude Haiku 5.5 Medium'), 'both values reach the emitted card');
+  assert.equal(new Set(orders.values()).size, orders.size, 'and they never share an order');
 });
 
 test('the official Fusion family card mirrors both BYOK members and native pairings', () => {

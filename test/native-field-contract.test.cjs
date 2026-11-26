@@ -274,12 +274,21 @@ const EXPECTED_FIELDS = {
     1: scalar('label', 9), 4: scalar('disabled', 8), 5: scalar('supports_images', 8), 6: scalar('supports_legacy', 8),
     10: enumeration('provider'), 18: scalar('max_tokens', 5), 21: message('fast_status'), 22: scalar('model_uid', 9),
     23: message('model_info'), 30: message('model_family_metadata'), 32: message('model_dimensions', true),
+    33: message('disabled_reason', false, true), 34: enumeration('compliance_levels', true),
+    35: message('client_traits'), 36: scalar('allowlist_covered_model_uids', 9, true), 37: message('retirement_status'),
   },
   'exa.codeium_common_pb.ModelInfo': {
     3: enumeration('model_type'), 4: scalar('max_tokens', 5), 6: message('model_features'), 13: scalar('max_output_tokens', 5),
     17: scalar('model_uid', 9), 18: scalar('inference_server_url', 9), 20: scalar('harness_uids', 9, true),
-    22: enumeration('display_option'), 23: scalar('model_family_uid', 9), 25: scalar('is_model_router', 8),
+    21: message('arena_config', false, true), 22: enumeration('display_option'), 23: scalar('model_family_uid', 9),
+    24: message('inference_config'), 25: scalar('is_model_router', 8),
     26: message('compaction_thresholds'), 27: scalar('aliases', 9, true), 28: enumeration('partner_providers', true),
+    29: scalar('allow_route_override', 8),
+  },
+  // Lead-side traits carried by a Fusion entry (3.15.14). Absent means false,
+  // which is the conservative default for a BYOK lead.
+  'exa.codeium_common_pb.ClientModelTraits': {
+    1: message('cache_keepalive'), 2: scalar('skips_fusion_lead_reminders', 8), 3: scalar('bash_mode', 8),
   },
   'exa.codeium_common_pb.ModelFeatures': {
     8: scalar('zero_shot_capable', 8), 11: scalar('supports_images', 8), 12: scalar('supports_tool_calls', 8),
@@ -385,6 +394,14 @@ const EXPECTED_ENUMS = {
   'exa.codeium_common_pb.ChatMessageSource': {
     CHAT_MESSAGE_SOURCE_UNSPECIFIED: 0, CHAT_MESSAGE_SOURCE_USER: 1, CHAT_MESSAGE_SOURCE_SYSTEM: 2,
     CHAT_MESSAGE_SOURCE_UNKNOWN: 3, CHAT_MESSAGE_SOURCE_TOOL: 4, CHAT_MESSAGE_SOURCE_SYSTEM_PROMPT: 5,
+  },
+  // ModelInfo.f22. We emit 3 (MODEL_ROUTER) on every Fusion combination, which
+  // is exactly what the official combinations carry; 6 (HIDDEN_TOOL) is what
+  // the vendor's `fusion-sidekick-*` rows carry, and 0 is a plain model row.
+  'exa.codeium_common_pb.DisplayOption': {
+    DISPLAY_OPTION_UNSPECIFIED: 0, DISPLAY_OPTION_ARENA: 1, DISPLAY_OPTION_BATTLE_GROUP_ONLY: 2,
+    DISPLAY_OPTION_MODEL_ROUTER: 3, DISPLAY_OPTION_QUICK_REVIEW: 4, DISPLAY_OPTION_MIMIC: 5,
+    DISPLAY_OPTION_HIDDEN_TOOL: 6, DISPLAY_OPTION_COMPACTOR: 7, DISPLAY_OPTION_MODERN_AGENT_CHAT: 8,
   },
 };
 

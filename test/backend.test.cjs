@@ -65,7 +65,7 @@ async function fixture(t) {
           const body = options.body ?? await collect(req);
           forwarded.push({ target: target.href, body });
           forwardHook?.(req, options);
-          if (natives && /ModelConfigs|GetUserStatus/.test(req.url)) options.onNativeModels?.(natives);
+          if (natives && /ModelConfigs|GetUserStatus/.test(req.url)) options.onNativeModels?.(natives, { rpc: req.url });
           if (hold) held.set(req.url, res);
           else { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('official'); }
         },
@@ -307,6 +307,37 @@ test('a saved native Sidekick preference alone never grants capability without o
     body: JSON.stringify({ modelRouterUid: fusionUid, fusionLeadRouterUid: fusionUid }) });
   assert.equal(await response.text(), 'official');
   assert.equal(f.forwarded.at(-1).target, 'https://server.codeium.com' + API + 'AssignModel');
+});
+
+test('a retired official preset stops voting once the complete catalog omits it', async t => {
+  const f = await fixture(t);
+  const kept = { uid: 'fusion-claude-opus-5-5-medium-sidekick-swe-2-1-medium', label: 'F', disabled: false, isModelRouter: true,
+    harnessUids: ['fusion'], sidekickDimension: { order: 10, name: 'SWE-2.1 Medium' } };
+  const retired = { uid: 'fusion-claude-fable-5-1-medium-sidekick-glm-5-2', label: 'F', disabled: false, isModelRouter: true,
+    harnessUids: ['fusion'], sidekickDimension: { order: 8, name: 'GLM-5.2 High' } };
+  const prune = () => f.logs.filter(([event]) => event === 'native-pruned');
+  const ask = () => fetch(f.base + API + 'GetCliModelConfigs', { method: 'POST', body: 'native' });
+  f.setNatives([kept, retired]);
+  await ask();
+  assert.deepEqual(prune(), [], 'the first complete catalog prunes nothing');
+  f.setNatives([kept]);
+  await ask();
+  // The payload comes from the sandbox realm, so its Object.prototype differs.
+  assert.equal(prune().at(-1)?.[1]?.count, 1, 'a preset missing from the complete catalog is dropped');
+  // The bridge reports the full service path; comparing that to the bare method
+  // name is what silently disabled the sync in the shipped build, so both
+  // spellings have to prune identically.
+  f.setNatives(null);
+  f.setForwardHook((req, options) => {
+    if (/GetCliModelConfigs/.test(req.url)) options.onNativeModels?.([kept, retired], { rpc: 'GetCliModelConfigs' });
+  });
+  await ask();
+  f.setForwardHook((req, options) => {
+    if (/GetCliModelConfigs/.test(req.url)) options.onNativeModels?.([kept], { rpc: 'GetCliModelConfigs' });
+  });
+  await ask();
+  assert.equal(prune().length, 2, 'a bare method name prunes too');
+  assert.equal(prune().at(-1)[1].count, 1);
 });
 
 test('officially paired and standalone native Sidekicks assign declared harnesses', async t => {

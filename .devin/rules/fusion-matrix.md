@@ -36,11 +36,15 @@ description: "改 Fusion 矩阵 emit、Lead/Sidekick 资格与命名、家族维
   **三段 order 的段位关系由代码强制**：官方 Fusion 值（官方自填小整数，实测 Lead 1..8 / Sidekick 1..9）< 原生非 Fusion 值（`0x10000000..0x17ffffff`，哈希定位，
   实测不随供应商启停漂移）< BYOK 值（`0x20000000` 起）。`buildCatalog` 的 `assertNativeBand` 在原生段落点不在本段、或不高于官方最大值时抛 `order_band_conflict`；
   改 span/base 前先看它——段位相交会让两个值共用一个 order，而 picker 按 order 去重会**静默丢掉一个**。
+
+**Sidekick 的代表 order 取「最小声称值」，必须与官方一致**。观测里有两类噪声：官方已下线的组合、我们自镜像的 native×native 条目（uid 与官方同形，会被回读）；
+两者只会带来更大的数字，取最小即官方基准位（实测 GLM-5.2 High 7、GPT-5.6 Sol High 6、Sonnet 5.5 8、Haiku 5.5 9、SWE-2.1 10）。只有**名字**不一致才判死 uid；
+不同 uid 抢同一 order 留到发射时消解。要守的不变量是「我们的 order 与官方相同」——picker 按整族列值，同名不同序会多一行。观测侧两道卫生：官方预设随完整目录同步、自镜像 uid 不参与观测。
+
 ## 角色身份与命名（Fast Mode、Lead 资格、fast 档、族标签）
 
-- **`Fast Mode` 是正交开关，不属于 Lead 身份**（真机 40 个 `(Lead 值, Effort 值)` 组合**全部**同时存在 `Fast Mode=0` 与 `=1`，两者
-  Lead/Effort 值完全相同）。因此官方家族的 fast 兄弟必须**并入**官方族（`Claude Opus 5` 5 → 10 成员），不能单列成同名的第二行（旧实现产生了
-  `Claude Opus 5`/`Claude Opus 5.5` 两组重复 label，用户无从分辨）。官方族因此按**档位系列**吸收成员：凡 uid 能提出档位 token 的同族基成员都并入（官方声明的
+- **`Fast Mode` 是正交开关，不属于 Lead 身份**（同一 `(Lead 值, Effort 值)` 同时存在 `Fast Mode=0` 与 `=1`，两者
+  Lead/Effort 值完全相同）。因此官方家族的 fast 兄弟必须**并入**官方族（`Claude Opus 5` 5 → 10 成员），不能单列成同名的第二行。官方族因此按**档位系列**吸收成员：凡 uid 能提出档位 token 的同族基成员都并入（官方声明的
   uid、`-fast`/`-priority` 兄弟、以及官方从未声明的 `-none` 档，如 `gpt-6-sol-none` 与 `gpt-5-6-sol-none` →
   `GPT-6 Sol`/`GPT-5.6 Sol` 各 5 → **12** 成员），**提不出 token 的同族基成员才留在自己的单成员行**（真机当前无此情形）。并入成员**必须继承**该族的官方
   `leadDimension`；其 Effort 值由自己的 token 给出（`none` → `No Thinking`）。**Effort 的 order 一律取官方空间**（从

@@ -65,7 +65,7 @@ async function collect(stream, limit = 64 * 1024 * 1024) {
   for await (const chunk of stream) { length += chunk.length; if (length > limit) throw new Error('Message too large'); chunks.push(chunk); }
   return Buffer.concat(chunks, length);
 }
-function forward(request, response, target, { body, rpc = target.pathname, getCatalog, log = () => {}, onFusionStatus, onNativeModels, onAllowedUids, timeouts = {}, proxy } = {}) {
+function forward(request, response, target, { body, rpc = target.pathname, getCatalog, log = () => {}, onFusionStatus, onNativeModels, onAllowedUids, onEmitted, timeouts = {}, proxy } = {}) {
   const limits = { connect: 10000, headers: 120000, body: 120000 };
   for (const [key, name] of [[timeouts.connectMs, 'connect'], [timeouts.firstResponseMs, 'headers'], [timeouts.idleMs, 'body']]) {
     if (Number.isInteger(key) && key > 0 && key <= 2147483647) limits[name] = key;
@@ -178,11 +178,12 @@ function forward(request, response, target, { body, rpc = target.pathname, getCa
       try {
         const format = wire.decode(original, upstream.headers);
         const observed = collectNativeModels(format.data, { rpc, format });
-        if (observed.length) try { onNativeModels?.(observed); } catch {}
+        if (observed.length) try { onNativeModels?.(observed, { rpc }); } catch {}
         const observation = collectAllowedUids(format.data, { rpc, format });
         if (allowedTarget) notifyAllowed(observation);
         else if (observation) try { onAllowedUids?.(observation); } catch {}
         const catalog = getCatalog();
+        try { onEmitted?.(catalog?.matrixUids); } catch {}
         // A skip means the payload went back untouched, which otherwise reads
         // exactly like "nothing to do". It rides on the `catalog` line, which is
         // logged for every response, so a shape that stops being recognized stays
