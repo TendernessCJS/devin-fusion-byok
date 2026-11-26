@@ -17,6 +17,10 @@ function normalizeNativeEntry(entry) {
     ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
     ...(Number.isSafeInteger(entry.kind) ? { kind: entry.kind } : {}),
     ...(typeof entry.pickerListed === 'boolean' ? { pickerListed: entry.pickerListed } : {}),
+    ...(typeof entry.pickerGroup === 'string' && entry.pickerGroup.trim() && entry.pickerGroup.length <= 64
+      ? { pickerGroup: entry.pickerGroup } : {}),
+    ...(Number.isSafeInteger(entry.pickerGroupRank) && entry.pickerGroupRank >= 0 && entry.pickerGroupRank <= 0x7fffffff
+      ? { pickerGroupRank: entry.pickerGroupRank } : {}),
     ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
     ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
     ...(entry.supportsImages ? { supportsImages: true } : {}),
@@ -58,6 +62,12 @@ function mergeNativeEntry(prior, incoming) {
   // A sorts-carrying observation delivers a fresh verdict (picker-listed or not); a
   // flat-catalog observation leaves the prior verdict untouched.
   if (prior.pickerListed !== undefined && incoming.pickerListed === undefined) carried.pickerListed = prior.pickerListed;
+  // pickerGroup and its rank travel together under the same rule: a flat
+  // catalog observation has no sorts section and leaves both untouched.
+  if (incoming.pickerGroup === undefined && incoming.pickerGroupRank === undefined) {
+    if (prior.pickerGroup !== undefined) carried.pickerGroup = prior.pickerGroup;
+    if (prior.pickerGroupRank !== undefined) carried.pickerGroupRank = prior.pickerGroupRank;
+  }
   const merged = Object.keys(carried).length ? { ...incoming, ...carried } : { ...incoming };
   // Observation sources accumulate: a uid seen through any catalog keeps every
   // surface it was ever observed on, so picker classification stays truthful.

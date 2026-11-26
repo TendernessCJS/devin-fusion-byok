@@ -351,7 +351,7 @@ function isOwnUid(uid) {
   return uid.slice('fusion-'.length).split('-sidekick-').some(part => part.startsWith('dfbyok-'));
 }
 
-function nativeEntries(entries, isJson, source, pickerLabels) {
+function nativeEntries(entries, isJson, source, pickerGroups) {
   const seen = [];
   for (const entry of entries) {
     let uid, label, disabled, meta, dimension, fusionMeta;
@@ -384,7 +384,9 @@ function nativeEntries(entries, isJson, source, pickerLabels) {
       ...(meta.supportsImages ? { supportsImages: true } : {}),
       ...(meta.familyUid ? { familyUid: meta.familyUid } : {}),
       ...(source ? { sources: [source] } : {}),
-      ...(pickerLabels ? { pickerListed: pickerLabels.has(label) } : {}),
+      ...(pickerGroups ? { pickerListed: pickerGroups.listed.has(label),
+        ...(pickerGroups.groups.has(label)
+          ? { pickerGroup: pickerGroups.groups.get(label).group, pickerGroupRank: pickerGroups.groups.get(label).rank } : {}) } : {}),
     });
     if (normalized) seen.push(normalized);
   }
@@ -404,34 +406,72 @@ function defaultFusion(catalog) {
 }
 
 function jsonKey(object, camel, snake) { return has(object, snake) && !has(object, camel) ? snake : camel; }
-function protoPickerLabels(fields) {
-  const labels = new Set();
-  for (const section of fields.filter(field => field.number === 2 && field.wire === 2)) {
-    try {
-      for (const group of parseFields(section.value).filter(part => part.number === 2 && part.wire === 2)) {
-        for (const label of parseFields(group.value).filter(part => part.number === 2 && part.wire === 2)) {
-          labels.add(label.value.toString('utf8'));
-        }
-      }
-    } catch {}
-  }
-  return labels.size ? labels : null;
-}
-
-function jsonPickerLabels(payload) {
-  const sorts = payload[jsonKey(payload, 'clientModelSorts', 'client_model_sorts')];
-  if (!Array.isArray(sorts)) return null;
-  const labels = new Set();
-  for (const sort of sorts) {
-    const groups = sort?.groups;
-    if (!Array.isArray(groups)) continue;
-    for (const group of groups) {
-      const list = group?.modelLabels ?? group?.model_labels;
-      if (!Array.isArray(list)) continue;
-      for (const label of list) if (typeof label === 'string') labels.add(label);
+// The sorts section carries several alternative groupings (Recommended,
+// Provider, Cost): picker membership is the union of all of them, but the
+// vendor group comes only from the `Provider` section (falling back to the
+// first section that has any named group). Unnamed groups contribute
+// membership only — they never name a vendor and never consume a rank.
+function pickerSectionGroups(sections, groups) {
+  let target = sections.find(section => section.name === 'Provider');
+  if (!target) target = sections.find(section => section.groups.some(group => group.name));
+  if (!target) return;
+  const groupRanks = new Map();
+  let position = 0;
+  for (const group of target.groups) {
+    if (!group.name) continue;
+    const pos = position++;
+    if (!groupRanks.has(group.name)) groupRanks.set(group.name, pos);
+    const rank = groupRanks.get(group.name);
+    for (const label of group.labels) {
+      if (!groups.has(label)) groups.set(label, { group: group.name, rank });
     }
   }
-  return labels.size ? labels : null;
 }
 
-module.exports = { rpcShape, rewriteMessage, validateProtoCatalog, isOwnUid, reportFusionStatus, protoUid, protoFamilyUid, jsonMetadata, nativeEntries, reportNativeModels, defaultFusion, jsonKey, protoPickerLabels, jsonPickerLabels };
+function protoPickerGroups(fields) {
+  const listed = new Set(), groups = new Map(), sections = [];
+  for (const section of fields.filter(field => field.number === 2 && field.wire === 2)) {
+    try {
+      const inner = parseFields(section.value);
+      const nameField = inner.find(part => part.number === 1 && part.wire === 2);
+      const record = { name: nameField ? nameField.value.toString('utf8') : '', groups: [] };
+      for (const group of inner.filter(part => part.number === 2 && part.wire === 2)) {
+        const gInner = parseFields(group.value);
+        const gNameField = gInner.find(part => part.number === 1 && part.wire === 2);
+        const labels = gInner.filter(part => part.number === 2 && part.wire === 2).map(part => part.value.toString('utf8'));
+        record.groups.push({ name: gNameField ? gNameField.value.toString('utf8') : '', labels });
+        for (const label of labels) listed.add(label);
+      }
+      sections.push(record);
+    } catch {}
+  }
+  if (!listed.size) return null;
+  pickerSectionGroups(sections, groups);
+  return { listed, groups };
+}
+
+function jsonPickerGroups(payload) {
+  const sorts = payload[jsonKey(payload, 'clientModelSorts', 'client_model_sorts')];
+  if (!Array.isArray(sorts)) return null;
+  const listed = new Set(), groups = new Map(), sections = [];
+  for (const sort of sorts) {
+    const list = sort?.groups;
+    if (!Array.isArray(list)) continue;
+    const section = { name: typeof sort?.name === 'string' ? sort.name : '', groups: [] };
+    for (const group of list) {
+      const name = typeof group?.groupName === 'string' ? group.groupName
+        : (typeof group?.group_name === 'string' ? group.group_name : '');
+      const labels = [];
+      const raw = group?.modelLabels ?? group?.model_labels;
+      if (Array.isArray(raw)) for (const label of raw) if (typeof label === 'string') labels.push(label);
+      section.groups.push({ name, labels });
+      for (const label of labels) listed.add(label);
+    }
+    sections.push(section);
+  }
+  if (!listed.size) return null;
+  pickerSectionGroups(sections, groups);
+  return { listed, groups };
+}
+
+module.exports = { rpcShape, rewriteMessage, validateProtoCatalog, isOwnUid, reportFusionStatus, protoUid, protoFamilyUid, jsonMetadata, nativeEntries, reportNativeModels, defaultFusion, jsonKey, protoPickerGroups, jsonPickerGroups };

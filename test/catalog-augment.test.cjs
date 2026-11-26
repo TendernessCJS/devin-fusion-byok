@@ -235,7 +235,7 @@ for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} c
   } else {
     const fixture = statusFixture();
     assert.deepEqual(collectNativeModels(fixture.body, { rpc: lsStatus, format: proto }),
-      [{ uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6', 'swe-1p5'], isModelRouter: false, sources: ['entitlement'], pickerListed: true }]);
+      [{ uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6', 'swe-1p5'], isModelRouter: false, sources: ['entitlement'], pickerListed: true, pickerGroup: 'Official Group', pickerGroupRank: 0 }]);
     const direct = cat(m(1, cat(s(1, 'Router'), s(22, 'swe-router'), m(23, cat(s(20, 'swe-1p6'), v(25, 1))))));
     assert.deepEqual(collectNativeModels(direct, { rpc: 'GetCliModelConfigs', format: proto }),
       [{ uid: 'swe-router', label: 'Router', disabled: false, harnessUids: ['swe-1p6'], isModelRouter: true, sources: ['cli'] }]);
@@ -705,3 +705,75 @@ test('staleOwnEntries rejects malformed options loudly', () => {
   assert.throws(() => staleOwnEntries(flat), TypeError);
   assert.throws(() => staleOwnEntries(flat, { models: 'x' }), TypeError);
 });
+
+test('picker groups scope to the Provider section while pickerListed unions every section', () => {
+  const grp = (name, ...labels) => m(2, cat(...(name ? [s(1, name)] : []), ...labels.map(label => s(2, label))));
+  const section = (name, ...groups) => m(2, cat(s(1, name), ...groups));
+  const entry = (uid, label) => m(1, cat(s(1, label), s(22, uid)));
+  const providerNames = ['Cognition', 'OpenAI', 'Anthropic', 'Google', 'xAI', 'DeepSeek', 'Moonshot', 'Z.ai', 'NVIDIA', 'Meta'];
+  const input = cat(
+    entry('uid-rec', 'GLM-5.3 Low'), entry('uid-alpha', 'Alpha'), entry('uid-beta', 'Beta'),
+    entry('uid-gamma', 'Gamma'), entry('uid-out', 'Outside'),
+    // Recommended: one unnamed group whose labels must never name a vendor.
+    section('Recommended', grp('', 'GLM-5.3 Low', 'Alpha')),
+    // Provider: ten named groups, 0-based ranks in order.
+    section('Provider', ...providerNames.map((name, i) => grp(name, i === 0 ? 'Alpha' : i === 7 ? 'GLM-5.3 Low' : i === 1 ? 'Beta' : ' filler-' + i))),
+    // Cost: one unnamed group that still contributes membership.
+    section('Cost', grp('', 'Alpha', 'Beta', 'Gamma')));
+  const records = collectNativeModels(input, { rpc: 'GetCascadeModelConfigs', format: proto });
+  const byUid = Object.fromEntries(records.map(record => [record.uid, record]));
+  assert.deepEqual([byUid['uid-alpha'].pickerGroup, byUid['uid-alpha'].pickerGroupRank], ['Cognition', 0],
+    'the Provider section scopes the group even though Recommended listed the label first');
+  assert.deepEqual([byUid['uid-beta'].pickerGroup, byUid['uid-beta'].pickerGroupRank], ['OpenAI', 1]);
+  assert.deepEqual([byUid['uid-rec'].pickerGroup, byUid['uid-rec'].pickerGroupRank], ['Z.ai', 7],
+    'regression anchor: a Recommended representative still gets its Provider group');
+  assert.equal(byUid['uid-gamma'].pickerGroup, undefined, 'a label only in unnamed groups gets no vendor');
+  assert.equal(byUid['uid-gamma'].pickerListed, true, 'the Cost union still lists it');
+  assert.equal(byUid['uid-out'].pickerListed, false, 'absence from every section is a false verdict');
+  assert.equal(byUid['uid-out'].pickerGroup, undefined);
+
+  // Fallback: without a Provider section the first section holding any named
+  // group scopes the vendors; a sorts area of only unnamed groups names none.
+  const fallback = cat(
+    entry('uid-alpha', 'Alpha'), entry('uid-beta', 'Beta'),
+    section('Recommended', grp('', 'Alpha', 'Beta')),
+    section('Alphabetical', grp('Named', 'Alpha'), grp('Second', 'Beta')));
+  const fallen = collectNativeModels(fallback, { rpc: 'GetCascadeModelConfigs', format: proto });
+  const fb = Object.fromEntries(fallen.map(record => [record.uid, record]));
+  assert.deepEqual([fb['uid-alpha'].pickerGroup, fb['uid-alpha'].pickerGroupRank], ['Named', 0]);
+  assert.deepEqual([fb['uid-beta'].pickerGroup, fb['uid-beta'].pickerGroupRank], ['Second', 1]);
+  const unnamedOnly = cat(entry('uid-alpha', 'Alpha'), section('Recommended', grp('', 'Alpha')));
+  const [unnamed] = collectNativeModels(unnamedOnly, { rpc: 'GetCascadeModelConfigs', format: proto });
+  assert.equal(unnamed.pickerGroup, undefined, 'a sorts area without any named group never names a vendor');
+  assert.equal(unnamed.pickerListed, true);
+
+  // Malformed shapes stay silent: missing section name, group without a name
+  // field, group without labels.
+  const broken = cat(entry('uid-alpha', 'Alpha'),
+    m(2, cat(grp('Named', 'Alpha'))),
+    section('Weird', m(2, cat(s(2, 'Alpha'))), m(2, cat(s(1, 'Empty')))));
+  const records2 = collectNativeModels(broken, { rpc: 'GetCascadeModelConfigs', format: proto });
+  assert.equal(records2.length, 1, 'malformed sorts parts never throw');
+});
+
+test('JSON picker groups scope to the Provider sort in either key spelling', () => {
+  const entry = (uid, label) => ({ modelUid: uid, label, disabled: false });
+  const payload = {
+    clientModelConfigs: [entry('uid-rec', 'GLM-5.3 Low'), entry('uid-alpha', 'Alpha'), entry('uid-gamma', 'Gamma')],
+    clientModelSorts: [
+      { name: 'Recommended', groups: [{ modelLabels: ['GLM-5.3 Low', 'Alpha'] }] },
+      { name: 'Provider', groups: [{ groupName: 'Cognition', modelLabels: ['Alpha'] }, { group_name: 'Z.ai', model_labels: ['GLM-5.3 Low'] }] },
+      { name: 'Cost', groups: [{ group_name: '', model_labels: ['Alpha', 'Gamma'] }] }],
+  };
+  const records = collectNativeModels(payload, { rpc: 'GetCascadeModelConfigs', format: json });
+  const byUid = Object.fromEntries(records.map(record => [record.uid, record]));
+  assert.deepEqual([byUid['uid-alpha'].pickerGroup, byUid['uid-alpha'].pickerGroupRank], ['Cognition', 0]);
+  assert.deepEqual([byUid['uid-rec'].pickerGroup, byUid['uid-rec'].pickerGroupRank], ['Z.ai', 1],
+    'snake_case keys parse; the unnamed Cost group consumes no rank');
+  assert.equal(byUid['uid-gamma'].pickerGroup, undefined);
+  assert.equal(byUid['uid-gamma'].pickerListed, true);
+  const cli = collectNativeModels({ clientModelConfigs: [entry('uid-alpha', 'Alpha')] }, { rpc: 'GetCliModelConfigs', format: json });
+  assert.equal(cli[0].pickerListed, undefined, 'the CLI surface carries no sorts section, so no verdict at all');
+  assert.equal(cli[0].pickerGroup, undefined);
+});
+

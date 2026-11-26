@@ -61,6 +61,7 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
       eligible: eligibleLeads.has(uid) || eligibleSidekicks.has(uid) });
   }
   const usedFamilyLabels = new Set();
+  const officialGroupByFamily = new Map();
   const nativeFamilies = [...familiesById.values()].map(family => {
     const members = family.members.map(({ entry, ...member }) => member);
     // The display name comes from the unmarked member (bare uid); without one,
@@ -122,6 +123,31 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
       }
       return false;
     });
+    // The official picker order is authoritative when observed: the family
+    // inherits the group of its base member, else the most frequent group
+    // among members (ties broken alphabetically); the rank is that group's
+    // minimum observed rank. Heuristic vendor patterns only fill the rest.
+    const groupCounts = new Map();
+    for (const member of family.members) {
+      const group = member.entry?.pickerGroup;
+      if (typeof group !== 'string' || !group) continue;
+      const rank = Number.isSafeInteger(member.entry.pickerGroupRank) ? member.entry.pickerGroupRank : 0x7fffffff;
+      if (!groupCounts.has(group)) groupCounts.set(group, { count: 0, minRank: rank });
+      const rec = groupCounts.get(group);
+      rec.count++;
+      if (rank < rec.minRank) rec.minRank = rank;
+    }
+    if (groupCounts.size) {
+      const baseRaw = family.members.find(member => member.uid === base.uid);
+      const baseGroup = typeof baseRaw?.entry?.pickerGroup === 'string' && baseRaw.entry.pickerGroup;
+      if (baseGroup && groupCounts.has(baseGroup)) {
+        officialGroupByFamily.set(family.id, { name: baseGroup, rank: groupCounts.get(baseGroup).minRank });
+      } else {
+        const winner = [...groupCounts.entries()]
+          .sort((a, b) => b[1].count - a[1].count || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))[0];
+        officialGroupByFamily.set(family.id, { name: winner[0], rank: winner[1].minRank });
+      }
+    }
     return { id: family.id, label, variants: members.length, internal,
       efforts: [...effortOrders.entries()].sort((a, b) => a[1] - b[1]).map(([name]) => name),
       toggles: [...toggles].sort(),
@@ -142,8 +168,21 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
   }
   // Vendor grouping mirrors the official picker's provider sections; stable
   // sort keeps observation order inside each vendor.
-  for (const family of nativeFamilies) family.vendor = nativeVendor(family.id, family.label).name;
-  nativeFamilies.sort((a, b) => nativeVendor(a.id, a.label).rank - nativeVendor(b.id, b.label).rank);
+  const sortKey = family => {
+    const official = officialGroupByFamily.get(family.id);
+    return official ? [0, official.rank] : [1, nativeVendor(family.id, family.label).rank];
+  };
+  for (const family of nativeFamilies) {
+    const official = officialGroupByFamily.get(family.id);
+    family.vendor = official ? official.name : nativeVendor(family.id, family.label).name;
+  }
+  // Official groups lead in their observed rank order; heuristic vendors
+  // follow in the table's order. The sort is stable, so ties keep the
+  // observation sequence inside each group.
+  nativeFamilies.sort((a, b) => {
+    const ka = sortKey(a), kb = sortKey(b);
+    return ka[0] - kb[0] || ka[1] - kb[1];
+  });
   // The Fusion card selection this extension last observed. It is a memory
   // (`lastFusionSelection`), so picking a plain model afterwards leaves it
   // pointing at the previous combination — the panel therefore labels it as

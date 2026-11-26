@@ -173,3 +173,29 @@ test('normalizeNativeEntry and mergeNativeEntry carry the server family uid', ()
   assert.equal(mergeNativeEntry(without, withFamily).familyUid, 'glm-5.2');
   assert.equal(mergeNativeEntry(without, without).familyUid, undefined);
 });
+
+test('pickerGroup and its rank validate at normalize and carry together at merge', () => {
+  const { mergeNativeEntry } = require('../src/models/native-entry.cjs');
+  const grouped = normalizeNativeEntry(entry({ pickerGroup: 'Official', pickerGroupRank: 3, pickerListed: true }));
+  assert.deepEqual([grouped.pickerGroup, grouped.pickerGroupRank], ['Official', 3]);
+  // Invalid values are silently dropped — a bad group name must never kill the entry.
+  for (const bad of [{ pickerGroup: 'x'.repeat(65) }, { pickerGroup: '   ' }, { pickerGroup: 42 },
+    { pickerGroupRank: -1 }, { pickerGroupRank: 1.5 }, { pickerGroupRank: 0x80000000 }, { pickerGroupRank: '0' }]) {
+    const normalized = normalizeNativeEntry(entry(bad));
+    assert.ok(normalized, JSON.stringify(bad) + ' must not drop the entry');
+    assert.equal(normalized.pickerGroup, undefined, JSON.stringify(bad));
+    assert.equal(normalized.pickerGroupRank, undefined, JSON.stringify(bad));
+  }
+  // A sorts-less observation (CLI) does not erase the group a sorts-carrying
+  // observation (cascade) recorded — same carry rule as pickerListed.
+  const flat = normalizeNativeEntry(entry());
+  assert.equal(flat.pickerGroup, undefined);
+  const merged = mergeNativeEntry(grouped, flat);
+  assert.deepEqual([merged.pickerGroup, merged.pickerGroupRank], ['Official', 3], 'group and rank carry together');
+  // The reverse direction takes the fresh cascade verdict instead.
+  const reverse = mergeNativeEntry(flat, grouped);
+  assert.deepEqual([reverse.pickerGroup, reverse.pickerGroupRank], ['Official', 3]);
+  // A sorts-carrying observation of its own always wins over the carried one.
+  const regrouped = normalizeNativeEntry(entry({ pickerGroup: 'Other', pickerGroupRank: 0, pickerListed: true }));
+  assert.deepEqual([mergeNativeEntry(grouped, regrouped).pickerGroup, mergeNativeEntry(grouped, regrouped).pickerGroupRank], ['Other', 0]);
+});

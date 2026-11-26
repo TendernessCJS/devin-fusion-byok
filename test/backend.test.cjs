@@ -1299,3 +1299,24 @@ test('the mirror option widens the catalog scope while the stored allowlist stay
   assert.equal(after.allowedMode, 'restricted', 'the stored mode is untouched by the wider catalog scope');
   assert.deepEqual(after.allowedUids, ['swe-2-max']);
 });
+
+test('picker group fields survive the push/read roundtrip and invalid values are dropped', async t => {
+  const f = await fixture(t);
+  const { pushNativeModels } = require('../src/runtime/host/native-models.cjs');
+  const endpoint = f.base + '/_runtime/native-models';
+  const rich = [
+    { uid: 'swe-2-high', label: 'SWE-2 High', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'],
+      pickerGroup: 'Official', pickerGroupRank: 2 },
+    { uid: 'swe-2-low', label: 'SWE-2 Low', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'],
+      pickerGroup: 'x'.repeat(65), pickerGroupRank: -4 },
+  ];
+  const pushed = await pushNativeModels({ root: f.root, port: f.backend.port, models: rich });
+  assert.equal(pushed.pushed, 2);
+  const read = await (await fetch(endpoint, { headers: { authorization: 'Bearer ' + f.control().token } })).json();
+  const high = read.models.find(entry => entry.uid === 'swe-2-high');
+  assert.deepEqual([high.pickerGroup, high.pickerGroupRank], ['Official', 2], 'valid group fields round-trip verbatim');
+  const low = read.models.find(entry => entry.uid === 'swe-2-low');
+  assert.ok(low, 'an entry with invalid group fields is still ingested');
+  assert.equal(low.pickerGroup, undefined, 'an overlong group name is dropped, not stored');
+  assert.equal(low.pickerGroupRank, undefined, 'a negative rank is dropped, not stored');
+});

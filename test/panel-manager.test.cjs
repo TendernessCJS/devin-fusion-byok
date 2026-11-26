@@ -912,3 +912,41 @@ test('publicState treats the mirror option as an unrestricted allowlist, matchin
   assert.equal(on.fusionCount, unrestricted.fusionCount);
   assert.deepEqual(sidekickUids(on), sidekickUids(unrestricted));
 });
+
+test('native family vendors prefer the official picker group and sort it ahead of heuristics', () => {
+  const row = (uid, familyUid, extra = {}) => ({ uid, label: uid, disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid, ...extra });
+  // A heuristic-named family whose members carry no sorts verdict keeps the regex fallback.
+  const plain = publicState(fixture(), [row('claude-x', 'claude-x')]);
+  assert.equal(plain.nativeFamilies[0].vendor, 'Anthropic', 'no observation -> heuristic vendor table');
+  // An observed official group wins over the heuristic name, verbatim and untranslated.
+  const official = publicState(fixture(), [
+    row('claude-x', 'claude-x', { pickerGroup: '官方分组 Zeta', pickerGroupRank: 1 }),
+    row('grok-x', 'grok-x', { pickerGroup: '官方分组 Alpha', pickerGroupRank: 0 }),
+    row('glm-x', 'glm-x'),
+  ]);
+  const vendors = official.nativeFamilies.map(family => [family.label, family.vendor]);
+  assert.deepEqual(vendors[0], ['grok-x', '官方分组 Alpha'], 'the lower official rank sorts first');
+  assert.deepEqual(vendors[1], ['claude-x', '官方分组 Zeta'], 'official groups keep rank order ahead of every heuristic');
+  assert.deepEqual(vendors[2], ['glm-x', 'Zhipu AI'], 'unobserved families fall back to the heuristic band behind them');
+  // The base member's group wins; without one the most frequent member group does.
+  const mixed = publicState(fixture(), [
+    row('swe-x', 'swe-x', { pickerGroup: 'Base Group', pickerGroupRank: 0 }),
+    row('swe-x-low', 'swe-x', { pickerGroup: 'Side Group', pickerGroupRank: 1 }),
+    row('swe-x-high', 'swe-x', { pickerGroup: 'Side Group', pickerGroupRank: 1 }),
+  ]);
+  assert.equal(mixed.nativeFamilies[0].vendor, 'Base Group', 'the unmarked base member names the family group');
+  const noBase = publicState(fixture(), [
+    row('swe-x-low', 'swe-x', { pickerGroup: 'Side Group', pickerGroupRank: 1 }),
+    row('swe-x-high', 'swe-x', { pickerGroup: 'Side Group', pickerGroupRank: 1 }),
+    row('swe-x-max', 'swe-x', { pickerGroup: 'Rare Group', pickerGroupRank: 0 }),
+  ]);
+  assert.equal(noBase.nativeFamilies[0].vendor, 'Side Group', 'no base verdict -> the most frequent member group');
+  // An official group named exactly like a heuristic vendor merges into one
+  // head instead of duplicating it.
+  const collision = publicState(fixture(), [
+    row('claude-x', 'claude-x', { pickerGroup: 'Anthropic', pickerGroupRank: 0 }),
+    row('claude-y', 'claude-y'),
+  ]);
+  assert.deepEqual(collision.nativeFamilies.map(family => family.vendor), ['Anthropic', 'Anthropic'],
+    'both spellings of the same name share a single vendor head');
+});

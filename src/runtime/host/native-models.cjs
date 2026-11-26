@@ -64,6 +64,8 @@ async function readOnce({ root, port, signal, request }) {
     if (typeof entry.familyUid === 'string' && entry.familyUid && entry.familyUid.length <= 128) next.familyUid = entry.familyUid;
     if (Number.isSafeInteger(entry.kind)) next.kind = entry.kind;
     if (typeof entry.pickerListed === 'boolean') next.pickerListed = entry.pickerListed;
+    if (typeof entry.pickerGroup === 'string' && entry.pickerGroup.trim() && entry.pickerGroup.length <= 64) next.pickerGroup = entry.pickerGroup;
+    if (Number.isSafeInteger(entry.pickerGroupRank) && entry.pickerGroupRank >= 0 && entry.pickerGroupRank <= 0x7fffffff) next.pickerGroupRank = entry.pickerGroupRank;
     if (Array.isArray(entry.sources)) {
       const sources = entry.sources.filter(value => typeof value === 'string' && value.length <= 32).slice(0, 8);
       if (sources.length) next.sources = sources;
@@ -107,7 +109,17 @@ async function pushNativeModels({ root, models, allowedUids, allowedMode, revisi
   try { control = JSON.parse(fs.readFileSync(controlFile(root), 'utf8')); } catch { return { pushed: 0, reason: 'identity' }; }
   if (control.rootId !== health.rootId || control.instanceId !== health.instanceId || control.sourceId !== health.sourceId ||
     !/^[a-f0-9]{64}$/.test(control.token || '')) return { pushed: 0, reason: 'identity' };
-  const payload = models.filter(entry => entry && isUpstreamUid(entry.uid));
+  const validGroup = entry => typeof entry.pickerGroup === 'string' && entry.pickerGroup.trim() && entry.pickerGroup.length <= 64;
+  const validRank = entry => Number.isSafeInteger(entry.pickerGroupRank) && entry.pickerGroupRank >= 0 && entry.pickerGroupRank <= 0x7fffffff;
+  const payload = models.filter(entry => entry && isUpstreamUid(entry.uid)).map(entry => {
+    const badGroup = entry.pickerGroup !== undefined && !validGroup(entry);
+    const badRank = entry.pickerGroupRank !== undefined && !validRank(entry);
+    if (!badGroup && !badRank) return entry;
+    const copy = { ...entry };
+    if (badGroup) delete copy.pickerGroup;
+    if (badRank) delete copy.pickerGroupRank;
+    return copy;
+  });
   if (!payload.length) return { pushed: 0, reason: 'empty' };
   try {
     const response = await request(base + '/_runtime/native-models', {

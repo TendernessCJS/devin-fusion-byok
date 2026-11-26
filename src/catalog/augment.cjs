@@ -1,7 +1,7 @@
 'use strict';
 const { parseFields, fields, str, s, m } = require('../protocol/wire.cjs');
 const { OWN_GROUP, ownUid, has, concat, expandHiddenByFamily, nativeUid, isFastLeadUid } = require('./identity.cjs');
-const { rpcShape, rewriteMessage, reportFusionStatus, protoUid, protoFamilyUid, jsonKey, jsonMetadata, nativeEntries, reportNativeModels, protoPickerLabels, jsonPickerLabels, isOwnUid } = require('./payload.cjs');
+const { rpcShape, rewriteMessage, reportFusionStatus, protoUid, protoFamilyUid, jsonKey, jsonMetadata, nativeEntries, reportNativeModels, protoPickerGroups, jsonPickerGroups, isOwnUid } = require('./payload.cjs');
 
 function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNativeModels, source, preserveUnemitted = false) {
   const models = Array.isArray(catalog.models) ? catalog.models : [];
@@ -277,13 +277,13 @@ function collectNativeModels(data, { rpc, format = {} } = {}) {
       }
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
       const list = payload[jsonKey(payload, 'clientModelConfigs', 'client_model_configs')];
-      const picker = shape.sorts ? jsonPickerLabels(payload) : null;
+      const picker = shape.sorts ? jsonPickerGroups(payload) : null;
       return Array.isArray(list) ? nativeEntries(list, true, shape.source, picker) : [];
     }
     if (!Buffer.isBuffer(data)) return [];
     if (!shape.status) {
       const parsed = parseFields(data);
-      const picker = shape.sorts ? protoPickerLabels(parsed) : null;
+      const picker = shape.sorts ? protoPickerGroups(parsed) : null;
       return nativeEntries(parsed.filter(field => field.number === 1 && field.wire === 2).map(field => field.value), false, shape.source, picker);
     }
     const statuses = parseFields(data).filter(field => field.number === 1);
@@ -302,7 +302,7 @@ function collectNativeModels(data, { rpc, format = {} } = {}) {
       if (lists.length !== 1 || lists[0].wire !== 2) return [];
       inner = parseFields(lists[0].value);
     }
-    return nativeEntries(inner.filter(field => field.number === 1 && field.wire === 2).map(field => field.value), false, shape.source, protoPickerLabels(inner));
+    return nativeEntries(inner.filter(field => field.number === 1 && field.wire === 2).map(field => field.value), false, shape.source, protoPickerGroups(inner));
   } catch { return []; }
 }
 
