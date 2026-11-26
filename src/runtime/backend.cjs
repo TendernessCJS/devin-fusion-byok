@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { readConfig } = require('../config/config.cjs');
-const { buildCatalog, resolveAssignment } = require('../catalog.cjs');
+const { safeCatalog, resolveAssignment } = require('../catalog.cjs');
 const wire = require('../protocol/wire.cjs');
 const { parseChat } = require('../protocol/native-chat-codec.cjs');
 const { serveChat } = require('../protocol/inference.cjs');
@@ -228,9 +228,15 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
   // emitted matrix keeps refusing models the picker already grants.
   const catalogAllowed = current => (allowedMode === 'unrestricted' || current.mirrorNativeAllowlist === true) ? null : allowedUids;
   let lastDriftSignature = '';
+  const degradedLogged = new Set();
+  const onCatalogDegraded = reason => {
+    if (degradedLogged.has(reason)) return;
+    degradedLogged.add(reason);
+    log('catalog-degraded', { reason });
+  };
   const getCatalog = () => {
     const current = config();
-    const catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], catalogAllowed(current));
+    const catalog = safeCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], catalogAllowed(current), null, onCatalogDegraded);
     // Sidekick order drift is only possible through a vendor change or our own
     // mirrors leaking back; surface it once per distinct signature instead of
     // letting the min-order rule hide it forever.
@@ -334,7 +340,7 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     try {
       body = await collect(request);
       const format = wire.decode(body, request.headers);
-      const current = config(), catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], catalogAllowed(current));
+      const current = config(), catalog = safeCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], catalogAllowed(current), null, onCatalogDegraded);
       if (rpc.endsWith('/AssignModel')) {
         // Anything outside the AssignModelRequest table above means the client
         // started sending intent we never modeled. Observation only: field

@@ -105,7 +105,8 @@ function fixture(t) {
     './config/config.cjs': { readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
       defaultConfig: realRequire('./config/config.cjs').defaultConfig,
       admitStorage: realRequire('./config/config.cjs').admitStorage },
-    './catalog.cjs': { buildCatalog: config => ({ models: [], fusions: {}, matrixUids: new Set(), rolePool: { lead: [], sidekick: [] } }) },
+    './catalog.cjs': (() => { const fakeCatalog = () => ({ models: [], fusions: {}, matrixUids: new Set(), rolePool: { lead: [], sidekick: [] } });
+      return { buildCatalog: fakeCatalog, safeCatalog: fakeCatalog }; })(),
     './runtime/host/native-models.cjs': { readNativeModels: async () => ({ status: 'empty', models: [] }),
       isUpstreamUid: realRequire('./runtime/host/native-models.cjs').isUpstreamUid,
       pushNativeModels: async () => ({ pushed: 0, reason: 'empty' }) },

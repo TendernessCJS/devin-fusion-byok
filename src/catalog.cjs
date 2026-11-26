@@ -1,10 +1,10 @@
 'use strict';
 // Facade: implementation lives in ./catalog/*.cjs; public surface unchanged.
-const { buildCatalog } = require('./catalog/build.cjs');
+const { buildCatalog, safeCatalog } = require('./catalog/build.cjs');
 const { augmentCatalog, collectNativeModels, collectAllowedUids, staleFusionUids, staleOwnEntries } = require('./catalog/augment.cjs');
 const { resolveAssignment } = require('./catalog/assignment.cjs');
 const { analyzeRoles, buildRoleLists } = require('./catalog/roles.cjs');
 const { refKey } = require('./catalog/identity.cjs');
 const { ownEntriesSignature } = require('./catalog/signature.cjs');
 const { validateProtoCatalog, isOwnUid } = require('./catalog/payload.cjs');
-module.exports = { buildCatalog, augmentCatalog, resolveAssignment, collectNativeModels, collectAllowedUids, analyzeRoles, buildRoleLists, refKey, staleFusionUids, staleOwnEntries, ownEntriesSignature, validateProtoCatalog, isOwnUid };
+module.exports = { buildCatalog, safeCatalog, augmentCatalog, resolveAssignment, collectNativeModels, collectAllowedUids, analyzeRoles, buildRoleLists, refKey, staleFusionUids, staleOwnEntries, ownEntriesSignature, validateProtoCatalog, isOwnUid };

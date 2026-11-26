@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { defaultConfig, readConfig, admitStorage } = require('./config/config.cjs');
 const { readDoc, updateConfig, archiveCorrupt, recoverFromBackup } = require('./config/store.cjs');
-const { buildCatalog } = require('./catalog.cjs');
+const { safeCatalog } = require('./catalog.cjs');
 const { safeError } = require('./activation/errors.cjs');
 const { createCatalogSync } = require('./activation/catalog-sync.cjs');
 const { createSettingsOwner } = require('./activation/settings-owner.cjs');
@@ -74,8 +74,14 @@ async function activate(context) {
   const settingsOwner = createSettingsOwner({ root, extensionPath: context.extensionPath, vscode,
     globalState: context.globalState, isLive: () => session.isLive() });
   let catalogSync;
+  const degradedLogged = new Set();
+  const onCatalogDegraded = reason => {
+    if (degradedLogged.has(reason)) return;
+    degradedLogged.add(reason);
+    log('catalog-degraded', { reason });
+  };
   const catalog = () => { const current = config(); const native = catalogSync.read();
-    return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, native.models, native.allowedUids); };
+    return safeCatalog(current.enabled === false ? { ...current, providers: [] } : current, native.models, native.allowedUids, null, onCatalogDegraded); };
   let panel;
   catalogSync = createCatalogSync({ root, config, log,
     lifecycleView: {

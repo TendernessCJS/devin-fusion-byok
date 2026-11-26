@@ -47,3 +47,26 @@ Anthropic 与 Chat 两个协议面的契约已按**协议面**逐字拆到 `prov
   三条映射**真机不可达**，只有测试背书；`attachment_unsupported` 同样**不可触发**——没有东西可拒，别把「日志里没这条」读成「守卫生效」。
 - 后果：模型只拿到链接，PDF 正文必须由自己读文件获得（本机 `pypdf`/`pdfplumber` 缺失，`pymupdf` 可用）。
 - **不要给 `resource`/`resource_link` 猜一个 wire 映射**：当前没坏是因为 CLI 同时把链接写进了正文；在拿到真实 wire 证据前加映射等于凭想象改协议层。
+
+## BYOK 模型能力与目录容错（2026-11-26 定稿）
+
+**Effort 判定顺序**（`models/capabilities.cjs`）：`effortMode:'none'` → 显式 `efforts` 列表 → `effortMode:'manual'` →
+`reasoningEffort` 布尔（`true` 给 Low…Max 六档，`false` 只留默认档）→ 最后才是模型 ID 启发式，且 `mini|nano|chat|preview|instruct`
+这类非推理变体不再因家族形 ID 获得档位。`reasoningEffort` 的来源有两条：`/models` 返回的能力（写入新导入条目），或面板/配置的显式覆盖（覆盖时以覆盖为准）。
+
+**`reasoningSupport(info)` 的取法**：`capabilities.{reasoning,reasoning_effort,thinking,effort}` 布尔 → 顶层 `reasoning`/`supports_reasoning` →
+`supported_parameters`/`supported_params`（含 `reasoning`、`reasoning_effort`、`reasoning.*` 为 `true`，非空但无这些标记为 `false`）；
+都取不到返回 `null`（交给启发式）。三态设计的目的就是「有证据才断言，没证据不下结论」。
+
+**窗口字段**：输入侧依次取 `max_input_tokens` → `context_length` → `max_context_length` → `max_model_len` → 272000；
+输出侧 `max_tokens` → `max_output_tokens` → `max_completion_tokens` → 131072，并以输入窗口封顶。OpenAI 兼容网关多用 `context_length`，
+只读 Anthropic 字段会一律回落到默认值（声明窗口虚高 → 上游 400 或截断）。
+
+**只读路径与写入路径的容错边界**：`buildCatalog` 保持严格（`Provider id is required`、`Duplicate provider id`、`Model id is required`、
+`Duplicate provider/model identity`、`Invalid effort value`、`Invalid inference server URL`），只在面板提交前用作校验；只读消费者
+（`panel-state`、`extension` 的 catalog 门面、backend 的 `getCatalog`/AssignModel 快照）一律走 `safeCatalog`：先严格构建，失败后净化
+（删非法 `inferenceServerUrl`、丢非法/重复 provider、丢非法/重复 model、过滤非法 effort 值）重试一次，仍失败返回空目录并回调
+`'sanitized'`/`'empty'`，调用方按 reason 去重记 `catalog-degraded`。目的是一条坏配置不要拖垮整个 picker。
+
+**镜像判据的自证守护**：proto 观测只在「本次载荷里带 f32 的 `fusion-*` 行数 > 0 且不带 f32 的行数不超过它」时才把 f32-less 行当自产镜像丢弃；
+厂商整体去掉 f32 时判据自动失效，宁可保留镜像也不清掉官方组合。

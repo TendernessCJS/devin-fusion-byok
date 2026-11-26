@@ -88,14 +88,19 @@ function fixture(t, initial = {}) {
       readConfig: file => JSON.parse(fs.readFileSync(file, 'utf8')),
       defaultConfig: realRequire('./config/config.cjs').defaultConfig,
       admitStorage: realRequire('./config/config.cjs').admitStorage },
-    './catalog.cjs': { staleFusionUids: () => [], staleOwnEntries: () => [], isOwnUid: realRequire('./catalog/payload.cjs').isOwnUid,
-      ownEntriesSignature: realRequire('./catalog/signature.cjs').ownEntriesSignature,
-      buildCatalog: config => ({ models: config.providers?.length
+    './catalog.cjs': (() => {
+      const fakeCatalog = config => ({ models: config.providers?.length
         ? [{ uid: 'dfbyok-own', label: 'own', kind: 'model' },
           { uid: 'fusion-dfbyok-selected', label: 'CPA Fusion', kind: 'matrix' },
           { uid: 'fusion-dfbyok-another', label: 'CPA Fusion Alt', kind: 'matrix' }, ...extraCatalogModels] : [],
       fusions: config.providers?.length ? { 'fusion-dfbyok-selected': { label: 'CPA Fusion' }, 'fusion-dfbyok-another': { label: 'CPA Fusion Alt' } } : {},
-      lastFusionSelection: config.lastFusionSelection, matrixUids }) },
+      lastFusionSelection: config.lastFusionSelection, matrixUids });
+      // The read path degrades through safeCatalog now; the stub never throws,
+      // so sharing the same pass-through keeps the fixture exact.
+      return { staleFusionUids: () => [], staleOwnEntries: () => [], isOwnUid: realRequire('./catalog/payload.cjs').isOwnUid,
+        ownEntriesSignature: realRequire('./catalog/signature.cjs').ownEntriesSignature,
+        buildCatalog: fakeCatalog, safeCatalog: fakeCatalog };
+    })(),
     './runtime/host/native-models.cjs': { readNativeModels: options => nativeRead(options),
       isUpstreamUid: realRequire('./runtime/host/native-models.cjs').isUpstreamUid,
       pushNativeModels: options => { pushes.push(options); return Promise.resolve(pushResult); } },

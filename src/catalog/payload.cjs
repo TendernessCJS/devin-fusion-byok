@@ -353,6 +353,21 @@ function isOwnUid(uid) {
 
 function nativeEntries(entries, isJson, source, pickerGroups) {
   const seen = [];
+  // The f32-less mirror criterion is only trustworthy when this very payload
+  // proves the vendor still ships f32 on official fusion rows. If the vendor
+  // dropped f32 wholesale, the same test would wipe every real combination as
+  // a "mirror", so the filter disengages unless official-shaped rows dominate.
+  let dropMirrors = false;
+  if (!isJson) {
+    let with32 = 0, without32 = 0;
+    for (const entry of entries) {
+      try {
+        if (!protoUid(entry).startsWith('fusion-')) continue;
+        if (fields(entry, 32).length) with32++; else without32++;
+      } catch {}
+    }
+    dropMirrors = with32 > 0 && without32 <= with32;
+  }
   for (const entry of entries) {
     let uid, label, disabled, meta, dimension, fusionMeta;
     let provider;
@@ -372,7 +387,7 @@ function nativeEntries(entries, isJson, source, pickerGroups) {
       // cache; exactly the 327 emitted rows lacked it in a used one). The
       // JSON surface has no verified equivalent, so it still relies on the
       // backend's emittedUids filter.
-      if (uid.startsWith('fusion-') && fields(entry, 32).length === 0) continue;
+      if (dropMirrors && uid.startsWith('fusion-') && fields(entry, 32).length === 0) continue;
       label = str(entry, 1);
       disabled = protoDisabled(entry);
       meta = protoMetadata(entry);

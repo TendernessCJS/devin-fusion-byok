@@ -29,6 +29,11 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   }
   const allProviders = rawProviders
     .filter(provider => provider && typeof provider.id === 'string' && provider.id);
+  const providerIds = new Set();
+  for (const provider of allProviders) {
+    if (providerIds.has(provider.id)) throw new Error('Duplicate provider id');
+    providerIds.add(provider.id);
+  }
   const orderedProviders = sortByOrder(allProviders);
   const providerRanks = new Map(orderedProviders.map((provider, rank) => [provider.id, rank]));
   const modelRanks = new Map(), effortSlots = new Map();
@@ -480,4 +485,71 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
 // Which surface an entry was observed through decides whether it can appear in
 // a model picker at all: the configs RPCs are selectable catalogs, user_status
 // is the account entitlement list (a superset containing legacy/internal rows).
-module.exports = { buildCatalog };
+// Read-only consumers (panel state, assignment resolution, the extension
+// facade) must never lose the whole catalog to one malformed config entry:
+// the strict validation above guards the write path, while this degraded
+// wrapper retries once with the offending pieces removed and otherwise serves
+// an empty catalog. `onError` receives a fixed enum ('sanitized' | 'empty')
+// so callers can dedupe their log lines by signature.
+function emptyCatalog() {
+  return { models: [], routes: {}, fusions: {}, sidekicks: [], hiddenNativeModelUids: [], hiddenFusionUids: [],
+    matrixUids: new Set(), nativeHarnessUids: new Map(), nativeLeadHarnessUids: new Map(),
+    fastLeadUids: new Set(), nonFastLeadUids: new Set(), excludedRoleUids: { lead: new Set(), sidekick: new Set() },
+    sidekickOrderDrift: [], nativeUids: [], mirrorNativeAllowlist: false, rolePool: { lead: [], sidekick: [] } };
+}
+
+function sanitizedConfig(config) {
+  const clean = { ...config };
+  if (clean.inferenceServerUrl !== undefined) {
+    let valid = typeof clean.inferenceServerUrl === 'string';
+    if (valid) {
+      try {
+        const url = new URL(clean.inferenceServerUrl);
+        valid = ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password;
+      } catch { valid = false; }
+    }
+    if (!valid) delete clean.inferenceServerUrl;
+  }
+  const seenProviders = new Set();
+  clean.providers = (Array.isArray(clean.providers) ? clean.providers : [])
+    .filter(provider => {
+      if (!provider || typeof provider.id !== 'string' || !provider.id) return false;
+      if (seenProviders.has(provider.id)) return false;
+      seenProviders.add(provider.id);
+      return true;
+    })
+    .map(provider => {
+      if (!Array.isArray(provider.models)) return provider;
+      const seenModels = new Set();
+      const models = provider.models
+        .filter(model => {
+          if (!model || typeof model.id !== 'string' || !model.id) return false;
+          const key = JSON.stringify([provider.id, model.id]);
+          if (seenModels.has(key)) return false;
+          seenModels.add(key);
+          return true;
+        })
+        .map(model => {
+          if (!Array.isArray(model.efforts) || !model.efforts.length) return model;
+          // Dropping every invalid effort can empty the list, which simply
+          // hands the model back to reasoningEffort or the id heuristic.
+          const efforts = model.efforts.filter(value => typeof value === 'string' && /^[a-z0-9_-]{1,32}$/.test(value));
+          return efforts.length === model.efforts.length ? model : { ...model, efforts };
+        });
+      return { ...provider, models };
+    });
+  return clean;
+}
+
+function safeCatalog(config, nativeModels, allowedUids, analysis, onError) {
+  try { return buildCatalog(config, nativeModels, allowedUids, analysis); } catch {}
+  try {
+    const catalog = buildCatalog(sanitizedConfig(config), nativeModels, allowedUids, analysis);
+    onError?.('sanitized');
+    return catalog;
+  } catch {}
+  onError?.('empty');
+  return emptyCatalog();
+}
+
+module.exports = { buildCatalog, safeCatalog };

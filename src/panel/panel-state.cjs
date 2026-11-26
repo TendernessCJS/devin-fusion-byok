@@ -1,5 +1,5 @@
 'use strict';
-const { analyzeRoles, buildCatalog, buildRoleLists, isOwnUid } = require('../catalog.cjs');
+const { analyzeRoles, safeCatalog, buildRoleLists, isOwnUid } = require('../catalog.cjs');
 const { modelSupportsImages } = require('../models/capabilities.cjs');
 const { sortByOrder } = require('../models/order.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
@@ -34,7 +34,7 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
   // Same scope as the backend when the mirror option is on (see backend.cjs).
   if (config.mirrorNativeAllowlist === true) allowed = null;
   const analysis = analyzeRoles({ ...config, enabled: true }, nativeModels, allowed);
-  const catalog = buildCatalog({ ...config, enabled: true }, nativeModels, allowed, analysis);
+  const catalog = safeCatalog({ ...config, enabled: true }, nativeModels, allowed, analysis);
   const hidden = new Set(catalog.hiddenNativeModelUids || []);
   const roleLists = buildRoleLists(config, nativeModels, allowed, analysis);
   const eligibleLeads = new Set(roleLists.lead.filter(item => item.available).flatMap(item => item.memberUids || [item.ref.nativeUid]).filter(Boolean));

@@ -836,3 +836,25 @@ test('a Provider section of only unnamed groups falls back to the first named-gr
     'a Provider section without named groups cannot be the vendor source');
   assert.equal(record.pickerListed, true, 'the unnamed Provider group still contributes membership');
 });
+
+test('the f32 mirror filter disengages when no official-shaped fusion rows dominate', () => {
+  const fusionEntry = (uid, with32) => cat(s(1, 'F'), s(22, uid), ...(with32 ? [m(32, v(1, 1))] : []));
+  // Every fusion row lacks f32: the vendor may have dropped the field
+  // wholesale, so nothing is filtered.
+  const allBare = cat(m(1, fusionEntry('fusion-a-sidekick-x', false)), m(1, fusionEntry('fusion-b-sidekick-y', false)));
+  const kept = collectNativeModels(allBare, { rpc: 'GetCliModelConfigs', format: proto });
+  assert.deepEqual(kept.map(record => record.uid).sort(), ['fusion-a-sidekick-x', 'fusion-b-sidekick-y'],
+    'an all-bare payload keeps every fusion row');
+  // Mirrors never dominate: more f32-less rows than official ones disables
+  // the filter too.
+  const mirrorHeavy = cat(m(1, fusionEntry('fusion-official-a-sidekick-b', true)),
+    m(1, fusionEntry('fusion-m1-sidekick-x', false)), m(1, fusionEntry('fusion-m2-sidekick-y', false)));
+  const heavy = collectNativeModels(mirrorHeavy, { rpc: 'GetCliModelConfigs', format: proto });
+  assert.equal(heavy.length, 3, 'f32-less rows at parity or beyond are kept');
+  // A healthy payload (official rows with f32 dominate) still drops the mirrors.
+  const mixed = cat(m(1, fusionEntry('fusion-official-a-sidekick-b', true)), m(1, fusionEntry('fusion-official-c-sidekick-d', true)),
+    m(1, fusionEntry('fusion-mirror-sidekick-x', false)), m(1, fusionEntry('fusion-mirror2-sidekick-y', false)));
+  const filtered = collectNativeModels(mixed, { rpc: 'GetCliModelConfigs', format: proto });
+  assert.deepEqual(filtered.map(record => record.uid).sort(), ['fusion-official-a-sidekick-b', 'fusion-official-c-sidekick-d'],
+    'mirrors drop only while official-shaped rows dominate');
+});
