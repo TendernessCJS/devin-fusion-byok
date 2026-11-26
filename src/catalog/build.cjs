@@ -471,7 +471,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   }
   // Matrix entries lead the list, matching the order the picker saw before the
   // named-preset pipeline was retired.
-  return { models: [...matrixModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids, matrixUids, nativeHarnessUids, nativeLeadHarnessUids, fastLeadUids, nonFastLeadUids, excludedRoleUids,
+  return { models: [...matrixModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids, matrixUids, nativeHarnessUids, nativeLeadHarnessUids, fastLeadUids, nonFastLeadUids, excludedRoleUids, sidekickOrderDrift: officialRoles.sidekickOrderDrift || [],
     nativeUids, mirrorNativeAllowlist: config.mirrorNativeAllowlist === true,
     rolePool: Object.fromEntries(Object.entries(candidates).map(([role, items]) => [role, items.map(item => ({ ref: item.ref, label: item.label, uid: item.uid }))])),
     lastFusionSelection: typeof config.lastFusionSelection === 'string' ? config.lastFusionSelection : undefined };

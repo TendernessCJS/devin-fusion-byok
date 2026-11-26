@@ -340,6 +340,32 @@ test('a retired official preset stops voting once the complete catalog omits it'
   assert.equal(prune().at(-1)[1].count, 1);
 });
 
+test('a partial catalog response never wipes the official fusion observations', async t => {
+  const f = await fixture(t);
+  const row = n => ({ uid: 'fusion-lead-a-sidekick-swe-2-' + n, label: 'F', disabled: false, isModelRouter: true,
+    harnessUids: ['fusion'], sidekickDimension: { order: 10, name: 'SWE' } });
+  const rows = ['a', 'b', 'c', 'd'].map(row);
+  const prune = () => f.logs.filter(([event]) => event === 'native-pruned');
+  const skipped = () => f.logs.filter(([event]) => event === 'native-prune-skipped');
+  const ask = () => fetch(f.base + API + 'GetCliModelConfigs', { method: 'POST', body: 'native' });
+  f.setNatives(rows);
+  await ask();
+  assert.deepEqual(prune(), [], 'the seeding response prunes nothing');
+  // One fusion row out of four known is below half: a partial page must not
+  // delete the other three.
+  f.setNatives([rows[0]]);
+  await ask();
+  assert.deepEqual(prune(), [], 'a partial response prunes nothing');
+  assert.equal(skipped().length, 1, 'the skip is logged once');
+  assert.equal(skipped()[0][1]?.known, 4);
+  assert.equal(skipped()[0][1]?.seen, 1);
+  // A response still holding half or more of the known rows is a reasonable
+  // shrink and prunes the missing one.
+  f.setNatives(rows.slice(0, 3));
+  await ask();
+  assert.equal(prune().at(-1)?.[1]?.count, 1, 'a reasonable shrink still prunes the retired row');
+});
+
 test('officially paired and standalone native Sidekicks assign declared harnesses', async t => {
   const f = await fixture(t);
   const observed = [

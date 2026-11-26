@@ -170,10 +170,19 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
     }
     let pruned = 0;
     if (seen) {
-      for (const uid of [...observedNatives.keys()]) {
-        if (seen.has(uid) || !uid.startsWith('fusion-')) continue;
-        observedNatives.delete(uid);
-        pruned++;
+      // A partial response that mentions only a fraction of the known fusion
+      // rows must not wipe the official combination observations: the sync
+      // below is only sound for a reasonably complete list.
+      const fusionKnown = [...observedNatives.keys()].filter(uid => uid.startsWith('fusion-')).length;
+      const fusionSeen = [...seen].filter(uid => uid.startsWith('fusion-')).length;
+      if (fusionKnown > 0 && fusionSeen < Math.ceil(fusionKnown / 2)) {
+        log('native-prune-skipped', { known: fusionKnown, seen: fusionSeen });
+      } else {
+        for (const uid of [...observedNatives.keys()]) {
+          if (seen.has(uid) || !uid.startsWith('fusion-')) continue;
+          observedNatives.delete(uid);
+          pruned++;
+        }
       }
     }
     if (pruned) { improved = true; log('native-pruned', { count: pruned }); }
@@ -218,7 +227,19 @@ async function startBackend({ root, port = PORT, log = () => {}, drainTimeoutMs 
   // allowlist, so role eligibility must use the same scope — otherwise the
   // emitted matrix keeps refusing models the picker already grants.
   const catalogAllowed = current => (allowedMode === 'unrestricted' || current.mirrorNativeAllowlist === true) ? null : allowedUids;
-  const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], catalogAllowed(current)); };
+  let lastDriftSignature = '';
+  const getCatalog = () => {
+    const current = config();
+    const catalog = buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()], catalogAllowed(current));
+    // Sidekick order drift is only possible through a vendor change or our own
+    // mirrors leaking back; surface it once per distinct signature instead of
+    // letting the min-order rule hide it forever.
+    const drift = Array.isArray(catalog.sidekickOrderDrift) ? catalog.sidekickOrderDrift : [];
+    const signature = JSON.stringify(drift);
+    if (drift.length && signature !== lastDriftSignature) log('sidekick-order-drift', { count: drift.length });
+    lastDriftSignature = signature;
+    return catalog;
+  };
   // Official Fusion uids observed as disabled in catalog responses. Entries
   // that later appear enabled are removed so Pro accounts keep native Fusion.
   // Persisted so a saved locked preference still redirects when a fresh

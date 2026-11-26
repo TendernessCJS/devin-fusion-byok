@@ -275,7 +275,15 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
     }
   }
 
-  return { eligibleNativeLeads, eligibleNativeSidekicks, reservedOrders, reservedLeadOrders, hiddenFusionUids, fastLeadBases };
+  // A sidekick claiming several orders across the official combinations is
+  // drift the min-order rule would otherwise mask forever: it can only come
+  // from a vendor change or from our own mirrored rows leaking back in.
+  const sidekickOrderDrift = [];
+  for (const [uid, rec] of sidekickClaimsByUid) {
+    if (rec.orders.size > 1) sidekickOrderDrift.push({ uid, orders: [...rec.orders].sort((a, b) => a - b) });
+  }
+
+  return { eligibleNativeLeads, eligibleNativeSidekicks, reservedOrders, reservedLeadOrders, hiddenFusionUids, fastLeadBases, sidekickOrderDrift };
 }
 
 // Everything observed that the strict official lists do not cover: any model

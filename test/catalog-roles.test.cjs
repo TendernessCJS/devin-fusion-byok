@@ -1323,3 +1323,20 @@ test('fast lead support is read from combinations, not only from model rows', ()
   assert.equal(row.fastVariants, true, 'a fast combination marks the family without a fast model row');
   assert.equal(row.variantCount, 1, 'a fast combination adds no tier');
 });
+
+test('discoverOfficialRoles reports sidekicks claiming several orders as drift', () => {
+  const { discoverOfficialRoles } = require('../src/catalog/roles.cjs');
+  const natives = [
+    { uid: 'lead-a', label: 'A', disabled: false, isModelRouter: false, harnessUids: [] },
+    { uid: 'swe-x', label: 'X', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] },
+    { uid: 'fusion-lead-a-sidekick-swe-x', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'],
+      sidekickDimension: { order: 5, name: 'SWE X' } },
+    { uid: 'fusion-lead-b-sidekick-swe-x', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'],
+      sidekickDimension: { order: 3, name: 'SWE X' } },
+  ];
+  const drifted = discoverOfficialRoles(natives, new Set(), {});
+  assert.deepEqual(drifted.sidekickOrderDrift, [{ uid: 'swe-x', orders: [3, 5] }],
+    'two orders for one sidekick surface sorted by order');
+  const steady = discoverOfficialRoles(natives.slice(0, 3), new Set(), {});
+  assert.deepEqual(steady.sidekickOrderDrift, [], 'a single order is not drift');
+});
