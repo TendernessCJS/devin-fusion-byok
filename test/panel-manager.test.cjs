@@ -981,3 +981,21 @@ test('native family vendors prefer the official picker group and sort it ahead o
   assert.deepEqual(collision.nativeFamilies.map(family => family.vendor), ['Anthropic', 'Anthropic'],
     'both spellings of the same name share a single vendor head');
 });
+
+test('updateModels accepts a reasoningEffort tri-state and rejects other types', async () => {
+  const f = memory();
+  const input = f.read();
+  input.providers = [{ id: 'p', name: 'P', models: [{ id: 'm', label: 'M', efforts: [], contextWindow: 1000, maxOutputTokens: 100 }] }];
+  const seed = memory({ config: input });
+  const patch = async value => seed.manager.dispatch('updateModels', { providerId: 'p', changes: [{ id: 'm', reasoningEffort: value }], removeIds: [] });
+  await patch(true);
+  assert.equal(seed.read().providers[0].models[0].reasoningEffort, true, 'true stores the capability');
+  await patch(false);
+  assert.equal(seed.read().providers[0].models[0].reasoningEffort, false, 'false stores the suppression');
+  await patch(null);
+  assert.equal('reasoningEffort' in seed.read().providers[0].models[0], false, 'null returns the model to auto');
+  for (const bad of ['yes', 1, 0, {}, []]) {
+    await assert.rejects(patch(bad), PanelInputError, JSON.stringify(bad) + ' is not a tri-state');
+  }
+  assert.equal('reasoningEffort' in seed.read().providers[0].models[0], false, 'rejected patches never write');
+});

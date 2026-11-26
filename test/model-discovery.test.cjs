@@ -156,3 +156,41 @@ test('discoveryNotice accepts only integer HTTP statuses in 100..599', () => {
   assert.match(discoveryNotice(405), /手动添加/);
   assert.equal(discoveryNotice(418), '获取模型失败：HTTP 418');
 });
+
+test('discover infers reasoning support and window fields from /models metadata', async () => {
+  const request = async () => ({ ok: true, json: async () => ({ data: [
+    { id: 'reasoning-params', supported_parameters: ['temperature', 'reasoning'] },
+    { id: 'no-reasoning-params', supported_parameters: ['temperature'] },
+    { id: 'caps-reasoning', capabilities: { reasoning: true } },
+    { id: 'caps-thinking-snake', capabilities: { reasoning_effort: false } },
+    { id: 'direct-bool', supports_reasoning: true },
+    { id: 'no-clues' },
+    { id: 'empty-params', supported_parameters: [] },
+    { id: 'windows', context_length: 128000, max_output_tokens: 8192 },
+    { id: 'windows-alt', max_context_length: 64000, max_completion_tokens: 4096 },
+    { id: 'windows-len', max_model_len: 32000 },
+    { id: 'output-over-window', context_length: 4096, max_tokens: 999999 },
+    { id: 'kept', supported_parameters: ['reasoning'], context_length: 999999 },
+  ] }) });
+  const provider = { id: 'p', name: 'Provider', baseUrl: 'https://provider.invalid/v1/', apiKey: 'fixture-secret',
+    models: [{ id: 'kept', label: 'Saved', efforts: [], contextWindow: 200000, maxOutputTokens: 32768, reasoningEffort: false }] };
+  const data = await Promise.resolve().then(() => {
+    const models = ['reasoning-params', 'no-reasoning-params', 'caps-reasoning', 'caps-thinking-snake', 'direct-bool', 'no-clues', 'empty-params', 'windows', 'windows-alt', 'windows-len', 'output-over-window', 'kept'];
+    return require('../src/models/discovery.cjs').discover(provider, { request }).then(() => Object.fromEntries(provider.models.map(m => [m.id, m])));
+  });
+  assert.equal(data['reasoning-params'].reasoningEffort, true, 'a reasoning entry in supported_parameters means support');
+  assert.equal(data['no-reasoning-params'].reasoningEffort, false, 'a populated list without reasoning means no support');
+  assert.equal(data['caps-reasoning'].reasoningEffort, true, 'capabilities.reasoning boolean is honored');
+  assert.equal(data['caps-thinking-snake'].reasoningEffort, false, 'capabilities false boolean is honored too');
+  assert.equal(data['direct-bool'].reasoningEffort, true);
+  assert.equal('reasoningEffort' in data['no-clues'], false, 'no evidence leaves the key absent');
+  assert.equal('reasoningEffort' in data['empty-params'], false, 'an empty parameter list is no evidence');
+  assert.equal(data['windows'].contextWindow, 128000);
+  assert.equal(data['windows'].maxOutputTokens, 8192);
+  assert.equal(data['windows-alt'].contextWindow, 64000);
+  assert.equal(data['windows-alt'].maxOutputTokens, 4096);
+  assert.equal(data['windows-len'].contextWindow, 32000);
+  assert.equal(data['output-over-window'].maxOutputTokens, 4096, 'output tokens are capped by the window');
+  assert.equal(data['kept'].reasoningEffort, false, 'saved entries are never rewritten by discovery');
+  assert.equal(data['kept'].contextWindow, 200000);
+});

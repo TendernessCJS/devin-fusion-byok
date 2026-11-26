@@ -245,18 +245,25 @@ function createModelsView(ui) {
       element('option', { value: 'manual', text: t('models.effortManual') }),
       element('option', { value: 'none', text: t('models.effortNone') }));
     effortMode.value = model?.effortMode || (model?.efforts?.length ? 'manual' : 'auto');
+    // The tri-state overrides whatever /models reported for this model.
+    const reasoning = element('select', { 'aria-label': t('models.reasoningSupport') },
+      element('option', { value: 'auto', text: t('models.reasoningAuto') }),
+      element('option', { value: 'yes', text: t('models.reasoningSupported') }),
+      element('option', { value: 'no', text: t('models.reasoningUnsupported') }));
+    reasoning.value = model?.reasoningEffort === true ? 'yes' : model?.reasoningEffort === false ? 'no' : 'auto';
     const manual = field(t('models.effortList'), efforts, t('models.effortListHint'));
     manual.hidden = effortMode.value !== 'manual';
     effortMode.addEventListener('change', () => { manual.hidden = effortMode.value !== 'manual'; });
     form.append(field(t('models.modelId'), id), field(t('models.displayName'), label),
       element('details', { class: 'fold', open: effortMode.value === 'manual' }, element('summary', { text: t('models.advanced') }),
         element('div', { class: 'field-grid' }, field(t('models.contextWindow'), contextWindow), field(t('models.maxOutput'), maxOutputTokens)),
-        field(t('models.effort'), effortMode, t('models.effortHint')), manual));
+        field(t('models.effort'), effortMode, t('models.effortHint')), manual, field(t('models.reasoningSupport'), reasoning)));
     const remove = model ? deleteButton(dialog, t('models.deleteModelTitle'), t('models.deleteModelBody', { provider: provider.name, model: model.label || model.id }),
       () => request('updateModels', { providerId: provider.id, changes: [], removeIds: [model.id] })) : null;
     finishDialog(dialog, form, model ? t('common.save') : t('models.addSubmit'), () => {
       const saved = { id: id.value.trim(), label: label.value.trim() || id.value.trim(),
         contextWindow: Number(contextWindow.value), maxOutputTokens: Number(maxOutputTokens.value), effortMode: effortMode.value,
+        reasoningEffort: reasoning.value === 'auto' ? null : reasoning.value === 'yes',
         efforts: effortMode.value === 'auto' ? [] : [...new Set(efforts.value.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean))] }; // i18n-data: accepts a full-width comma as a list separator in user input
       if (model) return request('updateModels', { providerId: provider.id, changes: [{ ...saved, supportsImages: true }] });
       return request('addModel', { providerId: provider.id, model: { ...saved, enabled: true } });

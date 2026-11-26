@@ -59,6 +59,11 @@ function modelPatch(t, input, previous) {
     if (!['auto', 'manual', 'none'].includes(input.effortMode)) fail(t('manager.effortModeInvalid'));
     model.effortMode = input.effortMode;
   }
+  if (own(input, 'reasoningEffort')) {
+    if (input.reasoningEffort === null) delete model.reasoningEffort;
+    else if (typeof input.reasoningEffort === 'boolean') model.reasoningEffort = input.reasoningEffort;
+    else fail(t('manager.invalid', { label: t('models.effort') }));
+  }
   if (model.maxOutputTokens > model.contextWindow) fail(t('manager.outputOverContext'));
   return model;
 }

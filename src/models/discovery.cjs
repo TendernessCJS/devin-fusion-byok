@@ -12,6 +12,29 @@ function modelList(json) {
   if (Array.isArray(json?.data?.data)) return json.data.data;
   return null;
 }
+// /models entries sometimes describe reasoning support explicitly. The
+// tri-state result (true/false/null) feeds `reasoningEffort` on freshly
+// imported models: null means "no evidence" and leaves the id heuristic in
+// charge, while false actively suppresses it.
+function reasoningSupport(info) {
+  if (!info || typeof info !== 'object') return null;
+  if (info.capabilities && typeof info.capabilities === 'object' && !Array.isArray(info.capabilities)) {
+    for (const key of ['reasoning', 'reasoning_effort', 'thinking', 'effort']) {
+      if (typeof info.capabilities[key] === 'boolean') return info.capabilities[key];
+    }
+  }
+  if (typeof info.reasoning === 'boolean') return info.reasoning;
+  if (typeof info.supports_reasoning === 'boolean') return info.supports_reasoning;
+  const params = Array.isArray(info.supported_parameters) ? info.supported_parameters
+    : (Array.isArray(info.supported_params) ? info.supported_params : null);
+  if (params) {
+    if (!params.length) return null;
+    const lowered = params.filter(value => typeof value === 'string').map(value => value.toLowerCase());
+    if (lowered.some(value => value === 'reasoning' || value === 'reasoning_effort' || value.startsWith('reasoning.'))) return true;
+    return false;
+  }
+  return null;
+}
 async function discover(provider, { request = directFetch } = {}) {
   const anthropic = provider.apiFormat === 'anthropic';
   const headers = anthropic ? { 'anthropic-version': '2023-06-01', 'x-api-key': provider.apiKey } : { Authorization: 'Bearer ' + provider.apiKey };
@@ -37,9 +60,13 @@ async function discover(provider, { request = directFetch } = {}) {
   provider.models = [...new Set(listed.map(m => m?.id).filter(id => typeof id === 'string' && id.length <= 256))].map(id => {
     if (old.has(id)) return old.get(id);
     const info = limits.get(id);
-    const contextWindow = positive(info.max_input_tokens) ?? 272000;
-    const maxOutputTokens = Math.min(positive(info.max_tokens) ?? 131072, contextWindow);
-    return { id, label: provider.name + ' · ' + id, efforts: [], contextWindow, maxOutputTokens };
+    const support = reasoningSupport(info);
+    const contextWindow = positive(info.max_input_tokens) ?? positive(info.context_length)
+      ?? positive(info.max_context_length) ?? positive(info.max_model_len) ?? 272000;
+    const maxOutputTokens = Math.min(positive(info.max_tokens) ?? positive(info.max_output_tokens)
+      ?? positive(info.max_completion_tokens) ?? 131072, contextWindow);
+    return { id, label: provider.name + ' · ' + id, efforts: [], contextWindow, maxOutputTokens,
+      ...(support === null ? {} : { reasoningEffort: support }) };
   });
   return provider.models.length;
 }
