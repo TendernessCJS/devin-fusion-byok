@@ -410,12 +410,12 @@ test('official Sidekick bindings give canonical dimension and full harness; conf
 
 test('Fast Mode dimension parses strictly and FastMode variants never bind', () => {
   const withFast = (fastOrder, extra = '') => cat(s(1, 'F'), s(22, 'fusion-a-sidekick-swe-x'),
-    fam(dimEntry(4, 'Luna'), m(2, cat(s(1, 'Fast Mode'), m(2, cat(v(1, fastOrder), s(2, extra), v(3, 2)))))));
+    fam(dimEntry(4, 'Luna'), m(2, cat(s(1, 'Fast Mode'), m(2, cat(v(1, fastOrder), s(2, extra), v(3, 2)))))), m(32, v(1, 1)));
   assert.deepEqual(collectNativeModels(cat(m(1, withFast(0))), { rpc: 'GetCliModelConfigs', format: proto })[0].sidekickDimension,
     { order: 4, name: 'Luna', fastModeOrder: 0 });
   assert.deepEqual(collectNativeModels(cat(m(1, withFast(1))), { rpc: 'GetCliModelConfigs', format: proto })[0].sidekickDimension,
     { order: 4, name: 'Luna', fastModeOrder: 1 });
-  const noFast = cat(s(1, 'F'), s(22, 'fusion-a-sidekick-swe-x'), fam(dimEntry(4, 'Luna'), m(2, cat(s(1, 'Fast Mode'), m(2, cat(v(1, 0)))))));
+  const noFast = cat(s(1, 'F'), s(22, 'fusion-a-sidekick-swe-x'), fam(dimEntry(4, 'Luna'), m(2, cat(s(1, 'Fast Mode'), m(2, cat(v(1, 0)))))), m(32, v(1, 1)));
   assert.deepEqual(collectNativeModels(cat(m(1, noFast)), { rpc: 'GetCliModelConfigs', format: proto })[0].sidekickDimension,
     { order: 4, name: 'Luna', fastModeOrder: 0 }, 'a nameless Fast Mode entry still counts');
   const natives = [{ uid: 'swe-fast', label: 'F', disabled: false, isModelRouter: false, harnessUids: ['gpt-5p6'] }];

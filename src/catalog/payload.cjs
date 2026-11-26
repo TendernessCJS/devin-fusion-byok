@@ -1,6 +1,6 @@
 'use strict';
-const { parseFields, str, num, m } = require('../protocol/wire.cjs');
-const { concat, ownUid, has, nativeUid } = require('./identity.cjs');
+const { parseFields, fields, str, num, m } = require('../protocol/wire.cjs');
+const { concat, ownUid, has, nativeUid, providerGroup } = require('./identity.cjs');
 const { normalizeNativeEntry } = require('../models/native-entry.cjs');
 
 const OBSERVE_SOURCE = { GetCliModelConfigs: 'cli', GetCascadeModelConfigs: 'cascade', GetUserStatus: 'entitlement' };
@@ -355,6 +355,7 @@ function nativeEntries(entries, isJson, source, pickerGroups) {
   const seen = [];
   for (const entry of entries) {
     let uid, label, disabled, meta, dimension, fusionMeta;
+    let provider;
     if (isJson) {
       uid = nativeUid(entry);
       label = typeof entry?.label === 'string' ? entry.label : '';
@@ -362,15 +363,28 @@ function nativeEntries(entries, isJson, source, pickerGroups) {
       meta = jsonMetadata(entry);
       fusionMeta = jsonFusionMetadata(entry);
       dimension = extractSidekickDimension(fusionMeta);
+      provider = entry?.provider;
     } else {
       uid = protoUid(entry);
+      // A proto `fusion-*` row without the f32 capability record is our own
+      // emitted mirror being served back, not a vendor row: every official
+      // fusion entry carries f32 (measured 2026-11: 451/451 rows in a clean
+      // cache; exactly the 327 emitted rows lacked it in a used one). The
+      // JSON surface has no verified equivalent, so it still relies on the
+      // backend's emittedUids filter.
+      if (uid.startsWith('fusion-') && fields(entry, 32).length === 0) continue;
       label = str(entry, 1);
       disabled = protoDisabled(entry);
       meta = protoMetadata(entry);
       fusionMeta = protoFusionMetadata(entry);
       dimension = extractSidekickDimension(fusionMeta);
+      provider = num(entry, 10);
     }
     if (typeof uid !== 'string' || !uid || uid.length > 256 || ownUid(uid)) continue;
+    // The sorts section is authoritative for the vendor group; the provider
+    // enum is the fallback so flat-catalog (CLI) observations still group.
+    const sorted = pickerGroups ? pickerGroups.groups.get(label) : undefined;
+    const group = sorted ? { group: sorted.group, rank: sorted.rank } : providerGroup(provider);
     // The field extraction above keeps each source's own pass-through and
     // fail-closed semantics (e.g. a non-false JSON `disabled` arrives here
     // already true); the shared normalizer only re-encodes the canonical shape.
@@ -384,9 +398,8 @@ function nativeEntries(entries, isJson, source, pickerGroups) {
       ...(meta.supportsImages ? { supportsImages: true } : {}),
       ...(meta.familyUid ? { familyUid: meta.familyUid } : {}),
       ...(source ? { sources: [source] } : {}),
-      ...(pickerGroups ? { pickerListed: pickerGroups.listed.has(label),
-        ...(pickerGroups.groups.has(label)
-          ? { pickerGroup: pickerGroups.groups.get(label).group, pickerGroupRank: pickerGroups.groups.get(label).rank } : {}) } : {}),
+      ...(pickerGroups ? { pickerListed: pickerGroups.listed.has(label), pickerSorted: true } : {}),
+      ...(group ? { pickerGroup: group.group, pickerGroupRank: group.rank } : {}),
     });
     if (normalized) seen.push(normalized);
   }
@@ -412,7 +425,7 @@ function jsonKey(object, camel, snake) { return has(object, snake) && !has(objec
 // first section that has any named group). Unnamed groups contribute
 // membership only — they never name a vendor and never consume a rank.
 function pickerSectionGroups(sections, groups) {
-  let target = sections.find(section => section.name === 'Provider');
+  let target = sections.find(section => section.name === 'Provider' && section.groups.some(group => group.name));
   if (!target) target = sections.find(section => section.groups.some(group => group.name));
   if (!target) return;
   const groupRanks = new Map();

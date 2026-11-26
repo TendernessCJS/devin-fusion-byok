@@ -335,7 +335,8 @@ test('the installed picker selects every canonical native Sidekick on generated 
   const protoFamily = family => m(30, cat(s(1, 'Fusion'), ...(family || []).map(dim =>
     m(2, cat(s(1, dim.key), m(2, cat(v(1, dim.order), s(2, dim.name), v(3, dim.controlType ?? 0))))))));
   const entry = record => cat(s(1, record.label), s(22, record.uid), v(4, record.disabled ? 1 : 0),
-    m(23, cat(...(record.harnesses || []).map(harness => s(20, harness)), v(25, record.router ? 1 : 0))), protoFamily(record.family));
+    m(23, cat(...(record.harnesses || []).map(harness => s(20, harness)), v(25, record.router ? 1 : 0))), protoFamily(record.family),
+    ...(record.uid.startsWith('fusion-') ? [m(32, v(1, 1))] : []));
   const records = collectNativeModels(cat(...[...fixture.natives, ...fixture.fusions].map(record => m(1, entry(record)))),
     { rpc: 'GetCliModelConfigs', format: proto });
   const result = buildCatalog(config(), records);

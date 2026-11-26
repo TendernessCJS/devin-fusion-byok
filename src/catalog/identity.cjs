@@ -18,6 +18,26 @@ function refKey(ref) {
   return '';
 }
 
+// ModelProvider enum (ClientModelConfig f10) mapped to the vendor group names
+// and ranks of the official `Provider` picker sort section: WINDSURF rows are
+// the vendor's own, so they group as Cognition. The rank order reproduces the
+// measured Provider section order (Cognition 0 … Meta 9); providers absent
+// from that section keep their enum order behind the observed ones.
+const PROVIDER_GROUPS = ['Cognition', 'OpenAI', 'Anthropic', 'Google', 'xAI', 'DeepSeek', 'Moonshot', 'Z.ai', 'NVIDIA', 'Meta', 'Qwen', 'MiniMax', 'Thinking Machines'];
+const PROVIDER_GROUP_BY_ENUM = { WINDSURF: 'Cognition', OPENAI: 'OpenAI', ANTHROPIC: 'Anthropic', GOOGLE: 'Google', XAI: 'xAI', DEEPSEEK: 'DeepSeek', MOONSHOT: 'Moonshot', QWEN: 'Qwen', ZAI: 'Z.ai', MINIMAX: 'MiniMax', NVIDIA: 'NVIDIA', THINKING_MACHINES: 'Thinking Machines', META: 'Meta' };
+const PROVIDER_ENUM_NUMBERS = { WINDSURF: 1, OPENAI: 2, ANTHROPIC: 3, GOOGLE: 4, XAI: 5, DEEPSEEK: 6, MOONSHOT: 7, QWEN: 8, ZAI: 9, MINIMAX: 10, NVIDIA: 11, THINKING_MACHINES: 12, META: 13 };
+function providerGroup(provider) {
+  let name = '';
+  if (typeof provider === 'number' && Number.isSafeInteger(provider)) {
+    for (const [key, value] of Object.entries(PROVIDER_ENUM_NUMBERS)) if (value === provider) { name = key; break; }
+  } else if (typeof provider === 'string') {
+    name = provider.trim().toUpperCase().replace(/^MODEL_PROVIDER_/, '');
+  }
+  const group = PROVIDER_GROUP_BY_ENUM[name];
+  if (!group) return null;
+  return { group, rank: PROVIDER_GROUPS.indexOf(group) };
+}
+
 const NATIVE_ORDER_BASE = 0x10000000;
 const NATIVE_ORDER_SPAN = 0x08000000;
 const BYOK_ORDER_BASE = 0x20000000;
@@ -165,7 +185,7 @@ function nativeUid(entry) {
   const uid = camel ?? snake;
   return typeof uid === 'string' ? uid : '';
 }
-module.exports = { OWN_GROUP, SIDEKICK_HARNESSES, ownUid, has, digest, slug, concat, positive, refKey,
+module.exports = { PROVIDER_GROUPS, PROVIDER_GROUP_BY_ENUM, providerGroup, OWN_GROUP, SIDEKICK_HARNESSES, ownUid, has, digest, slug, concat, positive, refKey,
   NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE,
   BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, stableOrders,
   leadFamilyBase, leadFamilyBaseFor, leadFamilyTier, NATIVE_EFFORT_NAMES, leadFamilyLabel, effortMetadata, expandHiddenByFamily, normalizeAllowedUids, nativeUid, isFastLeadUid,

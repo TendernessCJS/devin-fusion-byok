@@ -199,3 +199,22 @@ test('pickerGroup and its rank validate at normalize and carry together at merge
   const regrouped = normalizeNativeEntry(entry({ pickerGroup: 'Other', pickerGroupRank: 0, pickerListed: true }));
   assert.deepEqual([mergeNativeEntry(grouped, regrouped).pickerGroup, mergeNativeEntry(grouped, regrouped).pickerGroupRank], ['Other', 0]);
 });
+
+test('a sorts-carrying observation without a named group clears the carried pickerGroup', () => {
+  const { mergeNativeEntry } = require('../src/models/native-entry.cjs');
+  // pickerSorted validates like pickerListed: boolean only.
+  assert.equal(normalizeNativeEntry(entry({ pickerSorted: true })).pickerSorted, true);
+  assert.equal(normalizeNativeEntry(entry({ pickerSorted: 'yes' })).pickerSorted, undefined);
+  const grouped = normalizeNativeEntry(entry({ pickerGroup: 'Official', pickerGroupRank: 3, pickerListed: true, pickerSorted: true }));
+  // The label falls out of every named group in a later sorts-carrying
+  // observation: that is a fresh verdict, so the prior group must not carry.
+  const ungrouped = normalizeNativeEntry(entry({ pickerListed: true, pickerSorted: true }));
+  const cleared = mergeNativeEntry(grouped, ungrouped);
+  assert.equal(cleared.pickerGroup, undefined, 'a sorts verdict of "no group" clears the carried group');
+  assert.equal(cleared.pickerGroupRank, undefined, 'the rank clears together with the group');
+  assert.equal(cleared.pickerSorted, true);
+  // A flat (sorts-less) observation still leaves the prior verdict untouched.
+  const flat = normalizeNativeEntry(entry());
+  const carried = mergeNativeEntry(grouped, flat);
+  assert.deepEqual([carried.pickerGroup, carried.pickerGroupRank], ['Official', 3], 'sorts-less observations still carry');
+});

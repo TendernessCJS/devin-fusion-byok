@@ -105,7 +105,7 @@ test('an observation that only adds family metadata is still persisted', async t
     m(30, cat(s(1, 'Fusion'),
       m(2, cat(s(1, 'Lead'), m(2, cat(v(1, 1), s(2, 'Lead'))))),
       m(2, cat(s(1, 'Sidekick'), m(2, cat(v(1, 2), s(2, 'SWE-2 High'), v(3, 3))))),
-      m(2, cat(s(1, 'Fast Mode'), m(2, cat(v(3, 2))))))));
+      m(2, cat(s(1, 'Fast Mode'), m(2, cat(v(3, 2))))))), m(32, v(1, 1)));
   const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
   const realRequire = createRequire(filename);
   const module = { exports: {} };

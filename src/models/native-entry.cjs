@@ -17,6 +17,7 @@ function normalizeNativeEntry(entry) {
     ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
     ...(Number.isSafeInteger(entry.kind) ? { kind: entry.kind } : {}),
     ...(typeof entry.pickerListed === 'boolean' ? { pickerListed: entry.pickerListed } : {}),
+    ...(typeof entry.pickerSorted === 'boolean' ? { pickerSorted: entry.pickerSorted } : {}),
     ...(typeof entry.pickerGroup === 'string' && entry.pickerGroup.trim() && entry.pickerGroup.length <= 64
       ? { pickerGroup: entry.pickerGroup } : {}),
     ...(Number.isSafeInteger(entry.pickerGroupRank) && entry.pickerGroupRank >= 0 && entry.pickerGroupRank <= 0x7fffffff
@@ -62,9 +63,10 @@ function mergeNativeEntry(prior, incoming) {
   // A sorts-carrying observation delivers a fresh verdict (picker-listed or not); a
   // flat-catalog observation leaves the prior verdict untouched.
   if (prior.pickerListed !== undefined && incoming.pickerListed === undefined) carried.pickerListed = prior.pickerListed;
-  // pickerGroup and its rank travel together under the same rule: a flat
-  // catalog observation has no sorts section and leaves both untouched.
-  if (incoming.pickerGroup === undefined && incoming.pickerGroupRank === undefined) {
+  // pickerGroup and its rank travel together, carried only when this
+  // observation has no sorts section. A sorts-carrying observation that finds
+  // the label in no named group is a fresh verdict and clears the prior group.
+  if (incoming.pickerSorted !== true && incoming.pickerGroup === undefined && incoming.pickerGroupRank === undefined) {
     if (prior.pickerGroup !== undefined) carried.pickerGroup = prior.pickerGroup;
     if (prior.pickerGroupRank !== undefined) carried.pickerGroupRank = prior.pickerGroupRank;
   }

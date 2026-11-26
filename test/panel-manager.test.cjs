@@ -486,14 +486,14 @@ const nativeMembers = state => (state.nativeFamilies || []).flatMap(family => fa
 
 test('native model hide and restore persist a validated exclusion list with observed status', async () => {
   const observed = [
-    { uid: 'swe-2-max', label: 'Official SWE', disabled: false },
     { uid: 'claude-x', label: 'Claude X', disabled: true },
+    { uid: 'swe-2-max', label: 'Official SWE', disabled: false },
   ];
   const f = memory({ nativeModels: () => observed });
   let state = await f.manager.dispatch('ready');
   assert.deepEqual(nativeMembers(state), [
-    { uid: 'claude-x', label: 'Claude X', disabled: true, hidden: false, eligible: false },
     { uid: 'swe-2-max', label: 'Official SWE', disabled: false, hidden: false, eligible: false },
+    { uid: 'claude-x', label: 'Claude X', disabled: true, hidden: false, eligible: false },
   ], 'families are emitted in vendor order, not observation order');
   state = await f.manager.dispatch('setNativeModelHidden', { uid: 'swe-2-max', hidden: true });
   assert.deepEqual(f.read().hiddenNativeModelUids, ['swe-2-max']);
@@ -745,12 +745,12 @@ test('publicState groups observed natives into server families without fusion en
   const labels = state.nativeFamilies.map(family => family.label);
   assert.equal(new Set(labels).size, labels.length, 'family labels stay unique');
 
-  assert.equal(glm5.vendor, 'Zhipu AI');
+  assert.equal(glm5.vendor, 'Z.ai');
   assert.equal(opus.vendor, 'Anthropic');
-  assert.equal(fastSwe.vendor, 'Devin');
+  assert.equal(fastSwe.vendor, 'Cognition');
   assert.equal(solo.vendor, '其他', 'an unrecognized uid falls into the catch-all vendor');
-  const vendorRank = id => ['Anthropic', 'OpenAI', 'Google', 'xAI', 'DeepSeek', 'Moonshot', 'Zhipu AI',
-    'NVIDIA', 'Devin', '其他'].indexOf(state.nativeFamilies.find(family => family.id === id).vendor);
+  const vendorRank = id => ['Cognition', 'OpenAI', 'Anthropic', 'Google', 'xAI', 'DeepSeek', 'Moonshot', 'Z.ai',
+    'NVIDIA', 'Meta', '其他'].indexOf(state.nativeFamilies.find(family => family.id === id).vendor);
   const ranks = state.nativeFamilies.map(family => vendorRank(family.id));
   assert.deepEqual([...ranks].sort((a, b) => a - b), ranks, 'families are sorted by vendor order');
 
@@ -932,6 +932,18 @@ test('family variants count distinct dimension signatures while members stay who
   assert.equal(expanded.members.length, 3, 'all members stay listed');
 });
 
+test('heuristic vendor fallback follows the official Provider order including Meta', () => {
+  const row = (uid, extra = {}) => ({ uid, label: uid, disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: uid, ...extra });
+  const state = publicState(fixture(), [
+    row('muse-x'), row('nemotron-x'), row('glm-x'), row('kimi-x'), row('deepseek-x'),
+    row('grok-x'), row('gemini-x'), row('claude-x'), row('gpt-x'), row('swe-x'),
+  ]);
+  assert.deepEqual(state.nativeFamilies.map(family => family.vendor),
+    ['Cognition', 'OpenAI', 'Anthropic', 'Google', 'xAI', 'DeepSeek', 'Moonshot', 'Z.ai', 'NVIDIA', 'Meta'],
+    'ungrouped families order exactly like the official Provider section');
+  assert.equal(state.nativeFamilies.at(-1).label, 'muse-x', 'muse rows fall back to the Meta vendor');
+});
+
 test('native family vendors prefer the official picker group and sort it ahead of heuristics', () => {
   const row = (uid, familyUid, extra = {}) => ({ uid, label: uid, disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid, ...extra });
   // A heuristic-named family whose members carry no sorts verdict keeps the regex fallback.
@@ -946,7 +958,7 @@ test('native family vendors prefer the official picker group and sort it ahead o
   const vendors = official.nativeFamilies.map(family => [family.label, family.vendor]);
   assert.deepEqual(vendors[0], ['grok-x', '官方分组 Alpha'], 'the lower official rank sorts first');
   assert.deepEqual(vendors[1], ['claude-x', '官方分组 Zeta'], 'official groups keep rank order ahead of every heuristic');
-  assert.deepEqual(vendors[2], ['glm-x', 'Zhipu AI'], 'unobserved families fall back to the heuristic band behind them');
+  assert.deepEqual(vendors[2], ['glm-x', 'Z.ai'], 'unobserved families fall back to the heuristic band behind them');
   // The base member's group wins; without one the most frequent member group does.
   const mixed = publicState(fixture(), [
     row('swe-x', 'swe-x', { pickerGroup: 'Base Group', pickerGroupRank: 0 }),

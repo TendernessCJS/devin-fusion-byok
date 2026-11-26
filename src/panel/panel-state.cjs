@@ -8,15 +8,16 @@ const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, ke
 // (MODEL_PRIVATE_*) fall back to the label, which carries the real model name.
 // Truly unrecognized entries land in 其他 rather than inventing a name.
 const NATIVE_VENDORS = [
-  ['Anthropic', /^(?:claude|opus|MODEL_CLAUDE)\b/i],
+  ['Cognition', /^(?:swe\b|fusion$|adaptive$|arena|subagent|memory-migration)\b/i],
   ['OpenAI', /^(?:gpt|MODEL_(?:CHAT_)?GPT)\b/i],
+  ['Anthropic', /^(?:claude|opus|MODEL_CLAUDE)\b/i],
   ['Google', /^(?:gemini|MODEL_GOOGLE)\b/i],
   ['xAI', /^grok\b/i],
   ['DeepSeek', /^deepseek\b/i],
   ['Moonshot', /^kimi\b/i],
-  ['Zhipu AI', /^(?:glm|zhipu|zai)\b/i],
+  ['Z.ai', /^(?:glm|zhipu|zai)\b/i],
   ['NVIDIA', /^(?:nemotron|nvidia)\b/i],
-  ['Devin', /^(?:swe\b|fusion$|adaptive$|arena|subagent|memory-migration)\b/i],
+  ['Meta', /^(?:muse|MODEL_META)\b/i],
 ];
 const OTHER_VENDOR = '其他'; // i18n-data: vendor grouping value; panel/settings-view.cjs translates it for display
 function nativeVendor(id, label = '') {

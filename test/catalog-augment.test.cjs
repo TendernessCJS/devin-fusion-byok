@@ -235,7 +235,7 @@ for (const format of [proto, json]) test(`${format.json ? 'JSON' : 'protobuf'} c
   } else {
     const fixture = statusFixture();
     assert.deepEqual(collectNativeModels(fixture.body, { rpc: lsStatus, format: proto }),
-      [{ uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6', 'swe-1p5'], isModelRouter: false, sources: ['entitlement'], pickerListed: true, pickerGroup: 'Official Group', pickerGroupRank: 0 }]);
+      [{ uid: 'swe-2-max', label: 'Official SWE', disabled: false, harnessUids: ['swe-1p6', 'swe-1p5'], isModelRouter: false, sources: ['entitlement'], pickerListed: true, pickerSorted: true, pickerGroup: 'Official Group', pickerGroupRank: 0 }]);
     const direct = cat(m(1, cat(s(1, 'Router'), s(22, 'swe-router'), m(23, cat(s(20, 'swe-1p6'), v(25, 1))))));
     assert.deepEqual(collectNativeModels(direct, { rpc: 'GetCliModelConfigs', format: proto }),
       [{ uid: 'swe-router', label: 'Router', disabled: false, harnessUids: ['swe-1p6'], isModelRouter: true, sources: ['cli'] }]);
@@ -334,7 +334,7 @@ test('ambiguous user status envelopes drop observation entirely instead of guess
 });
 
 test('protobuf and JSON collect the official Sidekick dimension only when unambiguous', () => {
-  const base = uid => cat(s(1, 'F'), s(22, uid), fam(dimEntry(4, 'GPT-5.6 Luna High')));
+  const base = uid => cat(s(1, 'F'), s(22, uid), fam(dimEntry(4, 'GPT-5.6 Luna High')), m(32, v(1, 1)));
   assert.deepEqual(collectNativeModels(cat(m(1, base('fusion-a-sidekick-swe-x'))), { rpc: 'GetCliModelConfigs', format: proto })[0].sidekickDimension,
     { order: 4, name: 'GPT-5.6 Luna High', fastModeOrder: 0 });
   for (const entry of [
@@ -380,7 +380,8 @@ test('sanitized real catalog entries yield canonical orders and exact harnesses 
   const protoFamily = family => m(30, cat(s(1, 'Fusion'), ...(family || []).map(dim =>
     m(2, cat(s(1, dim.key), m(2, cat(v(1, dim.order), s(2, dim.name), v(3, dim.controlType ?? 0))))))));
   const entry = record => cat(s(1, record.label), s(22, record.uid), v(4, record.disabled ? 1 : 0),
-    m(23, cat(...(record.harnesses || []).map(harness => s(20, harness)), v(25, record.router ? 1 : 0))), protoFamily(record.family));
+    m(23, cat(...(record.harnesses || []).map(harness => s(20, harness)), v(25, record.router ? 1 : 0))), protoFamily(record.family),
+    ...(record.uid.startsWith('fusion-') ? [m(32, v(1, 1))] : []));
   const records = collectNativeModels(cat(...[...fixture.natives, ...fixture.fusions].map(record => m(1, entry(record)))),
     { rpc: 'GetCliModelConfigs', format: proto });
   const result = buildCatalog(config(), records);
@@ -772,8 +773,66 @@ test('JSON picker groups scope to the Provider sort in either key spelling', () 
     'snake_case keys parse; the unnamed Cost group consumes no rank');
   assert.equal(byUid['uid-gamma'].pickerGroup, undefined);
   assert.equal(byUid['uid-gamma'].pickerListed, true);
-  const cli = collectNativeModels({ clientModelConfigs: [entry('uid-alpha', 'Alpha')] }, { rpc: 'GetCliModelConfigs', format: json });
+  const cli = collectNativeModels({ clientModelConfigs: [{ ...entry('uid-alpha', 'Alpha'), provider: 9 }] }, { rpc: 'GetCliModelConfigs', format: json });
   assert.equal(cli[0].pickerListed, undefined, 'the CLI surface carries no sorts section, so no verdict at all');
-  assert.equal(cli[0].pickerGroup, undefined);
+  assert.deepEqual([cli[0].pickerGroup, cli[0].pickerGroupRank], ['Z.ai', 7],
+    'a sorts-less observation still groups by the provider enum');
+  assert.equal(cli[0].pickerSorted, undefined, 'the enum fallback is not a sorts verdict');
 });
 
+
+test('proto observation drops f32-less fusion mirrors while official rows survive', () => {
+  const mirror = cat(s(1, 'Fusion (Mirror)'), s(22, 'fusion-lead-a-sidekick-swe-x'),
+    m(30, cat(s(1, 'Fusion'), m(2, cat(s(1, 'Sidekick'), m(2, cat(v(1, 2), s(2, 'SWE X'), v(3, 3))))))));
+  const official = cat(mirror, m(32, v(1, 1)));
+  const plain = cat(s(1, 'SWE'), s(22, 'swe-2-max'));
+  const records = collectNativeModels(cat(m(1, mirror), m(1, official), m(1, plain)), { rpc: 'GetCliModelConfigs', format: proto });
+  assert.deepEqual(records.map(record => record.uid), ['fusion-lead-a-sidekick-swe-x', 'swe-2-max'],
+    'the f32-less mirror is dropped, the official row and plain natives survive');
+  assert.equal(records[0].uid, 'fusion-lead-a-sidekick-swe-x');
+  assert.deepEqual(records[0].sidekickDimension, { order: 2, name: 'SWE X', fastModeOrder: 0 },
+    'the surviving official row keeps its dimension');
+  // The JSON surface has no verified mirror marker: fusion rows still pass
+  // through there and the backend's emittedUids filter rejects them instead.
+  const jsonRecords = collectNativeModels({ clientModelConfigs: [{ modelUid: 'fusion-lead-a-sidekick-swe-x', label: 'F', disabled: false }] },
+    { rpc: 'GetCliModelConfigs', format: json });
+  assert.equal(jsonRecords.length, 1, 'JSON fusion rows are not filtered at this layer');
+});
+
+test('the provider enum groups flat-catalog observations by the official vendor order', () => {
+  const entry = (uid, provider) => cat(s(1, uid), s(22, uid), ...(provider === null ? [] : [v(10, provider)]));
+  const input = cat(m(1, entry('swe-x', 1)), m(1, entry('glm-x', 9)), m(1, entry('muse-x', 13)), m(1, entry('unspec-x', 0)), m(1, entry('absent-x', null)));
+  const records = collectNativeModels(input, { rpc: 'GetCliModelConfigs', format: proto });
+  const byUid = Object.fromEntries(records.map(record => [record.uid, record]));
+  assert.deepEqual([byUid['swe-x'].pickerGroup, byUid['swe-x'].pickerGroupRank], ['Cognition', 0]);
+  assert.deepEqual([byUid['glm-x'].pickerGroup, byUid['glm-x'].pickerGroupRank], ['Z.ai', 7]);
+  assert.deepEqual([byUid['muse-x'].pickerGroup, byUid['muse-x'].pickerGroupRank], ['Meta', 9]);
+  assert.equal(byUid['unspec-x'].pickerGroup, undefined, 'UNSPECIFIED never names a vendor');
+  assert.equal(byUid['absent-x'].pickerGroup, undefined, 'a missing provider field never names a vendor');
+  for (const record of records) {
+    assert.equal(record.pickerListed, undefined, 'no sorts section means no picker verdict');
+    assert.equal(record.pickerSorted, undefined);
+  }
+
+  // The sorts section wins over the enum when both exist.
+  const grp = (name, ...labels) => m(2, cat(s(1, name), ...labels.map(label => s(2, label))));
+  const section = (name, ...groups) => m(2, cat(s(1, name), ...groups));
+  const sorted = cat(m(1, cat(s(1, 'Gamma'), s(22, 'gamma-x'), v(10, 9))),
+    section('Provider', grp('Anthropic', 'Gamma')));
+  const [winner] = collectNativeModels(sorted, { rpc: 'GetCascadeModelConfigs', format: proto });
+  assert.deepEqual([winner.pickerGroup, winner.pickerGroupRank], ['Anthropic', 0], 'the sorts verdict outranks the enum');
+  assert.equal(winner.pickerSorted, true);
+});
+
+test('a Provider section of only unnamed groups falls back to the first named-group section', () => {
+  const grp = (name, ...labels) => m(2, cat(...(name ? [s(1, name)] : []), ...labels.map(label => s(2, label))));
+  const section = (name, ...groups) => m(2, cat(s(1, name), ...groups));
+  const input = cat(
+    m(1, cat(s(1, 'Alpha'), s(22, 'uid-alpha'))),
+    section('Provider', grp('', 'Alpha')),
+    section('Alphabetical', grp('Named', 'Alpha')));
+  const [record] = collectNativeModels(input, { rpc: 'GetCascadeModelConfigs', format: proto });
+  assert.deepEqual([record.pickerGroup, record.pickerGroupRank], ['Named', 0],
+    'a Provider section without named groups cannot be the vendor source');
+  assert.equal(record.pickerListed, true, 'the unnamed Provider group still contributes membership');
+});
