@@ -1,8 +1,8 @@
 'use strict';
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { modelEfforts, modelSupportsImages } = require('../models/capabilities.cjs');
-const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, leadFamilyBase, stableOrders,
-  NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE, BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, isFastLeadUid, fastLeadSets } = require('./identity.cjs');
+const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, stableOrders,
+  NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE, BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, isFastLeadUid, fastLeadSets, leadFamilyTier, leadFamilyBaseFor } = require('./identity.cjs');
 const { sortByOrder } = require('../models/order.cjs');
 const { configFor } = require('./codec.cjs');
 const { discoverOfficialRoles, discoverAdditionalNativeRoles, buildRoleLists } = require('./roles.cjs');
@@ -204,7 +204,35 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
       }
     }
   }
-  const selectedAdditionalNativeLeads = [...additionalNativeLeads.values()].filter(native => selectedNativeLeadUids.has(native.uid));
+  const selectedNativeLeadPool = [...additionalNativeLeads.values()].filter(native => selectedNativeLeadUids.has(native.uid));
+  // The picker dedupes combinations by (Lead, Effort): an alias row and its
+  // tier-token sibling carrying the same Effort value would both emit, and one
+  // would silently shadow the other. Keep a single member per (family base,
+  // effort order+name), preferring the uid that carries its own tier token.
+  const effortGroups = new Map();
+  const effortKeyOf = native => {
+    const eff = native.effortDimension;
+    if (!eff || !Number.isSafeInteger(eff.order) || typeof eff.name !== 'string' || !eff.name) return null;
+    return leadFamilyBaseFor(native.uid, native.fusionMetadata) + '|' + eff.order + '|' + eff.name;
+  };
+  for (const native of selectedNativeLeadPool) {
+    const key = effortKeyOf(native);
+    if (key === null) continue;
+    if (!effortGroups.has(key)) effortGroups.set(key, []);
+    effortGroups.get(key).push(native);
+  }
+  const effortWinners = new Set();
+  for (const group of effortGroups.values()) {
+    group.sort((a, b) => {
+      const at = leadFamilyTier(a.uid) ? 0 : 1, bt = leadFamilyTier(b.uid) ? 0 : 1;
+      return at - bt || (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0);
+    });
+    effortWinners.add(group[0].uid);
+  }
+  const selectedAdditionalNativeLeads = selectedNativeLeadPool.filter(native => {
+    const key = effortKeyOf(native);
+    return key === null || effortWinners.has(native.uid);
+  });
   const selectedAdditionalNativeSidekicks = [...additionalNativeSidekicks.values()].filter(native => selectedNativeSidekickUids.has(native.uid));
 
   const sidekicks = [], seenSidekicks = new Set();
@@ -311,7 +339,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
       // family level — same provider/model key for BYOK, same uid family
       // base for natives — so cross-effort self-pairs are filtered too.
       if (lead.native === sidekick.native &&
-          (lead.native ? leadFamilyBase(lead.uid) === leadFamilyBase(sidekick.uid)
+          (lead.native ? leadFamilyBaseFor(lead.uid, lead.fusionMetadata) === leadFamilyBaseFor(sidekick.uid, sidekick.fusionMetadata)
                        : lead.key === sidekick.key)) continue;
       const uid = `fusion-${lead.uid}-sidekick-${sidekick.uid}`;
       if (matrixUids.has(uid) || officialFusionUids.has(uid)) continue;

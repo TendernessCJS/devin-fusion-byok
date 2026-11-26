@@ -913,6 +913,25 @@ test('publicState treats the mirror option as an unrestricted allowlist, matchin
   assert.deepEqual(sidekickUids(on), sidekickUids(unrestricted));
 });
 
+test('family variants count distinct dimension signatures while members stay whole', () => {
+  const effort = (order, name) => ({ key: 'Effort', order, name, controlType: 1 });
+  const thinking = { key: 'Thinking', order: 1, name: '', controlType: 2 };
+  const row = (uid, fusionMetadata) => ({ uid, label: uid, disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid: 'x-1', fusionMetadata });
+  const observed = [
+    row('x-1', [effort(0, 'Low')]),
+    row('x-1-low', [effort(0, 'Low')]),
+  ];
+  const state = publicState(fixture(), observed);
+  const family = state.nativeFamilies.find(item => item.id === 'x-1');
+  assert.equal(family.variants, 1, 'rows sharing every dimension are aliases of one variant');
+  assert.equal(family.members.length, 2, 'alias members are never dropped — the hidden switch needs them all');
+
+  const withThinking = publicState(fixture(), [...observed, row('x-1-low-thinking', [effort(0, 'Low'), thinking])]);
+  const expanded = withThinking.nativeFamilies.find(item => item.id === 'x-1');
+  assert.equal(expanded.variants, 2, 'a row distinct in any dimension is its own variant');
+  assert.equal(expanded.members.length, 3, 'all members stay listed');
+});
+
 test('native family vendors prefer the official picker group and sort it ahead of heuristics', () => {
   const row = (uid, familyUid, extra = {}) => ({ uid, label: uid, disabled: false, isModelRouter: false, harnessUids: ['h'], familyUid, ...extra });
   // A heuristic-named family whose members carry no sorts verdict keeps the regex fallback.

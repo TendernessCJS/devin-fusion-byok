@@ -123,6 +123,15 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
       }
       return false;
     });
+    // A variant is one distinct dimension combination, not a row count: rows
+    // sharing every dimension signature are aliases of the same variant
+    // (swe-2-1 vs swe-2-1-low), while the hidden switch still works on the
+    // whole family — `members` keeps every row regardless.
+    const signatures = new Set(family.members.map(({ entry, uid }) => {
+      const dims = Array.isArray(entry?.fusionMetadata) ? entry.fusionMetadata : [];
+      if (!dims.length) return uid;
+      return dims.map(dim => dim.key + '=' + dim.order + '|' + dim.name).sort().join(',');
+    }));
     // The official picker order is authoritative when observed: the family
     // inherits the group of its base member, else the most frequent group
     // among members (ties broken alphabetically); the rank is that group's
@@ -148,7 +157,7 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
         officialGroupByFamily.set(family.id, { name: winner[0], rank: winner[1].minRank });
       }
     }
-    return { id: family.id, label, variants: members.length, internal,
+    return { id: family.id, label, variants: Math.max(signatures.size, 1), internal,
       efforts: [...effortOrders.entries()].sort((a, b) => a[1] - b[1]).map(([name]) => name),
       toggles: [...toggles].sort(),
       hidden: anyHidden,

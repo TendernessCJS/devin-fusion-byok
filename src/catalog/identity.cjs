@@ -54,6 +54,19 @@ function leadFamilyTier(uid) {
   return (head.match(NATIVE_EFFORT_SUFFIX) || [])[1] || '';
 }
 
+// A uid that ends with a bare fast marker (`swe-2-1-lightning`) has no tier
+// token, so `leadFamilyBase` keeps it as its own family. Strip the marker only
+// when the row itself observes Fast Mode != 0: the word can also be a product
+// name (`nemotron-3-5-lightning-*` carries it behind a tier; a bare such uid
+// would stay un-stripped because it observes no Fast Mode).
+const NATIVE_BARE_FAST = /-(?:fast|priority|lightning)$/;
+function leadFamilyBaseFor(uid, fusionMetadata) {
+  const base = leadFamilyBase(uid);
+  if (base !== uid || !NATIVE_BARE_FAST.test(uid)) return base;
+  const fast = (Array.isArray(fusionMetadata) ? fusionMetadata : []).find(dim => dim && dim.key === 'Fast Mode');
+  return fast && fast.order !== 0 ? uid.replace(NATIVE_BARE_FAST, '') : base;
+}
+
 // Display names a uid tier token maps to. `none` is "No Thinking" on native
 // models (glm-5-2-none, gpt-6-sol-none), distinct from the BYOK "None".
 const NATIVE_EFFORT_NAMES = { none: 'No Thinking', minimal: 'Minimal', low: 'Low', medium: 'Medium',
@@ -155,5 +168,5 @@ function nativeUid(entry) {
 module.exports = { OWN_GROUP, SIDEKICK_HARNESSES, ownUid, has, digest, slug, concat, positive, refKey,
   NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE,
   BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, stableOrders,
-  leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, leadFamilyLabel, effortMetadata, expandHiddenByFamily, normalizeAllowedUids, nativeUid, isFastLeadUid,
+  leadFamilyBase, leadFamilyBaseFor, leadFamilyTier, NATIVE_EFFORT_NAMES, leadFamilyLabel, effortMetadata, expandHiddenByFamily, normalizeAllowedUids, nativeUid, isFastLeadUid,
   fastLeadSets };

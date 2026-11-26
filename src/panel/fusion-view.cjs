@@ -61,6 +61,7 @@ function createFusionView(ui) {
     container.replaceChildren();
     const row = item => {
       const confirmed = !item.native || state().nativeCatalogStatus === 'ready';
+      const variants = Number.isSafeInteger(item.variantCount) ? item.variantCount : (item.memberUids || []).length;
       return element('div', { class: 'row' },
         element('div', { class: 'row-main' },
           element('div', { class: 'fusion-role-title' },
@@ -68,7 +69,8 @@ function createFusionView(ui) {
             item.native === true && item.official === true
               ? element('span', { class: 'badge fusion-preset', text: t('fusion.officialPreset') }) : null),
           item.native ? element('span', { class: 'row-sub',
-            text: t('fusion.official') + ((item.memberUids || []).length > 1 ? ' · ' + t('fusion.variants', { count: item.memberUids.length }) : '') })
+            text: t('fusion.official') + (variants > 1 ? ' · ' + t('fusion.tiers', { count: variants }) : '')
+              + (item.fastVariants === true ? ' · ' + t('fusion.fast') : '') })
             : element('span', { class: 'row-sub',
               text: 'BYOK' + ((item.variantCount || 0) > 1 ? ' · ' + t('models.tiers', { count: item.variantCount }) : '') })),
         item.available ? switchInput(item.selected === true, t('fusion.enableInRoleAria', { role: name, label: item.label }),

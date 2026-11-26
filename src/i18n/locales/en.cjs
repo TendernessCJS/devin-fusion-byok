@@ -189,6 +189,8 @@ module.exports = Object.freeze({
   'fusion.official': 'Official',
   'fusion.officialPreset': 'Official preset',
   'fusion.variants': '{count} variants',
+  'fusion.tiers': '{count} tiers',
+  'fusion.fast': 'Fast Mode',
   'fusion.enableInRoleAria': 'Enable {label} as {role}',
   'fusion.unavailable': 'Unavailable',
   'fusion.unconfirmed': 'Official catalog not synced; cannot confirm yet',

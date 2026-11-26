@@ -189,6 +189,8 @@ module.exports = Object.freeze({
   'fusion.official': '官方',
   'fusion.officialPreset': '官方预设',
   'fusion.variants': '{count} 个变体',
+  'fusion.tiers': '{count} 档',
+  'fusion.fast': 'Fast Mode',
   'fusion.enableInRoleAria': '在 {role} 中启用 {label}',
   'fusion.unavailable': '不可用',
   'fusion.unconfirmed': '官方目录未同步，暂无法确认',

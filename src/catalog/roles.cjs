@@ -1,5 +1,5 @@
 'use strict';
-const { ownUid, has, refKey, nativeUid, leadFamilyBase, leadFamilyTier, NATIVE_EFFORT_NAMES, stableOrders, leadFamilyLabel, normalizeAllowedUids, expandHiddenByFamily, isFastLeadUid, fastLeadSets } = require('./identity.cjs');
+const { ownUid, has, refKey, nativeUid, leadFamilyBase, leadFamilyBaseFor, leadFamilyTier, NATIVE_EFFORT_NAMES, stableOrders, leadFamilyLabel, normalizeAllowedUids, expandHiddenByFamily, isFastLeadUid, fastLeadSets } = require('./identity.cjs');
 
 function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = null) {
   const observed = Array.isArray(nativeModels) ? nativeModels : [];
@@ -36,6 +36,11 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
   const sidekickHarnessOk = candidate =>
     Boolean(nativeModelsMap.get(candidate)?.harnessUids?.length) || declaredSidekickHarness.has(candidate);
 
+  // The vendor offers Fast Mode leads that have no model row of their own
+  // (claude-sonnet-5-5-*-fast, gemini-4-neon-high-fast): the family still
+  // supports Fast Mode, so the panel marker must read it from the combinations
+  // rather than from the observed rows.
+  const fastLeadBases = new Set();
   const reservedOrders = new Set(), reservedLeadOrders = new Set();
   const leadNamesByOrder = new Map(), leadClaimsByTuple = new Map();
   const sidekickClaimsByUid = new Map();
@@ -78,7 +83,10 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
       leadDim, effortDim, sidekickDim,
     });
 
-    if (fastModeDim && fastModeDim.order !== 0) continue;
+    if (fastModeDim && fastModeDim.order !== 0) {
+      fastLeadBases.add(leadFamilyBaseFor(leadCandidate, null));
+      continue;
+    }
     if (entry.disabled !== false) continue;
     if (!Array.isArray(entry.harnessUids) || !entry.harnessUids.includes('fusion')) continue;
 
@@ -267,7 +275,7 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
     }
   }
 
-  return { eligibleNativeLeads, eligibleNativeSidekicks, reservedOrders, reservedLeadOrders, hiddenFusionUids };
+  return { eligibleNativeLeads, eligibleNativeSidekicks, reservedOrders, reservedLeadOrders, hiddenFusionUids, fastLeadBases };
 }
 
 // Everything observed that the strict official lists do not cover: any model
@@ -302,7 +310,7 @@ function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles, a
   // would invent an Effort value the official card does not offer.
   const officialLeadBases = new Map(), officialEffortOrders = new Map();
   for (const native of officialRoles.eligibleNativeLeads.values()) {
-    const base = leadFamilyBase(native.uid);
+    const base = leadFamilyBaseFor(native.uid, native.fusionMetadata);
     if (!officialLeadBases.has(base)) officialLeadBases.set(base, native.leadDimension);
     const eff = native.effortDimension;
     if (eff && Number.isSafeInteger(eff.order) && eff.name && !officialEffortOrders.has(eff.name)) {
@@ -312,7 +320,7 @@ function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles, a
   for (const native of records.values()) {
     const officialLead = officialRoles.eligibleNativeLeads.get(native.uid);
     const officialSidekick = officialRoles.eligibleNativeSidekicks.get(native.uid);
-    const baseUid = leadFamilyBase(native.uid);
+    const baseUid = leadFamilyBaseFor(native.uid, native.fusionMetadata);
     const officialDim = officialLeadBases.get(baseUid);
     const token = leadFamilyTier(native.uid);
     // Lead candidates: harnessed entries, officially declared leads, and
@@ -335,12 +343,15 @@ function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles, a
         // supplies each member's own Effort value.
         const record = { ...native, leadHarnessUids: [...new Set(['fusion', ...(native.harnessUids || [])])] };
         const eff = (Array.isArray(native.fusionMetadata) ? native.fusionMetadata : [])
-          .find(dim => dim?.key === 'Effort' && Number.isSafeInteger(dim.order) && typeof dim.name === 'string' && dim.name);
+          .find(dim => (dim?.key === 'Effort' || dim?.key === 'Reasoning Effort')
+            && Number.isSafeInteger(dim.order) && typeof dim.name === 'string' && dim.name);
         // The Effort name comes from the uid token (else the observed Effort
         // name); the order always comes from the official Effort space, with a
         // reserved-collision-free hash order for names the official card lacks
         // — an observed order lives in another space (GLM High=1 vs official
-        // High=3) and would split same-named values in the picker.
+        // High=3) and would split same-named values in the picker. `Reasoning
+        // Effort` orders are per-family ordinals (Medium observed at 0/1/2), so
+        // only its name is trustworthy.
         const effortName = token ? NATIVE_EFFORT_NAMES[token] : (eff ? eff.name : '');
         if (effortName) {
           let effortOrder = officialEffortOrders.get(effortName);
@@ -365,6 +376,35 @@ function discoverAdditionalNativeRoles(nativeModels, hiddenSet, officialRoles, a
       }
     }
     if (sideCandidate) sidekicks.set(native.uid, officialSidekick || { ...native, dimension: undefined });
+  }
+  // Sidekick aliases carrying the same effort value produce functionally
+  // identical combinations — the picker dedupes those by (Lead, Effort), so
+  // offering both rows only doubles one value. Merge each (family base, fast
+  // class, effort name) group into a single row: an official sidekick wins,
+  // then the uid carrying its own tier token, then the smaller uid.
+  const { fast: mergeFastUids, nonFast: mergeNonFastUids } = fastLeadSets(nativeModels);
+  const sideGroups = new Map();
+  for (const native of sidekicks.values()) {
+    const token = leadFamilyTier(native.uid);
+    const eff = (Array.isArray(native.fusionMetadata) ? native.fusionMetadata : [])
+      .find(dim => (dim?.key === 'Effort' || dim?.key === 'Reasoning Effort')
+        && Number.isSafeInteger(dim.order) && typeof dim.name === 'string' && dim.name);
+    const effortName = token ? NATIVE_EFFORT_NAMES[token] : (eff ? eff.name : '');
+    if (!effortName) continue;
+    const fast = isFastLeadUid(native.uid, mergeFastUids, mergeNonFastUids);
+    const key = leadFamilyBaseFor(native.uid, native.fusionMetadata) + '|' + (fast ? 'fast' : 'slow') + '|' + effortName;
+    if (!sideGroups.has(key)) sideGroups.set(key, []);
+    sideGroups.get(key).push(native);
+  }
+  for (const group of sideGroups.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => {
+      const ao = officialRoles.eligibleNativeSidekicks.has(a.uid) ? 0 : 1;
+      const bo = officialRoles.eligibleNativeSidekicks.has(b.uid) ? 0 : 1;
+      const at = leadFamilyTier(a.uid) ? 0 : 1, bt = leadFamilyTier(b.uid) ? 0 : 1;
+      return ao - bo || at - bt || (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0);
+    });
+    for (const loser of group.slice(1)) sidekicks.delete(loser.uid);
   }
   return { eligibleNativeLeads: leads, eligibleNativeSidekicks: sidekicks };
 }
@@ -510,9 +550,18 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
     // also lifts the explicit-include pin, or a stale member inclusion would
     // keep a deselected family floating in the expanded list.
     const memberExcluded = memberKeys.some(member => leadRefs.exclusions.has(member));
+    // The panel badge shows the emittable tier count, not the member count:
+    // fast twins never emit and aliases share one Effort value, so count the
+    // distinct effort names of the non-fast members (1 when the family has no
+    // Effort dimension at all).
+    const variantCount = new Set(family.members
+      .filter(member => !isFastLeadUid(member.uid, fastLeadUids, nonFastLeadUids) && member.effortDimension?.name)
+      .map(member => member.effortDimension.name)).size || 1;
+    const fastVariants = family.members.some(member => isFastLeadUid(member.uid, fastLeadUids, nonFastLeadUids)
+      || (officialRoles.fastLeadBases || new Set()).has(leadFamilyBaseFor(member.uid, member.fusionMetadata)));
     leadList.push({
       ref, label: family.label, native: true, ...(family.official ? { official: true } : {}),
-      available: true, defaultSelected: family.official, memberUids: family.uids,
+      available: true, defaultSelected: family.official, memberUids: family.uids, variantCount, fastVariants,
       selected: !memberExcluded &&
         (family.official || memberKeys.some(member => leadRefs.inclusions.has(member))),
       explicitIncluded: !memberExcluded &&

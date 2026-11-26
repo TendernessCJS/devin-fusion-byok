@@ -874,17 +874,22 @@ test('a tier-qualified -lightning lead is refused even without Fast Mode metadat
 
 test('a lead family whose members are all fast is not offered in the role list', () => {
   const roles = buildRoleLists(config(), [OFFICIAL_SIDEKICK,
+    // A bare fast twin with an observed Fast Mode now groups into its family
+    // base, so an all-fast family needs a base with no non-fast member at all.
+    nativeLead('lone-9-lightning', 'Lone 9 Ultrafast', [{ key: 'Fast Mode', order: 1 }]),
     nativeLead('swe-2-1-lightning', 'SWE-2.1 Ultrafast', [{ key: 'Fast Mode', order: 1 }]),
     nativeLead('swe-2-1-high', 'SWE-2.1 High'),
     nativeLead('swe-2-1-high-lightning', 'SWE-2.1 Ultrafast High', [{ key: 'Fast Mode', order: 1 }])]);
   const nativeLeads = roles.lead.filter(item => item.native);
   const offered = new Set(nativeLeads.flatMap(item => item.memberUids || [item.ref.nativeUid]));
-  assert.ok(!offered.has('swe-2-1-lightning'),
+  assert.ok(!offered.has('lone-9-lightning'),
     'an all-fast family can never emit — listing it would be a dead control');
   const family = nativeLeads.find(item => (item.memberUids || []).includes('swe-2-1-high'));
   assert.ok(family, 'a mixed family with a non-fast member stays offered');
   assert.ok(family.memberUids.includes('swe-2-1-high-lightning'),
     'aggregation still keeps the fast sibling for the emission filter');
+  assert.ok(family.memberUids.includes('swe-2-1-lightning'),
+    'the bare fast twin joins the mixed family once its Fast Mode is observed');
 });
 
 test('a non-fast non-official uid with a tier token joins the official family', () => {
@@ -1210,4 +1215,111 @@ test('unavailable BYOK entries (disabled provider or model) never reach the role
   const dead = deadNative.lead.find(item => item.ref?.nativeUid === 'gone-uid');
   assert.equal(dead?.available, false);
   assert.equal(dead?.reason, '当前未在可用列表中', 'native dead refs still render the removal row');
+});
+
+test('an alias row sharing its sibling Effort emits no second bucket and no effortless entries', () => {
+  // `x-1` carries the family's Low on its Reasoning Effort dimension, but so
+  // does the tier-token sibling `x-1-low` — the picker dedupes by (Lead,
+  // Effort), so emitting both would silently shadow one of them.
+  const natives = [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
+    nativeLead('x-1', 'X1', [{ key: 'Reasoning Effort', order: 0, name: 'Low', controlType: 1 }]),
+    nativeLead('x-1-low', 'X1 Low'),
+    nativeLead('x-1-high', 'X1 High')];
+  const cfg = { ...config(), roleInclusions: { lead: [{ nativeUid: 'x-1-low' }] } };
+  const result = buildCatalog(cfg, natives);
+  const emitted = result.models.filter(model => model.kind === 'matrix' && model.uid.startsWith('fusion-x-1'));
+  assert.ok(emitted.length > 0, 'the included family emits combinations');
+  const byEffort = new Map();
+  for (const model of emitted) {
+    const effort = model.json.modelFamilyMetadata.entries.find(entry => entry.key === 'Effort')?.value;
+    assert.ok(effort, 'no effortless bucket survives: ' + model.uid);
+    const key = effort.order + '|' + effort.name;
+    if (!byEffort.has(key)) byEffort.set(key, new Set());
+    byEffort.get(key).add(result.fusions[model.uid].leadUid);
+  }
+  assert.deepEqual([...byEffort.keys()].sort(), ['1|Low', '3|High'], 'exactly the Low and High values emit');
+  assert.deepEqual([...byEffort.get('1|Low')], ['x-1-low'], 'the tier-token sibling wins the shared Low value');
+  assert.deepEqual([...byEffort.get('3|High')], ['x-1-high']);
+});
+
+test('a lone alias row still emits its Reasoning Effort value when no tier sibling exists', () => {
+  const natives = [OFFICIAL_SIDEKICK, ...officialSeries('claude-x', 7, 'Claude X'),
+    nativeLead('x-1', 'X1', [{ key: 'Reasoning Effort', order: 0, name: 'Low', controlType: 1 }])];
+  const cfg = { ...config(), roleInclusions: { lead: [{ nativeUid: 'x-1' }] } };
+  const result = buildCatalog(cfg, natives);
+  const emitted = result.models.filter(model => model.kind === 'matrix' && model.uid.startsWith('fusion-x-1-sidekick-'));
+  assert.ok(emitted.length > 0, 'the lone alias emits combinations');
+  for (const model of emitted) {
+    const effort = model.json.modelFamilyMetadata.entries.find(entry => entry.key === 'Effort')?.value;
+    assert.deepEqual(effort && { order: effort.order, name: effort.name }, { order: 1, name: 'Low' },
+      'the observed Reasoning Effort name emits in the official order space: ' + model.uid);
+    assert.equal(result.fusions[model.uid].leadUid, 'x-1');
+  }
+});
+
+test('a bare fast suffix joins the family only when Fast Mode is observed on the row', () => {
+  // `swe-x-lightning` has no tier token, so the uid alone cannot group it —
+  // only its observed Fast Mode dimension marks it as the family's fast twin.
+  const withFast = [
+    nativeLead('swe-x', 'SWE-X'),
+    nativeLead('swe-x-medium', 'SWE-X Medium'),
+    nativeLead('swe-x-lightning', 'SWE-X Lightning', [{ key: 'Fast Mode', order: 1, name: 'Ultrafast' }])];
+  const roles = buildRoleLists(config(), withFast);
+  const family = roles.lead.find(item => item.native && (item.memberUids || []).includes('swe-x-medium'));
+  assert.ok(family, 'the family row exists');
+  assert.ok(family.memberUids.includes('swe-x-lightning'), 'the observed fast twin joins the family');
+  assert.ok(family.memberUids.includes('swe-x'));
+
+  // The same uid shape without an observed Fast Mode dimension is a product
+  // name, not a fast twin: it must keep its own family row.
+  const withoutFast = [
+    nativeLead('swe-x', 'SWE-X'),
+    nativeLead('swe-x-medium', 'SWE-X Medium'),
+    nativeLead('swe-x-lightning', 'SWE-X Lightning')];
+  const plain = buildRoleLists(config(), withoutFast);
+  const plainFamily = plain.lead.find(item => item.native && (item.memberUids || []).includes('swe-x-medium'));
+  assert.ok(plainFamily, 'the family row exists');
+  assert.ok(!plainFamily.memberUids.includes('swe-x-lightning'), 'unobserved -lightning stays out of the family');
+  assert.ok(plain.lead.some(item => item.native && (item.memberUids || []).includes('swe-x-lightning')),
+    'the unobserved uid forms its own row');
+});
+
+test('sidekick aliases sharing one effort value merge into the tier-token row', () => {
+  // `y-1` (observed Low) and `y-1-low` (token Low) are the same Sidekick
+  // value: the picker dedupes their combinations by (Lead, Effort), so only
+  // the tier-token row survives.
+  const natives = [
+    nativeLead('y-1', 'Y1', [{ key: 'Reasoning Effort', order: 0, name: 'Low', controlType: 1 }]),
+    nativeLead('y-1-low', 'Y1 Low')];
+  const roles = buildRoleLists(config(), natives);
+  const rows = roles.sidekick.filter(item => item.native && ['y-1', 'y-1-low'].includes(item.ref.nativeUid));
+  assert.deepEqual(rows.map(item => item.ref.nativeUid), ['y-1-low'], 'only the tier-token row survives');
+});
+
+test('a native lead row variantCount counts distinct non-fast effort values', () => {
+  const natives = [
+    nativeLead('z-1', 'Z1', [{ key: 'Reasoning Effort', order: 0, name: 'Low', controlType: 1 }]),
+    nativeLead('z-1-low', 'Z1 Low'),
+    nativeLead('z-1-high', 'Z1 High'),
+    nativeLead('z-1-high-lightning', 'Z1 High Lightning', [{ key: 'Fast Mode', order: 1, name: 'Ultrafast' }])];
+  const roles = buildRoleLists(config(), natives);
+  const family = roles.lead.find(item => item.native && (item.memberUids || []).includes('z-1-low'));
+  assert.ok(family, 'the family row exists');
+  assert.equal(family.memberUids.length, 4, 'all members stay in the row, fast twin included');
+  assert.equal(family.variantCount, 2, 'only the non-fast Low and High count as emittable variants');
+});
+
+test('fast lead support is read from combinations, not only from model rows', () => {
+  // `claude-sonnet-5-5-*-fast` and `gemini-4-neon-high-fast` exist only as lead
+  // uids inside official combinations — no model row carries their Fast Mode.
+  // The panel marker belongs to the family, so it must read the combinations.
+  const lead = nativeLead('claude-y-medium', 'Claude Y Medium');
+  const slow = officialCombo('claude-y-medium', 9, 'Claude Y', 2);
+  const fast = officialCombo('claude-y-medium-fast', 9, 'Claude Y', 2);
+  fast.fusionMetadata = [...fast.fusionMetadata, { key: 'Fast Mode', order: 1 }];
+  const roles = buildRoleLists(config(), [OFFICIAL_SIDEKICK, lead, slow, fast]);
+  const row = roles.lead.find(item => item.native && (item.memberUids || []).includes('claude-y-medium'));
+  assert.ok(row, 'the family row exists');
+  assert.equal(row.fastVariants, true, 'a fast combination marks the family without a fast model row');
+  assert.equal(row.variantCount, 1, 'a fast combination adds no tier');
 });
