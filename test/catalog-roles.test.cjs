@@ -254,6 +254,42 @@ test('eligible observed native Sidekicks combine with every imported Lead using 
   assert.deepEqual(fields(getNested(assignedMedium, 1), 3).map(field => field.value.toString()), ['swe-1p5', 'unrelated']);
 });
 
+test('a harnessless sidekick model row qualifies through its fusion-sidekick declaration row', () => {
+  // The vendor declares each usable Sidekick as `fusion-sidekick-<uid>` with
+  // the harness list on that row; a model row that lost its harnessUids must
+  // still qualify, and the assignment carries the declaration's harnesses.
+  const harnessless = { ...nativeLead('swe-2-max', 'SWE-2 Max'), harnessUids: [] };
+  const declaration = { uid: 'fusion-sidekick-swe-2-max', label: 'Fusion Sidekick (SWE-2 Max)',
+    disabled: false, isModelRouter: true, harnessUids: ['swe-1p6', 'swe-1p5'] };
+  const combo = { uid: 'fusion-lead-a-sidekick-swe-2-max', label: 'F', disabled: false, isModelRouter: true,
+    harnessUids: ['fusion'], sidekickDimension: { order: 3, name: 'SWE-2 Max' } };
+
+  const roles = buildRoleLists(config(), [harnessless, declaration, combo]);
+  const row = roles.sidekick.find(item => item.native && item.ref.nativeUid === 'swe-2-max');
+  assert.ok(row, 'the declaration row keeps a harnessless model row eligible');
+  assert.equal(row.official, true);
+  const catalog = buildCatalog(config(), [harnessless, declaration, combo]);
+  const fusion = Object.values(catalog.fusions).find(value => value.sidekickUid === 'swe-2-max');
+  assert.ok(fusion, 'a BYOK lead pairs with the declared sidekick');
+  assert.deepEqual(fusion.sidekickHarnessUids, ['swe-1p6', 'swe-1p5'], 'the declaration supplies the assignment harness');
+  const assigned = resolveAssignment(cat(s(2, fusion.uid), s(6, fusion.uid)), proto, catalog);
+  assert.deepEqual(fields(getNested(assigned, 1), 3).map(field => field.value.toString()), ['swe-1p6', 'swe-1p5']);
+
+  // Without the declaration row the same harnessless model row cannot
+  // qualify — nothing else in the catalog supplies a harness for it.
+  const bare = buildRoleLists(config(), [harnessless, combo]);
+  assert.ok(!bare.sidekick.some(item => item.native && item.ref.nativeUid === 'swe-2-max' && item.official),
+    'without the declaration, a harnessless model row is no official sidekick');
+
+  // The Lead claim of a combination passes through its Sidekick's harness, so
+  // the same declaration must keep the Lead too, not just the Sidekick.
+  const lead = nativeLead('lead-a', 'Lead A');
+  const full = officialCombo('lead-a', 1, 'Lead A', 2);
+  const declared = buildRoleLists(config(), [harnessless, lead, declaration, full]);
+  assert.ok(declared.lead.some(item => item.native && item.ref.nativeUid === 'lead-a' && item.official),
+    'the declaration keeps the Lead claim of the same combination');
+});
+
 test('config alone never grants native capability and unobserved natives fail closed', () => {
   const input = config();
   const unobserved = buildCatalog(input);

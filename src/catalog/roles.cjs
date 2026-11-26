@@ -13,6 +13,29 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
     }
   }
 
+  // The vendor declares each usable Sidekick as its own `fusion-sidekick-<uid>`
+  // row (kind 6, isModelRouter) and hangs the harness list on that row. Treat the
+  // declaration as identity-level evidence: a Sidekick whose model row lost its
+  // harnessUids must still qualify, and the assignment needs the declaration's
+  // harness — the combo only supplies order and name.
+  const declaredSidekickHarness = new Map();
+  for (const entry of observed) {
+    const uid = typeof entry?.uid === 'string' ? entry.uid : '';
+    if (!uid.startsWith('fusion-sidekick-') || ownUid(uid)) continue;
+    const declared = uid.slice('fusion-sidekick-'.length);
+    const harnesses = entry.harnessUids;
+    if (!declared || declaredSidekickHarness.has(declared)) continue;
+    if (!Array.isArray(harnesses) || !harnesses.length) continue;
+    if (!harnesses.every(value => typeof value === 'string' && value.trim().length > 0)) continue;
+    declaredSidekickHarness.set(declared, [...harnesses]);
+  }
+  // One predicate for both places a Sidekick's harness decides admission: its
+  // own claim, and the Lead claim of a combination that names it. The vendor
+  // already hangs the harness on the declaration row, so a model row that lost
+  // harnessUids must not silently take its Lead down with it.
+  const sidekickHarnessOk = candidate =>
+    Boolean(nativeModelsMap.get(candidate)?.harnessUids?.length) || declaredSidekickHarness.has(candidate);
+
   const reservedOrders = new Set(), reservedLeadOrders = new Set();
   const leadNamesByOrder = new Map(), leadClaimsByTuple = new Map();
   const sidekickClaimsByUid = new Map();
@@ -60,7 +83,8 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
     if (!Array.isArray(entry.harnessUids) || !entry.harnessUids.includes('fusion')) continue;
 
     const sideNative = sideKnown ? nativeModelsMap.get(sideCandidate) : null;
-    if (sideKnown && sideNative.disabled === false && sideNative.isModelRouter === false && sideNative.harnessUids?.length && !hiddenSet.has(sideCandidate)
+    if (sideKnown && sideNative.disabled === false && sideNative.isModelRouter === false
+        && sidekickHarnessOk(sideCandidate) && !hiddenSet.has(sideCandidate)
         && (!allowed || allowed.has(sideCandidate))) {
       if (sidekickDim && Number.isSafeInteger(sidekickDim.order) && sidekickDim.name) {
         if (!sidekickClaimsByUid.has(sideCandidate)) {
@@ -82,8 +106,8 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
     // its own harness.
     if (leadNative.disabled !== false || leadNative.isModelRouter !== false || hiddenSet.has(leadCandidate)
         || (allowed && !allowed.has(leadCandidate))) continue;
-    if (sideNative.disabled !== false || sideNative.isModelRouter !== false || !sideNative.harnessUids?.length || hiddenSet.has(sideCandidate)
-        || (allowed && !allowed.has(sideCandidate))) continue;
+    if (sideNative.disabled !== false || sideNative.isModelRouter !== false || !sidekickHarnessOk(sideCandidate)
+        || hiddenSet.has(sideCandidate) || (allowed && !allowed.has(sideCandidate))) continue;
 
     if (leadDim && Number.isSafeInteger(leadDim.order) && leadDim.name &&
         effortDim && Number.isSafeInteger(effortDim.order) && effortDim.name) {
@@ -171,7 +195,7 @@ function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = n
     eligibleNativeSidekicks.set(uid, {
       uid, label: sidekickName || native.label || uid,
       dimension: { order: sidekickOrder, name: sidekickName },
-      harnessUids: native.harnessUids,
+      harnessUids: native.harnessUids?.length ? native.harnessUids : declaredSidekickHarness.get(uid),
     });
   }
 

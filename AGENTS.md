@@ -32,6 +32,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/auto-continue-forensics.md` | **排查「该续没续」或改 `auto-continue.cjs` 资格判定时必读**——2026-10-31 `session-info` 永久取消资格的真机时间线与修复依据、两个观测事件的字段、残留待定项 |
 | `.devin/rules/upstream-routing.md` | **排查「转发打到了哪里」或推送没生效时必读**——upstream origin 契约与校验、原生派生链与收敛窗口、激活期推送失败的 identity 分级、`upstream-push` / `upstream-origin` / `upstream-push.json` 三个观测落点 |
 | `.devin/rules/fusion-matrix.md` | 改 Fusion 矩阵 emit、Lead/Sidekick 资格命名、家族/服务器家族判定、控制维度、harness 执行通道或 Fast Mode 时必读 |
+| `.devin/rules/fusion-role-declarations.md` | 改 Fusion Lead/Sidekick 准入判定、或排查「官方侧手在面板里消失」时必读——侧手声明行与 Lead/Effort 的权威来源 |
 | `.devin/rules/catalog-and-picker.md` | 改 picker 可见性、角色白名单与 Lead/Sidekick 门槛、CLI allowlist 三态与准入层、陈旧条目清理、推送门控、`nativeFamilies` 或维度 order 时必读 |
 | `.devin/rules/model-entitlement-forensics.md` | **排查「picker 整族变窄 / Claude·GPT·Gemini 全消失 / mirror 加宽无效」时必读**——准入层（plan/区域）在 f7 之上、官方 List Models API 取证、缓存字节判据与已排除路径 |
 | `.devin/rules/catalog-publication.md` | 改原生 `auth-status` 写入、`GetModelStatuses`，或怀疑「改了配置会话看不见」时必读；发布确认链已随 3.12.17 删除 |
