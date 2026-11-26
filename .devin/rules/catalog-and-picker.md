@@ -94,6 +94,8 @@ models 必须非空（空 payload 不推），POST 的模式校验在 ingest 之
 「团队/组织限制了模型」：`allowedKind=restricted` 与「存储白名单为空」可以同时成立，此时限制来自准入层，页面上那个
 `Reset settings` 是空操作。判据与取证方式见 `model-entitlement-forensics.md`。
 
+- 原生观测的 `pickerGroup`/`pickerGroupRank` 只取排序区 `Provider` 段（0 基），无排序区观测须 carry；面板优先官方名，启发式兜底。
+
 ## 分卷指针
 
 - **声明窗口 `f4`/`maxTokens` 与上下文压缩已分卷到 `context-and-compaction.md`**：**改声明窗口或怀疑「扩展触发了压缩」前必读**，勿凭印象重推阈值。

@@ -73,3 +73,29 @@ trigger: model_decision
 
 
 **`ModelInfo` f5 的规模实测（2026-11-06，`catalog-and-picker.md` 的判据出处）**：CLI 缓存 1205 条原生条目中 **234 条**带 f5、值恒为 `LLAMA_WITH_SPECIAL`，**971 条**不带；我方 `encodeConfig`（`catalog/codec.cjs`）**72 条**全部不发。形态看是提示词模板/分词器类型，字段名未在 bundle 里确证。不发的**影响未验证**——可能 harness 已在服务端提供模板故留空无害，也可能客户端回落默认模板。
+
+## 官方 picker 分组的实测结构（2026-11-26，Devin 3.15.14）
+
+`GetUserStatus` 载荷（`~/.cache/devin/cli/user_status.<digest>.bin`，JSON 信封 + base64 protobuf）的 f33 容器里，
+f2 是**三个排序 section**，不是一段分组：
+
+| section | 组数 | label 数 | 内容 |
+| --- | --- | --- | --- |
+| `Recommended` | 1 | 16 | 组消息只有 f2 labels、**没有 f1 组名**；每族一个代表项 |
+| `Provider` | 10 | 319 | 全部命名组，覆盖三段并集的**全部** 319 个 label |
+| `Cost` | 1 | 319 | 无名组，组内还带 f3（价格档相关，未取证） |
+
+`Provider` 段顺序与 label 数：Cognition 27 / OpenAI 135 / Anthropic 78 / Google 28 / xAI 8 / DeepSeek 8 /
+Moonshot 9 / Z.ai 12 / NVIDIA 8 / Meta 6。
+
+**陷阱（已修）**：按「跨 section 首次出现」取组会把 `Recommended` 的无名组排在前面，它的 16 个 label 被登记成空组、
+Provider 的正确归属被「已存在」判据丢弃（实测 319 → 303 有组），`GLM-5.3` 整族因此回落成启发式厂商名。正确口径是
+**section 作用域**：`pickerListed` 取三段并集（319 不变），`pickerGroup`/`pickerGroupRank` 只取 `Provider` 段，
+rank 为该段内命名组的 0 基序号（Cognition 0 … Meta 9），无名组只贡献 listed。
+
+族级（`familyUid` 归并，user_status 面 55 族）：Cognition 5 / OpenAI 14（含无 familyUid 的 `MODEL_GPT_OSS_120B`）/
+Anthropic 12 / Google 8 / Moonshot 4 / Z.ai 3 / xAI 2 / Meta 1 / NVIDIA 3 / DeepSeek 3，0 跨组分歧。
+内部门面族（adaptive、fusion、swe-check 等 11 个）只存在于 `model_configs` 面，该面**没有排序区**——
+所以分组字段在那面必然缺席，`mergeNativeEntry` 必须成对 carry `pickerGroup` 与 `pickerGroupRank`。
+
+若厂商改了 section 名：回落为「第一个至少含一个命名组的 section」；全为无名组时不写分组字段，面板走启发式厂商表。
