@@ -34,7 +34,7 @@ function encodeConfig(config) {
     s(22, config.modelUid), m(23, infoRaw), m(30, encodeFamily(config.modelFamilyMetadata))]);
 }
 
-function configFor({ uid, label, family, familyUid, contextWindow, maxOutputTokens, effort, fusion, supportsImages, inferenceServerUrl, kind, harnessUids }) {
+function configFor({ uid, label, family, familyUid, contextWindow, maxOutputTokens, effort, fusion, supportsImages, inferenceServerUrl, kind, harnessUids, hiddenFromSorts }) {
   const json = {
     label, modelUid: uid, provider: fusion ? 1 : 2,
     maxTokens: contextWindow, supportsImages: !!supportsImages,
@@ -49,7 +49,7 @@ function configFor({ uid, label, family, familyUid, contextWindow, maxOutputToke
     },
     modelFamilyMetadata: family,
   };
-  return { uid, label, effort, kind: kind || (fusion ? 'fusion' : 'model'), json, raw: encodeConfig(json) };
+  return { uid, label, effort, kind: kind || (fusion ? 'fusion' : 'model'), json, raw: encodeConfig(json), ...(hiddenFromSorts ? { hiddenFromSorts: true } : {}) };
 }
 
 module.exports = { encodeFamily, encodeConfig, configFor };

@@ -290,6 +290,53 @@ test('a harnessless sidekick model row qualifies through its fusion-sidekick dec
     'the declaration keeps the Lead claim of the same combination');
 });
 
+test('a BYOK lead row carries fastVariants only for a tier-exact pairing', () => {
+  const fastConfig = (targetExtra = {}, baseExtra = {}, targetEfforts = ['medium', 'high']) => ({
+    providers: [{ id: 'cpa', name: 'CPA', baseUrl: 'https://private.invalid/v1', apiKey: 'secret-test-value', apiFormat: 'openai',
+      models: [
+        { id: 'grok-4.6', label: 'Grok 4.6', efforts: ['medium', 'high'], fastModel: 'grok-fast',
+          contextWindow: 1000000, maxOutputTokens: 32768, ...baseExtra },
+        { id: 'grok-fast', label: 'Grok Fast', efforts: targetEfforts,
+          contextWindow: 1000000, maxOutputTokens: 32768, ...targetExtra },
+      ] }],
+  });
+  const leadRow = roles => roles.lead.find(item => !item.native && item.ref.model === 'grok-4.6');
+
+  const exact = buildRoleLists(fastConfig(), []);
+  assert.equal(leadRow(exact).fastVariants, true, 'a tier-exact pairing flags the base lead row');
+  const sidekickRow = exact.sidekick.find(item => !item.native && item.ref.model === 'grok-4.6');
+  assert.ok(sidekickRow && !('fastVariants' in sidekickRow), 'sidekick rows never carry the flag');
+
+  const mismatched = buildRoleLists(fastConfig({}, {}, ['high']), []);
+  assert.notEqual(leadRow(mismatched).fastVariants, true, 'a tier mismatch produces no pairing and no flag');
+
+  const disabledBase = buildRoleLists(fastConfig({}, { enabled: false }), []);
+  assert.ok(!leadRow(disabledBase), 'a disabled base renders no available lead row at all');
+
+  // The pairing judgement intentionally ignores the target's own enabled flag:
+  // a disabled variant stays routable exactly so the Fusion card keeps its
+  // Fast toggle, so the twins — and this badge — survive target disabling.
+  const disabledTarget = buildRoleLists(fastConfig({ enabled: false }), []);
+  assert.equal(leadRow(disabledTarget).fastVariants, true, 'a disabled target still generates the twins');
+
+  const variantRow = exact.sidekick.find(item => !item.native && item.ref.model === 'grok-fast');
+  assert.ok(variantRow, 'the fast variant appears as a sidekick row of its own');
+  assert.equal(variantRow.label, 'CPA · Grok Fast', 'the sidekick row carries the variant label, not the base family label');
+  assert.equal(variantRow.available, true);
+  assert.ok(!exact.lead.some(item => item.ref.model === 'grok-fast'), 'the variant still never appears as a lead');
+  const disabledTargetRoles = buildRoleLists(fastConfig({ enabled: false }), []);
+  assert.ok(!disabledTargetRoles.sidekick.some(item => item.ref.model === 'grok-fast'),
+    'a disabled variant is no available sidekick row either');
+
+  const missing = fastConfig();
+  missing.providers[0].models[0].fastModel = 'gone';
+  assert.notEqual(leadRow(buildRoleLists(missing, [])).fastVariants, true, 'a missing target produces no pairing');
+
+  const selfish = fastConfig();
+  selfish.providers[0].models[0].fastModel = 'grok-4.6';
+  assert.notEqual(leadRow(buildRoleLists(selfish, [])).fastVariants, true, 'a self reference produces no pairing');
+});
+
 test('config alone never grants native capability and unobserved natives fail closed', () => {
   const input = config();
   const unobserved = buildCatalog(input);

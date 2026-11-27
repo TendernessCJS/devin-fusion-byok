@@ -10,13 +10,9 @@ description: "改 Fusion 矩阵 emit、Lead/Sidekick 资格与命名、家族维
 ## 发射条件（矩阵恒开、只发新增成员）
 
 - **矩阵恒开，没有开关**：`buildCatalog` 总是发射交叉积，`kind` 一律是 `'matrix'`，且**不得进入面板分组**（面板分组只收 `kind === 'model'` 的普通条目）。官方 Fusion 卡片的维度候选来自「同 family 条目的自声明维度」，
-  所以每个 Lead 值下必须有多条不同 Sidekick/Effort 条目（全交叉积），否则下拉被锁死；`fusion-<lead>-fast-sidekick-<side>` 形式的 `-fast` uid
-  显式拒绝（BYOK 无 fast 能力，不得伪装降级）。条目一律 `familyUid: 'fusion'` + `isModelRouter` + `displayOption 3`，harness 用
-  `inferenceServerUrl` —— **该值自 2026-10-19 起由 `src/runtime/port.cjs` 的 `BACKEND_URL` 派生**（注意：此处指后端推理地址派生值，**不是** `ModelInfo.f18`）（不读配置、不持久化；`build.cjs` 的缺省回落也是它）。不要改回读 `config.inferenceServerUrl`：它不是权威来源（不读配置、不持久化），即使旧备份恢复了持久副本也不得把推理指向它，再叠上"硬编码官方地址"的旧回落就会把 BYOK/Fusion 推理静默打向官方服务。
-  **`Fast Mode` 与 `Recommended Sidekick` 两个信息性维度必须照官方线形态发射**：前者只带 `controlType: 2`、后者只带 `name`，都不写
-  `order`（`encodeFamily` 因此只在声明了字段时才写，不再用 `order || 0` 兜底）。picker（`nil`）按 `order` 去重维度值、
-  并**丢弃值数 < 2 的维度**：我们若写 `order: 0`，就会与官方的「无 order」分成两个桶——`Fast Mode` 从官方的 2 个选项涨到 3 个，`Recommended Sidekick`
-  从「不渲染」变成一个真实控件（2026-10-14 真机实测）。
+  所以每个 Lead 值下必须有多条不同 Sidekick/Effort 条目（全交叉积），否则下拉被锁死；`fusion-<lead>-fast-sidekick-<side>` 形式的原生 fast lead uid 显式拒绝（原生 fast lead 不发射，不得伪装降级）。条目一律 `familyUid: 'fusion'` + `isModelRouter` + `displayOption 3`，harness 用
+  `inferenceServerUrl` —— **该值自 2026-10-19 起由 `src/runtime/port.cjs` 的 `BACKEND_URL` 派生**（注意：此处指后端推理地址派生值，**不是** `ModelInfo.f18`）（不读配置、不持久化；`build.cjs` 的缺省回落也是它）。不要改回读 `config.inferenceServerUrl`：它不是权威来源（不读配置、不持久化），即使旧备份恢复了持久副本也不得把推理指向它，再叠上"硬编码官方地址"的旧回落就会把 BYOK/Fusion 推理静默打向官方服务。**`Fast Mode` 与 `Recommended Sidekick` 两个信息性维度必须照官方线形态发射**：普通条目上前者只带 `controlType: 2`、后者只带 `name`，都不写
+  `order`（fast 孪生例外：`order: 1`，见下；`encodeFamily` 只在声明了字段时才写，不再用 `order || 0` 兜底）。picker（`nil`）按 `order` 去重维度值、并**丢弃值数 < 2 的维度**：我们若在普通条目写 `order: 0`，就会与官方的「无 order」分成两个桶——`Fast Mode` 从官方的 2 个选项涨到 3 个，`Recommended Sidekick`从「不渲染」变成一个真实控件（2026-10-14 真机实测）。
 - 矩阵只 emit「至少一方是新增成员」的组合：官方维度成员（lead 有 `leadDimension`、sidekick 有 `dimension`）之间的配对永远交给官方目录，
   即使官方没有覆盖该组合也不替它发明（避免产出官方不支持的组合）；BYOK 或非官方原生成员与官方成员配对时，官方成员条目复用官方维度 `name+order` 直接并入官方选项，不另造维度值。Lead
   一律按**系列**组织，族键统一取「uid 去掉结尾档位 token（`-(none|minimal|low|medium|high|xhigh|max|ultra)`，其后可再跟 `-fast`/`-priority`/`-lightning`；**容量限定符 `-1m` 保留在族基上**，故 `GLM-5.2` 与 `GLM-5.2 1M` 是两个族）」（`leadFamilyBase`），
@@ -58,16 +54,10 @@ description: "改 Fusion 矩阵 emit、Lead/Sidekick 资格与命名、家族维
   与能否当 Fusion Lead 无关。2026-10-16 实测当时 586 条组合里有 **40 条以 `harnessUids=[]` 的 `gpt-6-astra-*` 为 Lead**（`isModelRouter=false`、`disabled=false`），故 lead 侧去掉了 harness 判据；2026-11-25 复测该族已带 `[gpt-5p6-codex,gpt-5p6]`，1009 条组合的 111 个 Lead / 14 个 Sidekick **全部有 harness**——这条判据今天不影响任何官方成员，但结论五周内翻转过一次，属易变契约：**保留结构，不要用 harness 卡 Lead**。同批扫描的反证仍成立：lead/sidekick 引用 router = 0/0、引用 disabled = 0/0、**sidekick 引用无 harness = 0**——所以只有 lead 侧去掉 harness 判据，其余门禁（router/disabled/hidden、sidekick 的 harness）原样。`discoverAdditionalNativeRoles` 据此按角色分判：lead 候选 = `eligible || 官方 Lead 声明 || (官方族基 && 档位 token)`——astra `-priority` 兄弟无 harness 也并入官方族（`leadHarnessUids` 记 `['fusion']`，发射侧照旧被 `fastLeadUids` 跳过）；sidekick 候选 = `eligible || 官方 Sidekick 声明`。无官方声明、无官方族基档位 token 的无 harness 条目（`MODEL_*`/`arena-*`/`*-review` 类）照旧双假被跳过，不进角色池。
 - **fast 档 Lead 只聚合、绝不发射**（`buildCatalog` 展开 `selectedNativeLeadUids` 时跳过 `fastLeadUids` 成员；**只跳 lead 侧**，官方
   Sidekick 维度没有子档、fast sidekick 是它自己的合法取值，实测 sidekick 段 fast 发射为 0 条）。三处判据统一收敛为
-  `isFastLeadUid(uid, observedFastUids, observedNonFastUids)`（`identity.cjs`）：**观测优先，后缀兜底**——`observedFastUids`（观测的
-  `Fast Mode != 0`）命中即 fast；`observedNonFastUids`（明确 `Fast Mode=0`，或有 `Speed` 维度且无 `Fast Mode!=0`，如 `swe-1-6` 的
-  `Speed` 是另一个合法系列而非 Fast Mode）命中即非 fast；两者都无观测才回落 `-fast`/`-priority` 后缀。emit 过滤
-  （`selectedNativeLeadUids`）、`staleFusionUids`（`fastLeadUids`/`nonFastLeadUids` 选项）、`resolveAssignment`（fusion 最终确定后
-  统一拒绝 fast lead）共用同一判据；fast sidekick 三处都不设限。
-  原因是能力缺口而非取舍：我们的矩阵条目**不写 `Fast Mode` 的 `order`**（写了就会把 Fast Mode 从官方 2 个选项涨到 3 个），于是 fast lead 条目与同档非 fast
-  双胞胎**维度元组逐字节相同**（发射即产生成组重复），picker 无从区分；不发射则重复组为 0。
-  **若未来要重新发射 fast lead，必须同时补上 `Fast Mode` 的 order 才能让 picker 区分**，否则只是造重复条目或让新条目被自己的清理逻辑删掉。
+  `isFastLeadUid(uid, observedFastUids, observedNonFastUids)`（`identity.cjs`）：**观测优先，后缀兜底**——`observedFastUids` 命中即 fast；`observedNonFastUids`（明确 `Fast Mode=0`，或有 `Speed` 维度而无 `Fast Mode!=0`）命中即非 fast；都无观测才回落 `-fast`/`-priority` 后缀。emit 过滤（`selectedNativeLeadUids`）、`staleFusionUids`（`fastLeadUids`/`nonFastLeadUids` 选项）、`resolveAssignment`（fusion 确定后统一拒绝 fast lead）共用同一判据；fast sidekick 三处都不设限。原生 fast lead 口径不变。BYOK fast 走孪生：配置 `fastModel` 后每基础 combo 增发一条——三维度逐字节相同、仅 `Fast Mode` 写 `{order: 1, controlType: 2}`，label Lead 段取变体名加 ` · Fast`；uid lead 段指向同 effort 的 fast 路线（缺档不发）；
+  fast 目标不作 Lead 单发；可作 Sidekick 取值，label 取变体自身防与 base 撞名。模型行侧档位一致时变体并入 base family（同 familyUid/家族标签/Effort），成员 label 各自独立、变体出 sorts 列表组但留 routes 与 f1——picker 按 label→uid 展开列表，重名会让 base 行消失且默认 fast。
   并入成员继承官方 `leadDimension` 因此**不再为发射服务**，而是让家族聚合在「官方成员因 record 冲突被剔除、只剩这些兄弟」时仍读作官方（`buildRoleLists`
-  的家族循环仍读该字段）。附注一个易误判的边界：`swe-1-6`（label `SWE-1.6`）带的是 **`Speed` 开关**（不是 `Fast Mode`），而 `swe-1-6-fast`（label `SWE-1.6 Fast`）的 uid 已随代际下线（2026-11-25 复测目录里只剩 `swe-1-6`）；判断「是不是 fast 开关的变体」只能看 `Fast Mode` 维度，不要按 uid 后缀或 label
+  的家族循环仍读该字段）。附注易误判边界：`swe-1-6`（label `SWE-1.6`）带 **`Speed` 开关**（不是 `Fast Mode`），而 `swe-1-6-fast`（label `SWE-1.6 Fast`）的 uid 已随代际下线（2026-11-25 复测只剩 `swe-1-6`）；判断「是不是 fast 开关的变体」只能看 `Fast Mode` 维度，不要按 uid 后缀或 label
   猜。
 - **一族一个 Lead 名**：非官方族成员发射时用**族标签**作 Lead 名（`record.leadBaseLabel = leadFamilyLabel(native.label)`；官方成员继续用
   `leadDimension.name`），于是选中一族时其全部发射条目共用同一个 Lead 值、各自带自己的 Effort。族标签必须来自 `leadFamilyLabel`，**不得按「uid 以 Effort 名 slug 结尾」推导**——对 `glm-5-2-1m`、`gpt-6-luna-medium` 这类 uid 直接失效，会把一族发射成多个 Lead 值且 Effort 全空，面板「一族一行」与实际可选项对不上。

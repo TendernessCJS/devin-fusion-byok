@@ -387,12 +387,238 @@ test('informational dimensions omit order so the picker merges them with the off
     // left with fewer than two values, so an explicit order here would put our
     // entries in their own bucket: Fast Mode grew a third option and the
     // informational Recommended Sidekick turned into a real control.
-    assert.equal(Object.hasOwn(dims['Fast Mode'], 'order'), false, model.uid);
     assert.equal(Object.hasOwn(dims['Recommended Sidekick'], 'order'), false, model.uid);
-    assert.deepEqual(dims['Fast Mode'], { controlType: 2 });
+    if (model.label.endsWith(' · Fast')) {
+      // Fast twins carry the official on-shape; the orderless base entries keep
+      // the toggle at exactly two unnamed values.
+      assert.deepEqual(dims['Fast Mode'], { order: 1, controlType: 2 }, model.uid);
+    } else {
+      assert.equal(Object.hasOwn(dims['Fast Mode'], 'order'), false, model.uid);
+      assert.deepEqual(dims['Fast Mode'], { controlType: 2 });
+    }
     assert.deepEqual(dims['Recommended Sidekick'], { name: dims.Sidekick.name });
     // Selectable dimensions keep a real order; that is what makes them work.
     for (const key of ['Lead', 'Sidekick']) assert.equal(Number.isSafeInteger(dims[key].order), true, key + ' on ' + model.uid);
     if (dims.Effort) assert.equal(Number.isSafeInteger(dims.Effort.order), true, 'Effort on ' + model.uid);
   }
+});
+
+const fastFixture = () => {
+  const input = config();
+  input.providers[0].models.push({ id: 'grok-fast', label: 'Grok Fast', efforts: ['medium', 'high'], contextWindow: 500000, maxOutputTokens: 32768 });
+  input.providers[0].models[0].fastModel = 'grok-fast';
+  return input;
+};
+const dimsOf = model => Object.fromEntries(model.json.modelFamilyMetadata.entries.map(entry => [entry.key, entry.value]));
+
+test('a configured fastModel emits one Fast Mode twin per base combination', () => {
+  const built = buildCatalog(fastFixture(), OBSERVED_SWE);
+  const matrix = built.models.filter(model => model.kind === 'matrix');
+  const base = matrix.filter(model => !model.label.endsWith(' · Fast'));
+  const twins = matrix.filter(model => model.label.endsWith(' · Fast'));
+  assert.ok(base.length && twins.length, 'both shapes exist');
+  const baseGrokLeads = base.filter(model => built.fusions[model.uid] && !built.fusions[model.uid].leadNative &&
+    built.routes[built.fusions[model.uid].leadUid]?.model === 'grok-4.6');
+  assert.ok(baseGrokLeads.length, 'grok base combos emit');
+  for (const entry of baseGrokLeads) {
+    const fusion = built.fusions[entry.uid];
+    const twin = twins.find(candidate => built.fusions[candidate.uid]?.sidekickUid === fusion.sidekickUid &&
+      candidate.json.modelFamilyMetadata.entries.find(dim => dim.key === 'Effort')?.value?.name ===
+        entry.json.modelFamilyMetadata.entries.find(dim => dim.key === 'Effort')?.value?.name);
+    assert.ok(twin, 'every base combo has a twin: ' + entry.uid);
+    const baseDims = dimsOf(entry), twinDims = dimsOf(twin);
+    for (const key of ['Lead', 'Sidekick']) assert.deepEqual(twinDims[key], baseDims[key], key + ' identical on ' + twin.uid);
+    if (baseDims.Effort) assert.deepEqual(twinDims.Effort, baseDims.Effort, 'Effort identical');
+    assert.deepEqual(twinDims['Fast Mode'], { order: 1, controlType: 2 }, 'the twin carries the on-shape');
+    assert.deepEqual(baseDims['Fast Mode'], { controlType: 2 }, 'the base keeps the orderless shape');
+    assert.ok(twin.label.endsWith(' · Fast'), 'twin label suffix');
+    const twinFusion = built.fusions[twin.uid];
+    assert.equal(twinFusion.leadNative, false);
+    assert.notEqual(twinFusion.leadUid, fusion.leadUid, 'the twin leads on the fast route');
+    assert.ok(twinFusion.leadUid.includes('grok-fast'), 'the twin lead uid is the fast variant route');
+    assert.equal(twinFusion.sidekickUid, fusion.sidekickUid, 'same sidekick');
+    assert.equal(twin.json.modelInfo.harnessUids.join(','), 'fusion', 'the twin uses the bare fusion router');
+  }
+  // resolveAssignment parses the twin straight back to the fast route.
+  const fastTwin = twins.find(model => model.uid.includes('grok-fast'));
+  const baseCombo = baseGrokLeads.find(model => built.fusions[model.uid]?.sidekickUid === built.fusions[fastTwin.uid]?.sidekickUid &&
+    model.json.modelFamilyMetadata.entries.find(dim => dim.key === 'Effort')?.value?.name ===
+      fastTwin.json.modelFamilyMetadata.entries.find(dim => dim.key === 'Effort')?.value?.name);
+  assert.ok(fastTwin.label.startsWith('Fusion (CPA · Grok Fast '), 'the twin label leads with the variant own name: ' + fastTwin.label);
+  assert.ok(fastTwin.label.endsWith(' · Fast'), 'the Fast suffix stays');
+  assert.ok(baseCombo.label.startsWith('Fusion (CPA · Grok 4.6 '), 'the base combo keeps the base lead name');
+  assert.notEqual(fastTwin.label.replace(/ · Fast$/, ''), baseCombo.label, 'the twin and base lead segments differ');
+  const twinFusionUid = fastTwin.uid;
+  const fusion = built.fusions[twinFusionUid];
+  assert.ok(built.routes[fusion.leadUid], 'the fast route exists in the plain route table');
+  const { resolveAssignment: resolve } = require('../src/catalog.cjs');
+  const resolved = resolve({}, { json: true }, built);
+  assert.equal(resolved, null, 'empty assignment resolves nothing');
+  const assigned = resolve({ modelRouterUid: twinFusionUid }, { json: true }, built);
+  assert.equal(assigned.assignment.modelUid, fusion.leadUid, 'the twin assignment resolves to the fast route uid');
+  // The fast target never appears as a role or emits its own combos.
+  assert.ok(!built.rolePool.lead.some(item => item.ref.model === 'grok-fast'), 'fast target absent from lead pool');
+  assert.ok(built.rolePool.sidekick.some(item => item.ref.model === 'grok-fast'), 'fast target present in the sidekick pool: it is a legal Sidekick value');
+  const selfLed = base.filter(model => built.routes[built.fusions[model.uid]?.leadUid]?.model === 'grok-fast');
+  assert.equal(selfLed.length, 0, 'no base combo is led by the fast route');
+  assert.ok(built.models.some(model => model.uid.includes('grok-fast') && model.kind !== 'matrix'), 'the plain model row stays');
+  assert.ok(Object.keys(built.routes).some(uid => uid.includes('grok-fast')), 'its routes stay');
+});
+
+test('a fast variant selected as sidekick emits combos under its own label and order', () => {
+  const input = fastFixture();
+  input.sidekicks = [{ providerId: 'cpa', model: 'grok-fast' }];
+  const built = buildCatalog(input, OBSERVED_SWE);
+  const sideNames = new Map();
+  for (const model of built.models.filter(model => model.kind === 'matrix')) {
+    const dim = model.json.modelFamilyMetadata.entries.find(entry => entry.key === 'Sidekick');
+    if (dim && /Grok/.test(dim.value?.name || '')) sideNames.set(dim.value.name, dim.value.order);
+  }
+  assert.ok(sideNames.has('CPA · Grok Fast Medium') && sideNames.has('CPA · Grok Fast High'),
+    'the variant emits sidekick values under its own label');
+  assert.ok(sideNames.has('CPA · Grok 4.6 Medium'), 'the base values of the merged family emit alongside');
+  assert.notEqual(sideNames.get('CPA · Grok Fast Medium'), sideNames.get('CPA · Grok 4.6 Medium'),
+    'same-tier base and variant values never share an order: the picker would drop one silently');
+  assert.equal(new Set(sideNames.values()).size, sideNames.size, 'every sidekick order is unique');
+  const fastSideCombos = built.models.filter(model => model.kind === 'matrix' &&
+    model.json.modelFamilyMetadata.entries.some(entry => entry.key === 'Sidekick' && /Grok Fast/.test(entry.value?.name || '')));
+  assert.ok(fastSideCombos.length > 0, 'combos led by other models pair with the fast variant sidekick');
+  const fusion = built.fusions[fastSideCombos[0].uid];
+  assert.ok(built.routes[fusion.sidekickUid]?.model === 'grok-fast', 'the combination routes the sidekick to the variant');
+  const selfLed = fastSideCombos.filter(model => built.routes[built.fusions[model.uid]?.leadUid]?.model === 'grok-4.6');
+  assert.equal(selfLed.length, 0, 'a merged family never pairs with itself: base lead x fast sidekick stays empty');
+});
+
+test('hand-edited chains and duplicate claims collapse to legal pairings', () => {
+  const chainInput = config();
+  chainInput.providers[0].models = [
+    { id: 'a', label: 'A', fastModel: 'b', efforts: ['high'], enabled: true, contextWindow: 100000, maxOutputTokens: 8192 },
+    { id: 'b', label: 'B', fastModel: 'c', efforts: ['high'], enabled: true, contextWindow: 100000, maxOutputTokens: 8192 },
+    { id: 'c', label: 'C', efforts: ['high'], enabled: true, contextWindow: 100000, maxOutputTokens: 8192 }];
+  const chained = buildCatalog(chainInput, OBSERVED_SWE);
+  // The void A→B claim frees B to lead normally (its plain base combos are
+  // expected); what must not exist is any TWIN led on B's routes.
+  const bLedTwins = Object.values(chained.fusions).filter(fusion => chained.routes[fusion.leadUid]?.model === 'b' && fusion.label.endsWith(' · Fast'));
+  assert.equal(bLedTwins.length, 0, 'a chain link whose target itself declares a variant emits no twins');
+  const bLedBase = Object.values(chained.fusions).filter(fusion => chained.routes[fusion.leadUid]?.model === 'b' && !fusion.label.endsWith(' · Fast'));
+  assert.ok(bLedBase.length > 0, 'freed of the void claim, B leads ordinary combos of its own');
+  const cTwins = Object.values(chained.fusions).filter(fusion => chained.routes[fusion.leadUid]?.model === 'c' && fusion.label.endsWith(' · Fast'));
+  assert.ok(cTwins.length > 0, 'the final link of the chain still twins');
+  const rows = chained.models.filter(model => model.kind === 'model');
+  const famOf = id => rows.find(row => row.uid.includes('-' + id.slice(0, 8)) || row.label.includes(' ' + id + ' '));
+  const aRow = rows.find(row => row.label.startsWith('CPA · A ')), bRow = rows.find(row => row.label.startsWith('CPA · B '));
+  assert.notEqual(aRow.json.modelInfo.modelFamilyUid, bRow?.json.modelInfo.modelFamilyUid, 'b never merges into a family of a');
+
+  const dupInput = config();
+  dupInput.providers[0].models = [
+    { id: 'a', label: 'A', fastModel: 'x', efforts: ['high'], enabled: true, contextWindow: 100000, maxOutputTokens: 8192 },
+    { id: 'b', label: 'B', fastModel: 'x', efforts: ['high'], enabled: true, contextWindow: 100000, maxOutputTokens: 8192 },
+    { id: 'x', label: 'X', efforts: ['high'], enabled: true, contextWindow: 100000, maxOutputTokens: 8192 }];
+  const duped = buildCatalog(dupInput, OBSERVED_SWE);
+  const xTwins = Object.values(duped.fusions).filter(fusion => duped.routes[fusion.leadUid]?.model === 'x');
+  assert.ok(xTwins.length > 0, 'the first claimant twins');
+  const xLedTwins = new Set(xTwins.map(fusion => fusion.leadUid));
+  assert.equal(xLedTwins.size, 1, 'one claimant only: the twin lead segment is a single variant route');
+  const allXLed = Object.values(duped.fusions).filter(fusion => {
+    const leadRoute = duped.routes[fusion.leadUid];
+    return leadRoute?.model === 'x' && fusion.uid.includes('dfbyok');
+  });
+  assert.ok(allXLed.every(fusion => xLedTwins.has(fusion.leadUid)), 'no second claimant emits competing twins');
+  const mixed = config();
+  mixed.providers[0].models = [
+    { id: 'a', label: 'A', fastModel: 'b', efforts: ['high'], enabled: true, contextWindow: 100000, maxOutputTokens: 8192 },
+    { id: 'b', label: 'B', fastModel: 'c', efforts: ['high'], enabled: true, contextWindow: 100000, maxOutputTokens: 8192 },
+    { id: 'd', label: 'D', fastModel: 'c', efforts: ['high'], enabled: true, contextWindow: 100000, maxOutputTokens: 8192 },
+    { id: 'c', label: 'C', efforts: ['high'], enabled: true, contextWindow: 100000, maxOutputTokens: 8192 }];
+  buildCatalog(mixed, OBSERVED_SWE);
+});
+
+test('an excluded fast variant leaves the sidekicks list while its base stays', () => {
+  const input = fastFixture();
+  input.roleExclusions = { sidekick: [{ providerId: 'cpa', model: 'grok-fast' }] };
+  const built = buildCatalog(input, OBSERVED_SWE);
+  const grokRows = built.sidekicks.filter(sidekick => !sidekick.native && /Grok/.test(sidekick.label)).map(sidekick => sidekick.label);
+  assert.ok(grokRows.length > 0, 'the base members of the family stay listed');
+  assert.ok(grokRows.every(label => !label.includes('Grok Fast')), 'the excluded variant leaves no sidekick rows: ' + grokRows.join(','));
+  assert.ok(!built.sidekicks.some(sidekick => sidekick.model === 'grok-fast'), 'no variant row at all');
+});
+
+test('fast twins vanish with the variant, the provider or a missing effort', () => {
+  const disabledModel = fastFixture();
+  disabledModel.providers[0].models.find(model => model.id === 'grok-fast').enabled = false;
+  const disabledCatalog = buildCatalog(disabledModel, OBSERVED_SWE);
+  assert.ok(disabledCatalog.models.some(model => model.label.endsWith(' · Fast')),
+    'a disabled fast variant still emits twins: the Fast toggle must not silently vanish');
+  const variantRoute = Object.values(disabledCatalog.routes).find(route => route.model === 'grok-fast');
+  assert.ok(variantRoute, 'the disabled variant keeps its routes');
+  assert.ok(!disabledCatalog.models.some(model => model.kind === 'model' && model.uid.includes('grok-fast') && !model.label.endsWith(' · Fast')),
+    'but the disabled variant emits no model row of its own');
+  const disabledProvider = fastFixture();
+  disabledProvider.providers[0].enabled = false;
+  assert.equal(buildCatalog(disabledProvider, OBSERVED_SWE).models.filter(model => model.label.endsWith(' · Fast')).length, 0,
+    'a disabled provider emits no twin');
+  // Exact effort matching: the variant lacks the base tier, so nothing twins.
+  const tierless = fastFixture();
+  tierless.providers[0].models.find(model => model.id === 'grok-fast').efforts = ['low'];
+  assert.equal(buildCatalog(tierless, OBSERVED_SWE).models.filter(model => model.label.endsWith(' · Fast')).length, 0,
+    'a fast variant without the matching effort emits no twin');
+});
+
+test('a tier-matched fast variant merges into the base family with the Fast Mode pair', () => {
+  const built = buildCatalog(fastFixture(), OBSERVED_SWE);
+  const rows = built.models.filter(model => model.kind === 'model' && model.uid.includes('grok'));
+  assert.ok(rows.length >= 4, 'base and variant rows both emit');
+  const base = rows.filter(model => model.uid.includes('grok-4')), variant = rows.filter(model => model.uid.includes('grok-fast'));
+  assert.ok(base.length && variant.length, 'both sides present');
+  for (const a of base) for (const b of variant.filter(v => dimsOf(v).Effort?.name === dimsOf(a).Effort?.name)) {
+    assert.equal(a.json.modelInfo.modelFamilyUid, b.json.modelInfo.modelFamilyUid, 'same family uid');
+    assert.equal(a.json.modelFamilyMetadata.modelFamilyLabel, b.json.modelFamilyMetadata.modelFamilyLabel, 'same family label');
+    assert.notEqual(a.json.label, b.json.label, 'member labels stay distinct: the picker expands lists through a label-to-uid map');
+  }
+  for (const model of variant) {
+    assert.ok(model.label.startsWith('CPA · Grok Fast'), 'the variant keeps its own label: ' + model.label);
+    assert.equal(model.hiddenFromSorts, true, 'the variant is routable but out of the list groups');
+  }
+  for (const model of base) assert.equal(model.hiddenFromSorts, undefined, 'the base stays listed');
+  for (const model of base) assert.deepEqual(dimsOf(model)['Fast Mode'], { controlType: 2 }, 'base stays orderless');
+  for (const model of variant) assert.deepEqual(dimsOf(model)['Fast Mode'], { order: 1, controlType: 2 }, 'variant carries the on-shape');
+  for (const model of [...base, ...variant]) assert.ok(built.routes[model.uid], 'every member keeps its route');
+  assert.equal(built.routes[base[0].uid].model, 'grok-4.6');
+  assert.equal(built.routes[variant[0].uid].model, 'grok-fast');
+});
+
+test('a tier-mismatched or base-disabled pair does not merge families', () => {
+  const mismatched = fastFixture();
+  mismatched.providers[0].models.find(model => model.id === 'grok-fast').efforts = ['low'];
+  const built = buildCatalog(mismatched, OBSERVED_SWE);
+  const rows = built.models.filter(model => model.kind === 'model' && model.uid.includes('grok'));
+  const familyUids = new Set(rows.map(model => model.json.modelInfo.modelFamilyUid));
+  assert.ok(familyUids.size > 1, 'mismatched tiers stay in separate families');
+  for (const model of rows) assert.equal(dimsOf(model)['Fast Mode'], undefined, 'no Fast Mode without the merge');
+  const disabledBase = fastFixture();
+  disabledBase.providers[0].models[0].enabled = false;
+  const builtDisabled = buildCatalog(disabledBase, OBSERVED_SWE);
+  assert.ok(Object.values(builtDisabled.routes).some(route => route.model === 'grok-fast'), 'the variant keeps its routes');
+  const orphanRows = builtDisabled.models.filter(model => model.kind === 'model' && model.uid.includes('grok-fast'));
+  assert.ok(orphanRows.length > 0, 'the still-enabled variant emits rows as an ordinary model');
+  for (const model of orphanRows) assert.equal(dimsOf(model)['Fast Mode'], undefined, 'but nothing merges while the base is disabled');
+});
+
+test('emitted model labels are globally unique and sorts groups exclude fast variants', () => {
+  const built = buildCatalog(fastFixture(), OBSERVED_SWE);
+  const rows = built.models.filter(model => model.kind === 'model');
+  const labels = rows.map(model => model.label);
+  assert.equal(new Set(labels).size, labels.length, 'a duplicate label would resolve the whole list row to the latter uid');
+  const augmented = augmentCatalog({ clientModelConfigs: [], clientModelSorts: [] }, { rpc: 'GetCascadeModelConfigs', format: json, catalog: built });
+  const groups = (augmented.clientModelSorts || []).flatMap(sort => sort.groups || []);
+  const sortLabels = groups.flatMap(group => group.modelLabels || group.model_labels || []);
+  const variantLabels = new Set(rows.filter(model => model.hiddenFromSorts).map(model => model.label));
+  assert.ok(variantLabels.size > 0, 'the fixture has hidden variants');
+  assert.ok(sortLabels.length > 0, 'the own group emits labels');
+  for (const label of variantLabels) assert.ok(!sortLabels.includes(label), 'variant label stays out of the list groups: ' + label);
+  assert.equal(new Set(sortLabels).size, sortLabels.length, 'no label appears twice in the groups');
+  for (const model of rows.filter(model => !model.hiddenFromSorts)) assert.ok(sortLabels.includes(model.label), 'listed rows are in the groups');
+  // f1 keeps every emitted entry, variants included: they must stay routable.
+  const configUids = new Set((augmented.clientModelConfigs || []).map(entry => entry.modelUid || entry.model_uid));
+  for (const model of rows) assert.ok(configUids.has(model.uid), 'every row survives in clientModelConfigs: ' + model.uid);
 });

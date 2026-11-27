@@ -1,5 +1,5 @@
 'use strict';
-const { ownUid, has, refKey, nativeUid, leadFamilyBase, leadFamilyBaseFor, leadFamilyTier, NATIVE_EFFORT_NAMES, stableOrders, leadFamilyLabel, normalizeAllowedUids, expandHiddenByFamily, isFastLeadUid, fastLeadSets } = require('./identity.cjs');
+const { ownUid, has, refKey, nativeUid, leadFamilyBase, leadFamilyBaseFor, leadFamilyTier, NATIVE_EFFORT_NAMES, stableOrders, leadFamilyLabel, normalizeAllowedUids, expandHiddenByFamily, isFastLeadUid, fastLeadSets, fastTargetsOf, fastPairsOf } = require('./identity.cjs');
 
 function discoverOfficialRoles(nativeModels, hiddenSet, config = {}, allowed = null) {
   const observed = Array.isArray(nativeModels) ? nativeModels : [];
@@ -470,6 +470,8 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
   for (const provider of providers) {
     if (!provider || typeof provider.id !== 'string') continue;
     const providerEnabled = provider.enabled !== false;
+    const fastTargets = fastTargetsOf(provider);
+    const fastPairs = fastPairsOf(provider);
     for (const model of Array.isArray(provider.models) ? provider.models : []) {
       if (!model || typeof model.id !== 'string') continue;
       const ref = { providerId: provider.id, model: model.id };
@@ -478,6 +480,24 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
       const label = sourceLabel.startsWith(prefix + ' · ') ? sourceLabel : `${prefix} · ${sourceLabel}`;
       const available = providerEnabled && model.enabled !== false;
       const variantCount = Array.isArray(model.efforts) && model.efforts.length ? model.efforts.length : 1;
+      // A fast variant is reachable through its base model's twin entries, so
+      // it never appears as a role of its own. The key is still marked seen:
+      // otherwise the dead-ref loops below would pick it up as a fake row.
+      if (fastTargets.has(model.id)) {
+        // Never a Lead of its own (the twin would duplicate it), but a legal
+        // Sidekick value: the official Sidekick dimension has no sub-tiers, so
+        // the fast uid is just another selectable value there.
+        seenLeadKeys.add(key);
+        if (!seenSidekickKeys.has(key)) {
+          seenSidekickKeys.add(key);
+          if (available) sidekickList.push({
+            ref, label, native: false, variantCount,
+            available, selected: roleSelected(ref, sidekickRefs, true),
+            defaultSelected: true,
+          });
+        }
+        continue;
+      }
 
       // An unavailable BYOK row is never rendered: its 移除 button would
       // forgetRoleRef, which only clears roleInclusions/roleExclusions while
@@ -494,6 +514,7 @@ function buildRoleLists(config = {}, nativeModels = [], allowedUids = null, anal
           ref, label, native: false, variantCount,
           available, selected: roleSelected(ref, leadRefs, true),
           defaultSelected: true,
+          fastVariants: fastPairs.baseToTarget.has(model.id),
         });
       }
       if (!seenSidekickKeys.has(key)) {

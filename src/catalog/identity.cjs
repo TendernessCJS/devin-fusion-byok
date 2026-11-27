@@ -1,5 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
+const { modelEfforts } = require('../models/capabilities.cjs');
 
 const OWN_GROUP = 'Devin Fusion BYOK';
 const SIDEKICK_HARNESSES = ['swe-1p6', 'swe-1p5'];
@@ -178,6 +179,47 @@ function fastLeadSets(nativeModels) {
   }
   return { fast, nonFast };
 }
+// The legal fast claims of one provider as base id → target id, in declaration
+// order. Self-references and non-strings drop out; beyond that, two hand-edit
+// defenses apply (the write path's validateFastModels rejects both, but a
+// hand-edited config.json bypasses it): a chain A→B→C collapses to its final
+// link — any claim whose target itself declares a fast variant is void — and
+// a target claimed twice keeps only its first claimant. Every consumer of the
+// fast graph (role exclusion, family merge, twin emission) reads these same
+// claims so the three never disagree.
+function fastClaimsOf(provider) {
+  const claims = new Map(), claimedTargets = new Set();
+  const models = Array.isArray(provider?.models) ? provider.models : [];
+  const byId = new Map(models.map(model => [model?.id, model]));
+  for (const model of models) {
+    if (!model || typeof model.fastModel !== 'string' || !model.fastModel || model.fastModel === model.id) continue;
+    const target = byId.get(model.fastModel);
+    if (target && typeof target.fastModel === 'string' && target.fastModel && target.fastModel !== target.id) continue;
+    if (claimedTargets.has(model.fastModel)) continue;
+    claimedTargets.add(model.fastModel);
+    claims.set(model.id, model.fastModel);
+  }
+  return claims;
+}
+// The ids any model in this provider legally names as its fast variant.
+function fastTargetsOf(provider) {
+  return new Set(fastClaimsOf(provider).values());
+}
+// The tier-exact subset of fastClaimsOf: an enabled base whose target exists
+// and whose effort set equals the target's exactly. build.cjs keys the same
+// pairing with the provider id; panel role lists use these bare-id maps.
+const fastTierKey = model => JSON.stringify([...new Set(modelEfforts(model).map(effort => String(effort)))].sort());
+function fastPairsOf(provider) {
+  const baseToTarget = new Map();
+  const byId = new Map((Array.isArray(provider?.models) ? provider.models : []).map(model => [model?.id, model]));
+  for (const [baseId, targetId] of fastClaimsOf(provider)) {
+    const model = byId.get(baseId), target = byId.get(targetId);
+    if (!model || model.enabled === false || !target) continue;
+    if (fastTierKey(target) !== fastTierKey(model)) continue;
+    baseToTarget.set(baseId, targetId);
+  }
+  return { baseToTarget };
+}
 function nativeUid(entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return '';
   const camel = entry.modelUid, snake = entry.model_uid;
@@ -189,4 +231,4 @@ module.exports = { PROVIDER_GROUPS, PROVIDER_GROUP_BY_ENUM, providerGroup, OWN_G
   NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE,
   BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, stableOrders,
   leadFamilyBase, leadFamilyBaseFor, leadFamilyTier, NATIVE_EFFORT_NAMES, leadFamilyLabel, effortMetadata, expandHiddenByFamily, normalizeAllowedUids, nativeUid, isFastLeadUid,
-  fastLeadSets };
+  fastLeadSets, fastTargetsOf, fastPairsOf, fastClaimsOf };

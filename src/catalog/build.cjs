@@ -2,7 +2,7 @@
 const { BACKEND_URL } = require('../runtime/port.cjs');
 const { modelEfforts, modelSupportsImages } = require('../models/capabilities.cjs');
 const { positive, slug, digest, ownUid, has, refKey, nativeUid, effortMetadata, stableOrders,
-  NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE, BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, isFastLeadUid, fastLeadSets, leadFamilyTier, leadFamilyBaseFor } = require('./identity.cjs');
+  NATIVE_ORDER_BASE, BYOK_ORDER_BASE, BYOK_PROVIDER_STRIDE, BYOK_MODEL_STRIDE, BYOK_PROVIDER_LIMIT, BYOK_MODEL_LIMIT, isFastLeadUid, fastLeadSets, leadFamilyTier, leadFamilyBaseFor, fastTargetsOf, fastPairsOf, fastClaimsOf } = require('./identity.cjs');
 const { sortByOrder } = require('../models/order.cjs');
 const { configFor } = require('./codec.cjs');
 const { discoverOfficialRoles, discoverAdditionalNativeRoles, buildRoleLists } = require('./roles.cjs');
@@ -51,29 +51,73 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   // the ranks above become the dimension orders. A config whose array order
   // disagrees with its orders therefore still shows one consistent sequence.
   const providers = orderedProviders.filter(provider => provider.enabled !== false);
+  // Fast variants stay routable while disabled: the twin's lead segment needs
+  // the variant's route uid, and a disabled variant must not silently drop the
+  // Fast toggle off the Fusion card. It emits routes only — never a model row.
+  const fastTargetKeys = new Set();
+  for (const provider of providers) for (const target of fastTargetsOf(provider)) fastTargetKeys.add(provider.id + '\n' + target);
+  // A linked pair whose tiers match exactly merges into ONE picker family: the
+  // variant shares the base's family key, label and Effort values, and the two
+  // members differ only in their Fast Mode entry — the card's toggle shape.
+  const fastBaseOf = new Map(), fastVariantOf = new Map(), variantOwnLabels = new Map();
+  for (const provider of providers) {
+    const byIdLocal = new Map((Array.isArray(provider.models) ? provider.models : []).map(model => [model?.id, model]));
+    const pairs = fastPairsOf(provider);
+    for (const [baseId, targetId] of pairs.baseToTarget) {
+      fastBaseOf.set(provider.id + '\n' + targetId, byIdLocal.get(baseId));
+      fastVariantOf.set(provider.id + '\n' + baseId, byIdLocal.get(targetId));
+    }
+  }
   const identities = new Set();
   for (const provider of providers) {
     for (const model of sortByOrder(Array.isArray(provider.models) ? provider.models : [])) {
-      if (!model || model.enabled === false) continue;
+      if (!model) continue;
+      const routable = model.enabled !== false || fastTargetKeys.has(provider.id + '\n' + model.id);
+      if (!routable) continue;
       if (typeof model.id !== 'string' || !model.id) throw new Error('Model id is required');
       const key = JSON.stringify([provider.id, model.id]);
       if (identities.has(key)) throw new Error('Duplicate provider/model identity');
       identities.add(key);
-      const prefix = provider.name || provider.id, sourceLabel = model.label || model.id;
+      const prefix = provider.name || provider.id;
+      const familyOwner = fastBaseOf.get(provider.id + '\n' + model.id) || model;
+      const sourceLabel = familyOwner.label || familyOwner.id;
       const familyLabel = sourceLabel.startsWith(prefix + ' · ') ? sourceLabel : `${prefix} · ${sourceLabel}`;
+      const familyKey = JSON.stringify([provider.id, familyOwner.id]);
+      const fastSide = fastVariantOf.has(provider.id + '\n' + model.id) ? { controlType: 2 }
+        : fastBaseOf.has(provider.id + '\n' + model.id) ? { order: 1, controlType: 2 } : null;
       const efforts = modelEfforts(model);
       for (const effort of efforts) {
         if (effort !== null && (typeof effort !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(effort))) throw new Error('Invalid effort value');
         const uid = `dfbyok-${slug(provider.id)}-${slug(model.id)}-${digest([provider.id, model.id, effort]).slice(0, 16)}`;
         const contextWindow = positive(model.contextWindow, 272000);
         const maxOutputTokens = Math.min(positive(model.maxOutputTokens, 131072), contextWindow);
-        const lead = { uid, key, familyLabel, providerId: provider.id, model: model.id, effort,
+        const ownSource = model.label || model.id;
+        const ownLabel = fastBaseOf.has(provider.id + '\n' + model.id)
+          ? (ownSource.startsWith(prefix + ' · ') ? ownSource : `${prefix} · ${ownSource}`) : null;
+        if (ownLabel) variantOwnLabels.set(provider.id + '\n' + model.id, ownLabel);
+        const lead = { uid, key: familyKey, familyLabel, providerId: provider.id, model: model.id, effort, fastSide, ownLabel,
           contextWindow, maxOutputTokens, supportsImages: modelSupportsImages(model), inferenceServerUrl };
-        leads.push(lead);
+        if (model.enabled !== false) leads.push(lead);
         routes[uid] = { uid, providerId: provider.id, model: model.id, effort, maxOutputTokens };
       }
     }
   }
+  // Fast Mode twins resolve uid-for-uid: a base model names its fast variant,
+  // and the twin's lead segment is the variant's own route uid for the SAME
+  // effort. The lookup is keyed by exact effort, so a variant lacking that
+  // tier simply emits no twin — never a fallback that two tiers would share.
+  const routeUidByKey = new Map();
+  for (const route of Object.values(routes)) routeUidByKey.set(route.providerId + '\n' + route.model + '\n' + (route.effort ?? ''), route.uid);
+  // Twins resolve per-effort and deliberately ignore tiers and enablement, but
+  // they share the chain/duplicate defense of fastClaimsOf: a hand-edited chain
+  // collapses to its final link and a twice-claimed target twins only for its
+  // first claimant — two claimants would share one twin uid and the matrix
+  // dedupe would silently swallow one.
+  const fastTargetOf = new Map();
+  for (const provider of providers) {
+    for (const [baseId, targetId] of fastClaimsOf(provider)) fastTargetOf.set(provider.id + '\n' + baseId, targetId);
+  }
+  const isFastTarget = lead => fastTargetKeys.has(lead.providerId + '\n' + lead.model);
   const hiddenNativeModelUids = [];
   for (const uid of Array.isArray(config.hiddenNativeModelUids) ? config.hiddenNativeModelUids : []) {
     if (typeof uid !== 'string' || !uid || uid.length > 256 || ownUid(uid) || hiddenNativeModelUids.includes(uid)) continue;
@@ -154,9 +198,11 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   }
   for (const lead of leads) {
     const effort = effortMetadata(lead.effort);
-    models.push(configFor({ ...lead, label: lead.familyLabel + (lead.effort ? ` ${effort.name}` : ''),
+    models.push(configFor({ ...lead, label: (lead.ownLabel || lead.familyLabel) + (lead.effort ? ` ${effort.name}` : ''),
+      hiddenFromSorts: Boolean(lead.ownLabel),
       familyUid: 'dfbyok-family-' + digest(lead.key).slice(0, 16),
-      family: { modelFamilyLabel: lead.familyLabel, entries: [{ key: 'Effort', value: effort }] } }));
+      family: { modelFamilyLabel: lead.familyLabel, entries: [{ key: 'Effort', value: effort },
+        ...(lead.fastSide ? [{ key: 'Fast Mode', value: lead.fastSide }] : [])] } }));
   }
 
   const roleSelection = buildRoleLists(config, nativeModels, allowedUids, analysis);
@@ -181,7 +227,10 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   const selectedLeadKeys = new Set(roleSelection.lead.filter(item => item.selected).map(item => refKey(item.ref)));
   const selectedSidekickKeys = new Set(roleSelection.sidekick.filter(item => item.selected).map(item => refKey(item.ref)));
 
-  const selectedImportedLeads = leads.filter(lead => selectedLeadKeys.has(refKey({ providerId: lead.providerId, model: lead.model })));
+  // A fast variant never emits on its own: it is reachable through the twin
+  // entries of its base model, so emitting it as a plain Lead or Sidekick
+  // would offer two roads to the same model.
+  const selectedImportedLeads = leads.filter(lead => selectedLeadKeys.has(refKey({ providerId: lead.providerId, model: lead.model })) && !isFastTarget(lead));
   // Lead role items group official uids into effort families; expand every
   // selected family's member uids so the whole series emits combinations.
   // Fast leads are never emitted: our matrix entries cannot carry the Fast
@@ -251,13 +300,18 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
     // value's name, e.g. "Claude Sonnet 5.5 Medium"), so a selected BYOK family
     // emits every variant — the sidekick's effort becomes a real choice instead
     // of silently resolving to the provider default.
-    const ref = { providerId: candidates[0]?.providerId, model: candidates[0]?.model };
-    if (!selectedSidekickKeys.has(refKey(ref))) continue;
+    // A merged fast family holds two models under one key: test every member's
+    // ref, or selecting the variant alone would silently emit nothing.
+    if (!candidates.some(lead => selectedSidekickKeys.has(refKey({ providerId: lead.providerId, model: lead.model })))) continue;
     for (const lead of candidates) {
+      // Member-level selection, matching the candidates.sidekick filter: a
+      // merged fast family holds two models, and excluding one must not leave
+      // its values in this list while the matrix correctly omits its combos.
+      if (!selectedSidekickKeys.has(refKey({ providerId: lead.providerId, model: lead.model }))) continue;
       if (seenSidekicks.has(lead.uid)) continue;
       seenSidekicks.add(lead.uid);
       sidekicks.push({ uid: lead.uid, native: false, providerId: lead.providerId, model: lead.model,
-        label: lead.familyLabel + (lead.effort ? ` ${effortMetadata(lead.effort).name}` : '') });
+        label: (lead.ownLabel || lead.familyLabel) + (lead.effort ? ` ${effortMetadata(lead.effort).name}` : '') });
     }
   }
   for (const native of [...eligibleNativeSidekicks.values()].sort((a, b) => a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0)) {
@@ -270,7 +324,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
 
   const importedCandidate = lead => ({ ...lead, native: false,
     ref: { providerId: lead.providerId, model: lead.model, effort: lead.effort },
-    label: lead.familyLabel + (lead.effort ? ` · ${effortMetadata(lead.effort).name}` : ' · 默认档位') }); // i18n-data: part of a catalog model label sent to Devin (catalog data, not panel copy)
+    label: (lead.ownLabel || lead.familyLabel) + (lead.effort ? ` · ${effortMetadata(lead.effort).name}` : ' · 默认档位') }); // i18n-data: part of a catalog model label sent to Devin (catalog data, not panel copy)
   const candidates = {
     lead: [...selectedImportedLeads.map(importedCandidate), ...selectedAdditionalNativeLeads.map(native => ({
       ...native, native: true, ref: { nativeUid: native.uid },
@@ -352,7 +406,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
         : lead.familyLabel;
       const sideDim = sidekick.native && sidekick.dimension ? sidekick.dimension.name
         : sidekick.native ? sidekick.label
-        : sidekick.familyLabel + (sidekick.effort ? ` ${effortMetadata(sidekick.effort).name}` : '');
+        : (sidekick.ownLabel || sidekick.familyLabel) + (sidekick.effort ? ` ${effortMetadata(sidekick.effort).name}` : '');
       if (!(lead.native && lead.leadDimension)) customLeadSlots.set(leadDim,
         { providerId: lead.native ? '' : lead.providerId, key: lead.native ? '' : lead.key });
       const officialSide = sidekick.native && sidekick.dimension && officialSideOrders.has(sidekick.uid);
@@ -361,7 +415,10 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
           base: sidekick.native ? `native:${sidekick.uid}` : `byok:${sidekick.key}`,
           slot: sidekick.native ? (sidekick.dimension ? sidekick.dimension.order : 0) : effortMetadata(sidekick.effort).order,
           providerId: sidekick.native ? '' : sidekick.providerId,
-          key: sidekick.native ? '' : sidekick.key,
+          // The order key is the model's own identity, not the merged family
+          // key: a fast variant has its own rank/slot stride, and keying by
+          // family would collide its orders with the base's same-tier values.
+          key: sidekick.native ? '' : JSON.stringify([sidekick.providerId, sidekick.model]),
           effort: sidekick.native ? null : (sidekick.effort ?? null),
           model: sidekick.native ? '' : sidekick.familyLabel,
         });
@@ -473,6 +530,45 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
         { key: 'Fast Mode', value: { controlType: 2 } },
         { key: 'Recommended Sidekick', value: { name: sideDim } },
       ] }, familyUid: 'fusion', fusion: true, kind: 'matrix' }));
+
+    // The Fast Mode twin: byte-identical dimensions except Fast Mode carrying
+    // the official "on" shape {order: 1, controlType: 2}. The picker's toggle
+    // only renders when exactly two unnamed values exist, so the base entry
+    // keeps its orderless shape — declaring order 0 there would split the
+    // official bucket. The twin only exists when the fast variant has a route
+    // for this exact effort; a disabled variant or provider emits nothing.
+    if (!lead.native) {
+      const target = fastTargetOf.get(lead.providerId + '\n' + lead.model);
+      const fastUid = target ? routeUidByKey.get(lead.providerId + '\n' + target + '\n' + (lead.effort ?? '')) : null;
+      if (fastUid) {
+        const twinUid = `fusion-${fastUid}-sidekick-${sidekick.uid}`;
+        if (!matrixUids.has(twinUid) && !officialFusionUids.has(twinUid)) {
+          matrixUids.add(twinUid);
+          // The twin leads on the variant, so its label names the variant —
+          // the session tile then matches the resolved main model. Only the
+          // label changes: the Lead dimension keeps the base name, or the
+          // values would split into two buckets.
+          const variantOwn = variantOwnLabels.get(lead.providerId + '\n' + target);
+          const twinLeadLabel = variantOwn ? variantOwn + (lead.effort ? ` ${effortMetadata(lead.effort).name}` : '') : leadLabel;
+          const twinLabel = variantOwn
+            ? `Fusion (${twinLeadLabel} + ${sideDim}) · Fast`
+            : label + ' · Fast'; // i18n-data: part of a catalog model label sent to Devin (catalog data, not panel copy)
+          fusions[twinUid] = { uid: twinUid, label: twinLabel, leadUid: fastUid, sidekickUid: sidekick.uid,
+            leadNative: false, sidekickNative: sidekick.native,
+            ...(sidekick.native ? { sidekickHarnessUids: sidekick.harnessUids } : {}) };
+          matrixModels.push(configFor({ ...lead, uid: twinUid, label: twinLabel,
+            inferenceServerUrl,
+            harnessUids: ['fusion'],
+            family: { modelFamilyLabel: 'Fusion', entries: [
+              { key: 'Lead', value: { order: leadOrder, name: leadDim, controlType: 3 } },
+              ...(effort ? [{ key: 'Effort', value: { order: effort.order, name: effort.name, controlType: 1 } }] : []),
+              { key: 'Sidekick', value: { order: sideOrder, name: sideDim, controlType: 3 } },
+              { key: 'Fast Mode', value: { order: 1, controlType: 2 } },
+              { key: 'Recommended Sidekick', value: { name: sideDim } },
+            ] }, familyUid: 'fusion', fusion: true, kind: 'matrix' }));
+        }
+      }
+    }
   }
   // Matrix entries lead the list, matching the order the picker saw before the
   // named-preset pipeline was retired.

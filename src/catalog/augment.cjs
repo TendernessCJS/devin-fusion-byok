@@ -40,7 +40,7 @@ function augmentProtoList(data, catalog, hasSorts = true, onFusionStatus, onNati
   }
   for (const label of hiddenLabels) if (retainedLabels.has(label)) hiddenLabels.delete(label);
   const labels = models.map(model => model.label);
-  const groups = [{ name: OWN_GROUP, items: models.filter(model => model.kind === 'model') }]
+  const groups = [{ name: OWN_GROUP, items: models.filter(model => model.kind === 'model' && !model.hiddenFromSorts) }]
     .filter(group => group.items.length).map(group => concat([s(1, group.name), ...group.items.map(model => s(2, model.label))]));
   let sorts = 0;
   const result = preserved.map(field => {
@@ -97,7 +97,7 @@ function augmentJsonList(data, catalog, hasSorts = true, onFusionStatus, onNativ
     kept.push(model);
   }
   for (const label of hiddenLabels) if (retainedLabels.has(label)) hiddenLabels.delete(label);
-  const groups = [{ groupName: OWN_GROUP, modelLabels: models.filter(model => model.kind === 'model').map(model => model.label) }]
+  const groups = [{ groupName: OWN_GROUP, modelLabels: models.filter(model => model.kind === 'model' && !model.hiddenFromSorts).map(model => model.label) }]
     .filter(group => group.modelLabels.length);
   const append = sort => ({ ...sort, groups: [...groups, ...(sort.groups || []).map(value => {
     const labelsKey = has(value, 'modelLabels') ? 'modelLabels' : has(value, 'model_labels') ? 'model_labels' : '';
