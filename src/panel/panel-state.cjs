@@ -214,6 +214,7 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
       apiFormat: provider.apiFormat, enabled: provider.enabled !== false, keyConfigured: !!provider.apiKey,
       models: sortByOrder(provider.models).map(model => ({ id: model.id, label: model.label || model.id, enabled: model.enabled !== false,
         efforts: model.efforts || [], effortMode: model.effortMode || (model.efforts?.length ? 'manual' : 'auto'),
+        reasoningEffort: model.reasoningEffort === true ? true : model.reasoningEffort === false ? false : null,
         contextWindow: model.contextWindow || 272000, maxOutputTokens: model.maxOutputTokens || Math.min(131072, model.contextWindow || 272000),
         supportsImages: modelSupportsImages(model) })) })),
     sidekicks: catalog.sidekicks.map(sidekick => sidekick.native

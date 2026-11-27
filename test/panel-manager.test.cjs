@@ -1015,3 +1015,18 @@ test('the manual effort list rejects the reserved none tier without persisting',
   await f.manager.dispatch('updateModels', { providerId: 'p', changes: [{ id: 'm', efforts: ['low', 'high'] }], removeIds: [] });
   assert.deepEqual(f.read().providers[0].models[0].efforts, ['low', 'high'], 'a list without none still passes');
 });
+
+test('the provider state projection round-trips the reasoningEffort tri-state', async () => {
+  const input = fixture();
+  input.providers[0].models = [
+    model('supports', { reasoningEffort: true }),
+    model('suppressed', { reasoningEffort: false }),
+    model('undecided'),
+  ];
+  const f = memory({ config: input });
+  const state = await f.manager.dispatch('ready');
+  const models = Object.fromEntries(state.providers[0].models.map(m => [m.id, m]));
+  assert.equal(models.supports.reasoningEffort, true);
+  assert.equal(models.suppressed.reasoningEffort, false);
+  assert.equal(models.undecided.reasoningEffort, null, 'an unset capability projects as null, not undefined');
+});
