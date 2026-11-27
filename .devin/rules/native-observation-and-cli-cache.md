@@ -52,6 +52,7 @@ description: "改原生目录观测与缓存、CLI 缓存原地重写、代际�
 - **原生观测的两条通道必须按「谁更完整」合并，不能后者覆盖**：backend 看的是 CLI 侧流量（CLI 常读自己的缓存、很少重取 → 它的观测可能长期是 seed 的贫化形态），扩展宿主看的是原生扩展 UI
   侧的流量（带完整 field 30）。`mergeNativeEntry`（`native-cache.cjs`）在合并时保留
   `sidekickDimension`/`fusionMetadata`/`harnessUids`，缺失的一方不会把完整的一方降级；标量字段（`disabled`/`label`）仍以新到者为准。
+  **sorts 判决权威于枚举回退**：`pickerSorted: true` 的观测是实测判决，后来的无 sorts 观测（含供应商枚举回退组）不得覆盖其 `pickerGroup`/rank——`pickerSorted` 标记一并随判决保留；「不在任何命名组」的判决还要抑制后来的枚举回退组。新的带 sorts 观测仍是新判决：换组或清组都生效。无 sorts 判决在先时枚举回退组照常生效。
   **一旦被贫化条目覆盖，所有原生 Sidekick 解析不到 → 镜像组合消失 → 又被上一条的清理逻辑删除**，这是级联失效。`refreshNativeModels` 与
   `observeNativeModels` 都已走该合并。
 
