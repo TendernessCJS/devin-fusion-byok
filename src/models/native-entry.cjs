@@ -63,14 +63,30 @@ function mergeNativeEntry(prior, incoming) {
   // A sorts-carrying observation delivers a fresh verdict (picker-listed or not); a
   // flat-catalog observation leaves the prior verdict untouched.
   if (prior.pickerListed !== undefined && incoming.pickerListed === undefined) carried.pickerListed = prior.pickerListed;
-  // pickerGroup and its rank travel together, carried only when this
-  // observation has no sorts section. A sorts-carrying observation that finds
-  // the label in no named group is a fresh verdict and clears the prior group.
-  if (incoming.pickerSorted !== true && incoming.pickerGroup === undefined && incoming.pickerGroupRank === undefined) {
+  // pickerGroup and its rank travel together. A prior verdict that came out of
+  // the sorts sections (pickerSorted: true) is authoritative over any later
+  // sorts-less observation — including a provider-enum fallback group, which
+  // is a guess rather than a measurement. A sorts-less observation only
+  // inherits a plain prior group when it carries no group of its own, and a
+  // fresh sorts-carrying observation stays authoritative in both directions:
+  // it replaces the prior group, or clears it when the label sits in no named
+  // group at all.
+  const priorSortsVerdict = prior.pickerSorted === true && incoming.pickerSorted !== true;
+  if (priorSortsVerdict) {
+    carried.pickerSorted = true;
+    if (prior.pickerGroup !== undefined) carried.pickerGroup = prior.pickerGroup;
+    if (prior.pickerGroupRank !== undefined) carried.pickerGroupRank = prior.pickerGroupRank;
+  } else if (incoming.pickerSorted !== true && incoming.pickerGroup === undefined && incoming.pickerGroupRank === undefined) {
     if (prior.pickerGroup !== undefined) carried.pickerGroup = prior.pickerGroup;
     if (prior.pickerGroupRank !== undefined) carried.pickerGroupRank = prior.pickerGroupRank;
   }
   const merged = Object.keys(carried).length ? { ...incoming, ...carried } : { ...incoming };
+  // The authoritative verdict "in no named group" suppresses the fallback
+  // group too: carrying nothing would let the enum guess re-label the entry.
+  if (priorSortsVerdict && prior.pickerGroup === undefined) {
+    delete merged.pickerGroup;
+    delete merged.pickerGroupRank;
+  }
   // Observation sources accumulate: a uid seen through any catalog keeps every
   // surface it was ever observed on, so picker classification stays truthful.
   const sources = new Set([...(prior.sources || []), ...(incoming.sources || [])]);

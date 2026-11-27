@@ -59,7 +59,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   // A linked pair whose tiers match exactly merges into ONE picker family: the
   // variant shares the base's family key, label and Effort values, and the two
   // members differ only in their Fast Mode entry — the card's toggle shape.
-  const fastBaseOf = new Map(), fastVariantOf = new Map(), variantOwnLabels = new Map();
+  const fastBaseOf = new Map(), fastVariantOf = new Map(), variantOwnLabels = new Map(), variantGeneratedFast = new Set();
   for (const provider of providers) {
     const byIdLocal = new Map((Array.isArray(provider.models) ? provider.models : []).map(model => [model?.id, model]));
     const pairs = fastPairsOf(provider);
@@ -195,6 +195,48 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
     for (const lead of family.leads) lead.familyLabel = candidate;
     reserved.add(candidate);
     for (const lead of family.leads) reserved.add(finalLabel(lead));
+  }
+  // Fast-variant own labels bypass the family-level renaming above (the
+  // variant shares the base's family yet renders under its own name), so they
+  // are resolved here against EVERY ordinary row label and against each other.
+  // Ordinary rows reserve their final familyLabel+effort form first; variants
+  // then resolve in stable identity order: an exact same-label collision with
+  // the base family earns the visible ` · Fast` marker, and whatever still
+  // collides — a third model literally carrying that generated name, or two
+  // variants alike — takes a deterministic model-id disambiguator. The row
+  // label, the Sidekick dimension value and the Fast twin label all read this
+  // one resolution, so the three surfaces can never disagree.
+  const effortSuffixOf = lead => lead.effort ? ` ${effortMetadata(lead.effort).name}` : '';
+  const rowLabels = new Set(), variantLeads = [];
+  for (const lead of leads) {
+    if (lead.ownLabel) { variantLeads.push(lead); continue; }
+    rowLabels.add(lead.familyLabel + effortSuffixOf(lead));
+  }
+  const variantGroups = new Map();
+  for (const lead of variantLeads) {
+    const key = lead.providerId + '\n' + lead.model;
+    if (!variantGroups.has(key)) variantGroups.set(key, []);
+    variantGroups.get(key).push(lead);
+  }
+  for (const key of [...variantGroups.keys()].sort()) {
+    const group = variantGroups.get(key);
+    const first = group[0];
+    let candidate = first.ownLabel;
+    if (candidate === first.familyLabel) {
+      candidate += ' · Fast'; // i18n-data: part of a catalog model label sent to Devin (catalog data, not panel copy)
+      variantGeneratedFast.add(key);
+    }
+    const collides = base => group.some(lead => rowLabels.has(base + effortSuffixOf(lead)));
+    if (collides(candidate)) {
+      let attempt = `${candidate} (${first.model})`, counter = 1;
+      while (collides(attempt)) { counter += 1; attempt = `${candidate} (${first.model}-${counter})`; }
+      candidate = attempt;
+    }
+    for (const lead of group) {
+      lead.ownLabel = candidate;
+      rowLabels.add(candidate + effortSuffixOf(lead));
+    }
+    variantOwnLabels.set(key, candidate);
   }
   for (const lead of leads) {
     const effort = effortMetadata(lead.effort);
@@ -335,6 +377,30 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
     sidekick: [...leads.filter(lead => selectedSidekickKeys.has(refKey({ providerId: lead.providerId, model: lead.model }))).map(importedCandidate),
       ...selectedAdditionalNativeSidekicks.map(native => ({ ...native, native: true, ref: { nativeUid: native.uid } }))],
   };
+  // A fast-target route is only a legitimate fusion lead while its base model
+  // is itself a selected, enabled lead candidate at the exact same effort. The
+  // picker remembers combination uids across rebuilds, so a twin uid survives
+  // the base being disabled or deselected — and because a disabled variant
+  // keeps its routes, the uid-split fallback would otherwise keep resolving a
+  // fast lead nothing emits anymore. The map carries every linked fast-target
+  // route uid (false by default) so resolution can tell "linked but inactive"
+  // apart from "active right now" without re-deriving the role graph.
+  const fastTargetLeadActive = new Map();
+  const fastBaseByTarget = new Map();
+  for (const [baseKey, targetId] of fastTargetOf) {
+    const providerId = baseKey.slice(0, baseKey.indexOf('\n'));
+    fastBaseByTarget.set(providerId + '\n' + targetId, baseKey.slice(baseKey.indexOf('\n') + 1));
+  }
+  const activeLeadKeys = new Set();
+  for (const item of candidates.lead) {
+    if (item.native) continue;
+    activeLeadKeys.add(item.ref.providerId + '\n' + item.ref.model + '\n' + (item.ref.effort ?? ''));
+  }
+  for (const route of Object.values(routes)) {
+    const baseId = fastBaseByTarget.get(route.providerId + '\n' + route.model);
+    if (baseId === undefined) continue;
+    fastTargetLeadActive.set(route.uid, activeLeadKeys.has(route.providerId + '\n' + baseId + '\n' + (route.effort ?? '')));
+  }
   // Mirror our members into the official Fusion family card: official-shaped
   // `fusion-<lead>-sidekick-<side>` uids with self-declared dimension values
   // make BYOK models selectable in the native Lead/Effort/Sidekick dropdowns.
@@ -551,7 +617,10 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
           const variantOwn = variantOwnLabels.get(lead.providerId + '\n' + target);
           const twinLeadLabel = variantOwn ? variantOwn + (lead.effort ? ` ${effortMetadata(lead.effort).name}` : '') : leadLabel;
           const twinLabel = variantOwn
-            ? `Fusion (${twinLeadLabel} + ${sideDim}) · Fast`
+            // The disambiguated variant label may already carry the generated
+            // ` · Fast` marker; appending the outer one again would read as a
+            // double suffix. The Fast Mode metadata still carries the toggle.
+            ? `Fusion (${twinLeadLabel} + ${sideDim})` + (variantGeneratedFast.has(lead.providerId + '\n' + target) ? '' : ' · Fast')
             : label + ' · Fast'; // i18n-data: part of a catalog model label sent to Devin (catalog data, not panel copy)
           fusions[twinUid] = { uid: twinUid, label: twinLabel, leadUid: fastUid, sidekickUid: sidekick.uid,
             leadNative: false, sidekickNative: sidekick.native,
@@ -572,7 +641,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
   }
   // Matrix entries lead the list, matching the order the picker saw before the
   // named-preset pipeline was retired.
-  return { models: [...matrixModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids, matrixUids, nativeHarnessUids, nativeLeadHarnessUids, fastLeadUids, nonFastLeadUids, excludedRoleUids, sidekickOrderDrift: officialRoles.sidekickOrderDrift || [],
+  return { models: [...matrixModels, ...models], routes, fusions, sidekicks, hiddenNativeModelUids, hiddenFusionUids, matrixUids, nativeHarnessUids, nativeLeadHarnessUids, fastLeadUids, nonFastLeadUids, excludedRoleUids, fastTargetLeadActive, sidekickOrderDrift: officialRoles.sidekickOrderDrift || [],
     nativeUids, mirrorNativeAllowlist: config.mirrorNativeAllowlist === true,
     rolePool: Object.fromEntries(Object.entries(candidates).map(([role, items]) => [role, items.map(item => ({ ref: item.ref, label: item.label, uid: item.uid }))])),
     lastFusionSelection: typeof config.lastFusionSelection === 'string' ? config.lastFusionSelection : undefined };
@@ -590,7 +659,7 @@ function buildCatalog(config = {}, nativeModels = [], allowedUids = null, analys
 function emptyCatalog() {
   return { models: [], routes: {}, fusions: {}, sidekicks: [], hiddenNativeModelUids: [], hiddenFusionUids: [],
     matrixUids: new Set(), nativeHarnessUids: new Map(), nativeLeadHarnessUids: new Map(),
-    fastLeadUids: new Set(), nonFastLeadUids: new Set(), excludedRoleUids: { lead: new Set(), sidekick: new Set() },
+    fastLeadUids: new Set(), nonFastLeadUids: new Set(), excludedRoleUids: { lead: new Set(), sidekick: new Set() }, fastTargetLeadActive: new Map(),
     sidekickOrderDrift: [], nativeUids: [], mirrorNativeAllowlist: false, rolePool: { lead: [], sidekick: [] } };
 }
 

@@ -50,6 +50,12 @@ function resolveAssignment(data, format = {}, catalog, lockedFusionUids) {
     // emitted, locked-default redirect or uid-split fallback all land here.
     // Fast sidekicks stay legitimate — the official dimension has no tiers.
     if (isFastLeadUid(fusion.leadUid, catalog?.fastLeadUids, catalog?.nonFastLeadUids)) return null;
+    // A BYOK fast lead only resolves while its base is a live lead candidate at
+    // the same effort: the linked twin of a disabled or deselected base must go
+    // dead even though the variant's route legitimately still exists. Entries
+    // absent from the map are not fast-target routes at all and pass through.
+    if (catalog?.fastTargetLeadActive instanceof Map && catalog.fastTargetLeadActive.has(fusion.leadUid) &&
+        catalog.fastTargetLeadActive.get(fusion.leadUid) !== true) return null;
     // Explicit role exclusions veto the combination regardless of which path
     // found it; the plain routes stay live, so in-flight requests are not cut.
     if (catalog?.excludedRoleUids?.lead?.has(fusion.leadUid) ||

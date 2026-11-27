@@ -160,6 +160,44 @@ test('mergeNativeEntry keeps the richer form when a poorer copy arrives later', 
   assert.deepEqual(mergeNativeEntry({ ...rich, harnessUids: ['swe-1p6'] }, noHarness).harnessUids, ['swe-1p6']);
 });
 
+test('mergeNativeEntry sorts verdicts outrank later sorts-less enum fallback groups', () => {
+  const { mergeNativeEntry } = require('../src/models/native-entry.cjs');
+  const base = { uid: 'swe-2-medium', label: 'L', disabled: false, isModelRouter: false, harnessUids: [] };
+  const sorted = normalizeNativeEntry({ ...base, pickerSorted: true, pickerGroup: 'OpenAI', pickerGroupRank: 1 });
+  const enumFallback = normalizeNativeEntry({ ...base, pickerGroup: 'Anthropic', pickerGroupRank: 2 });
+  // Official-sort observation first, flat provider-enum fallback second: the
+  // measured group survives the guess, verdict marker included.
+  const merged = mergeNativeEntry(sorted, enumFallback);
+  assert.equal(merged.pickerGroup, 'OpenAI');
+  assert.equal(merged.pickerGroupRank, 1);
+  assert.equal(merged.pickerSorted, true);
+  // A fresh sorts-carrying observation stays authoritative: it replaces the group.
+  const resort = normalizeNativeEntry({ ...base, pickerSorted: true, pickerGroup: 'Google', pickerGroupRank: 3 });
+  const replaced = mergeNativeEntry(merged, resort);
+  assert.equal(replaced.pickerGroup, 'Google');
+  assert.equal(replaced.pickerGroupRank, 3);
+  // ...including clearing the group when the label sits in no named group.
+  const cleared = mergeNativeEntry(replaced, normalizeNativeEntry({ ...base, pickerSorted: true }));
+  assert.equal(cleared.pickerGroup, undefined);
+  assert.equal(cleared.pickerGroupRank, undefined);
+  assert.equal(cleared.pickerSorted, true);
+  // A sorts verdict of "no named group" suppresses a later enum fallback too.
+  const verdictNone = normalizeNativeEntry({ ...base, pickerSorted: true });
+  const suppressed = mergeNativeEntry(verdictNone, enumFallback);
+  assert.equal(suppressed.pickerGroup, undefined);
+  assert.equal(suppressed.pickerGroupRank, undefined);
+  assert.equal(suppressed.pickerSorted, true);
+  // Without a prior sorts verdict the enum fallback applies as before.
+  const plain = mergeNativeEntry(normalizeNativeEntry(base), enumFallback);
+  assert.equal(plain.pickerGroup, 'Anthropic');
+  assert.equal(plain.pickerGroupRank, 2);
+  // And a plain prior group still carries into a groupless sorts-less copy.
+  const plainGrouped = normalizeNativeEntry({ ...base, pickerGroup: 'xAI', pickerGroupRank: 4 });
+  const carried = mergeNativeEntry(plainGrouped, normalizeNativeEntry(base));
+  assert.equal(carried.pickerGroup, 'xAI');
+  assert.equal(carried.pickerGroupRank, 4);
+});
+
 test('normalizeNativeEntry and mergeNativeEntry carry the server family uid', () => {
   const { mergeNativeEntry } = require('../src/models/native-entry.cjs');
   assert.equal(normalizeNativeEntry(entry({ familyUid: 'glm-5.2' })).familyUid, 'glm-5.2');

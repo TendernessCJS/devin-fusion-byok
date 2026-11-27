@@ -465,6 +465,109 @@ test('a configured fastModel emits one Fast Mode twin per base combination', () 
   assert.ok(Object.keys(built.routes).some(uid => uid.includes('grok-fast')), 'its routes stay');
 });
 
+test('a fast variant labeled exactly like its base stays visibly distinct on every surface', () => {
+  const input = {
+    providers: [{ id: 'p', name: 'P', baseUrl: 'https://private.invalid/v1', apiKey: 'secret-test-value', apiFormat: 'openai', models: [
+      { id: 'alpha', label: 'Same', efforts: ['medium'], contextWindow: 100000, maxOutputTokens: 1000, fastModel: 'beta' },
+      { id: 'beta', label: 'Same', efforts: ['medium'], contextWindow: 100000, maxOutputTokens: 1000 },
+      { id: 'gamma', label: 'Same · Fast', efforts: ['medium'], contextWindow: 100000, maxOutputTokens: 1000 },
+    ] }],
+  };
+  const built = buildCatalog(input, OBSERVED_SWE);
+  const rows = built.models.filter(model => model.kind !== 'matrix');
+  const labels = rows.map(model => model.label);
+  assert.equal(new Set(labels).size, labels.length, 'ordinary model row labels unique: ' + labels.join(' | '));
+  // A third model literally carrying the generated ` · Fast` name forces the
+  // deterministic model-id disambiguator onto the variant.
+  const betaRows = rows.filter(model => model.label.includes('(beta)'));
+  assert.ok(betaRows.length, 'the colliding variant row carries the model-id disambiguator');
+  assert.ok(betaRows.every(model => model.label.startsWith('P · Same · Fast (beta)')), 'variant rows read as the disambiguated fast variant: ' + betaRows[0]?.label);
+  assert.ok(rows.some(model => model.label.startsWith('P · Same · Fast Medium') && !model.label.includes('(beta)')),
+    'the third model keeps its own literal family label');
+  // The Sidekick dimension values of one dropdown must differ in BOTH name and order.
+  const sideValues = new Map();
+  for (const model of built.models.filter(model => model.kind === 'matrix')) {
+    for (const entry of model.json.modelFamilyMetadata.entries) {
+      if (entry.key !== 'Sidekick') continue;
+      if (!entry.value.name.startsWith('P · Same')) continue;
+      sideValues.set(entry.value.name, entry.value.order);
+    }
+  }
+  const names = [...sideValues.keys()];
+  assert.ok(names.some(name => name.startsWith('P · Same · Fast (beta)')), 'variant sidekick value carries the disambiguator: ' + names.join(' | '));
+  assert.ok(names.some(name => name.startsWith('P · Same · Fast') && !name.includes('(beta)')), 'third-model sidekick value keeps its literal name');
+  assert.ok(names.some(name => !name.includes('Fast') && name.startsWith('P · Same')), 'base sidekick value keeps the plain name');
+  assert.equal(new Set(sideValues.values()).size, sideValues.size, 'sidekick orders distinct');
+  // Twins are located by route/fusion data, not the label: the disambiguated
+  // variant label already carries the ` · Fast` marker, so the twin label does
+  // not gain a second outer one.
+  const fusionLeadModel = model => built.routes[built.fusions[model.uid].leadUid]?.model;
+  const twins = built.models.filter(model => model.kind === 'matrix' && fusionLeadModel(model) === 'beta');
+  assert.ok(twins.length, 'a fast twin exists for the colliding pair');
+  assert.ok(twins.every(model => !/ · Fast$/.test(model.label)), 'no double outer Fast suffix on the twin label: ' + twins[0].label);
+  assert.ok(twins.every(model => model.json.modelFamilyMetadata.entries.some(dim => dim.key === 'Fast Mode' && dim.value.order === 1)),
+    'the Fast Mode metadata still carries the toggle');
+  // All routes stay addressable: base combos resolve to alpha, twins to beta.
+  const routesByModel = model => Object.values(built.routes).filter(route => route.model === model).map(route => route.uid);
+  for (const id of ['alpha', 'beta', 'gamma']) assert.ok(routesByModel(id).length, `routes exist for ${id}`);
+  const { resolveAssignment: resolve } = require('../src/catalog.cjs');
+  const assigned = resolve({ modelRouterUid: twins[0].uid }, { json: true }, built);
+  assert.equal(built.routes[assigned.assignment.modelUid].model, 'beta', 'the twin resolves to the variant route');
+  const baseCombo = built.models.find(model => model.kind === 'matrix' && fusionLeadModel(model) === 'alpha');
+  assert.ok(baseCombo, 'the base combo exists');
+  const baseAssigned = resolve({ modelRouterUid: baseCombo.uid }, { json: true }, built);
+  assert.equal(built.routes[baseAssigned.assignment.modelUid].model, 'alpha', 'the base combo resolves to the base route');
+});
+
+test('a naturally fast-named distinct variant keeps the outer twin suffix', () => {
+  const input = {
+    providers: [{ id: 'p', name: 'P', baseUrl: 'https://private.invalid/v1', apiKey: 'secret-test-value', apiFormat: 'openai', models: [
+      { id: 'alpha', label: 'Base', efforts: ['medium'], contextWindow: 100000, maxOutputTokens: 1000, fastModel: 'beta' },
+      { id: 'beta', label: 'Custom · Fast', efforts: ['medium'], contextWindow: 100000, maxOutputTokens: 1000 },
+    ] }],
+  };
+  const built = buildCatalog(input, OBSERVED_SWE);
+  // `Custom · Fast` is the user's own distinct name — no collision resolution
+  // generated the marker — so the twin still carries the outer suffix even
+  // though the variant label happens to contain ` · Fast`.
+  const twins = built.models.filter(model => model.kind === 'matrix' &&
+    built.routes[built.fusions[model.uid].leadUid]?.model === 'beta');
+  assert.ok(twins.length, 'twins exist for the pair');
+  assert.ok(twins.every(model => model.label.endsWith(' · Fast')), 'the twin keeps the outer suffix: ' + twins[0].label);
+  assert.ok(twins.every(model => model.json.modelFamilyMetadata.entries.some(dim => dim.key === 'Fast Mode' && dim.value.order === 1)),
+    'the Fast Mode metadata is on');
+});
+
+test('a stale fast twin stops resolving once its base leaves the lead candidates', () => {
+  const { resolveAssignment: resolve } = require('../src/catalog.cjs');
+  const active = buildCatalog(fastFixture(), OBSERVED_SWE);
+  const twin = active.models.find(model => model.kind === 'matrix' && model.label.endsWith(' · Fast'));
+  assert.ok(twin, 'active pairing emits a twin');
+  const activeAssigned = resolve({ modelRouterUid: twin.uid }, { json: true }, active);
+  assert.equal(activeAssigned.assignment.modelUid, active.fusions[twin.uid].leadUid, 'active twin resolves to the fast route');
+  assert.equal(active.fastTargetLeadActive.get(active.fusions[twin.uid].leadUid), true, 'active fast route marked true');
+
+  // Disable the base: base and twin leave the emitted matrix, but the variant
+  // route legitimately stays (a disabled variant keeps its routes).
+  const disabled = fastFixture();
+  disabled.providers[0].models[0].enabled = false;
+  const stale = buildCatalog(disabled, OBSERVED_SWE);
+  assert.ok(!stale.models.some(model => model.kind === 'matrix' && builtLeadModel(stale, model) === 'grok-4.6'), 'no base-led combos');
+  assert.ok(!stale.models.some(model => model.kind === 'matrix' && model.label.endsWith(' · Fast')), 'no twins emitted');
+  function builtLeadModel(built, model) { return built.routes[built.fusions[model.uid]?.leadUid]?.model; }
+  const fastRouteUids = Object.values(stale.routes).filter(route => route.model === 'grok-fast').map(route => route.uid);
+  assert.ok(fastRouteUids.length, 'the fast route itself still exists');
+  for (const uid of fastRouteUids) assert.equal(stale.fastTargetLeadActive.get(uid), false, 'fast route marked inactive: ' + uid);
+  // The uid-split fallback rebuilds a fusion shape for the remembered twin uid,
+  // but resolution must refuse it: nothing emits this pairing anymore.
+  assert.equal(resolve({ modelRouterUid: twin.uid }, { json: true }, stale), null, 'stale twin rejected');
+  // The ordinary uid-split fallback is unchanged: an unemitted native pairing
+  // with no fast involvement still resolves.
+  const fallback = resolve({ modelRouterUid: 'fusion-swe-2-max-sidekick-swe-odd' }, { json: true }, active);
+  assert.ok(fallback, 'ordinary uid-split fallback still resolves');
+  assert.equal(fallback.assignment.modelUid, 'swe-2-max');
+});
+
 test('a fast variant selected as sidekick emits combos under its own label and order', () => {
   const input = fastFixture();
   input.sidekicks = [{ providerId: 'cpa', model: 'grok-fast' }];

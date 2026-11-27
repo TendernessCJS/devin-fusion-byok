@@ -396,10 +396,16 @@ function nativeEntries(entries, isJson, source, pickerGroups) {
       provider = num(entry, 10);
     }
     if (typeof uid !== 'string' || !uid || uid.length > 256 || ownUid(uid)) continue;
-    // The sorts section is authoritative for the vendor group; the provider
-    // enum is the fallback so flat-catalog (CLI) observations still group.
+    // The sorts section is authoritative for the vendor group: a payload that
+    // carries sorts but places this label in no NAMED group is a measured
+    // verdict of "no vendor group", never a license to guess — the enum
+    // fallback only applies to flat-catalog (CLI) observations with no sorts
+    // section at all. Feeding the enum in here would mislabel the verdict as
+    // measured, and mergeNativeEntry could neither carry nor clear it correctly.
     const sorted = pickerGroups ? pickerGroups.groups.get(label) : undefined;
-    const group = sorted ? { group: sorted.group, rank: sorted.rank } : providerGroup(provider);
+    const group = pickerGroups
+      ? (sorted ? { group: sorted.group, rank: sorted.rank } : null)
+      : providerGroup(provider);
     // The field extraction above keeps each source's own pass-through and
     // fail-closed semantics (e.g. a non-false JSON `disabled` arrives here
     // already true); the shared normalizer only re-encodes the canonical shape.

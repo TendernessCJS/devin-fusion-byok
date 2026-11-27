@@ -824,6 +824,43 @@ test('the provider enum groups flat-catalog observations by the official vendor 
   assert.equal(winner.pickerSorted, true);
 });
 
+test('a sorts verdict of no named group never inherits the provider enum fallback', () => {
+  const grp = (name, ...labels) => m(2, cat(...(name ? [s(1, name)] : []), ...labels.map(label => s(2, label))));
+  const section = (name, ...groups) => m(2, cat(s(1, name), ...groups));
+  // Alpha carries provider enum OPENAI yet lands only in an unnamed group;
+  // Beta sits in the named Provider group. The sorts section exists, so the
+  // enum must not guess a vendor for Alpha.
+  const input = cat(
+    m(1, cat(s(1, 'Alpha'), s(22, 'uid-alpha'), v(10, 2))),
+    m(1, cat(s(1, 'Beta'), s(22, 'uid-beta'), v(10, 2))),
+    section('Provider', grp('', 'Alpha'), grp('Cognition', 'Beta')));
+  const records = collectNativeModels(input, { rpc: 'GetCascadeModelConfigs', format: proto });
+  const byUid = Object.fromEntries(records.map(record => [record.uid, record]));
+  assert.equal(byUid['uid-alpha'].pickerListed, true, 'the unnamed group still contributes membership');
+  assert.equal(byUid['uid-alpha'].pickerSorted, true, 'a sorts observation is a measured verdict');
+  assert.equal(byUid['uid-alpha'].pickerGroup, undefined, 'no named group in sorts means NO group, not the enum guess');
+  assert.equal(byUid['uid-alpha'].pickerGroupRank, undefined);
+  assert.deepEqual([byUid['uid-beta'].pickerGroup, byUid['uid-beta'].pickerGroupRank], ['Cognition', 0],
+    'the named Provider group still sources the vendor group');
+  // Merging this verdict over a prior named sorts group clears that group:
+  // the measurement says the label sits in no named group now.
+  const { mergeNativeEntry } = require('../src/models/native-entry.cjs');
+  const { normalizeNativeEntry } = require('../src/models/native-entry.cjs');
+  const prior = normalizeNativeEntry({ uid: 'uid-alpha', label: 'Alpha', disabled: false, isModelRouter: false,
+    harnessUids: [], pickerSorted: true, pickerGroup: 'OpenAI', pickerGroupRank: 1 });
+  const merged = mergeNativeEntry(prior, byUid['uid-alpha']);
+  assert.equal(merged.pickerGroup, undefined, 'the fresh no-group verdict clears the prior named group');
+  assert.equal(merged.pickerGroupRank, undefined);
+  assert.equal(merged.pickerSorted, true);
+  // Reverse order: the verdict arriving first is not re-labeled by a later
+  // sorts-less enum observation either.
+  const flat = normalizeNativeEntry({ uid: 'uid-alpha', label: 'Alpha', disabled: false, isModelRouter: false,
+    harnessUids: [], pickerGroup: 'OpenAI', pickerGroupRank: 1 });
+  const suppressed = mergeNativeEntry(byUid['uid-alpha'], flat);
+  assert.equal(suppressed.pickerGroup, undefined, 'a later flat enum guess cannot re-label the measured verdict');
+  assert.equal(suppressed.pickerSorted, true);
+});
+
 test('a Provider section of only unnamed groups falls back to the first named-group section', () => {
   const grp = (name, ...labels) => m(2, cat(...(name ? [s(1, name)] : []), ...labels.map(label => s(2, label))));
   const section = (name, ...groups) => m(2, cat(s(1, name), ...groups));
