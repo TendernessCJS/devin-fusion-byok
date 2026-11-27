@@ -3,7 +3,7 @@
 Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三方模型（OpenAI Responses / Chat Completions / Anthropic
   Messages）注入 Devin 原生模型列表，并把 BYOK/原生模型的组合镜像进 Devin 官方的 Fusion 卡片。
 
-规则单文件必须小于 16,384 字节，超限部分静默丢弃；行为约束按下方索引分卷。取证与拆卷纪律见 `.devin/rules/rule-authoring.md`。
+规则单文件必须小于 16,384 字节，超限部分静默丢弃；行为约束按下方索引分卷。新增或拆分规则卷、取证与拆卷纪律见 `.devin/rules/rule-authoring.md`。
 
 ## 最高危禁令速查（漏了会静默坏）
 
@@ -56,12 +56,12 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/provider-measurements-forensics.md` | **排查「回放 reasoning 后行为异常」「某改动是否引入问题」或要动状态信封尺寸时必读**——Proxy/DeepSeek 各面的探针证据、对照臂方法与信封尺寸依据（实测证据，非契约） |
 | `.devin/rules/provider-endpoint-latency.md` | **排查首响慢、`upstream_timeout`/`upstream_stream_error`，或要动超时预算时必读**——响应头探针、历史统计口径与超时路径的证据边界 |
 | `.devin/rules/provider-sdk-parity.md` | **判断某个 provider 线格式字段是否合法、该不该发，或更新 `.refs` 里的 SDK 时必读**——SDK 基线版本与更新方式、我们发送字段的合法性对照、原生无法表达因此刻意不发的字段、以及「REA 管不到 provider 线格式」的判据 |
-| `.devin/rules/testing-notes.md` | 写或调测试，改契约基线 commit、合成场景矩阵或守卫覆盖边界时必读 |
+| `.devin/rules/testing-notes.md` | 写或调测试（异步 settle、fixture 陷阱），改契约基线 commit、合成场景矩阵或守卫覆盖边界时必读 |
 | `.devin/rules/testing-notes-forensics.md` | 追溯测试口径的带日期实测与事故记录（ppid 误判、0.3.49 验收清单、sourceId 实测、`.refs` 基线等）时必读——证据，非契约 |
 | `.devin/rules/retired-and-deadends.md` | 清理配置键、审「这段代码还活着吗」、疑惑旧字段为何还在 |
 | `.devin/rules/catalog-and-picker-forensics.md` | **核对「某个数字/结论是哪来的」、追溯已下线模型与旧观测面时必读**——目录与 picker 侧的带日期实测与事故记录（证据，非契约） |
 | `.devin/rules/fusion-matrix-forensics.md` | **核对「某条 fusion 判据为何这样定」、或判断某条 harness/Lead/fast 档结论是否已过期时必读**——矩阵与角色侧的带日期实测与事故记录（证据，非契约） |
-| `.devin/rules/audit-residuals.md` | **想"修"某个看着像漏洞/漏做的取舍前必读**——已核残余（DNS 不校验、`ownsSession` fail-closed、`finish_reason` 缺失落 end_turn、config 恢复依赖 `.bak`、panel 运行时未取证）与已排除怀疑（unzip 穿越、SQL 注入、rg 参数注入） |
+| `.devin/rules/audit-residuals.md` | **想"修"某个看着像缺陷或漏做的取舍前必读**——已核残余（DNS 不校验、`ownsSession` fail-closed、`finish_reason` 缺失落 end_turn、config 恢复依赖 `.bak`、panel 运行时未取证）与已排除怀疑（unzip 穿越、SQL 注入、rg 参数注入） |
 | `.devin/rules/acp-protocol-fields.md` | 改 `src/protocol/*` 的 protobuf 字段号、核对原生请求/响应/用量字段 |
 | `.devin/rules/acp-protocol-fields-forensics.md` | 改字段号、怀疑读数过期，或排查 CompletionDelta 错位陷阱时必读（实测方法与证据） |
 | `.devin/rules/acp-protocol-fields-forensics-rea.md` | **用 REA 取证、或想知道「本机 REA 还能用什么」时必读**——原生面不可用的确切原因、语义图预算实测、partial evidence 只在同会话内有效 |
