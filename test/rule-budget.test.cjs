@@ -11,6 +11,10 @@ const INJECTION_LIMIT = 16384;
 const ruleVolumes = () => fs.readdirSync(RULE_DIR).filter(name => name.endsWith('.md'))
   .map(name => path.join(RULE_DIR, name)).sort();
 
+// The row lookup must anchor to the table row itself: a bare includes() finds
+// cross-references in prose (or in other rows) before the actual index row.
+const indexRowFor = (index, name) => index.split('\n').find(line => line.startsWith('| `.devin/rules/' + name + '` |'));
+
 test('every injected rule volume stays under the 16,384-byte injection limit', () => {
   const over = [...ruleVolumes(), path.join(ROOT, 'AGENTS.md')]
     .map(file => ({ name: path.relative(ROOT, file), size: fs.statSync(file).size }))
@@ -53,7 +57,7 @@ test('every AGENTS.md index row shares a keyword with its volume description', (
   const offenders = [];
   for (const file of ruleVolumes()) {
     const name = path.basename(file);
-    const row = index.split('\n').find(line => line.includes(`.devin/rules/${name}`));
+    const row = indexRowFor(index, name);
     if (!row) continue; // coverage of "is indexed at all" is the previous test's job
     const head = fs.readFileSync(file, 'utf8').slice(0, 600);
     const desc = head.match(/description:\s*"?([^\n"]+)"?/);
@@ -64,4 +68,17 @@ test('every AGENTS.md index row shares a keyword with its volume description', (
   }
   assert.deepEqual(offenders, [],
     'an index row that shares no keyword with the volume description no longer tells the agent when to load it');
+});
+
+test('the index row lookup ignores cross-references outside the table row', () => {
+  const synthetic = [
+    ' prose cross-reference to `.devin/rules/alpha.md` before the table',
+    '| `.devin/rules/beta.md` | unrelated row sharing none of the keywords |',
+    '| `.devin/rules/alpha.md` | the real row with 关键字 inside |',
+  ].join('\n');
+  assert.ok(indexRowFor(synthetic, 'alpha.md').includes('the real row'),
+    'the anchored lookup lands on the table row, not the earlier prose mention');
+  assert.ok(!indexRowFor(synthetic, 'alpha.md').includes('unrelated'),
+    'an unrelated table row is never mistaken for the volume row');
+  assert.equal(indexRowFor(synthetic, 'gamma.md'), undefined);
 });
