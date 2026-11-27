@@ -70,9 +70,10 @@ function createFusionView(ui) {
               ? element('span', { class: 'badge fusion-preset', text: t('fusion.officialPreset') }) : null),
           item.native ? element('span', { class: 'row-sub',
             text: t('fusion.official') + (variants > 1 ? ' · ' + t('fusion.tiers', { count: variants }) : '')
-              + (item.fastVariants === true ? ' · ' + t('fusion.fast') : '') })
+              + (item.fastVariants === true ? ' · Fast Mode' : '') })
             : element('span', { class: 'row-sub',
-              text: 'BYOK' + ((item.variantCount || 0) > 1 ? ' · ' + t('models.tiers', { count: item.variantCount }) : '') })),
+              text: 'BYOK' + ((item.variantCount || 0) > 1 ? ' · ' + t('models.tiers', { count: item.variantCount }) : '')
+                + (item.fastVariants === true ? ' · Fast Mode' : '') })),
         item.available ? switchInput(item.selected === true, t('fusion.enableInRoleAria', { role: name, label: item.label }),
           value => run(() => request('setRoleModel', { role, model: item.ref, enabled: value }), undefined, catalogSuccess), off())
           : element('div', { class: 'actions nowrap' },

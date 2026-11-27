@@ -103,7 +103,16 @@ function createModelsView(ui) {
 
   function visibleModels() {
     const query = selection.modelSearch.trim().toLocaleLowerCase();
-    return (currentProvider()?.models || []).filter(model => !query || (model.id + ' ' + (model.label || '')).toLocaleLowerCase().includes(query));
+    const models = currentProvider()?.models || [];
+    const byIdLocal = new Map(models.map(model => [model.id, model]));
+    return models.filter(model => {
+      if (model.hiddenFastVariant) return false;
+      if (!query) return true;
+      let haystack = model.id + ' ' + (model.label || '');
+      const variant = byIdLocal.get(model.fastModel);
+      if (variant) haystack += ' ' + variant.id + ' ' + (variant.label || '');
+      return haystack.toLocaleLowerCase().includes(query);
+    });
   }
 
   function renderModelRows() {
@@ -136,8 +145,15 @@ function createModelsView(ui) {
       const variants = modelEfforts(model).length;
       if (variants > 1) caps.push(t('models.tiers', { count: variants }));
       if (model.contextWindow) caps.push(fmtTokens(model.contextWindow) + ' Context');
-      const sub = [name !== model.id ? model.id : '', ...caps].filter(Boolean).join(' · ');
+      const paired = typeof model.fastModel === 'string' && model.fastModel ? 'Fast Mode: ' + model.fastModel : '';
+      const sub = [name !== model.id ? model.id : '', ...caps, paired].filter(Boolean).join(' · ');
       const index = models.indexOf(model);
+      // Hidden fast variants still occupy positions in the persisted order, so
+      // a visible neighbour can sit several rows away: the delta is the index
+      // distance inside the full order, which moveModel (any nonzero integer)
+      // clamps and swaps directly.
+      const fullOrder = provider.models;
+      const neighborDelta = neighbor => fullOrder.findIndex(entry => entry.id === neighbor.id) - fullOrder.findIndex(entry => entry.id === model.id);
       const moveButton = (delta, label, title, disabled) => element('button', {
         type: 'button', class: 'move', disabled,
         'aria-label': t(delta < 0 ? 'models.moveModelUpAria' : 'models.moveModelDownAria', { name }), title,
@@ -148,8 +164,8 @@ function createModelsView(ui) {
           element('button', { type: 'button', class: 'link-title', text: name, 'aria-label': t('models.editModelAria', { name }), onclick: () => modelDialog(provider, model) }),
           sub ? element('span', { class: 'row-sub mono', text: sub }) : null),
         selection.modelSearch.trim() ? null : element('div', { class: 'order-move' },
-          moveButton(-1, t('models.moveUp'), t('models.moveUp'), index === 0),
-          moveButton(1, t('models.moveDown'), t('models.moveDown'), index === models.length - 1)),
+          moveButton(index > 0 ? neighborDelta(models[index - 1]) : -1, t('models.moveUp'), t('models.moveUp'), index === 0),
+          moveButton(index < models.length - 1 ? neighborDelta(models[index + 1]) : 1, t('models.moveDown'), t('models.moveDown'), index === models.length - 1)),
         switchInput(model.enabled !== false, t('models.enableModelAria', { name }),
           value => run(() => request('updateModels', { providerId: provider.id, changes: [{ id: model.id, enabled: value }] }), undefined, catalogSuccess))));
     }
@@ -332,17 +348,126 @@ function createModelsView(ui) {
     };
     effortMode.addEventListener('change', syncEffortUi);
     syncEffortUi();
+    // Fast Mode: one fast variant per base model. The select starts from the
+    // imported models and, once per dialog, pulls the same discovery candidates
+    // the import flow uses; picking an unimported candidate imports it on save.
+    const fastCheck = element('input', { type: 'checkbox', role: 'switch', 'aria-label': t('models.fastModeAria') });
+    fastCheck.checked = Boolean(model?.fastModel);
+    const fastSelect = element('select', { 'aria-label': t('models.fastField') });
+    const fastHint = element('span', { class: 'hint', role: 'status' });
+    const fastSection = element('div', { class: 'fast-mode' },
+      element('div', { class: 'fast-mode-head' },
+        element('label', { class: 'fast-toggle' }, fastCheck, element('span', { class: 'row-title', text: t('models.fastMode') })),
+        fastSelect),
+      element('span', { class: 'hint', text: t('models.fastModeHint') }), fastHint);
+    let fetched = false, painted = false;
+    const fastProvider = () => (state().providers || []).find(entry => entry.id === provider.id) || provider;
+    // The select only lists this provider's models, so the import-time
+    // `Provider · id` prefix is pure noise here; a hand-written label stays intact.
+    const fastOptionText = entry => {
+      const full = entry.label || entry.id || '';
+      const prefix = (provider.name || provider.id) + ' · ';
+      return full.startsWith(prefix) ? full.slice(prefix.length) : full;
+    };
+    const rebuildFastOptions = () => {
+      const current = fastProvider();
+      const models = Array.isArray(current.models) ? current.models : [];
+      const selfId = id.value.trim();
+      // The first paint seeds the select from the saved link; every later
+      // rebuild keeps whatever the select holds, a cleared choice included —
+      // re-seeding would silently undo it when the switch is flipped again.
+      const chosen = painted ? fastSelect.value : (model?.fastModel || '');
+      const claimed = new Set();
+      for (const entry of models) if (entry.fastModel && entry.id !== selfId && entry.id !== model?.id) claimed.add(entry.fastModel);
+      const seen = new Set(), options = [];
+      for (const entry of models) {
+        if (entry.enabled === false || entry.id === selfId || entry.fastModel || claimed.has(entry.id)) continue;
+        seen.add(entry.id);
+        options.push({ value: entry.id, text: fastOptionText(entry) });
+      }
+      const candidates = state().importCandidates;
+      if (candidates && candidates.providerId === provider.id) {
+        for (const candidate of candidates.models || []) {
+          if (candidate.id === selfId || seen.has(candidate.id)) continue;
+          seen.add(candidate.id);
+          options.push({ value: candidate.id, text: fastOptionText(candidate) + (candidate.imported === false ? t('models.fastNotImported') : '') });
+        }
+      }
+      if (model?.fastModel && !seen.has(model.fastModel) && model.fastModel !== selfId) {
+        options.push({ value: model.fastModel, text: model.fastModel + t('models.fastDisabled') });
+      }
+      fastSelect.replaceChildren(element('option', { value: '', text: t('models.fastModelNone') }),
+        ...options.map(option => element('option', { value: option.value, text: option.text })));
+      fastSelect.value = options.some(option => option.value === chosen) ? chosen : '';
+      painted = true;
+    };
+    let fastStatus = '';
+    const syncFastUi = () => {
+      fastSelect.hidden = !fastCheck.checked;
+      const empty = fastSelect.children.length <= 1;
+      const copy = fastStatus === 'loading' ? t('models.fastLoading')
+        : fastStatus || (fastCheck.checked && empty ? t('models.fastNoCandidates') : '');
+      fastHint.textContent = copy;
+      fastHint.hidden = !fastCheck.checked || !copy;
+    };
+    const fetchFast = async () => {
+      if (fetched) return;
+      if (!provider.keyConfigured && (provider.modelsMode || 'auto') !== 'manual') return;
+      fetched = true;
+      fastSelect.disabled = true;
+      fastStatus = 'loading';
+      syncFastUi();
+      try {
+        await request('refreshModels', { providerId: provider.id });
+        fastStatus = '';
+      } catch (failure) {
+        fastStatus = t('models.fastFetchFailed', { message: failure.message || '' });
+      }
+      fastSelect.disabled = false;
+      rebuildFastOptions();
+      syncFastUi();
+    };
+    fastCheck.addEventListener('change', () => {
+      rebuildFastOptions();
+      syncFastUi();
+      if (fastCheck.checked) fetchFast();
+    });
+    rebuildFastOptions();
+    syncFastUi();
+    if (fastCheck.checked) fetchFast();
     form.append(element('div', { class: 'field-grid' }, field(t('models.modelId'), id), field(t('models.displayName'), label)),
+      fastSection,
       element('details', { class: 'fold', open: effortMode.value === 'manual' }, element('summary', { text: t('models.advanced') }),
         element('div', { class: 'field-grid' }, field(t('models.contextWindow'), contextWindow), field(t('models.maxOutput'), maxOutputTokens)),
         effortField, reasoningField, manual));
     const remove = model ? deleteButton(dialog, t('models.deleteModelTitle'), t('models.deleteModelBody', { provider: provider.name, model: model.label || model.id }),
       () => request('updateModels', { providerId: provider.id, changes: [], removeIds: [model.id] })) : null;
-    finishDialog(dialog, form, model ? t('common.save') : t('models.addSubmit'), () => {
+    finishDialog(dialog, form, model ? t('common.save') : t('models.addSubmit'), async () => {
       const saved = { id: id.value.trim(), label: label.value.trim() || id.value.trim(),
         contextWindow: Number(contextWindow.value), maxOutputTokens: Number(maxOutputTokens.value), effortMode: effortMode.value,
         reasoningEffort: reasoning.value === 'auto' ? null : reasoning.value === 'yes',
         efforts: effortMode.value === 'manual' ? [...new Set(efforts.value.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean))] : [] }; // i18n-data: accepts a full-width comma as a list separator in user input
+      if (fastCheck.checked) {
+        if (!fastSelect.value) throw new Error(t('models.fastRequired'));
+        if (fastSelect.value === id.value.trim()) throw new Error(t('models.fastSelf'));
+        saved.fastModel = fastSelect.value;
+      } else saved.fastModel = null;
+      if (saved.fastModel) {
+        const listed = (fastProvider().models || []).some(entry => entry.id === saved.fastModel);
+        if (!listed) {
+          const candidates = state().importCandidates;
+          if (!candidates || candidates.providerId !== provider.id || !(candidates.models || []).some(entry => entry.id === saved.fastModel)) {
+            throw new Error(t('models.fastNotListed'));
+          }
+          try {
+            await request('importModels', { providerId: provider.id, token: candidates.token, ids: [saved.fastModel] });
+          } catch (failure) {
+            fetched = false;
+            fetchFast();
+            throw failure;
+          }
+        }
+      }
       if (model) return request('updateModels', { providerId: provider.id, changes: [{ ...saved, supportsImages: true }] });
       return request('addModel', { providerId: provider.id, model: { ...saved, enabled: true } });
     }, remove, model ? undefined : t('models.addedNotice'));

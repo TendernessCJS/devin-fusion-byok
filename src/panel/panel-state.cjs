@@ -2,6 +2,7 @@
 const { analyzeRoles, safeCatalog, buildRoleLists, isOwnUid } = require('../catalog.cjs');
 const { modelSupportsImages } = require('../models/capabilities.cjs');
 const { sortByOrder } = require('../models/order.cjs');
+const { fastPairsOf } = require('../catalog/identity.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 // The settings list mirrors the official picker's provider sections. The wire
 // carries no vendor field, so the family id's prefix decides; codenamed uids
@@ -214,11 +215,16 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
       apiFormat: provider.apiFormat, modelsMode: provider.modelsMode || (provider.modelsUrl ? 'url' : 'auto'), modelsUrl: provider.modelsUrl || '',
       staticModels: Array.isArray(provider.staticModels) ? provider.staticModels.filter(value => typeof value === 'string') : [],
       enabled: provider.enabled !== false, keyConfigured: !!provider.apiKey,
-      models: sortByOrder(provider.models).map(model => ({ id: model.id, label: model.label || model.id, enabled: model.enabled !== false,
+      models: (hiddenFast => sortByOrder(provider.models).map(model => ({ id: model.id, label: model.label || model.id, enabled: model.enabled !== false,
         efforts: model.efforts || [], effortMode: model.effortMode || (model.efforts?.length ? 'manual' : 'auto'),
         reasoningEffort: model.reasoningEffort === true ? true : model.reasoningEffort === false ? false : null,
+        fastModel: typeof model.fastModel === 'string' ? model.fastModel : null,
+        // The webview cannot require catalog modules (it runs serialized), so
+        // the pairing judgement arrives projected: only a tier-exact pairing
+        // hides the variant row — a mismatched one stays visible and editable.
+        ...(hiddenFast.has(model.id) ? { hiddenFastVariant: true } : {}),
         contextWindow: model.contextWindow || 272000, maxOutputTokens: model.maxOutputTokens || Math.min(131072, model.contextWindow || 272000),
-        supportsImages: modelSupportsImages(model) })) })),
+        supportsImages: modelSupportsImages(model) })))(new Set(fastPairsOf(provider).baseToTarget.values())) })),
     sidekicks: catalog.sidekicks.map(sidekick => sidekick.native
       ? { nativeUid: sidekick.uid, label: sidekick.label } : { providerId: sidekick.providerId, model: sidekick.model }),
     roleLists,

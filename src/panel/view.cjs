@@ -181,6 +181,11 @@ function panelStyles() {
     .dialog-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
     .dialog-error { color: var(--error); overflow-wrap: anywhere; }
     .confirm-text { white-space: pre-line; overflow-wrap: anywhere; }
+    .fast-mode { margin: 4px 0 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .fast-mode-head { display: flex; align-items: center; gap: 8px; }
+    .fast-mode-head .fast-toggle { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; cursor: pointer; }
+    .fast-mode-head select { flex: 1 1 auto; width: auto; min-width: 0; margin: 0; }
+    .fast-mode > .hint { display: block; margin-top: 8px; }
     .import-picker .scroll { max-height: min(320px, 40vh); }
     @media (max-width: 700px) {
       body { --page-x: 16px; }

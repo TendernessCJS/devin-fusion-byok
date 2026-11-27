@@ -89,8 +89,15 @@ test('the dialog grids collapse on the dialog width, not the viewport', () => {
   assert.match(style, /\.field-grid \{ display: grid; grid-template-columns: 1fr 1fr;/, '.field-grid stays two columns');
   assert.match(style, /@container \(max-width: 470px\) \{ \.field-grid \{ grid-template-columns: 1fr/, 'the collapse key is the dialog width');
   assert.match(style, /dialog\.wide \{ width: min\(600px/, 'the wide shell is the one that fits two columns');
+  assert.match(style, /\.fast-mode \{[^}]*border-top: 1px solid var\(--border\)/, 'the fast block separates from the identity grid');
+  assert.match(style, /\.fast-mode-head \{ display: flex/, 'the head is a flex row');
+  const fastSelectRule = style.match(/\.fast-mode-head select \{[^}]*\}/)[0];
+  assert.ok(!fastSelectRule.includes('margin-left: auto') && !fastSelectRule.includes('max-width: 60%'), 'the select fills the remaining width right after the label');
+  assert.match(style, /\.fast-mode-head \{[^}]*gap: 8px/, 'the head row keeps an 8px gap');
+  assert.match(style, /\.fast-mode > \.hint \{ display: block; margin-top: 8px/, 'the explainer spacing inside the fast block');
   const media = style.slice(style.indexOf('@media (max-width: 700px)'));
   assert.doesNotMatch(media, /field-grid/, 'a viewport media query must not flatten the dialog grids');
+  assert.doesNotMatch(media, /fast-mode/, 'the single-column fast block needs no viewport media query');
 });
 
 test('all controls share the --control-h height token so rows align', () => {
@@ -138,6 +145,35 @@ test('the Fusion tab hosts the role grids that drive the official Fusion card', 
   assert.match(fold.children[0].textContent, /更多官方模型（1）/);
   assert.doesNotMatch(renderPanel({ nonce: 'safe' }), /id="role-group"/,
     'the role picker no longer lives in settings');
+});
+
+test('a BYOK lead row shows the Fast Mode mark only when the pairing is real', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), roleLists: {
+    lead: [
+      { ref: { providerId: 'cpa', model: 'grok' }, label: 'CPA · Grok', native: false, available: true, selected: true, variantCount: 3, fastVariants: true },
+      { ref: { providerId: 'cpa', model: 'plain' }, label: 'CPA · Plain', native: false, available: true, selected: true, variantCount: 2 }],
+    sidekick: [] } } } });
+  const rows = byId('lead-role-list').children.filter(node => node.className === 'row');
+  const subtitles = row => collect(row, 'span', node => node.className === 'row-sub').map(node => node.textContent);
+  assert.deepEqual(subtitles(rows[0]), ['BYOK · 3 档 · Fast Mode'], 'a tier-exact pairing appends the Fast Mode mark');
+  assert.deepEqual(subtitles(rows[1]), ['BYOK · 2 档'], 'an unpaired row carries no Fast Mode mark');
+});
+
+test('the Fusion sidekick column lists a fast variant as a switchable row', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: { ...state(), roleLists: {
+    lead: [],
+    sidekick: [
+      { ref: { providerId: 'cpa', model: 'grok' }, label: 'CPA · Grok', native: false, available: true, selected: true, variantCount: 2 },
+      { ref: { providerId: 'cpa', model: 'grok-fast' }, label: 'CPA · Grok Fast', native: false, available: true, selected: false, variantCount: 2 }] } } } });
+  const rows = byId('sidekick-role-list').children.filter(node => node.className === 'row');
+  const titles = rows.map(row => collect(row, 'span', node => node.className === 'row-title')[0]?.textContent);
+  assert.deepEqual(titles, ['CPA · Grok', 'CPA · Grok Fast'], 'the variant rows the sidekick column under its own label');
+  const variantRow = rows[1];
+  const toggle = collect(variantRow, 'input', node => node.attributes.type === 'checkbox')[0];
+  assert.ok(toggle, 'the variant row offers the same enable switch as any sidekick');
+  assert.equal(toggle.checked, false, 'an unselected variant starts off');
 });
 
 test('a dead role row offers removal only once the native catalog is ready', () => {
@@ -1236,4 +1272,247 @@ test('the edit dialog echoes the reasoning tri-state and saving keeps it', () =>
   assert.ok(post, 'saving posts the update');
   const change = post.payload.changes[0];
   assert.equal(change.reasoningEffort, false, 'an untouched form never erases the stored tri-state');
+});
+
+const openModelDialogWith = (api, st, matcher = '编辑模型') => {
+  api.receive({ data: { type: 'state', state: st } });
+  collect(api.byId('models'), 'button', node => String(node.attributes['aria-label'] || '').startsWith(matcher))[0].listeners.click();
+  return api.byId('editor-dialog');
+};
+const fastWidgets = dialog => ({
+  check: collect(dialog, 'input', node => node.attributes['aria-label'] === '启用 Fast Mode')[0],
+  select: collect(dialog, 'select', node => node.attributes['aria-label'] === 'Fast Mode 模型')[0],
+});
+const withVariantState = () => {
+  const st = state();
+  st.providers[0].models.push({ id: 'fast-a', label: 'Fast A', enabled: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 });
+  return st;
+};
+const settle = async (ticks = 8) => { for (let tick = 0; tick < ticks; tick++) await Promise.resolve(); };
+
+test('the fast mode switch gates the variant field and the payload', async () => {
+  const api = panel();
+  // On but unselected first: the submit errors locally and posts nothing.
+  let dialog = openModelDialogWith(api, withVariantState());
+  let widgets = fastWidgets(dialog);
+  assert.ok(widgets.check && widgets.select, 'the switch and the select render');
+  widgets.check.checked = true;
+  widgets.check.listeners.change({});
+  assert.equal(widgets.select.hidden, false, 'switch on shows the variant select');
+  collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
+  await settle();
+  assert.ok(!api.posts.some(message => message.type === 'updateModels'), 'unselected fast mode never posts');
+  assert.ok(textOf(dialog).includes('已开启 Fast Mode，请选择一个 Fast 模型。'), 'the exact fast-required error surfaces in the dialog');
+  // Off: the variant field hides and the payload carries null.
+  dialog = openModelDialogWith(api, withVariantState());
+  widgets = fastWidgets(dialog);
+  assert.equal(widgets.select.hidden, true, 'switch off hides the variant select');
+  collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
+  let post = api.posts.find(message => message.type === 'updateModels');
+  assert.equal(JSON.parse(JSON.stringify(post.payload)).changes[0].fastModel, null, 'switch off posts null');
+  api.receive({ data: { type: 'result', id: post.id, ok: true } });
+  await settle();
+  // On with an imported sibling selected: the payload carries the id with no import.
+  api.posts.length = 0;
+  dialog = openModelDialogWith(api, withVariantState());
+  widgets = fastWidgets(dialog);
+  widgets.check.checked = true;
+  widgets.check.listeners.change({});
+  widgets.select.value = 'fast-a';
+  collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
+  post = api.posts.find(message => message.type === 'updateModels');
+  assert.equal(JSON.parse(JSON.stringify(post.payload)).changes[0].fastModel, 'fast-a', 'the selection lands in the payload');
+  assert.ok(!api.posts.some(message => message.type === 'importModels'), 'an already-imported sibling never re-imports');
+});
+
+test('clearing the variant then flipping the switch keeps it cleared', async () => {
+  const api = panel();
+  const st = withVariantState();
+  st.providers[0].models[0].fastModel = 'fast-a';
+  const dialog = openModelDialogWith(api, st);
+  const widgets = fastWidgets(dialog);
+  assert.equal(widgets.select.value, 'fast-a', 'the saved link is echoed');
+  widgets.select.value = '';
+  widgets.check.checked = false;
+  widgets.check.listeners.change({});
+  widgets.check.checked = true;
+  widgets.check.listeners.change({});
+  assert.equal(widgets.select.value, '', 'a rebuild never re-seeds a cleared choice from the saved link');
+  collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
+  await settle();
+  assert.ok(textOf(dialog).includes('已开启 Fast Mode，请选择一个 Fast 模型。'), 'submitting still demands a pick');
+});
+
+test('the fast mode section structure is a single-hint fast-mode block', () => {
+  const api = panel();
+  const dialog = openModelDialogWith(api, withVariantState());
+  const section = collect(dialog, 'div', node => node.className === 'fast-mode')[0];
+  assert.ok(section, 'the fast block is div.fast-mode');
+  const head = collect(section, 'div', node => node.className === 'fast-mode-head')[0];
+  assert.ok(head, 'the head row leads the block');
+  const toggle = collect(head, 'label', node => node.className === 'fast-toggle')[0];
+  assert.ok(toggle && collect(toggle, 'input', node => node.attributes.type === 'checkbox').length === 1, 'label.fast-toggle wraps the checkbox');
+  assert.ok(collect(head, 'select').length === 1, 'the select shares the head row');
+  const visibleCopy = textOf(section);
+  assert.ok(!visibleCopy.includes('Fast Mode 模型'), 'no visible field title: the copy lives only in the aria-label');
+  const explainers = collect(section, 'span', node => node.className === 'hint' && String(node.textContent).startsWith('在 Fusion 卡片上为该模型的组合提供 Fast 开关'));
+  assert.equal(explainers.length, 1, 'the merged explainer appears exactly once');
+  const widgets = fastWidgets(dialog);
+  assert.equal(widgets.select.hidden, true, 'the select hides while the switch is off');
+  const status = collect(section, 'span', node => node.attributes.role === 'status')[0];
+  assert.equal(status.hidden, true, 'the status line hides while the switch is off');
+  widgets.check.checked = true;
+  widgets.check.listeners.change({});
+  assert.equal(widgets.select.hidden, false, 'the select shows once the switch is on');
+});
+
+test('flipping the switch fetches candidates once and imports unimported picks on save', async () => {
+  const api = panel();
+  const dialog = openModelDialogWith(api, withVariantState());
+  const widgets = fastWidgets(dialog);
+  widgets.check.checked = true;
+  widgets.check.listeners.change({});
+  await settle(3);
+  const refresh = api.posts.filter(message => message.type === 'refreshModels');
+  assert.equal(refresh.length, 1, 'exactly one refresh goes out');
+  assert.equal(JSON.parse(JSON.stringify(refresh[0].payload)).providerId, 'cpa');
+  // Respond with candidates: self (imported) and fast-x (not imported).
+  const st = withVariantState();
+  st.importCandidates = { providerId: 'cpa', token: 'fixture-token',
+    models: [{ id: 'saved', label: 'Saved', imported: true }, { id: 'fast-x', label: 'Fast X', imported: false }] };
+  api.receive({ data: { type: 'result', id: refresh[0].id, ok: true } });
+  api.receive({ data: { type: 'state', state: st } });
+  await settle();
+  const values = collect(widgets.select, 'option').map(option => option.attributes.value);
+  assert.deepEqual(values, ['', 'fast-a', 'fast-x'], 'imported siblings plus unimported candidates, self excluded');
+  const fastX = collect(widgets.select, 'option').find(option => option.attributes.value === 'fast-x');
+  assert.ok(fastX.textContent.includes('未导入'), 'the unimported candidate is marked');
+  // Pick it and submit: import first, then the update carries the id.
+  api.posts.length = 0;
+  widgets.select.value = 'fast-x';
+  collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
+  await settle();
+  const importPost = api.posts.find(message => message.type === 'importModels');
+  assert.deepEqual(JSON.parse(JSON.stringify(importPost.payload)), { providerId: 'cpa', token: 'fixture-token', ids: ['fast-x'] });
+  api.receive({ data: { type: 'result', id: importPost.id, ok: true } });
+  await settle();
+  const update = api.posts.find(message => message.type === 'updateModels');
+  assert.equal(JSON.parse(JSON.stringify(update.payload)).changes[0].fastModel, 'fast-x');
+});
+
+test('the fast variant candidates exclude self, disabled, chained, claimed and foreign models', async () => {
+  const api = panel();
+  const st = state();
+  st.providers[0].models.push(
+    { id: 'fast-a', label: 'Fast A', enabled: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 },
+    { id: 'fast-b', label: 'Fast B', enabled: false, efforts: [], contextWindow: 1, maxOutputTokens: 1 },
+    { id: 'chained', label: 'Chained', enabled: true, fastModel: 'fast-a', efforts: [], contextWindow: 1, maxOutputTokens: 1 },
+    { id: 'claimer', label: 'Claimer', enabled: true, fastModel: 'fast-a', efforts: [], contextWindow: 1, maxOutputTokens: 1 });
+  st.providers.push({ id: 'other', name: 'Other', baseUrl: 'https://other.invalid/v1', apiFormat: 'openai', enabled: true, keyConfigured: true,
+    models: [{ id: 'alien', label: 'Alien', enabled: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 }] });
+  const dialog = openModelDialogWith(api, st);
+  const widgets = fastWidgets(dialog);
+  const values = collect(widgets.select, 'option').map(option => option.attributes.value);
+  assert.deepEqual(values, [''], 'self, disabled, chained, claimed and foreign rows are all excluded');
+});
+
+test('the fast variant options strip the provider prefix but keep custom labels', () => {
+  const api = panel();
+  const st = state();
+  st.providers[0].models.push(
+    { id: 'fast-b', label: 'CPA · fast-b', enabled: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 },
+    { id: 'glm-x', label: 'My GLM', enabled: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 });
+  const dialog = openModelDialogWith(api, st);
+  const widgets = fastWidgets(dialog);
+  const options = collect(widgets.select, 'option');
+  const stripped = options.find(option => option.attributes.value === 'fast-b');
+  assert.equal(stripped.textContent, 'fast-b', 'the import-time provider prefix is stripped');
+  const custom = options.find(option => option.attributes.value === 'glm-x');
+  assert.equal(custom.textContent, 'My GLM', 'a custom label survives untouched instead of falling back to the id');
+});
+
+test('a failed fetch falls back to the imported models with the error copy', async () => {
+  const api = panel();
+  const dialog = openModelDialogWith(api, withVariantState());
+  const widgets = fastWidgets(dialog);
+  widgets.check.checked = true;
+  widgets.check.listeners.change({});
+  await settle(3);
+  assert.equal(widgets.select.disabled, true, 'the select is disabled while loading');
+  assert.ok(textOf(dialog).includes('正在获取本供应商的模型列表'), 'the loading copy shows');
+  const refresh = api.posts.find(message => message.type === 'refreshModels');
+  api.receive({ data: { type: 'result', id: refresh.id, ok: false, error: 'boom' } });
+  await settle();
+  assert.equal(widgets.select.disabled, false, 'the select recovers');
+  const values = collect(widgets.select, 'option').map(option => option.attributes.value);
+  assert.deepEqual(values, ['', 'fast-a'], 'the options fall back to the imported models');
+  assert.ok(textOf(dialog).includes('获取模型列表失败（boom），下面只列出已导入的模型。'), 'the failure copy carries the message');
+});
+
+test('a keyless non-manual provider never fetches and explains the empty select', async () => {
+  const api = panel();
+  const lone = state();
+  lone.providers[0].keyConfigured = false;
+  lone.providers[0].modelsMode = 'auto';
+  const dialog = openModelDialogWith(api, lone);
+  const widgets = fastWidgets(dialog);
+  widgets.check.checked = true;
+  widgets.check.listeners.change({});
+  await settle();
+  assert.ok(!api.posts.some(message => message.type === 'refreshModels'), 'no key means no fetch');
+  assert.ok(textOf(dialog).includes('本供应商没有可选的 Fast 变体：先「导入模型」，或检查 API 密钥与模型获取设置。'), 'the empty copy explains');
+});
+
+test('fast variant rows hide from the model list and the base row names the pair', async () => {
+  const api = panel();
+  const st = withVariantState();
+  st.providers[0].models[0].fastModel = 'fast-a';
+  st.providers[0].models.find(model => model.id === 'fast-a').hiddenFastVariant = true;
+  api.receive({ data: { type: 'state', state: st } });
+  const rows = collect(api.byId('model-list'), 'button', node => node.className === 'link-title').map(node => node.textContent);
+  assert.deepEqual(rows, ['Saved'], 'only the base row renders; the variant row is hidden');
+  assert.ok(textOf(api.byId('model-list')).includes('Fast Mode: fast-a'), 'the base row subtitle names the pair');
+});
+
+test('a tier-mismatched variant row stays visible and the subtitle still names the link', async () => {
+  const api = panel();
+  const st = withVariantState();
+  st.providers[0].models[0].fastModel = 'fast-a';
+  // No hiddenFastVariant flag: the server projects it only for tier-exact
+  // pairings, so a mismatched variant keeps its own editable row.
+  api.receive({ data: { type: 'state', state: st } });
+  const rows = collect(api.byId('model-list'), 'button', node => node.className === 'link-title').map(node => node.textContent);
+  assert.deepEqual(rows, ['Saved', 'Fast A'], 'the mismatched variant row renders and stays editable');
+  assert.ok(textOf(api.byId('model-list')).includes('Fast Mode: fast-a'), 'the base row subtitle still names the unrealised link');
+});
+
+test('searching the variant id surfaces its base row', async () => {
+  const api = panel();
+  const st = withVariantState();
+  st.providers[0].models[0].fastModel = 'fast-a';
+  st.providers[0].models.find(model => model.id === 'fast-a').hiddenFastVariant = true;
+  api.receive({ data: { type: 'state', state: st } });
+  const search = collect(api.byId('models'), 'input', node => node.attributes.type === 'search')[0];
+  search.value = 'fast-a';
+  search.listeners.input({ target: search });
+  await settle(3);
+  const rows = collect(api.byId('model-list'), 'button', node => node.className === 'link-title').map(node => node.textContent);
+  assert.deepEqual(rows, ['Saved'], 'the hidden variant match surfaces the base row');
+});
+
+test('the move arrows skip hidden fast variants with a wider delta', async () => {
+  const api = panel();
+  const st = state();
+  st.providers[0].models = [
+    { id: 'aaa', label: 'Aaa', enabled: true, fastModel: 'vvv', efforts: [], contextWindow: 1, maxOutputTokens: 1 },
+    { id: 'vvv', label: 'Vvv', enabled: true, hiddenFastVariant: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 },
+    { id: 'bbb', label: 'Bbb', enabled: true, efforts: [], contextWindow: 1, maxOutputTokens: 1 }];
+  api.receive({ data: { type: 'state', state: st } });
+  const up = collect(api.byId('model-list'), 'button', node => String(node.attributes['aria-label'] || '') === '上移 Bbb'
+    || String(node.attributes['aria-label'] || '').includes('Bbb') && String(node.attributes['aria-label'] || '').includes('上移'))[0];
+  assert.ok(up, 'the up button for B renders');
+  up.listeners.click();
+  await settle();
+  const move = api.posts.find(message => message.type === 'moveModel');
+  assert.equal(JSON.parse(JSON.stringify(move.payload)).delta, -2, 'the delta jumps over the hidden variant');
 });

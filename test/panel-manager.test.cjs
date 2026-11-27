@@ -1191,3 +1191,169 @@ test('the provider state projection round-trips the reasoningEffort tri-state', 
   assert.equal(models.suppressed.reasoningEffort, false);
   assert.equal(models.undecided.reasoningEffort, null, 'an unset capability projects as null, not undefined');
 });
+
+test('fastModel saves, projects and rejects invalid shapes', async () => {
+  const input = fixture();
+  input.providers[0].models = [model('base'), model('fast'), model('other')];
+  const f = memory({ config: input });
+  // Normal save + projection.
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', fastModel: 'fast' }], removeIds: [] });
+  assert.equal(f.read().providers[0].models.find(m => m.id === 'base').fastModel, 'fast');
+  const state = await f.manager.dispatch('ready');
+  const projected = Object.fromEntries(state.providers[0].models.map(m => [m.id, m.fastModel]));
+  assert.deepEqual(projected, { base: 'fast', fast: null, other: null }, 'the tri-state projection exposes the reference');
+  // Clearing with null deletes the key.
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', fastModel: null }], removeIds: [] });
+  assert.equal('fastModel' in f.read().providers[0].models.find(m => m.id === 'base'), false);
+  // Invalid shapes reject without persisting.
+  const setAnd = async fastModel => {
+    const cfg = fixture();
+    cfg.providers[0].models = [model('base'), model('fast'), model('other')];
+    if (fastModel) cfg.providers[0].models.find(m => m.id === 'fast').fastModel = fastModel;
+    return cfg;
+  };
+  // self reference
+  const f1 = memory({ config: fixture() });
+  const before1 = f1.read();
+  await assert.rejects(f1.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'lead', fastModel: 'lead' }], removeIds: [] }), PanelInputError, 'self reference');
+  assert.deepEqual(f1.read(), before1);
+  // missing target
+  await assert.rejects(f1.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'lead', fastModel: 'ghost' }], removeIds: [] }), PanelInputError, 'missing target');
+  assert.deepEqual(f1.read(), before1);
+  // chain: fast already points at other
+  const chained = memory({ config: await setAnd('other') });
+  const beforeChain = chained.read();
+  await assert.rejects(chained.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'lead', fastModel: 'fast' }], removeIds: [] }), PanelInputError, 'chain');
+  assert.deepEqual(chained.read(), beforeChain);
+  // duplicate: two models claim the same target
+  const dupCfg = fixture();
+  dupCfg.providers[0].models = [model('base'), model('fast'), model('other')];
+  dupCfg.providers[0].models.find(m => m.id === 'other').fastModel = 'fast';
+  const f2 = memory({ config: dupCfg });
+  const before2 = f2.read();
+  await assert.rejects(f2.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', fastModel: 'fast' }], removeIds: [] }), PanelInputError, 'duplicate');
+  assert.deepEqual(f2.read(), before2);
+});
+
+test('fast sync carries enabled in both directions and stops at unlink', async () => {
+  const input = fixture();
+  input.providers[0].models = [model('base', { fastModel: 'fast' }), model('fast'), model('other')];
+  const f = memory({ config: input });
+  const pair = () => Object.fromEntries(f.read().providers[0].models.filter(m => m.id !== 'other').map(m => [m.id, m.enabled]));
+
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', enabled: false }], removeIds: [] });
+  assert.deepEqual(pair(), { base: false, fast: false }, 'disabling the base disables the hidden variant in the persisted config');
+
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', enabled: true }], removeIds: [] });
+  assert.deepEqual(pair(), { base: true, fast: true }, 're-enabling the base restores the variant: a one-way sync could never be undone from the panel');
+
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', fastModel: null }], removeIds: [] });
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', enabled: false }], removeIds: [] });
+  assert.deepEqual(pair(), { base: false, fast: true }, 'after unlink the variant keeps its last synced state and no longer follows the base');
+});
+
+test('importing a hand-linked target replays the fast sync immediately', async () => {
+  const input = fixture();
+  input.providers[0].models = [model('base', { fastModel: 'fast', efforts: ['high', 'max'] }), model('other')];
+  const f = memory({ config: input, discover: async provider => {
+    provider.models = [model('base'), model('fast', { efforts: [], contextWindow: 999999 })];
+  } });
+  const preview = await f.manager.dispatch('refreshModels', { providerId: 'cpa' });
+  await f.manager.dispatch('importModels', { providerId: 'cpa', token: preview.importCandidates.token, ids: ['fast'] });
+  const imported = f.read().providers[0].models.find(m => m.id === 'fast');
+  assert.ok(imported, 'the target landed');
+  assert.deepEqual(imported.efforts, ['high', 'max'], 'the import itself replays the sync: the variant mirrors the base at once');
+  assert.equal(imported.contextWindow, 200000, 'capability fields follow the base, not the discovered defaults');
+});
+
+test('the state projection hides only tier-exact fast variants', async () => {
+  const input = fixture();
+  input.providers[0].models = [
+    model('base', { fastModel: 'fast', efforts: ['high'] }), model('fast', { efforts: ['high'] }),
+    model('mismatched-base', { fastModel: 'mismatched-fast', efforts: ['high'] }), model('mismatched-fast', { efforts: ['low'] })];
+  const state = publicState(input, OBSERVED_SWE, 'unavailable', 'ready');
+  const projected = Object.fromEntries(state.providers[0].models.map(m => [m.id, m.hiddenFastVariant === true]));
+  assert.equal(projected.fast, true, 'a tier-exact variant is projected hidden');
+  assert.equal(projected['mismatched-fast'], false, 'a tier-mismatched variant keeps its visible row');
+});
+
+test('fast sync never reaches across providers', async () => {
+  const input = fixture();
+  input.providers[0].models = [model('base', { fastModel: 'fast' }), model('fast')];
+  const f = memory({ config: input });
+  const before = f.read().providers[0].models;
+  await f.manager.dispatch('updateModels', { providerId: 'other', changes: [{ id: 'other-lead', enabled: false }], removeIds: [] });
+  assert.deepEqual(f.read().providers[0].models, before, 'writing another provider leaves this pair byte-identical');
+});
+
+test('removing a fast variant clears the references pointing at it', async () => {
+  const input = fixture();
+  input.providers[0].models = [model('base', { fastModel: 'fast' }), model('fast'), model('other')];
+  const f = memory({ config: input });
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [], removeIds: ['fast'] });
+  const models = f.read().providers[0].models;
+  assert.ok(!models.some(m => m.id === 'fast'), 'the variant is gone');
+  assert.equal('fastModel' in models.find(m => m.id === 'base'), false, 'the dangling reference is cleared, not fatal');
+});
+
+test('moveModel accepts any nonzero integer delta and clamps to the edges', async () => {
+  const input = fixture();
+  input.providers[0].models = [model('aaa', { order: 1 }), model('vvv', { order: 2 }), model('bbb', { order: 3 })];
+  const f = memory({ config: input });
+  const order = () => [...f.read().providers[0].models].sort((x, y) => x.order - y.order).map(m => m.id);
+  await f.manager.dispatch('moveModel', { providerId: 'cpa', id: 'bbb', delta: -2 });
+  assert.deepEqual(order(), ['bbb', 'vvv', 'aaa'], 'a -2 delta swaps orders with the row two positions up');
+  await assert.rejects(f.manager.dispatch('moveModel', { providerId: 'cpa', id: 'bbb', delta: 0 }), PanelInputError, 'zero is rejected');
+  await assert.rejects(f.manager.dispatch('moveModel', { providerId: 'cpa', id: 'bbb', delta: 1.5 }), PanelInputError, 'non-integers are rejected');
+  await f.manager.dispatch('moveModel', { providerId: 'cpa', id: 'bbb', delta: -99 });
+  assert.deepEqual(order(), ['bbb', 'vvv', 'aaa'], 'an out-of-range delta clamps to the edge instead of erroring');
+});
+
+test('linking a fast variant syncs the capability fields of the base', async () => {
+  const input = fixture();
+  input.providers[0].models = [
+    model('base', { efforts: ['high', 'max'], contextWindow: 111111, maxOutputTokens: 22222, reasoningEffort: false }),
+    model('fast', { efforts: [], contextWindow: 1, maxOutputTokens: 1 })];
+  const f = memory({ config: input });
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', fastModel: 'fast' }], removeIds: [] });
+  const fast = f.read().providers[0].models.find(m => m.id === 'fast');
+  assert.equal(fast.contextWindow, 111111, 'contextWindow mirrors the base');
+  assert.equal(fast.maxOutputTokens, 22222, 'maxOutputTokens mirrors the base');
+  assert.deepEqual(fast.efforts, ['high', 'max'], 'efforts mirror the base');
+  assert.equal(fast.reasoningEffort, false, 'reasoningEffort mirrors the base');
+  // Later saves of the base re-apply the sync.
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', efforts: ['low'], contextWindow: 333333 }], removeIds: [] });
+  const updated = f.read().providers[0].models.find(m => m.id === 'fast');
+  assert.deepEqual(updated.efforts, ['low'], 'a base edit re-syncs efforts');
+  assert.equal(updated.contextWindow, 333333, 'a base edit re-syncs the context window');
+  // Unlinking keeps the synced values instead of reverting them.
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', fastModel: null }], removeIds: [] });
+  const unlinked = f.read().providers[0].models.find(m => m.id === 'fast');
+  assert.deepEqual(unlinked.efforts, ['low'], 'unlinking does not revert the synced values');
+});
+
+test('a capability field absent on the base is deleted from the variant', async () => {
+  const input = fixture();
+  input.providers[0].models = [
+    model('base', { fastModel: 'fast' }),
+    model('fast', { reasoningEffort: false })];
+  const f = memory({ config: input });
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'base', label: 'Base' }], removeIds: [] });
+  const fast = f.read().providers[0].models.find(m => m.id === 'fast');
+  assert.equal('reasoningEffort' in fast, false, 'a field the base does not carry is removed from the variant');
+});
+
+test('fastModel validation is scoped to the mutated provider', async () => {
+  const input = fixture();
+  input.providers[1].models = [model('other-lead', { fastModel: 'ghost' })];
+  const f = memory({ config: input });
+  // A dangling reference on provider B must not block an unrelated write on provider A.
+  await f.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'lead', label: 'Renamed lead' }], removeIds: [] });
+  assert.equal(f.read().providers[0].models.find(m => m.id === 'lead').label, 'Renamed lead', 'the write on provider A lands');
+  assert.equal(f.read().providers[1].models.find(m => m.id === 'other-lead').fastModel, 'ghost', 'the foreign key is left untouched');
+  // The same invalid shape inside the mutated provider still rejects.
+  const before = f.read();
+  await assert.rejects(f.manager.dispatch('updateModels', { providerId: 'other', changes: [{ id: 'other-lead', label: 'x' }], removeIds: [] }), PanelInputError,
+    'editing the provider that carries the dangling reference validates it');
+  assert.deepEqual(f.read(), before, 'the rejected write persists nothing');
+});

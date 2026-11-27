@@ -111,7 +111,7 @@ function fixture(catalog = buildCatalog(config(), OBSERVED_SWE)) {
     current = picked;
     return picked;
   };
-  return { catalog, fixture, augmented, data, mapped, strict, grouped, rows, fusion, select, Nt, Pt, Ft, ordered };
+  return { catalog, fixture, augmented, data, mapped, strict, grouped, rows, fusion, select, Nt, Pt, Ft, Ut, Kt, ordered };
 }
 
 test('the strict intersection produces real sorts and no misses for a fully-offered catalog', { skip: !webappAvailable }, () => {
@@ -418,4 +418,75 @@ test('persisted order drives the rendered Sidekick/Lead dropdown sequence', { sk
   const lead = f.fusion.dimensions.find(dimension => dimension.name === 'Lead');
   const ownLeads = [...lead.values].map(value => value.name).filter(name => name.startsWith('PA ·') || name.startsWith('PB ·'));
   assert.deepEqual(ownLeads, ['PA · a0', 'PB · b1', 'PB · b0'], 'the Lead dimension follows the same persisted order');
+});
+
+test('a configured fastModel twins select through the real Fast Mode toggle', { skip: !webappAvailable }, () => {
+  const input = config();
+  input.providers[0].models.push({ id: 'grok-fast', label: 'Grok Fast', efforts: ['medium', 'high'], contextWindow: 500000, maxOutputTokens: 32768 });
+  input.providers[0].models[0].fastModel = 'grok-fast';
+  const f = fixture(buildCatalog(input, OBSERVED_SWE));
+  const fastMode = f.fusion.dimensions.find(dimension => dimension.name === 'Fast Mode');
+  assert.equal(fastMode.values.length, 2, 'base and twin entries make Fast Mode a real two-value toggle');
+  assert.ok(fastMode.values.every(value => value.name === ''), 'both values stay unnamed, the toggle shape');
+  assert.equal(f.Ft(fastMode.values), true, 'the real predicate renders the switch');
+  const base = fastMode.values.find(value => value.order === 0);
+  const on = fastMode.values.find(value => value.order === 1);
+  assert.ok(base && on, 'exactly the orderless base and the order-1 twin');
+  const picked = f.select('Fast Mode', 1);
+  assert.ok(picked.modelUid.includes('-sidekick-'), picked.modelUid);
+  assert.ok(picked.modelUid.includes('grok-fast'), 'the on-value lands on a twin uid led by the fast route');
+  assert.ok(f.catalog.models.some(model => model.uid === picked.modelUid && model.label.endsWith(' · Fast')), 'the pick is an emitted twin entry');
+  const lead = resolveAssignment({ modelRouterUid: picked.modelUid }, json, f.catalog);
+  assert.ok(lead.assignment.modelUid.includes('grok-fast'), 'the twin assignment resolves to the fast variant route');
+  assert.ok(!f.catalog.models.some(model => model.kind === 'matrix' && !model.label.endsWith(' · Fast') &&
+    model.uid === picked.modelUid), 'the picked uid is a twin entry');
+  // The fast variant itself never appears as a Lead value.
+  const leadDim = f.fusion.dimensions.find(dimension => dimension.name === 'Lead');
+  assert.ok(![...leadDim.values].some(value => value.name.includes('Grok Fast')), 'the fast variant is no Lead choice of its own');
+});
+
+test('a tier-matched fast variant merges into one base row with the Fast toggle defaulting off', { skip: !webappAvailable }, () => {
+  const input = config();
+  input.providers[0].models.push({ id: 'grok-fast', label: 'Grok Fast', efforts: ['medium', 'high'], contextWindow: 500000, maxOutputTokens: 32768 });
+  input.providers[0].models[0].fastModel = 'grok-fast';
+  const f = fixture(buildCatalog(input, OBSERVED_SWE));
+  const allLabels = f.data.clientModelConfigs.map(entry => entry.label);
+  assert.equal(new Set(allLabels).size, allLabels.length, 'labels are globally unique: the list expands through a label-to-uid map');
+  const byokUid = f.catalog.models.find(model => model.kind === 'model' && model.uid.includes('grok-4'))?.json.modelInfo.modelFamilyUid;
+  assert.ok(byokUid && byokUid !== 'fusion', 'the BYOK family uid');
+  const family = f.grouped.families.get(byokUid);
+  assert.ok(family, 'the family groups in the real pipeline');
+  const fastIndex = family.dimensions.findIndex(dimension => dimension.name === 'Fast Mode');
+  const fastDim = family.dimensions[fastIndex];
+  assert.equal(fastDim.values.length, 2, 'exactly two values');
+  assert.ok(fastDim.values.every(value => value.name === ''), 'both unnamed: the toggle shape');
+  assert.equal(f.Ft(fastDim.values), true, 'the real predicate renders the switch');
+  // The list row: exactly one row for the family, resolving to the base uid.
+  const variantLabels = new Set(f.catalog.models.filter(model => model.hiddenFromSorts).map(model => model.label));
+  const baseHigh = f.catalog.models.find(model => model.kind === 'model' && model.uid.includes('grok-4') && model.label.includes('High'))?.uid;
+  const baseLabel = f.catalog.models.find(model => model.uid === baseHigh)?.label;
+  const rowsDedup = f.Kt(f.grouped, [], null, false);
+  const merged = rowsDedup.filter(row => row.family?.familyUid === byokUid);
+  assert.equal(merged.length, 1, 'exactly one list row for the merged family');
+  assert.ok(f.catalog.models.some(model => model.uid === merged[0].model?.modelUid && !model.hiddenFromSorts),
+    'the row resolves to a listed (base-side) member, never the hidden variant');
+  // The variant label appears in no sorts group at all.
+  const sortBody = JSON.stringify(f.data.clientModelSorts || []);
+  for (const label of variantLabels) assert.ok(!sortBody.includes(JSON.stringify(label).slice(1, -1)), 'variant label in no group: ' + label);
+  // Dimension chain: pin High on the base, flip Fast on/off, switch tiers.
+  const effortIndex = family.dimensions.findIndex(dimension => dimension.name === 'Effort');
+  const highOrder = family.dimensions[effortIndex].values.find(value => value.name === 'High')?.order;
+  const atBaseHigh = f.Ut(family, merged[0].model, effortIndex, highOrder);
+  assert.equal(atBaseHigh?.modelUid, baseHigh, 'the chain starts at the base High member');
+  const fastHigh = f.Ut(family, atBaseHigh, fastIndex, 1);
+  assert.ok(fastHigh?.modelUid?.includes('grok-fast'), 'fast on lands on the variant');
+  const effortOf = uid => (f.catalog.models.find(model => model.uid === uid)?.json.modelFamilyMetadata.entries || []).find(entry => entry.key === 'Effort')?.value?.name;
+  assert.equal(effortOf(fastHigh.modelUid), effortOf(baseHigh), 'same tier preserved');
+  const backOff = f.Ut(family, fastHigh, fastIndex, 0);
+  assert.ok(backOff?.modelUid?.includes('grok-4'), 'fast off returns to the base');
+  const mediumOrder = family.dimensions[effortIndex].values.find(value => value.name === 'Medium')?.order;
+  const fastMedium = f.Ut(family, fastHigh, effortIndex, mediumOrder);
+  assert.ok(fastMedium?.modelUid?.includes('grok-fast'), 'switching tiers from the variant stays on the variant');
+  assert.equal(effortOf(fastMedium.modelUid), 'Medium', 'and lands on the chosen tier');
+  assert.equal(f.strict.catalogMisses.length, 0, 'the strict intersection resolves every label');
 });

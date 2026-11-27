@@ -67,6 +67,13 @@ description: "改用量记录/归属/时间筛选、面板 webview 样式（含�
 - 互斥显隐的字段（思考档位、推理档位支持、档位列表）保持整行、**不进 `.field-grid`**：`hidden` 元素在 grid 里会留下空格子，而且它们各带说明文字，半宽会折行。带多行 URL 预览的地址字段同理，不要为了凑两列去拆它。
 - 共享元素的 `close` 事件是**排队派发**的：`dialog.close()` 返回时 `open` 已为 false，事件要到下一个任务才到。因此**禁止在同一 tick 内 `close()` 后立刻重开**——上一个实例排队的 `close` 会提前送给新实例，吃掉它的 `{ once: true }` 监听。`deleteButton` 因此是在 `close` 监听里打开确认框；实测（Chromium）`showModal()` 在 `close` 派发中可用，`openDialog` 的 `if (dialog.open) dialog.close()` 也不会误触发。
 
+## 模型列表与 Fast 变体
+
+- 被某个模型 `fastModel` 指向的变体**不单独成行**（`visibleModels()` 过滤）；行数统计、批量启用/停用、「筛选出 N 个」与空态随之只覆盖可见行，但侧栏供应商计数仍是库存数（不按行过滤）。
+- 基准行副标题追加 `Fast Mode: <变体 id>`（id 而非 label）；搜索命中被隐藏变体的 id/label 时显示其基准行（匹配串拼入变体文本）。Fast Mode 是**固定英文产品术语，不走 i18n**（与官方文案一致；字段标题 `Fast Mode 模型` 亦为固定串），这组文案改动不动 locales。
+- 移动箭头按**可见邻居**算距离：delta = 相邻可见行在完整 order 序列中的下标差，因此 `moveModel` 接受任意非零整数并 clamp 到端点。
+- 模型对话框的 Fast 下拉：首帧按本地已导入模型渲染，拨开开关（或编辑已关联模型）时拉一次 `refreshModels` 并入未导入候选（标注「未导入，保存时导入」），保存时先隐式 `importModels` 再写关联；无密钥且非 manual 不拉取。
+
 ## 界面文案与多语言（i18n）
 
 - **用户可见文字一律放 `src/i18n/locales/zh-CN.cjs` 与 `en.cjs`（同名键）**：宿主代码用注入的 `t()`（各模块参数默认是 zh-CN 翻译器，测试不传即断言原中文）；

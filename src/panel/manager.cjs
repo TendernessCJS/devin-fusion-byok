@@ -38,6 +38,41 @@ function staticModelIds(t, value) {
   for (const item of value) { const id = text(t, item, 'manager.field.modelId'); if (!ids.includes(id)) ids.push(id); }
   return ids;
 }
+// One fast variant per model, one claimant per variant, no chains: the matrix
+// emission twins entries uid-for-uid, so any ambiguity would silently drop one.
+// A fast variant mirrors its base: the twin is keyed by exact effort, so any
+// drift in tiers would silently drop the Fast option. Linking overwrites the
+// variant's capability fields and every later save of the base re-applies
+// them — enabled included, in BOTH directions: the variant row is hidden in
+// the panel, so a one-way disable could never be switched back on. Identity,
+// label, order and the link itself stay the variant's own.
+const FAST_SYNC_FIELDS = ['contextWindow', 'maxOutputTokens', 'efforts', 'effortMode', 'reasoningEffort', 'enabled'];
+function syncFastVariants(provider) {
+  const byId = new Map(provider.models.map(model => [model.id, model]));
+  for (const model of provider.models) {
+    if (typeof model.fastModel !== 'string' || !model.fastModel) continue;
+    const target = byId.get(model.fastModel);
+    if (!target || target === model) continue;
+    for (const field of FAST_SYNC_FIELDS) {
+      if (own(model, field)) target[field] = Array.isArray(model[field]) ? [...model[field]] : model[field];
+      else delete target[field];
+    }
+  }
+}
+
+function validateFastModels(t, provider) {
+  const byId = new Map((Array.isArray(provider.models) ? provider.models : []).map(model => [model.id, model]));
+  const claimed = new Set();
+  for (const model of byId.values()) {
+    if (typeof model.fastModel !== 'string' || !model.fastModel) continue;
+    if (model.fastModel === model.id) fail(t('manager.fastModelSelf'));
+    const target = byId.get(model.fastModel);
+    if (!target) fail(t('manager.fastModelMissing'));
+    if (typeof target.fastModel === 'string' && target.fastModel) fail(t('manager.fastModelChain'));
+    if (claimed.has(model.fastModel)) fail(t('manager.fastModelDuplicate'));
+    claimed.add(model.fastModel);
+  }
+}
 function boolean(t, value, field) { if (typeof value !== 'boolean') fail(t('manager.invalid', { label: t(field) })); return value; }
 function number(t, value, field) { if (!Number.isSafeInteger(value) || value < 1 || value > 2147483647) fail(t('manager.positiveInteger', { label: t(field) })); return value; }
 function providerAt(t, config, id) { return config.providers.find(provider => provider.id === id) || fail(t('manager.providerGone')); }
@@ -76,6 +111,10 @@ function modelPatch(t, input, previous) {
   if (own(input, 'effortMode')) {
     if (!['auto', 'manual', 'none'].includes(input.effortMode)) fail(t('manager.effortModeInvalid'));
     model.effortMode = input.effortMode;
+  }
+  if (own(input, 'fastModel')) {
+    if (input.fastModel === null || input.fastModel === '') delete model.fastModel;
+    else model.fastModel = text(t, input.fastModel, 'manager.field.modelId');
   }
   if (own(input, 'reasoningEffort')) {
     if (input.reasoningEffort === null) delete model.reasoningEffort;
@@ -216,6 +255,11 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
           provider.models.push({ ...candidate, label: provider.name + ' · ' + id, enabled: true,
             order: nextOrder(provider.models) });
         }
+        // An imported model can complete a fast link written ahead of it (the
+        // implicit import-on-save flow, or a hand-edited config): validate and
+        // replay the sync right away instead of waiting for the next save.
+        validateFastModels(t, provider);
+        syncFastVariants(provider);
         break;
       }
       case 'updateModels': {
@@ -227,6 +271,12 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
           provider.models[index] = modelPatch(t, change, provider.models[index]);
         }
         provider.models = provider.models.filter(m => !(payload.removeIds || []).includes(m.id));
+        // A gone fast variant can never resolve again; clear the reference
+        // instead of failing the write, mirroring pruneDanglingRoleRefs.
+        const removed = new Set(payload.removeIds || []);
+        for (const model of provider.models) if (removed.has(model.fastModel)) delete model.fastModel;
+        validateFastModels(t, provider);
+        syncFastVariants(provider);
         break;
       }
       case 'addModel': {
@@ -236,6 +286,8 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         normalizeOrders(provider.models);
         provider.models.push(modelPatch(t, input, { id, label: id, enabled: true, efforts: [], contextWindow: 272000,
           maxOutputTokens: 131072, source: 'manual', order: nextOrder(provider.models) }));
+        validateFastModels(t, provider);
+        syncFastVariants(provider);
         break;
       }
       case 'addModels': {
@@ -249,6 +301,8 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
           provider.models.push({ id, label: provider.name + ' · ' + id, enabled: true, efforts: [],
             contextWindow: 272000, maxOutputTokens: 131072, source: 'manual', order: nextOrder(provider.models) });
         }
+        validateFastModels(t, provider);
+        syncFastVariants(provider);
         break;
       }
       case 'setNativeModelHidden': {
@@ -346,12 +400,12 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       }
       case 'moveModel': {
         const provider = providerAt(t, config, payload.providerId);
-        if (payload?.delta !== -1 && payload?.delta !== 1) fail(t('manager.directionInvalid'));
+        if (!Number.isSafeInteger(payload?.delta) || payload.delta === 0) fail(t('manager.directionInvalid'));
         const ordered = sortByOrder(provider.models);
         const index = ordered.findIndex(model => model.id === payload.id);
         if (index < 0) fail(t('manager.modelGone'));
-        const target = index + payload.delta;
-        if (target < 0 || target >= ordered.length) return state();
+        const target = Math.min(Math.max(index + payload.delta, 0), ordered.length - 1);
+        if (target === index) return state();
         normalizeOrders(provider.models);
         const a = ordered[index], b = ordered[target];
         [a.order, b.order] = [b.order, a.order];

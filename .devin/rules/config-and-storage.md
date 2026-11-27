@@ -71,6 +71,7 @@ description: "改 config.json 读写、面板提交、损坏恢复或受管设�
 - `modelsUrl` 校验与 baseUrl 同类（http/https、无凭据/查询/片段、去尾斜杠），但**不做** `normalizeBaseUrlPath`——它是完整端点，尾部 `/models` 是路径的一部分，剥掉会让 Moonshot 这类用例退化成错误地址。
 - 覆盖地址的首屏逐字请求用户填的地址、**不**追加 `limit`；只有响应自身声明 `has_more`/`last_id` 时后续页才追加 `after_id`；派生地址行为不变（`limit=1000`）。`modelsUrlHint` 已写明密钥会发往该地址。
 - `providers[].staticModels`：`manual` 模式的静态模型 ID 源（1–200 条，去重、去空行）；保存时只有 `manual` 模式写或删它，其它模式保留但不生效。它是「可添加的模型 ID 源」——从列表删 ID 不删除已配置模型，也不参与发现请求；其内容并入 `signature()`，编辑后旧候选失效。
+- `models[].fastModel`：基础模型指定的 fast 变体（同供应商内模型 id）。一对一（同目标不能被两个模型指定）、目标必须存在、禁止链式与自指；删除变体时其它模型上的引用静默清除。fast 目标不作 lead 候选但可作 sidekick 取值，普通模型行与 routes 保留；孪生条目按 exact effort 匹配发射，无匹配档位不发。fast 图的三处消费（角色剔除/family 合并/孪生）共用 `fastClaimsOf` 的链式与重复声明防御（手改 config 时链式塌缩为末环、重复 target 只认首个声明者）；`fastPairsOf` 在其上加启用与档位一致判据，`targetToBase` 已删。关联期间 base 的 `contextWindow`/`maxOutputTokens`/`efforts`/`effortMode`/`reasoningEffort`/`enabled` 同步到变体且每次保存重放（base 缺的键从变体删除），`enabled` 必须双向——变体行在面板隐藏，单向停用将永远无法恢复；取消关联不还原；变体即使 `enabled === false` 也照常发射 routes（不发模型行），孪生不依赖变体启用态；`moveModel` 的 `delta` 接受任意非零整数（面板按可见邻居距离发送）。模型行侧，链接生效且两侧档位一致时变体并入 base 的 family（同 familyUid/家族标签/成员 label/Effort 值），base 成员写 `Fast Mode {controlType:2}`、变体成员写 `{order:1,controlType:2}`，picker 只显示一行并在卡片上给出 Fast 开关；档位不一致或 base 停用则不合并。
 - manual 供应商点「导入模型」时 `refreshModels` 直接以 `staticModels` 为候选（不发起网络请求），`importModels` 走同一条落盘路径，已配置条目以 `imported` 置灰；静态列表为空时以 `manager.staticSourceEmpty` 拒绝。
 
 ## 受管设置的写入/恢复串行边界
