@@ -251,20 +251,38 @@ function createModelsView(ui) {
       element('option', { value: 'yes', text: t('models.reasoningSupported') }),
       element('option', { value: 'no', text: t('models.reasoningUnsupported') }));
     reasoning.value = model?.reasoningEffort === true ? 'yes' : model?.reasoningEffort === false ? 'no' : 'auto';
+    // The mode alone decides where tiers come from, so the two refinements below
+    // are only shown for the mode that actually reads them: a manual list wins
+    // over every capability field, and the /models override is only consulted in
+    // auto. Hiding them keeps three competing knobs from sharing one screen.
+    const hintAuto = element('span', { class: 'hint', text: t('models.effortHint') });
+    const hintManual = element('span', { class: 'hint', text: t('models.effortHintManual') });
+    const hintNone = element('span', { class: 'hint', text: t('models.effortHintNone') });
+    const effortField = element('label', { class: 'field' },
+      element('span', { class: 'field-title', text: t('models.effort') }), effortMode, hintAuto, hintManual, hintNone);
     const manual = field(t('models.effortList'), efforts, t('models.effortListHint'));
-    manual.hidden = effortMode.value !== 'manual';
-    effortMode.addEventListener('change', () => { manual.hidden = effortMode.value !== 'manual'; });
+    const reasoningField = field(t('models.reasoningSupport'), reasoning, t('models.reasoningHint'));
+    const syncEffortUi = () => {
+      const mode = effortMode.value;
+      hintAuto.hidden = mode !== 'auto';
+      hintManual.hidden = mode !== 'manual';
+      hintNone.hidden = mode !== 'none';
+      manual.hidden = mode !== 'manual';
+      reasoningField.hidden = mode !== 'auto';
+    };
+    effortMode.addEventListener('change', syncEffortUi);
+    syncEffortUi();
     form.append(field(t('models.modelId'), id), field(t('models.displayName'), label),
       element('details', { class: 'fold', open: effortMode.value === 'manual' }, element('summary', { text: t('models.advanced') }),
         element('div', { class: 'field-grid' }, field(t('models.contextWindow'), contextWindow), field(t('models.maxOutput'), maxOutputTokens)),
-        field(t('models.effort'), effortMode, t('models.effortHint')), manual, field(t('models.reasoningSupport'), reasoning)));
+        effortField, reasoningField, manual));
     const remove = model ? deleteButton(dialog, t('models.deleteModelTitle'), t('models.deleteModelBody', { provider: provider.name, model: model.label || model.id }),
       () => request('updateModels', { providerId: provider.id, changes: [], removeIds: [model.id] })) : null;
     finishDialog(dialog, form, model ? t('common.save') : t('models.addSubmit'), () => {
       const saved = { id: id.value.trim(), label: label.value.trim() || id.value.trim(),
         contextWindow: Number(contextWindow.value), maxOutputTokens: Number(maxOutputTokens.value), effortMode: effortMode.value,
         reasoningEffort: reasoning.value === 'auto' ? null : reasoning.value === 'yes',
-        efforts: effortMode.value === 'auto' ? [] : [...new Set(efforts.value.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean))] }; // i18n-data: accepts a full-width comma as a list separator in user input
+        efforts: effortMode.value === 'manual' ? [...new Set(efforts.value.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean))] : [] }; // i18n-data: accepts a full-width comma as a list separator in user input
       if (model) return request('updateModels', { providerId: provider.id, changes: [{ ...saved, supportsImages: true }] });
       return request('addModel', { providerId: provider.id, model: { ...saved, enabled: true } });
     }, remove, model ? undefined : t('models.addedNotice'));

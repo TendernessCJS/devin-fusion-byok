@@ -177,6 +177,40 @@ test('the effort hint lists the Max preset and notes provider-dependent support'
   assert.ok(/供应商/.test(effortHint), 'the hint notes that the supported tiers depend on the provider');
 });
 
+test('only the effort controls the selected mode reads are shown', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: state() } });
+  const edit = collect(byId('models'), 'button', node => String(node.attributes['aria-label'] || '').startsWith('编辑模型'))[0];
+  assert.ok(edit, 'the edit button is rendered');
+  edit.listeners.click();
+  const dialog = byId('editor-dialog');
+  const field = title => collect(dialog, 'label', node => node.className === 'field' && textOf(node).startsWith(title))[0];
+  const mode = collect(dialog, 'select', node => node.attributes['aria-label'] === '思考档位')[0];
+  const effortField = field('思考档位');
+  const listField = field('档位列表');
+  const supportField = field('推理档位支持');
+  assert.ok(mode && effortField && listField && supportField, 'all three controls exist');
+  const shownHint = () => collect(effortField, 'span', node => node.className === 'hint')
+    .filter(node => node.hidden !== true).map(textOf).join('');
+
+  assert.equal(mode.value, 'auto');
+  assert.equal(listField.hidden, true, 'auto hides the manual list it would ignore');
+  assert.equal(supportField.hidden, false, 'auto exposes the /models override it reads');
+  assert.match(shownHint(), /XHigh/, 'auto shows the inference note');
+
+  mode.value = 'manual';
+  mode.listeners.change({});
+  assert.equal(listField.hidden, false, 'manual exposes the list');
+  assert.equal(supportField.hidden, true, 'a manual list wins over the capability override');
+  assert.match(shownHint(), /原样发送/, 'manual explains that the list is sent verbatim');
+
+  mode.value = 'none';
+  mode.listeners.change({});
+  assert.equal(listField.hidden, true, 'none drops both refinements');
+  assert.equal(supportField.hidden, true, 'none drops both refinements');
+  assert.match(shownHint(), /默认档/, 'none explains that only the provider default remains');
+});
+
 test('a model switch saves right away without a separate apply step', () => {
   const { byId, posts, receive } = panel();
   receive({ data: { type: 'state', state: state() } });
