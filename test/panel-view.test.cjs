@@ -1293,10 +1293,10 @@ test('the edit dialog echoes the reasoning tri-state and saving keeps it', () =>
   assert.equal(reasoning.value, 'no', 'a stored false reopens as unsupported, never as auto');
   const form = collect(dialog, 'form')[0];
   form.listeners.submit({ preventDefault() {} });
-  const post = api.posts.find(message => message.type === 'updateModels');
+  const post = api.posts.find(message => message.type === 'saveModel');
   assert.ok(post, 'saving posts the update');
-  const change = post.payload.changes[0];
-  assert.equal(change.reasoningEffort, false, 'an untouched form never erases the stored tri-state');
+  assert.equal(post.payload.existingId, 'saved', 'the edit names the existing model');
+  assert.equal(post.payload.model.reasoningEffort, false, 'an untouched form never erases the stored tri-state');
 });
 
 const openModelDialogWith = (api, st, matcher = '编辑模型') => {
@@ -1326,15 +1326,15 @@ test('the fast mode switch gates the variant field and the payload', async () =>
   assert.equal(widgets.select.hidden, false, 'switch on shows the variant select');
   collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
   await settle();
-  assert.ok(!api.posts.some(message => message.type === 'updateModels'), 'unselected fast mode never posts');
+  assert.ok(!api.posts.some(message => message.type === 'saveModel'), 'unselected fast mode never posts');
   assert.ok(textOf(dialog).includes('已开启 Fast Mode，请选择一个 Fast 模型。'), 'the exact fast-required error surfaces in the dialog');
   // Off: the variant field hides and the payload carries null.
   dialog = openModelDialogWith(api, withVariantState());
   widgets = fastWidgets(dialog);
   assert.equal(widgets.select.hidden, true, 'switch off hides the variant select');
   collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
-  let post = api.posts.find(message => message.type === 'updateModels');
-  assert.equal(JSON.parse(JSON.stringify(post.payload)).changes[0].fastModel, null, 'switch off posts null');
+  let post = api.posts.find(message => message.type === 'saveModel');
+  assert.equal(JSON.parse(JSON.stringify(post.payload)).model.fastModel, null, 'switch off posts null');
   api.receive({ data: { type: 'result', id: post.id, ok: true } });
   await settle();
   // On with an imported sibling selected: the payload carries the id with no import.
@@ -1345,9 +1345,9 @@ test('the fast mode switch gates the variant field and the payload', async () =>
   widgets.check.listeners.change({});
   widgets.select.value = 'fast-a';
   collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
-  post = api.posts.find(message => message.type === 'updateModels');
-  assert.equal(JSON.parse(JSON.stringify(post.payload)).changes[0].fastModel, 'fast-a', 'the selection lands in the payload');
-  assert.ok(!api.posts.some(message => message.type === 'importModels'), 'an already-imported sibling never re-imports');
+  post = api.posts.find(message => message.type === 'saveModel');
+  assert.equal(JSON.parse(JSON.stringify(post.payload)).model.fastModel, 'fast-a', 'the selection lands in the payload');
+  assert.equal(JSON.parse(JSON.stringify(post.payload)).importCandidateToken, undefined, 'an already-imported sibling sends no token');
 });
 
 test('clearing the variant then flipping the switch keeps it cleared', async () => {
@@ -1391,7 +1391,7 @@ test('the fast mode section structure is a single-hint fast-mode block', () => {
   assert.equal(widgets.select.hidden, false, 'the select shows once the switch is on');
 });
 
-test('flipping the switch fetches candidates once and imports unimported picks on save', async () => {
+test('flipping the switch fetches candidates once and carries unimported picks as a token on save', async () => {
   const api = panel();
   const dialog = openModelDialogWith(api, withVariantState());
   const widgets = fastWidgets(dialog);
@@ -1412,17 +1412,20 @@ test('flipping the switch fetches candidates once and imports unimported picks o
   assert.deepEqual(values, ['', 'fast-a', 'fast-x'], 'imported siblings plus unimported candidates, self excluded');
   const fastX = collect(widgets.select, 'option').find(option => option.attributes.value === 'fast-x');
   assert.ok(fastX.textContent.includes('未导入'), 'the unimported candidate is marked');
-  // Pick it and submit: import first, then the update carries the id.
+  // Pick it and submit: exactly one atomic saveModel post — the candidate
+  // rides as a token, never as a separate import that could outlive a
+  // failing edit.
   api.posts.length = 0;
   widgets.select.value = 'fast-x';
   collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
   await settle();
-  const importPost = api.posts.find(message => message.type === 'importModels');
-  assert.deepEqual(JSON.parse(JSON.stringify(importPost.payload)), { providerId: 'cpa', token: 'fixture-token', ids: ['fast-x'] });
-  api.receive({ data: { type: 'result', id: importPost.id, ok: true } });
-  await settle();
-  const update = api.posts.find(message => message.type === 'updateModels');
-  assert.equal(JSON.parse(JSON.stringify(update.payload)).changes[0].fastModel, 'fast-x');
+  assert.ok(!api.posts.some(message => message.type === 'importModels'), 'no separate import goes out');
+  const saves = api.posts.filter(message => message.type === 'saveModel');
+  assert.equal(saves.length, 1, 'exactly one save post');
+  const payload = JSON.parse(JSON.stringify(saves[0].payload));
+  assert.equal(payload.model.fastModel, 'fast-x');
+  assert.equal(payload.importCandidateToken, 'fixture-token', 'the candidate token rides along');
+  assert.equal(payload.providerId, 'cpa');
 });
 
 test('the fast variant candidates exclude self, disabled, chained, claimed and foreign models', async () => {

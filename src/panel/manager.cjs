@@ -5,6 +5,7 @@ const { discover: discoverModels } = require('../models/discovery.cjs');
 const { normalizeBaseUrlPath } = require('./base-url.cjs');
 const { publicState } = require('./panel-state.cjs');
 const { sortByOrder, nextOrder, normalizeOrders } = require('../models/order.cjs');
+const { modelEfforts } = require('../models/capabilities.cjs');
 const { translator } = require('../i18n/index.cjs');
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 class PanelInputError extends Error {}
@@ -47,7 +48,39 @@ function staticModelIds(t, value) {
 // the panel, so a one-way disable could never be switched back on. Identity,
 // label, order and the link itself stay the variant's own.
 const FAST_SYNC_FIELDS = ['contextWindow', 'maxOutputTokens', 'efforts', 'effortMode', 'reasoningEffort', 'enabled'];
-function syncFastVariants(provider) {
+// Copying the raw capability fields is not enough: in `auto` mode the tier
+// schedule falls back to id heuristics, and the variant's id rarely matches the
+// base's family shape (`gpt-6` infers tiers, `turbo-alias` does not). When the
+// copied fields still yield a different schedule, materialize the base's
+// resolved schedule explicitly — the three shapes below are exactly the ones
+// `modelEfforts` can produce, so after writing them the twin emission's
+// tier-exact check always sees equal sets. Anything else is a hand-edited
+// schedule we cannot represent faithfully, and saving it would silently keep
+// the mismatch, so the write is rejected instead.
+const CANONICAL_AUTO = [null, 'low', 'medium', 'high', 'xhigh', 'max'];
+const scheduleKey = schedule => JSON.stringify([...new Set(schedule.map(effort => String(effort)))].sort());
+function materializeEfforts(t, target, schedule) {
+  const key = scheduleKey(schedule);
+  if (key === scheduleKey([null])) {
+    target.effortMode = 'none';
+    delete target.efforts;
+    delete target.reasoningEffort;
+    return;
+  }
+  if (key === scheduleKey(CANONICAL_AUTO)) {
+    target.effortMode = 'auto';
+    target.reasoningEffort = true;
+    delete target.efforts;
+    return;
+  }
+  if (!schedule.includes(null) && schedule.length) {
+    target.effortMode = 'manual';
+    target.efforts = [...new Set(schedule)];
+    return;
+  }
+  fail(t('manager.fastEffortSchedule'));
+}
+function syncFastVariants(provider, t) {
   const byId = new Map(provider.models.map(model => [model.id, model]));
   for (const model of provider.models) {
     if (typeof model.fastModel !== 'string' || !model.fastModel) continue;
@@ -57,6 +90,8 @@ function syncFastVariants(provider) {
       if (own(model, field)) target[field] = Array.isArray(model[field]) ? [...model[field]] : model[field];
       else delete target[field];
     }
+    const schedule = modelEfforts(model);
+    if (scheduleKey(modelEfforts(target)) !== scheduleKey(schedule)) materializeEfforts(t, target, schedule);
   }
 }
 
@@ -176,6 +211,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
       if (!own(buildCatalog(config, observed().models, observed().allowed, roleAnalysis()).fusions, payload.uid)) fail(t('manager.fusionGone'));
       await selectFusion(payload.uid); return state();
     }
+    let importedCandidate = false;
     switch (type) {
       case 'saveProvider': {
         const existing = payload.id ? providerAt(t, config, payload.id) : null;
@@ -259,7 +295,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         // implicit import-on-save flow, or a hand-edited config): validate and
         // replay the sync right away instead of waiting for the next save.
         validateFastModels(t, provider);
-        syncFastVariants(provider);
+        syncFastVariants(provider, t);
         break;
       }
       case 'updateModels': {
@@ -276,7 +312,51 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         const removed = new Set(payload.removeIds || []);
         for (const model of provider.models) if (removed.has(model.fastModel)) delete model.fastModel;
         validateFastModels(t, provider);
-        syncFastVariants(provider);
+        syncFastVariants(provider, t);
+        break;
+      }
+      case 'saveModel': {
+        // One atomic model save: edit or add, plus — when the fast target is
+        // still an unimported discovery candidate — the import itself. The two
+        // step flow (importModels then updateModels/addModel) committed the
+        // import even when the model edit then failed validation, leaving a
+        // model nobody asked for; here everything mutates the same snapshot
+        // and the single write() at the bottom either carries all of it or —
+        // on any thrown validation — none of it.
+        const provider = providerAt(t, config, payload.providerId);
+        const input = payload.model;
+        if (!input || typeof input !== 'object' || Array.isArray(input)) fail(t('manager.modelParamInvalid'));
+        let imported = false;
+        if (payload.importCandidateToken !== undefined && payload.importCandidateToken !== null) {
+          if (!pendingImport || pendingImport.providerId !== provider.id || pendingImport.token !== payload.importCandidateToken ||
+              pendingImport.signature !== signature(provider)) fail(t('manager.candidatesExpired'));
+          const fastId = typeof input.fastModel === 'string' && input.fastModel ? input.fastModel : '';
+          const candidates = new Map(pendingImport.models.map(model => [model.id, model]));
+          // The token only ever authorizes importing the one candidate the
+          // fast link names — never an arbitrary id list.
+          if (!fastId || !candidates.has(fastId)) fail(t('manager.pickNotListed'));
+          if (!provider.models.some(model => model.id === fastId)) {
+            normalizeOrders(provider.models);
+            const candidate = candidates.get(fastId);
+            provider.models.push({ ...candidate, label: provider.name + ' · ' + fastId, enabled: true,
+              order: nextOrder(provider.models) });
+            imported = true;
+          }
+        }
+        if (payload.existingId !== undefined && payload.existingId !== null) {
+          const index = provider.models.findIndex(m => m.id === payload.existingId);
+          if (index < 0) fail(t('manager.modelGone'));
+          provider.models[index] = modelPatch(t, input, provider.models[index]);
+        } else {
+          const id = text(t, input.id, 'manager.field.modelId');
+          if (provider.models.some(m => m.id === id)) fail(t('manager.modelExists'));
+          normalizeOrders(provider.models);
+          provider.models.push(modelPatch(t, input, { id, label: id, enabled: true, efforts: [], contextWindow: 272000,
+            maxOutputTokens: 131072, source: 'manual', order: nextOrder(provider.models) }));
+        }
+        validateFastModels(t, provider);
+        syncFastVariants(provider, t);
+        importedCandidate = imported;
         break;
       }
       case 'addModel': {
@@ -287,7 +367,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         provider.models.push(modelPatch(t, input, { id, label: id, enabled: true, efforts: [], contextWindow: 272000,
           maxOutputTokens: 131072, source: 'manual', order: nextOrder(provider.models) }));
         validateFastModels(t, provider);
-        syncFastVariants(provider);
+        syncFastVariants(provider, t);
         break;
       }
       case 'addModels': {
@@ -302,7 +382,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
             contextWindow: 272000, maxOutputTokens: 131072, source: 'manual', order: nextOrder(provider.models) });
         }
         validateFastModels(t, provider);
-        syncFastVariants(provider);
+        syncFastVariants(provider, t);
         break;
       }
       case 'setNativeModelHidden': {
@@ -423,7 +503,7 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
     analyzedConfig = undefined; // The cases above mutated config in place.
     buildCatalog(config, observed().models, observed().allowed, roleAnalysis()); // Validate the complete model graph before committing.
     write(config, baseline);
-    if (type === 'importModels') pendingImport = undefined;
+    if (type === 'importModels' || (type === 'saveModel' && importedCandidate)) pendingImport = undefined;
     await afterChange(type);
     return state();
   }

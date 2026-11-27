@@ -452,6 +452,10 @@ function createModelsView(ui) {
         if (fastSelect.value === id.value.trim()) throw new Error(t('models.fastSelf'));
         saved.fastModel = fastSelect.value;
       } else saved.fastModel = null;
+      // An unimported fast target rides along as a candidate token: the manager
+      // validates and imports it inside the same atomic save, so a failing edit
+      // can no longer leave a stray imported model behind.
+      let importCandidateToken;
       if (saved.fastModel) {
         const listed = (fastProvider().models || []).some(entry => entry.id === saved.fastModel);
         if (!listed) {
@@ -459,17 +463,12 @@ function createModelsView(ui) {
           if (!candidates || candidates.providerId !== provider.id || !(candidates.models || []).some(entry => entry.id === saved.fastModel)) {
             throw new Error(t('models.fastNotListed'));
           }
-          try {
-            await request('importModels', { providerId: provider.id, token: candidates.token, ids: [saved.fastModel] });
-          } catch (failure) {
-            fetched = false;
-            fetchFast();
-            throw failure;
-          }
+          importCandidateToken = candidates.token;
         }
       }
-      if (model) return request('updateModels', { providerId: provider.id, changes: [{ ...saved, supportsImages: true }] });
-      return request('addModel', { providerId: provider.id, model: { ...saved, enabled: true } });
+      if (model) return request('saveModel', { providerId: provider.id, existingId: model.id,
+        model: { ...saved, supportsImages: true }, importCandidateToken });
+      return request('saveModel', { providerId: provider.id, model: { ...saved, enabled: true }, importCandidateToken });
     }, remove, model ? undefined : t('models.addedNotice'));
   }
 

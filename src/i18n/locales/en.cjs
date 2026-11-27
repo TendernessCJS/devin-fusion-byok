@@ -536,6 +536,7 @@ module.exports = Object.freeze({
   'manager.fastModelMissing': 'The fast variant does not exist in the model list of this provider.',
   'manager.fastModelChain': 'A fast variant cannot itself name a fast variant.',
   'manager.fastModelDuplicate': 'The same fast variant cannot serve two models.',
+  'manager.fastEffortSchedule': 'The fast variant cannot represent the effort schedule of its base model exactly. Adjust the effort settings of the base model first.',
   'manager.fastModelSelf': 'The fast variant cannot be the model itself.',
   'manager.invalid': '{label} is invalid.',
   'manager.positiveInteger': '{label} must be a positive integer.',

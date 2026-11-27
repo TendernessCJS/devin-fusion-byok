@@ -536,6 +536,7 @@ module.exports = Object.freeze({
   'manager.fastModelMissing': 'Fast 变体不存在于该供应商的模型列表中。',
   'manager.fastModelChain': 'Fast 变体自身不能再指定 Fast 变体。',
   'manager.fastModelDuplicate': '同一个 Fast 变体不能被两个模型同时指定。',
+  'manager.fastEffortSchedule': 'Fast 变体无法精确表达基础模型的档位形态，请先调整基础模型的档位设置。',
   'manager.fastModelSelf': 'Fast 变体不能是模型自身。',
   'manager.invalid': '{label}无效。',
   'manager.positiveInteger': '{label}必须是正整数。',

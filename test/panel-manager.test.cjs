@@ -56,6 +56,48 @@ function assertValidGraph(config, natives = []) {
   return catalog;
 }
 
+test('linking an auto-inferred base to a generic fast id materializes the tier schedule', async () => {
+  const input = fixture();
+  input.providers[0].models = [
+    model('gpt-6', { label: 'CPA · gpt-6' }),
+    model('turbo-alias', { label: 'CPA · turbo-alias' }),
+  ];
+  input.providers[0].models.forEach(entry => { delete entry.efforts; });
+  const m = memory({ config: input });
+  const { modelEfforts } = require('../src/models/capabilities.cjs');
+  // Before linking, the alias id alone cannot infer the canonical schedule.
+  assert.deepEqual(modelEfforts({ id: 'gpt-6' }), [null, 'low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(modelEfforts({ id: 'turbo-alias' }), [null]);
+  await m.manager.dispatch('updateModels', { providerId: 'cpa', changes: [{ id: 'gpt-6', fastModel: 'turbo-alias' }] });
+  const written = m.read();
+  const target = written.providers[0].models.find(entry => entry.id === 'turbo-alias');
+  assert.equal(target.effortMode, 'auto', 'the variant is materialized into the canonical auto shape');
+  assert.equal(target.reasoningEffort, true);
+  assert.equal(Object.hasOwn(target, 'efforts'), false, 'raw empty efforts list removed');
+  assert.deepEqual(modelEfforts(target), modelEfforts(written.providers[0].models.find(entry => entry.id === 'gpt-6')),
+    'effective efforts agree after the sync');
+  // The tier-exact pairing merges one picker family with a Fast Mode toggle per tier.
+  const built = buildCatalog(written, []);
+  const rows = built.models.filter(entry => entry.kind !== 'matrix');
+  const familyUids = new Set(rows.filter(entry => entry.label.includes('gpt-6') || entry.label.includes('turbo-alias'))
+    .map(entry => entry.json.modelFamilyUid));
+  assert.equal(familyUids.size, 1, 'base and variant share one picker family');
+  for (const row of rows.filter(entry => entry.label.includes('turbo-alias'))) {
+    const fast = row.json.modelFamilyMetadata.entries.find(entry => entry.key === 'Fast Mode');
+    assert.deepEqual(fast.value, { order: 1, controlType: 2 }, 'variant rows carry the toggle on-shape');
+  }
+  // One fast twin per tier: every canonical effort route of the variant leads one.
+  const twinEfforts = new Set();
+  for (const entry of built.models.filter(entry => entry.kind === 'matrix' && entry.label.endsWith(' · Fast'))) {
+    const route = built.routes[built.fusions[entry.uid].leadUid];
+    if (route.model === 'turbo-alias') twinEfforts.add(String(route.effort));
+  }
+  assert.deepEqual([...twinEfforts].sort(), ['high', 'low', 'max', 'medium', 'null', 'xhigh'], 'a fast twin exists for each tier');
+  // The role list advertises the fastVariants marker on the base.
+  const roles = m.manager.state().roleLists.lead.find(item => item.ref?.model === 'gpt-6');
+  assert.equal(roles.fastVariants, true, 'role row carries the fastVariants marker');
+});
+
 test('public state reports the mirrored combination count and carries no preset surface', () => {
   const input = fixture();
   const catalog = buildCatalog(input, OBSERVED_SWE);
@@ -311,6 +353,79 @@ test('fetching candidates never imports or removes models; confirmation adds onl
   assert.deepEqual(next.providers[1], other);
   assert.equal(f.manager.state().importCandidates, null);
   assertValidGraph(next);
+});
+
+test('saveModel imports an unimported fast target and links it in exactly one write', async () => {
+  const f = memory({ discover: async provider => {
+    provider.models = [model('lead'), model('fast-cand', { contextWindow: 400000 })];
+  } });
+  await f.manager.dispatch('refreshModels', { providerId: 'cpa' });
+  const preview = f.manager.state().importCandidates;
+  assert.ok(preview.models.some(entry => entry.id === 'fast-cand' && entry.imported === false), 'candidate available before save');
+  const writesBefore = f.writes.length;
+  await f.manager.dispatch('saveModel', { providerId: 'cpa', existingId: 'lead',
+    model: { id: 'lead', label: 'CPA · lead', enabled: true, fastModel: 'fast-cand', contextWindow: 200000, maxOutputTokens: 32768,
+      effortMode: 'auto', reasoningEffort: null, efforts: [], supportsImages: true },
+    importCandidateToken: preview.token });
+  assert.equal(f.writes.length, writesBefore + 1, 'import plus link commit in exactly one write');
+  const next = f.read();
+  const provider = next.providers[0];
+  assert.ok(provider.models.some(entry => entry.id === 'fast-cand'), 'the candidate was imported');
+  assert.equal(provider.models.find(entry => entry.id === 'lead').fastModel, 'fast-cand', 'the link landed');
+  assert.equal(provider.models.find(entry => entry.id === 'fast-cand').contextWindow, 200000,
+    'the fast sync copied the base capabilities in the same commit');
+  assert.equal(f.manager.state().importCandidates, null, 'a successful import consumes the pending candidates');
+  assertValidGraph(next);
+});
+
+test('saveModel rejects a failing edit without persisting the import or touching the config', async () => {
+  const f = memory({ discover: async provider => {
+    provider.models = [model('lead'), model('fast-cand')];
+  } });
+  await f.manager.dispatch('refreshModels', { providerId: 'cpa' });
+  const preview = f.manager.state().importCandidates;
+  const before = JSON.stringify(f.read());
+  const writesBefore = f.writes.length;
+  // maxOutputTokens over contextWindow fails modelPatch validation — with the
+  // two-step flow the import had already committed by this point.
+  await assert.rejects(f.manager.dispatch('saveModel', { providerId: 'cpa', existingId: 'lead',
+    model: { id: 'lead', label: 'CPA · lead', enabled: true, fastModel: 'fast-cand', contextWindow: 100, maxOutputTokens: 32768,
+      effortMode: 'auto', reasoningEffort: null, efforts: [], supportsImages: true },
+    importCandidateToken: preview.token }), PanelInputError);
+  assert.equal(JSON.stringify(f.read()), before, 'config byte-for-byte unchanged');
+  assert.equal(f.writes.length, writesBefore, 'no write happened');
+  const still = f.manager.state().importCandidates;
+  assert.ok(still && still.models.some(entry => entry.id === 'fast-cand'), 'the candidate remains available after the failure');
+  assert.equal(f.read().providers[0].models.some(entry => entry.id === 'fast-cand'), false, 'no stray import persisted');
+});
+
+test('saveModel covers the imported-target edit and the add-model flows without a token', async () => {
+  const f = memory();
+  // Edit linking an already-imported sibling: no token needed, none may be required.
+  await f.manager.dispatch('saveModel', { providerId: 'cpa', existingId: 'lead',
+    model: { id: 'lead', label: 'CPA · lead', enabled: true, fastModel: 'executor', contextWindow: 200000, maxOutputTokens: 32768,
+      effortMode: 'auto', reasoningEffort: null, efforts: [], supportsImages: true } });
+  assert.equal(f.read().providers[0].models.find(entry => entry.id === 'lead').fastModel, 'executor', 'edit link applied');
+  // Unlink through the same action.
+  await f.manager.dispatch('saveModel', { providerId: 'cpa', existingId: 'lead',
+    model: { id: 'lead', label: 'CPA · lead', enabled: true, fastModel: null, contextWindow: 200000, maxOutputTokens: 32768,
+      effortMode: 'auto', reasoningEffort: null, efforts: [], supportsImages: true } });
+  assert.equal(Object.hasOwn(f.read().providers[0].models.find(entry => entry.id === 'lead'), 'fastModel'), false, 'unlink applied');
+  // Add a brand-new model through the same action.
+  await f.manager.dispatch('saveModel', { providerId: 'cpa',
+    model: { id: 'fresh-model', label: 'Fresh', enabled: true, fastModel: null, contextWindow: 100000, maxOutputTokens: 4096,
+      effortMode: 'auto', reasoningEffort: null, efforts: [], supportsImages: true } });
+  const added = f.read().providers[0].models.find(entry => entry.id === 'fresh-model');
+  assert.ok(added, 'the add-model flow persists');
+  assert.equal(added.label, 'Fresh');
+  assertValidGraph(f.read());
+  // A token that does not match the pending import is rejected before anything mutates.
+  const before = JSON.stringify(f.read());
+  await assert.rejects(f.manager.dispatch('saveModel', { providerId: 'cpa', existingId: 'lead',
+    model: { id: 'lead', label: 'CPA · lead', enabled: true, fastModel: 'executor', contextWindow: 200000, maxOutputTokens: 32768,
+      effortMode: 'auto', reasoningEffort: null, efforts: [], supportsImages: true },
+    importCandidateToken: 'invented' }), PanelInputError);
+  assert.equal(JSON.stringify(f.read()), before, 'a bad token changes nothing');
 });
 
 test('refresh applies results to fresh state while preserving concurrent model and unrelated provider edits', async () => {
