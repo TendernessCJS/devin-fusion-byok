@@ -513,6 +513,7 @@ module.exports = Object.freeze({
   'manager.baseUrlParts': 'API 地址不能包含登录信息、查询参数或片段。',
   'manager.providerGone': '该供应商已不存在，请刷新面板。',
   'manager.effortsInvalid': '推理强度列表无效。',
+  'manager.effortsNoneReserved': '档位列表不能重复默认档，请删除 none。',
   'manager.effortModeInvalid': '推理档位来源无效。',
   'manager.outputOverContext': '最大输出长度不能超过上下文长度。',
   'manager.payloadInvalid': '操作参数无效。',

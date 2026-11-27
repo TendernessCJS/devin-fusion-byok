@@ -513,6 +513,7 @@ module.exports = Object.freeze({
   'manager.baseUrlParts': 'The base URL cannot contain credentials, a query string or a fragment.',
   'manager.providerGone': 'This provider no longer exists. Refresh the panel.',
   'manager.effortsInvalid': 'The effort list is invalid.',
+  'manager.effortsNoneReserved': 'The effort list cannot repeat the default tier; remove "none".',
   'manager.effortModeInvalid': 'The effort mode is invalid.',
   'manager.outputOverContext': 'Max output cannot exceed the context length.',
   'manager.payloadInvalid': 'Invalid request.',

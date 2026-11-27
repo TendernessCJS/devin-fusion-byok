@@ -2,10 +2,16 @@
 
 // /models commonly reports IDs only. Keep provider-specific overrides explicit;
 // use the standard GPT/o reasoning controls only for recognizable base IDs.
+// The mode alone decides where tiers come from, so each refinement is only
+// read by the mode that shows it in the panel. A config without the key keeps
+// the legacy "a list means manual" reading so older entries stay intact.
 function modelEfforts(model) {
-  if (model.effortMode === 'none') return [null];
-  if (Array.isArray(model.efforts) && model.efforts.length) return [...new Set(model.efforts)];
-  if (model.effortMode === 'manual') return [null];
+  const mode = model.effortMode || (Array.isArray(model.efforts) && model.efforts.length ? 'manual' : 'auto');
+  if (mode === 'none') return [null];
+  if (mode === 'manual') {
+    const list = Array.isArray(model.efforts) ? [...new Set(model.efforts)] : [];
+    return list.length ? list : [null];
+  }
   // A discovery-derived or explicitly set capability always wins; the id
   // heuristics below are only the last resort for providers whose /models
   // listing reports nothing but ids.

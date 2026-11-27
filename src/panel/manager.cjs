@@ -53,6 +53,7 @@ function modelPatch(t, input, previous) {
   if (own(input, 'maxOutputTokens')) model.maxOutputTokens = number(t, input.maxOutputTokens, 'manager.field.maxOutput');
   if (own(input, 'efforts')) {
     if (!Array.isArray(input.efforts) || input.efforts.some(v => !['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(v))) fail(t('manager.effortsInvalid'));
+    if (input.efforts.includes('none')) fail(t('manager.effortsNoneReserved'));
     model.efforts = [...new Set(input.efforts)];
   }
   if (own(input, 'effortMode')) {

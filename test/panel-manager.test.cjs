@@ -999,3 +999,19 @@ test('updateModels accepts a reasoningEffort tri-state and rejects other types',
   }
   assert.equal('reasoningEffort' in seed.read().providers[0].models[0], false, 'rejected patches never write');
 });
+
+test('the manual effort list rejects the reserved none tier without persisting', async () => {
+  const input = fixture();
+  input.providers = [{ id: 'p', name: 'P', models: [{ id: 'm', label: 'M', efforts: ['high'], contextWindow: 1000, maxOutputTokens: 100 }] }];
+  const f = memory({ config: input });
+  assert.deepEqual(f.read().providers[0].models[0].efforts, ['high']);
+  await assert.rejects(
+    f.manager.dispatch('updateModels', { providerId: 'p', changes: [{ id: 'm', efforts: ['none'] }], removeIds: [] }),
+    PanelInputError, 'the reserved default tier must be rejected');
+  await assert.rejects(
+    f.manager.dispatch('updateModels', { providerId: 'p', changes: [{ id: 'm', efforts: ['low', 'none'] }], removeIds: [] }),
+    PanelInputError, 'none stays reserved even inside a valid list');
+  assert.deepEqual(f.read().providers[0].models[0].efforts, ['high'], 'a rejected patch never reaches the disk');
+  await f.manager.dispatch('updateModels', { providerId: 'p', changes: [{ id: 'm', efforts: ['low', 'high'] }], removeIds: [] });
+  assert.deepEqual(f.read().providers[0].models[0].efforts, ['low', 'high'], 'a list without none still passes');
+});

@@ -12,6 +12,13 @@ test('reasoningEffort and the explicit controls decide efforts before any id gue
   assert.deepEqual(modelEfforts(model({ reasoningEffort: false, efforts: ['low', 'high'] })), ['low', 'high']);
   assert.deepEqual(modelEfforts(model({ reasoningEffort: true, effortMode: 'none' })), [null], 'effortMode none stays first');
   assert.deepEqual(modelEfforts(model({ effortMode: 'manual' })), [null]);
+  // The mode alone decides where tiers come from: auto never reads the list.
+  assert.deepEqual(modelEfforts({ id: 'gpt-6-astra', effortMode: 'auto', efforts: ['high'] }),
+    [null, 'low', 'medium', 'high', 'xhigh', 'max'], 'auto ignores the manual list');
+  assert.deepEqual(modelEfforts({ id: 'custom-model', effortMode: 'auto', efforts: ['high'] }), [null],
+    'auto outside the heuristic families has no tiers');
+  assert.deepEqual(modelEfforts({ id: 'custom-model', efforts: ['high'] }), ['high'],
+    'a config without the mode key keeps the legacy "a list means manual" reading');
 });
 
 test('non-reasoning variants never gain efforts from a family-shaped id', () => {
