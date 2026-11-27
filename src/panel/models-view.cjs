@@ -208,7 +208,7 @@ function createModelsView(ui) {
   }
 
   function providerDialog(provider) {
-    const { dialog, form } = openDialog(provider ? t('models.editProvider') : t('models.addProvider'));
+    const { dialog, form } = openDialog(provider ? t('models.editProvider') : t('models.addProvider'), { wide: true });
     const name = input(provider?.name, { required: true, maxlength: 80, placeholder: t('models.namePlaceholder') });
     const baseUrl = input(provider?.baseUrl, { type: 'url', required: true, placeholder: 'https://example.com/v1', spellcheck: 'false' });
     const apiFormat = element('select', { 'aria-label': t('models.apiType') },
@@ -275,7 +275,6 @@ function createModelsView(ui) {
       field(t('models.name'), name), field(t('models.apiType'), apiFormat));
     const apiKeyField = field(t('models.apiKey'), apiKey);
     form.append(identity, urlField, apiKeyField, fold);
-    dialog.className = 'wide';
     const remove = provider ? deleteButton(dialog, t('models.deleteProviderTitle'), t('models.deleteProviderBody', { name: provider.name }),
       () => request('deleteProvider', { id: provider.id })) : null;
     // Invalid url-mode input is rejected by the manager; unfolding the section
@@ -295,7 +294,7 @@ function createModelsView(ui) {
   }
 
   function modelDialog(provider, model) {
-    const { dialog, form } = openDialog(model ? t('models.editModel') : t('models.addModelTitle'));
+    const { dialog, form } = openDialog(model ? t('models.editModel') : t('models.addModelTitle'), { wide: true });
     const id = input(model?.id, { required: true, readOnly: Boolean(model), maxlength: 256, placeholder: t('models.idPlaceholder'), spellcheck: 'false' });
     const label = input(model?.label || '', { maxlength: 160, placeholder: t('models.labelPlaceholder') });
     const contextWindow = input(model?.contextWindow || 272000, { type: 'number', min: 1, step: 1, required: true });
@@ -333,7 +332,7 @@ function createModelsView(ui) {
     };
     effortMode.addEventListener('change', syncEffortUi);
     syncEffortUi();
-    form.append(field(t('models.modelId'), id), field(t('models.displayName'), label),
+    form.append(element('div', { class: 'field-grid' }, field(t('models.modelId'), id), field(t('models.displayName'), label)),
       element('details', { class: 'fold', open: effortMode.value === 'manual' }, element('summary', { text: t('models.advanced') }),
         element('div', { class: 'field-grid' }, field(t('models.contextWindow'), contextWindow), field(t('models.maxOutput'), maxOutputTokens)),
         effortField, reasoningField, manual));

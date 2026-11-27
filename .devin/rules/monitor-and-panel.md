@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: "改用量记录/归属/时间筛选、面板 webview 样式、busy 锁定或 state 去重与焦点保留时必读。"
+description: "改用量记录/归属/时间筛选、面板 webview 样式（含对话框布局）、busy 锁定或 state 去重与焦点保留时必读。"
 ---
 
 # 监控与面板（monitor-and-panel）
@@ -59,6 +59,13 @@ description: "改用量记录/归属/时间筛选、面板 webview 样式、busy
 - **面板 `health` 字段必须完全确定、不含时间戳**：它走同一条 `postState` JSON 去重，任何每次调用都变的字段会让面板每 3 秒重渲染并杀掉搜索焦点（同 `at` 事故的机制）。
   `checkInjectionHealth` 的输入只取自既有共享槽（backendStatus/bridgeState/bridgeHook/envValue+expectedEnv/cliCache/acp 计数），返回值由输入唯一决定。ACP 信号必须**三态**：首个
   `session/new` 观测（`acpObserved > 0`）之前判 `unknown`，否则每次窗口重载都会误报「会话无本插件条目」。
+
+## 对话框布局与共享 `<dialog>`
+
+- 所有编辑对话框复用同一个 `<dialog id="editor-dialog">`；**宽度由 `openDialog` 的参数决定**：`openDialog(title, { wide: true })` → `dialog.wide`（600px），否则 500px。`openDialog` 每次打开都先清 `className`，调用方**不要**再手写 `dialog.className = 'wide'`；新对话框只要用了 `.field-grid`，就必须显式请求 `wide`。
+- 两列只由 `.field-grid` 提供（`grid-template-columns: 1fr 1fr`），降级**必须按对话框自身宽度**判定：`dialog { container-type: inline-size }` + `@container (max-width: 470px)`。**不要挪回 `@media`**：面板窗口常年窄于 700px，视口媒体查询会把对话框内的两列静默压成单列（已踩两次），`test/panel-view.test.cjs` 的 CSS 守卫锁住这几行。
+- 互斥显隐的字段（思考档位、推理档位支持、档位列表）保持整行、**不进 `.field-grid`**：`hidden` 元素在 grid 里会留下空格子，而且它们各带说明文字，半宽会折行。带多行 URL 预览的地址字段同理，不要为了凑两列去拆它。
+- 共享元素的 `close` 事件是**排队派发**的：`dialog.close()` 返回时 `open` 已为 false，事件要到下一个任务才到。因此**禁止在同一 tick 内 `close()` 后立刻重开**——上一个实例排队的 `close` 会提前送给新实例，吃掉它的 `{ once: true }` 监听。`deleteButton` 因此是在 `close` 监听里打开确认框；实测（Chromium）`showModal()` 在 `close` 派发中可用，`openDialog` 的 `if (dialog.open) dialog.close()` 也不会误触发。
 
 ## 界面文案与多语言（i18n）
 

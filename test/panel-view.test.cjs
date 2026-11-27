@@ -82,6 +82,17 @@ const state = () => ({ enabled: true, providers: [{ id: 'cpa', name: 'CPA', base
     contextWindow: 200000, maxOutputTokens: 32768 }] }], nativeModels: [], roleLists: { lead: [], sidekick: [] },
   autoContinueStatus: 'unavailable' });
 
+test('the dialog grids collapse on the dialog width, not the viewport', () => {
+  const html = renderPanel({ nonce: 'safe' });
+  const style = html.slice(html.indexOf('<style'), html.indexOf('</style>'));
+  assert.match(style, /dialog \{[^}]*container-type: inline-size/, 'the dialog must be the query container for its own grids');
+  assert.match(style, /\.field-grid \{ display: grid; grid-template-columns: 1fr 1fr;/, '.field-grid stays two columns');
+  assert.match(style, /@container \(max-width: 470px\) \{ \.field-grid \{ grid-template-columns: 1fr/, 'the collapse key is the dialog width');
+  assert.match(style, /dialog\.wide \{ width: min\(600px/, 'the wide shell is the one that fits two columns');
+  const media = style.slice(style.indexOf('@media (max-width: 700px)'));
+  assert.doesNotMatch(media, /field-grid/, 'a viewport media query must not flatten the dialog grids');
+});
+
 test('all controls share the --control-h height token so rows align', () => {
   const html = renderPanel({ nonce: 'safe' });
   assert.match(html, /--control-h: 28px/);
@@ -244,6 +255,20 @@ test('deleting a model lives in its edit dialog', () => {
   assert.equal(collect(byId('models'), 'button', node => node.textContent === '删除').length, 0, 'rows carry no delete button');
   collect(byId('models'), 'button', node => String(node.attributes['aria-label'] || '').startsWith('编辑模型'))[0].listeners.click();
   assert.equal(collect(byId('editor-dialog'), 'button', node => node.textContent === '删除').length, 1);
+});
+
+test('the model dialog pairs identity and token limits on two columns', () => {
+  const { byId, receive } = panel();
+  receive({ data: { type: 'state', state: state() } });
+  collect(byId('models'), 'button', node => String(node.attributes['aria-label'] || '').startsWith('编辑模型'))[0].listeners.click();
+  const dialog = byId('editor-dialog');
+  assert.equal(dialog.className, 'wide', 'the model dialog shares the wide shell that keeps the grids on two columns');
+  const grids = collect(dialog, 'div', node => node.className === 'field-grid');
+  assert.equal(grids.length, 2, 'identity and token limits are the only gridded rows');
+  const titles = row => collect(row, 'label', node => node.className === 'field')
+    .map(node => textOf(collect(node, 'span', child => child.className === 'field-title')[0]));
+  assert.deepEqual(titles(grids[0]), ['模型 ID', '显示名称'], 'id and label share the first row');
+  assert.deepEqual(titles(grids[1]), ['上下文（tokens）', '最大输出（tokens）'], 'both token limits share a row inside the fold');
 });
 
 test('the settings tab exposes the CLI cache refresh and reports the last run', () => {
@@ -1030,10 +1055,13 @@ test('the provider dialog folds the model source section away from the credentia
     .map(node => textOf(collect(node, 'span', child => child.className === 'field-title')[0]));
   assert.deepEqual(innerTitles, ['模型获取方式', '模型列表地址', '静态模型 ID 列表'], 'the fold hosts the three source fields in order');
 
-  // The shared editor dialog must not keep the wide class for other dialogs.
+  // The model dialog opts into the same wide shell; a dialog that never asks for
+  // it must still come back to the default width.
   const edit = collect(api.byId('models'), 'button', node => String(node.attributes['aria-label'] || '').startsWith('编辑模型'))[0];
   edit.listeners.click();
-  assert.equal(api.byId('editor-dialog').className, '', 'the model dialog resets the shared width class');
+  assert.equal(api.byId('editor-dialog').className, 'wide', 'the model dialog opts into the wide layout too');
+  collect(api.byId('models'), 'button', node => node.textContent === '批量添加')[0].listeners.click();
+  assert.equal(api.byId('editor-dialog').className, '', 'the shared width class is reset for a dialog that does not want it');
 });
 
 test('the fold summary follows the selected source mode', () => {
