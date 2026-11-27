@@ -159,7 +159,20 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
         officialGroupByFamily.set(family.id, { name: winner[0], rank: winner[1].minRank });
       }
     }
-    return { id: family.id, label, variants: Math.max(signatures.size, 1), internal,
+    // kind is the proto DisplayOption enum: 3 MODEL_ROUTER joins the standard
+    // picker whenever arena is off (Adaptive and every official Fusion row), and
+    // 8 MODERN_AGENT_CHAT is the ordinary picker surface. The remaining non-picker
+    // kinds (1 ARENA, 2 BATTLE_GROUP_ONLY, 4 QUICK_REVIEW, 5 MIMIC, 6 HIDDEN_TOOL,
+    // 7 COMPACTOR) are invisible in the CLI renderer, so a family holding no 3/8
+    // member is unlisted there. `uid === 'fusion'` is the measured exception: the
+    // desktop menu lists a standalone Fusion entry (kind 6, checked when the
+    // session runs on it — observed 2026-11-27), while the same kind 6 keeps
+    // subagent-default and memory-migration-default out of the menu. Only the
+    // internal rows consume this — an absent kind proves nothing (an allowlist gap
+    // already makes such a family internal).
+    const pickerVisible = family.members.some(({ entry, uid }) =>
+      uid === 'fusion' || (entry && (entry.kind === 3 || entry.kind === 8)));
+    return { id: family.id, label, variants: Math.max(signatures.size, 1), internal, pickerVisible,
       efforts: [...effortOrders.entries()].sort((a, b) => a[1] - b[1]).map(([name]) => name),
       toggles: [...toggles].sort(),
       hidden: anyHidden,

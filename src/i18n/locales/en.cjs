@@ -294,6 +294,7 @@ module.exports = Object.freeze({
   'settings.native.emptyRetry': 'No official models received yet. Click Refresh to retry.',
   'settings.native.accountUnavailable': 'not available to your account',
   'settings.native.notFusionEligible': 'cannot be a Fusion Lead/Sidekick',
+  'settings.native.pickerVisible': 'listed in the picker (routing or combination entry)',
   'settings.native.notInPicker': 'hidden from the picker',
   'settings.native.showVariantsAria': 'Show the {count} variants of {label} in the list',
   'settings.native.showAria': 'Show {label} in the list',

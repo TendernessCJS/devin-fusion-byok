@@ -172,7 +172,7 @@ function createSettingsView(ui) {
       if (family.efforts.length) sub.push('Effort ' + family.efforts.join(' / '));
       if (family.toggles.length) sub.push(...family.toggles);
       if (family.disabled !== true && !family.members.some(member => member.eligible)) sub.push(t('settings.native.notFusionEligible'));
-      if (family.internal === true) sub.push(t('settings.native.notInPicker'));
+      if (family.internal === true) sub.push(t(family.pickerVisible === true ? 'settings.native.pickerVisible' : 'settings.native.notInPicker'));
       return element('div', { class: 'row' },
         element('div', { class: 'row-main' }, element('span', { class: 'row-title', text: family.label }),
           element('span', { class: 'row-sub', text: sub.join(' · ') })),

@@ -776,6 +776,26 @@ test('families no picker can select are classified as internal entries', async (
   assert.equal(byId('uid:private-1').internal, true);
 });
 
+test('pickerVisible projects any kind 3 or 8 member inside internal families', async () => {
+  const observed = [
+    { uid: 'router-card', label: 'Router Card', disabled: false, isModelRouter: true, harnessUids: [], kind: 3 },
+    { uid: 'tool-hidden', label: 'Tool Hidden', disabled: false, isModelRouter: false, harnessUids: [], kind: 6 },
+    { uid: 'fusion', label: 'Fusion', disabled: false, isModelRouter: true, harnessUids: [], kind: 6 },
+    { uid: 'subagent-default', label: 'Subagent Default', disabled: false, isModelRouter: true, harnessUids: [], kind: 6 },
+    { uid: 'mix-hidden', label: 'Mix Hidden', disabled: false, isModelRouter: false, harnessUids: [], kind: 6, familyUid: 'mixed' },
+    { uid: 'mix-router', label: 'Mix Router', disabled: false, isModelRouter: true, harnessUids: [], kind: 3, familyUid: 'mixed' },
+    { uid: 'chat-modern', label: 'Chat Modern', disabled: false, isModelRouter: false, harnessUids: [], kind: 8 },
+  ];
+  const state = publicState(fixture(), observed);
+  const byId = id => state.nativeFamilies.find(family => family.id === id);
+  assert.equal(byId('uid:router-card').pickerVisible, true, 'kind 3 MODEL_ROUTER joins the standard picker with arena off');
+  assert.equal(byId('uid:chat-modern').pickerVisible, true, 'kind 8 MODERN_AGENT_CHAT is the ordinary picker surface');
+  assert.equal(byId('uid:tool-hidden').pickerVisible, false, 'kind 6 HIDDEN_TOOL is genuinely unlisted');
+  assert.equal(byId('uid:fusion').pickerVisible, true, 'the desktop model menu lists the Fusion entry on its own, even at kind 6');
+  assert.equal(byId('uid:subagent-default').pickerVisible, false, 'subagent-default shares kind 6 yet stays off the menu');
+  assert.equal(byId('mixed').pickerVisible, true, 'one kind 3 member makes the whole family visible — the Adaptive/Fusion shape');
+});
+
 test('picker visibility uses kind enum and observation source', async () => {
   const observed = [
     { uid: 'review-a', label: 'Review A', disabled: false, isModelRouter: false, harnessUids: ['h'], kind: 4, sources: ['cli'] },

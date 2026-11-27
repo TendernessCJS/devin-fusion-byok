@@ -294,6 +294,7 @@ module.exports = Object.freeze({
   'settings.native.emptyRetry': '还没收到官方模型，请点刷新重试。',
   'settings.native.accountUnavailable': '账号不可用',
   'settings.native.notFusionEligible': '不可用作 Fusion Lead/Sidekick',
+  'settings.native.pickerVisible': 'picker 可见（路由或组合入口）',
   'settings.native.notInPicker': 'picker 不显示',
   'settings.native.showVariantsAria': '在列表中显示 {label} 的 {count} 个变体',
   'settings.native.showAria': '在列表中显示 {label}',

@@ -126,6 +126,31 @@ test('the tab strip puts models first and Fusion second', () => {
   assert.ok(sectionTag('view-fusion').includes('hidden'), 'the Fusion tab starts hidden');
 });
 
+test('internal family rows split picker visibility by evidence', async () => {
+  const { byId, receive } = panel();
+  const row = (id, extra) => ({ id, label: id, vendor: 'OpenAI', variants: 1, efforts: [], toggles: [],
+    hidden: false, members: [{ uid: id + '-1', label: id, disabled: false, eligible: false, hidden: false }], ...extra });
+  receive({ data: { type: 'state', state: { ...state(), nativeFamilies: [
+    row('fam-visible', { internal: true, pickerVisible: true }),
+    row('fam-hidden', { internal: true, pickerVisible: false }),
+    row('fam-legacy', { internal: true }),
+    row('fam-normal', { internal: false }),
+  ] } } });
+  collect(byId('native-models'), 'button', node => node.className.split(' ').includes('pill') && textOf(node).startsWith('全部'))[0].listeners.click();
+  const rows = collect(byId('native-list'), 'div', node => node.className === 'row');
+  const byTitle = title => rows.find(row => textOf(row).includes(title));
+  const visible = textOf(byTitle('fam-visible'));
+  assert.ok(visible.includes('picker 可见'), 'a kind-3/8 family row says picker visible');
+  assert.ok(!visible.includes('picker 不显示'), 'and never the hidden copy');
+  for (const title of ['fam-hidden', 'fam-legacy']) {
+    const copy = textOf(byTitle(title));
+    assert.ok(copy.includes('picker 不显示'), title + ' falls back to the hidden copy');
+    assert.ok(!copy.includes('picker 可见'), title + ' never claims visibility');
+  }
+  const normal = textOf(byTitle('fam-normal'));
+  assert.ok(!normal.includes('picker 可见') && !normal.includes('picker 不显示'), 'non-internal rows carry neither copy');
+});
+
 test('the Fusion tab hosts the role grids that drive the official Fusion card', () => {
   const { byId, receive } = panel();
   receive({ data: { type: 'state', state: { ...state(), roleLists: {

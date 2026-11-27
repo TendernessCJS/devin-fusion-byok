@@ -73,6 +73,7 @@ description: "改用量记录/归属/时间筛选、面板 webview 样式（含�
 - 基准行副标题追加 `Fast Mode: <变体 id>`（id 而非 label）；搜索命中被隐藏变体的 id/label 时显示其基准行（匹配串拼入变体文本）。Fast Mode 是**固定英文产品术语，不走 i18n**（与官方文案一致；字段标题 `Fast Mode 模型` 亦为固定串），这组文案改动不动 locales。
 - 移动箭头按**可见邻居**算距离：delta = 相邻可见行在完整 order 序列中的下标差，因此 `moveModel` 接受任意非零整数并 clamp 到端点。
 - 模型对话框的 Fast 下拉：首帧按本地已导入模型渲染，拨开开关（或编辑已关联模型）时拉一次 `refreshModels` 并入未导入候选（标注「未导入，保存时导入」），保存时先隐式 `importModels` 再写关联；无密钥且非 manual 不拉取。
+- 设置页内部族行的位置文案按 `kind`（proto DisplayOption）分档：任一成员 `kind` 3/8 →「picker 可见（路由或组合入口）」，其余 1/2/4/5/6/7 或无 `kind` →「picker 不显示」，例外 `uid === 'fusion'`：桌面端模型菜单单独列出 Fusion 入口（kind 6，选中时带勾，2026-11-27 实测），同 kind 6 的 `subagent-default`/`memory-migration-default` 仍不在菜单；CLI 渲染器的「2/5/6/7 invisible」不适用于这个桌面端入口。原因：`3 MODEL_ROUTER` 在 arena 关闭时混入标准 picker（Adaptive 与官方 Fusion 组合行都是 kind 3），此前一律写「picker 不显示」与实机不符；`catalog-and-picker.md` 已满，记在此卷。
 
 ## 界面文案与多语言（i18n）
 
