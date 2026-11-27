@@ -57,6 +57,7 @@ Devin Fusion BYOK：一个 Devin/VSCode 扩展，通过运行时桥接把第三�
 | `.devin/rules/provider-endpoint-latency.md` | **排查首响慢、`upstream_timeout`/`upstream_stream_error`，或要动超时预算时必读**——响应头探针、历史统计口径与超时路径的证据边界 |
 | `.devin/rules/provider-sdk-parity.md` | **判断某个 provider 线格式字段是否合法、该不该发，或更新 `.refs` 里的 SDK 时必读**——SDK 基线版本与更新方式、我们发送字段的合法性对照、原生无法表达因此刻意不发的字段、以及「REA 管不到 provider 线格式」的判据 |
 | `.devin/rules/testing-notes.md` | 写或调测试，改契约基线 commit、合成场景矩阵或守卫覆盖边界时必读 |
+| `.devin/rules/testing-notes-forensics.md` | 追溯测试口径的带日期实测与事故记录（ppid 误判、0.3.49 验收清单、sourceId 实测、`.refs` 基线等）时必读——证据，非契约 |
 | `.devin/rules/retired-and-deadends.md` | 清理配置键、审「这段代码还活着吗」、疑惑旧字段为何还在 |
 | `.devin/rules/catalog-and-picker-forensics.md` | **核对「某个数字/结论是哪来的」、追溯已下线模型与旧观测面时必读**——目录与 picker 侧的带日期实测与事故记录（证据，非契约） |
 | `.devin/rules/fusion-matrix-forensics.md` | **核对「某条 fusion 判据为何这样定」、或判断某条 harness/Lead/fast 档结论是否已过期时必读**——矩阵与角色侧的带日期实测与事故记录（证据，非契约） |

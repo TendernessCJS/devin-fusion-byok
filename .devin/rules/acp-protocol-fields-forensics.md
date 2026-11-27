@@ -1,6 +1,6 @@
 ---
-description: ACP 字段号的实测方法与证据——怎么从 bundle 的 newFieldList 读字段号、CompletionDelta 的错位陷阱、附件与缓存键字段的实证来源；改字段号或怀疑读数过期时必读
 trigger: model_decision
+description: ACP 字段号的实测方法与证据——怎么从 bundle 的 newFieldList 读字段号、CompletionDelta 的错位陷阱、附件与缓存键字段的实证来源；改字段号或怀疑读数过期时必读
 ---
 
 # ACP 字段号：实测方法与证据

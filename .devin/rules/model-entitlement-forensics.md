@@ -5,6 +5,8 @@ description: "排查「picker 整族变窄 / Claude·GPT·Gemini 全消失 / mir
 
 # 账号准入层取证（model-entitlement-forensics）
 
+契约面在 `catalog-and-picker.md` 的准入层一节；本卷只放取证判据与实测，判据以契约卷为准。
+
 ## 结论先行：准入层在 f7 之上
 
 **2026-11-18 更正**：同一凭据走直连与代理可得到不同准入集合。旧的‘同结果+不同auth即账号级’和‘只能上报’推断不充分；先确认独立 backend 的真实出口与代理配置，再讨论账号权益。服务端执行准入过滤，不等于本地转发路径与触发条件无关。

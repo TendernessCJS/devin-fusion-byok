@@ -67,7 +67,6 @@ description: "排查「某条 fusion 判据为何这样定」、核对官方组�
 
 - 官方 Fusion 值自填小整数，实测 Lead 1..8 / Sidekick 1..9；原生非 Fusion 值 `0x10000000..0x17ffffff` 哈希定位，实测不随供应商启停漂移。
 - 观测里有两类噪声：官方已下线的组合、我们自镜像的 native×native 条目（uid 与官方同形，会被回读）；两者只会带来更大的数字，取最小即官方基准位（实测 GLM-5.2 High 7、GPT-5.6 Sol High 6、Sonnet 5.5 8、Haiku 5.5 9、SWE-2.1 10）。
-- 普通条目上给 `Fast Mode` 写 `order: 0` 会与官方的「无 order」分成两个桶：`Fast Mode` 从官方的 2 个选项涨到 3 个，`Recommended Sidekick` 从「不渲染」变成一个真实控件（2026-10-14 真机实测）。
 
 **服务器家族与控制维度**
 
@@ -77,6 +76,6 @@ description: "排查「某条 fusion 判据为何这样定」、核对官方组�
 
 **harness**
 
-- 2026-10-16 实测当时 586 条组合里有 **40 条以 `harnessUids=[]` 的 `gpt-6-astra-*` 为 Lead**（`isModelRouter=false`、`disabled=false`），故 lead 侧去掉了 harness 判据；2026-11-25 复测该族已带 `[gpt-5p6-codex,gpt-5p6]`，1009 条组合的 111 个 Lead / 14 个 Sidekick **全部有 harness**。同批扫描的反证：lead/sidekick 引用 router = 0/0、引用 disabled = 0/0、**sidekick 引用无 harness = 0**。
+- 同批扫描的反证（2026-11-25，数字不在上方「Lead 不要求 harness」节里）：lead/sidekick 引用 router = 0/0、引用 disabled = 0/0、**sidekick 引用无 harness = 0**——所以只有 lead 侧去掉 harness 判据，sidekick 的 harness 门禁原样。
 - harness 的分组事实（原生观测实测）：`strawberry-pancake` 覆盖 Claude 全家 + `glm-5-2`/`glm-5-3` + `kimi-k3` + 官方 `deepseek-v4-*` + `grok-4-6`/`grok-4-7`；GPT 系为 `gpt-5p6-codex`+`gpt-5p6`；Gemini 系 `gemini-3-pro`；SWE 系 `swe-1p6`+`swe-1p5`（`swe-2-*` 多一个 `swe-1p6-exec`，对应 CLI 的 `--sidekick-prefer-exec-tool` 工具面偏好）。
 - 名字镜像 Cognition 服务端路由（二进制实测 `routers/swe-1p6-cognition`、`swe-1p6-devin`）。

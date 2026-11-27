@@ -5,21 +5,21 @@ description: "改原生目录观测与缓存、CLI 缓存原地重写、代际�
 
 # 原生观测与 CLI 缓存（native-observation-and-cli-cache）
 
-原生目录观测与跨进程缓存、两条观测通道的合并、CLI 缓存原地重写、配置键分类清理。
+原生目录观测与跨进程缓存、两条观测通道的合并、CLI 缓存原地重写、配置键分类清理。本卷「forensics 卷」均指 `native-observation-and-cli-cache-forensics.md`。
 
 - 原生模型目录靠观测，重启后内存里为空；观测结果经 `<storage root>/native-cache.json` 跨进程缓存（格式 `{version, savedAt, models}`，TTL 7 天，
   原子写：临时文件 + rename，`0o600`）。它是**观测缓存**、不是用户配置，只含 uid/label/能力标志，绝不落凭证；追加并集语义（与内存一致，不因单批缺席而删条目）。此时角色里的
   `nativeUid` 解析不到，**不得**断言「已从模型目录移除」——要按 `nativeCatalogStatus` 区分「尚未同步」（`loading`，面板为 muted 文案「正在同步官方模型…」，
   判定依据为**内存与缓存都没有可用观测**）与「目录就绪但模型确实不在」（真警告）。BYOK 供应商引用写在配置里，解析不到就是真的不可用，不算 `loading`。
   完整取值只有五个：`loading`（初始态，`extension.cjs` 的 `shared` 初值）/`ready`/`empty`/`unsupported`/`unavailable`，**没有 `pending`**（那是 `auto-continue` 的状态名，勿混）。
-- **读失败不是空目录（2026-10-19 定论）**：宿主侧一次目录读取有四种结论，只有三种是权威的——`ready`（读到 N 条）、`empty`（后端明确回答「现在是空」）、
+- **读失败不是空目录**：宿主侧一次目录读取有四种结论，只有三种是权威的——`ready`（读到 N 条）、`empty`（后端明确回答「现在是空」）、
   `unsupported`（旧协议的 `nativeModelsProtocol !== 1`）由 `readNativeModels` 返回；`unavailable`（连接失败/身份校验失败/超时/载荷非法）由 `catalog-sync` 的
   catch 合成（`syncPending` 闭包内的 catch），**它不是目录结论**。`refreshNativeModels` 必须在
   `clear()` 之前拦它：视图非空时**保留已发布条目**、只把 `nativeCatalogStatus` 置为 `unavailable`，并走一次 `commit({ bumpRevision: false })`（面板要看到
-  「无法连接插件本地服务」，但视图没变就不该推进 revision），同时打 `native-refresh-retained`。否则后端换进程的那几秒会把已发布条目清成 0、picker 显示「没有模型」（实测数字见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。**`empty` 必须继续清空**——陈旧条目清理依赖它，一起保护掉会让陈旧条目永久留存。冷启动不受此保护（首帧视图本来就空，无可保留）；
+  「无法连接插件本地服务」，但视图没变就不该推进 revision），同时打 `native-refresh-retained`。否则后端换进程间隙会把已发布条目清成 0（实测数字见 forensics 卷）。**`empty` 必须继续清空**——陈旧条目清理依赖它，一起保护掉会让陈旧条目永久留存。冷启动不受此保护（首帧视图本来就空，无可保留）；
   也不要为此让宿主去读 `native-cache.json`，那会造出第二个 cache 读者。
-- 原生目录由空变有（或目录签名变化）→ 触发 CLI 缓存检查；**picker 刷新模块已删除**——它曾靠 `devin.reloadAcpConnections`，实测会断开全部 ACP 连接并在 5–35s 内引发窗口重载（风暴实测见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。该禁令现由 `test/architecture.test.cjs` 的守卫保证（`src/**` 不得出现 `reloadAcpConnections`）。数据正确性完全由 cli-cache 原地刷新兜底，新会话读到的是新 payload；
-  **不得回退到 `devin.newConversation` 之类开会话的命令**，重新接命令前必须先在真机确认其不会断开 ACP。另一嫌疑（`saveReceipt` 往安装目录写 POINTERS）的叙述见 `.devin/rules/native-observation-and-cli-cache-forensics.md`；不得往
+- 原生目录由空变有（或目录签名变化）→ 触发 CLI 缓存检查；**picker 刷新模块已删除**（风暴事故史见 forensics 卷）。该禁令现由 `test/architecture.test.cjs` 的守卫保证（`src/**` 不得出现 `reloadAcpConnections`）。数据正确性完全由 cli-cache 原地刷新兜底，新会话读到的是新 payload；
+  **不得回退到 `devin.newConversation` 之类开会话的命令**，重新接命令前必须先在真机确认其不会断开 ACP（嫌疑叙述见 forensics 卷）；不得往
   `context.extensionPath` 里新增任何周期性/激活期写文件。
 
 - `augmentLocalModelChoices` 的门控是「Fusion 需要其原生 uid 出现在字段 7 允许列表里、普通 BYOK 不需要」——盲窗（原生观测为空）下 Fusion 整组被丢而普通
@@ -30,25 +30,23 @@ description: "改原生目录观测与缓存、CLI 缓存原地重写、代际�
   `src/runtime/host/cli-cache.cjs` 按「payload 含 `dfbyok` 判定我方身份、含 dfbyok 但缺当前 uid 判定陈旧」**原地重写 payload**：改写前先按
   `CACHE_PREFIX_RPC`/`rpcFor` 映射缓存名→RPC 路径、经 `augmentCatalog` 重算，且新 payload 必须「不丢任何已出现的期望 uid 且字节有变化」才落盘（否则 `no-improvement`
   跳过——允许净缩，清陈旧也是改进）；落盘前把原始字节写到 `<file>.bak`（原子写、`0o600`；**每次重写都覆盖，只保留最近一次**，不是首次重写前的原件），envelope 的
-  `version`/`identity_digest`/`fetched_at_secs` 原样保留。**绝不改名、绝不写 `.stale`**：改名/删除**不能**当刷新手段（删除与改写的实验过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。不碰无 dfbyok 标记的其他身份文件；仅在重写到
+  `version`/`identity_digest`/`fetched_at_secs` 原样保留。**绝不改名、绝不写 `.stale`**：改名/删除**不能**当刷新手段（删除与改写的实验过程见 forensics 卷）。不碰无 dfbyok 标记的其他身份文件；仅在重写到
   `model_configs` 的可见性由重写字节本身保证（`team_settings`/`user_status` 由 CLI 自身节奏重拉、无需断 ACP
   即生效）——不存在也不许复活任何 picker 刷新命令。Composer
   模型缺失排障时先看缓存新鲜度，backend 注入日志（`afterOwn`）证明不了 picker 侧可见性。面板「设置 → CLI 缓存 → 刷新缓存」走同一个
   `inspectCliCaches({ force: true })`（`refreshCliCaches` 消息），只做原地重写、不引入新的刷新通道；`cliCacheStatus()` 把最近一次报告交给面板渲染，
   不要在那里触发写入。**自动检查除 uid 存在性（`missing`/`staleProbe`）外还有一条形态比对** `staleOwnEntries`：仅当
   `ownEntriesSignature(models)` 与上次记录不同才启用，逐字节比较缓存里我们条目的 raw 与当前 emit；**同一签名只探一次**（收敛守卫，签名仅在权威检查——`retire=true`——返回后记录；loading/unavailable 的非权威探测不消费签名）——
-  逐字节判据可能永不收敛，重复探测会变成每 3 秒重写约 1.6 MB×2。signature 不含隐藏名单（原生白名单计数实测抖动会误触发）。`force` 仍是手动兜底：强制模式绕过门控、
-  直接比较 augment 后的字节，只有真差异才落盘。显式隐藏失效的 `hiddenNativeSignature` 机制在 `src/activation/cache-sync.cjs`，语义见 `catalog-and-picker.md`。**重写是「比对后替换」而非盲目覆盖**：落盘前重读、要求字节与所增强的那份**完全一致**，不一致就跳过（`concurrent-write`）——否则会用旧 payload 的增强结果覆盖 CLI 刚写入的更新版本、静默丢掉它存的内容（发现过程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。`.bak` 写的是**所增强的那份原始字节**（不是再次新读的、可能已属新世代的版本）。修
-  emit 形态后**必须**走一次强制刷新或让配置变动触发自动重写，否则旧形态条目会一直留在缓存里（2026-10-14：信息性维度加 `order` 的修复就是这样落地的）。
+  逐字节判据可能永不收敛，重复探测会持续重写（量级实测见 forensics 卷）。signature 不含隐藏名单（实测缘由见 forensics 卷）。`force` 仍是手动兜底：强制模式绕过门控、
+  直接比较 augment 后的字节，只有真差异才落盘。显式隐藏失效的 `hiddenNativeSignature` 机制在 `src/activation/cache-sync.cjs`，语义见 `catalog-and-picker.md`。**重写是「比对后替换」而非盲目覆盖**：落盘前重读、要求字节与所增强的那份**完全一致**，不一致就跳过（`concurrent-write`，后果与发现过程见 forensics 卷）。`.bak` 写的是**所增强的那份原始字节**（不是再次新读的、可能已属新世代的版本）。修
+  emit 形态后**必须**走一次强制刷新或让配置变动触发自动重写，否则旧形态条目会一直留在缓存里。
   **`GetUserStatus` 有两种载荷形状，按 f1 的 wire type 判别**：响应是 `GetUserStatusResponse` 信封（f1 = `user_status` message，
-  模型列表在其 f33），而 CLI 落盘的缓存是**裸 `UserStatus`**（f1 = `pro` bool，模型列表直接在 payload 的 f33，实测顶层 f33 = 526 条条目 + 3
-  个排序区）。`staleFusionUids` 现在扫描 payload 本身 + 它携带的每个 f1 message（覆盖 flat / 信封 / 裸三种形状）。`augmentCatalog` 接受
-  `onSkip(code)`（`shape-unrecognized`/`transform-failed`），**三个 RPC 都接**（`GetCliTeamSettings` 的允许列表改写同样上报，
-  此前它是唯一剩下的静默路径）；`refreshStaleCliCaches` 把「上报了 skip 且期望 uid 仍缺」记为失败码而非
+  模型列表在其 f33），而 CLI 落盘的缓存是**裸 `UserStatus`**（f1 = `pro` bool，模型列表直接在 payload 的 f33）。`staleFusionUids` 现在扫描 payload 本身 + 它携带的每个 f1 message（覆盖 flat / 信封 / 裸三种形状）。`augmentCatalog` 接受
+  `onSkip(code)`（`shape-unrecognized`/`transform-failed`），**三个 RPC 都接**（`GetCliTeamSettings` 的允许列表改写同样上报）；`refreshStaleCliCaches` 把「上报了 skip 且期望 uid 仍缺」记为失败码而非
   `no-improvement`——**静默返回输入等于关掉这条链路的所有自检**，面板据此显示「未改动（原因）」而不是「无需重写」。bridge 侧不要把跳过码按进程去重（扩展宿主长期存活，
-  形状在会话中途变化只会打一次），而是把它作为 `skipped` 字段**搭在每次响应都打的 `catalog` 行**上。回归防线是 `test/cli-cache.test.cjs` 的端到端用例（真实裸形状 payload → 真实 `augmentCatalog` → 真实重写链路，事故全程见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）。
+  形状在会话中途变化只会打一次），而是把它作为 `skipped` 字段**搭在每次响应都打的 `catalog` 行**上。回归防线是 `test/cli-cache.test.cjs` 的端到端用例（链路与事故全程见 forensics 卷）。
 - 加载 `src/extension.cjs` 的测试 fixture 必须 stub `./runtime/host/cli-cache.cjs`（或把 `dir` 指向临时目录），
-  **绝不可触及真实 `~/.cache/devin/cli`**（fixture 误触真实缓存的事故叙述见 `.devin/rules/native-observation-and-cli-cache-forensics.md`）；
+  **绝不可触及真实 `~/.cache/devin/cli`**（fixture 误触真实缓存的事故叙述见 forensics 卷）；
   `inspectCliCaches`/`refreshStaleCliCaches` 的 `dir` 参数必填（非空字符串，否则抛 `TypeError`）就是为了堵这个口子。
 
 - **原生观测的两条通道必须按「谁更完整」合并，不能后者覆盖**：backend 看的是 CLI 侧流量（CLI 常读自己的缓存、很少重取 → 它的观测可能长期是 seed 的贫化形态），扩展宿主看的是原生扩展 UI
@@ -57,10 +55,9 @@ description: "改原生目录观测与缓存、CLI 缓存原地重写、代际�
   **一旦被贫化条目覆盖，所有原生 Sidekick 解析不到 → 镜像组合消失 → 又被上一条的清理逻辑删除**，这是级联失效。`refreshNativeModels` 与
   `observeNativeModels` 都已走该合并。
 
-- backend 的原生缓存落盘条件包含「任一入口的维度变富」，不再只看条目数：seed 已是满员（875）时条目数永不变化，只看数量就永远不会把更完整的观测写回磁盘，每次重启都重新 seed
-  回贫化形态（`runtime.log` 的 `native-observed` 全天只出现 2 次就是这个征兆）。
+- backend 的原生缓存落盘条件包含「任一入口的维度变富」，不再只看条目数（缘由实测见 forensics 卷）。
 
-- **自产 fusion 镜像在观测层就剔除**：proto 里 `fusion-*` 且无 f32 ⇒ 我们的行（实测 ca58 451/451 有 f32；b023 恰 327 条无 = 发射集），JSON 面无判据仍靠 `emittedUids`。
+- **自产 fusion 镜像在观测层就剔除**：proto 里 `fusion-*` 且无 f32 ⇒ 我们的行（实测见 forensics 卷），JSON 面无判据仍靠 `emittedUids`。
 - **prune 只信「足够完整」的响应**：本次 fusion 行不足已知一半时跳过并记 `native-prune-skipped`；分组 carry 只在无排序区观测时成立（sorts 与枚举皆空才清除）。
 
 - LS 观测到的允许集变更必须经 `catalog-sync` 的 `observeAllowedUids` 进入统一 commit：推进 `nativeRevision`，并触发面板、picker、缓存与 backend 推送；不得只替换集合后调用 `pushToBackend`（revision 已追平时会被门控挡住，随后被旧 backend 快照覆盖）。同集合的重排/重复值不算变更；停用/销毁后不接收回调。restricted → unrestricted 三态已实现（C3）：`collectAllowedUids` 三态、双通道 N=3 去抖、确认提交直接生效——细节见 `catalog-and-picker.md` 尾节。另注意：`observeNativeModels` 对**同值**条目也登记 `observed`（来源权威），但不 bump `nativeRevision`、不 fanout。两路观测的时序问题已改为宿主权威，见下节「双观测通道的权威归属」。
@@ -82,9 +79,9 @@ description: "改原生目录观测与缓存、CLI 缓存原地重写、代际�
   并留下 `diverged` 日志，直到宿主自己观测到。这是为避免「旧副本覆盖新事实」，**不要**在后继改动里悄悄恢复
   「最后到达者赢」。
 
-## 代际判定与 coverage（Devin 3.11.216 / CLI 3000.11.216 实测后新增；3.11.228、3.12.17、3.12.43 复核仍 `model_configs_v6`）
+## 代际判定与 coverage
 
-- `model_configs_v7.<16hex>.bin` 是 Devin Desktop 3.14.30825 内置 CLI 3000.14.30825 的现行格式（旧版本用 v6）；3.14.30833 / CLI 3000.14.30833 复核仍为 v7（v8 不存在）。**可写性按内容判定，代际号只用于展示**——
+- `model_configs_v7.<16hex>.bin` 是 Devin Desktop 3.14.30825 内置 CLI 3000.14.30825 的现行格式（旧版本用 v6）。**可写性按内容判定，代际号只用于展示**——
   `model_configs*`（含无后缀=v1）一律是候选：信封+载荷校验通过即 supported（任意 `_vN` 可写，
   由 `rpcFor` 前缀派生 `GetCliModelConfigs`）；非 JSON → `legacy`（历史残留）；
   是 JSON 但校验失败 → `unsupported`（未来格式，请更新插件）。supported 中 `_vN`>6 → `coverage.dynamic`。

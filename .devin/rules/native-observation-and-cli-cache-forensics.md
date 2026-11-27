@@ -1,6 +1,6 @@
 ---
-description: 原生观测与 CLI 缓存的实测依据与事故记录——picker 刷新风暴、缓存删除/改名实验、裸 UserStatus 形状事故、fixture 误触真实缓存的证据
 trigger: model_decision
+description: 原生观测与 CLI 缓存的实测依据与事故记录——picker 刷新风暴、缓存删除/改名实验、裸 UserStatus 形状事故、fixture 误触真实缓存的证据
 ---
 
 # 原生观测与 CLI 缓存：实测依据与事故
@@ -129,3 +129,14 @@ QWEN 8 / ZAI 9 / MINIMAX 10 / NVIDIA 11 / THINKING_MACHINES 12 / META 13`。⇒ 
 **菜单可见性还取决于元数据是否存在**（2026-11-27 REA，`ev_a8a8728d…b8375`，3 chunk / 47,263 AST 节点 / parse_failures 0）：菜单项来自会话 `configOptions` 的 model select options，构造时**先写死 `displayOption: 'standard-picker'`**，只有 catalog 里存在同 uid 元数据时才被真实值覆盖；过滤式是 `standard-picker || (model-router && arenaMode==='disabled')`，`invisible`/`arena`/`quick-review` 不进列表。⇒ `uid=fusion` 只在 CLI `model_configs` 面、桌面 catalog 无其元数据，故按默认值显示；同 kind 6 的 `subagent-default`/`memory-migration-default` 因不在会话选项里而不出现。**「2/5/6/7 invisible」只在有元数据时成立**，别当绝对结论。
 
 另：顶层 f6 `listed` 标记已随 2026-11-25 的清理删除，服务端也不再发；契约卷只留 `pickerListed` 判据，事实记在此。
+
+## 契约卷移入的实测片段（2026-11-27 自 native-observation-and-cli-cache.md 逐字搬移）
+
+- 「读失败不是空目录」为 2026-10-19 定论。
+- 重写量级：逐字节判据可能永不收敛，重复探测会变成每 3 秒重写约 1.6 MB×2；signature 不含隐藏名单，因为原生白名单计数实测抖动会误触发。
+- 2026-10-14：信息性维度加 `order` 的修复就是这样落地的（修改 emit 形态后走一次强制刷新）。
+- 裸 `UserStatus` 实测：顶层 f33 = 526 条条目 + 3 个排序区。
+- fusion 镜像剔除判据的实测：ca58 451/451 有 f32；b023 恰 327 条无 = 发射集。
+- seed 条目数缘由：seed 已是满员（875）时条目数永不变化，只看数量就永远不会把更完整的观测写回磁盘，每次重启都重新 seed 回贫化形态（`runtime.log` 的 `native-observed` 全天只出现 2 次就是这个征兆）。
+- 代际版本史：Devin 3.11.216 / CLI 3000.11.216 实测后新增本节；3.11.228、3.12.17、3.12.43 复核仍 `model_configs_v6`；3.14.30833 / CLI 3000.14.30833 复核仍为 v7（v8 不存在）。
+- `GetCliTeamSettings` 的允许列表改写上报 skip 前，它是唯一剩下的静默路径。

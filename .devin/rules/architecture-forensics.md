@@ -4,6 +4,8 @@ description: "改模块归属/激活耦合、host-builds 快照读法或 LS/ACP 
 ---
 # 架构与出厂产物核对（architecture-forensics）
 
+契约在 `architecture-boundaries.md` 与 `runtime-and-injection.md`；本卷只放产物核对证据，判据以契约卷为准。
+
 ## 激活层耦合度量（2026-10-26 架构审查）
 
 - **`shared`/`deps.stores` 已整体移除（2026-11 每激活实例重构）**：四个 store 全部消失（`stores/` 目录不复存在），状态私有于各 factory——`catalogSync`/`cacheSync`/`settingsOwner`/`selection`/`continuation`/panel host/runtime session；跨服务只走命名接口，`shared`/`stores` 标识符被架构守卫（注释剥离后扫描）直接禁止。

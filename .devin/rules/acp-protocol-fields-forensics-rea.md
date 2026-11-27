@@ -1,6 +1,6 @@
 ---
-description: REA 原生面与 JS 语义图的能力边界与预算实测——本机哪些 REA 工具不可用及原因、语义图为何拿不到、partial evidence 的同会话失效纪律、产物指纹交叉验证；用 REA 取证或怀疑证据可复用性时必读
 trigger: model_decision
+description: REA 原生面与 JS 语义图的能力边界与预算实测——本机哪些 REA 工具不可用及原因、语义图为何拿不到、partial evidence 的同会话失效纪律、产物指纹交叉验证；用 REA 取证或怀疑证据可复用性时必读
 ---
 
 # REA 取证：能力边界与语义图预算
