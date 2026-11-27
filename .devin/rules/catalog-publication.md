@@ -37,6 +37,7 @@ description: "改原生 auth-status 目录写入、GetModelStatuses，或怀疑�
   （改的是 userStatus 的可见性与组合）；不在目录中的 uid，无论怎么改配置都选不到，直到新会话或窗口重载。
   反例说明粒度：一个重载时已启用的供应商，事后**新增一个模型**——那条新 uid 仍需新对话；而同一供应商下已在目录里的模型照常即时。
   两类典型观察（2026-11-02 用户实测）：①重载前禁用、重载后启用 → 等同新增，picker 不刷新；②重载前启用、重载后禁用 → 后续开关全即时。
+- 桌面端同一机制（2026-11-27 REA 坐实）：模型菜单项直接构建自这份 `configOptions`（`chunk-app-initial-D6JSDa9O.js` 按 `category==='model' && type==='select'` 取选项，再按 uid 取 catalog 元数据补 `displayOption`）。所以「会话建立时读一次」对桌面菜单同样成立，运行期改目录不会立刻改变已打开会话的菜单。
 - **显式隐藏配置触发一次独立缓存失效**：`cache-sync` 把 `config.hiddenNativeModelUids` 去重排序成 `hiddenNativeSignature`，仅在权威检查
   后记录；与上一记录不同则 `effectiveForce` 强刷一次（augment 删隐藏原生条目，unhide 同样失效一次但字节恢复靠上游），观测派生的
   `hiddenFusionUids`/allowlist 抖动不参与该签名，uid 值不进日志。

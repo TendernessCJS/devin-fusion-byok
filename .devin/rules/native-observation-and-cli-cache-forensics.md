@@ -124,4 +124,8 @@ QWEN 8 / ZAI 9 / MINIMAX 10 / NVIDIA 11 / THINKING_MACHINES 12 / META 13`。⇒ 
 **schema 有、数据没有**：`ClientModelConfig.f21 fast_status`（780 行 0 条）、`ModelFamilyMetadata.f3 is_default_model_in_family`（55 族 0 族置位）。
 所以 Fast Mode 只能读 Fusion 维度、族默认成员只能按 uid/label 推断；不要在评审里把它们当漏读。
 
-**`displayOption` 语义**（`y()`）：`0→standard-picker`、`3→model-router`、`4→quick-review`、`2/5/6/7→invisible`——与我们 emit 组合写 3、声明行写 6 一致。
+**`displayOption` 语义**（`y()`）：`0/缺省→standard-picker`、`1→arena`、`3→model-router`、`4→quick-review`、`8→modern-agent-chat`（`chunk-app-initial-D6JSDa9O.js` 的 `Ca()` 再归一化为 `standard-picker`）、`2/5/6/7→invisible`——与我们 emit 组合写 3、声明行写 6 一致。
+
+**菜单可见性还取决于元数据是否存在**（2026-11-27 REA，`ev_a8a8728d…b8375`，3 chunk / 47,263 AST 节点 / parse_failures 0）：菜单项来自会话 `configOptions` 的 model select options，构造时**先写死 `displayOption: 'standard-picker'`**，只有 catalog 里存在同 uid 元数据时才被真实值覆盖；过滤式是 `standard-picker || (model-router && arenaMode==='disabled')`，`invisible`/`arena`/`quick-review` 不进列表。⇒ `uid=fusion` 只在 CLI `model_configs` 面、桌面 catalog 无其元数据，故按默认值显示；同 kind 6 的 `subagent-default`/`memory-migration-default` 因不在会话选项里而不出现。**「2/5/6/7 invisible」只在有元数据时成立**，别当绝对结论。
+
+另：顶层 f6 `listed` 标记已随 2026-11-25 的清理删除，服务端也不再发；契约卷只留 `pickerListed` 判据，事实记在此。
