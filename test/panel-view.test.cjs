@@ -994,6 +994,17 @@ test('the provider dialog follows the models source tri-state', () => {
   assert.ok(manualHints.length, 'manual explains the static list flow');
 });
 
+test('the delete confirmation opens on the close event, not in the same tick', () => {
+  const api = panel();
+  const dialog = openProviderDialog(api);
+  collect(dialog, 'button', node => node.textContent === '删除')[0].listeners.click();
+  assert.equal(dialog.open, false, 'the editor closes first');
+  assert.equal(api.byId('dialog-title').textContent, '编辑供应商', 'the same tick must not replace the closing dialog');
+  dialog.listeners.close({});
+  assert.equal(dialog.open, true, 'the confirmation opens once the queued close lands');
+  assert.equal(api.byId('dialog-title').textContent, '删除供应商？', 'and it is the delete confirmation');
+});
+
 test('the provider dialog folds the model source section away from the credentials', () => {
   const api = panel();
   const dialog = openProviderDialog(api, { modelsMode: 'url', modelsUrl: 'https://api.moonshot.cn/v1/models' });

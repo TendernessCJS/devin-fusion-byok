@@ -120,10 +120,10 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
     if (selection.tab === 'fastcontext') vscode.postMessage({ id: 'fc-refresh', type: 'fastContext.state' });
   }
 
-  function openDialog(title) {
+  function openDialog(title, { wide = false } = {}) {
     const dialog = byId('editor-dialog');
     if (dialog.open) dialog.close();
-    dialog.className = '';
+    dialog.className = wide ? 'wide' : '';
     dialog.replaceChildren(element('h2', { id: 'dialog-title', text: title }));
     const form = element('form', { autocomplete: 'off' });
     dialog.append(form);
@@ -184,8 +184,14 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
   }
 
   // Deleting lives inside each editor so list rows stay uncluttered.
+  // The shared dialog's close event is queued: reopening it in the same tick would
+  // hand the next dialog a close meant for this one and eat its { once: true }
+  // listener, so the confirmation opens from the close instead.
   function deleteButton(dialog, title, message, onConfirm) {
-    return element('button', { type: 'button', class: 'danger', text: t('common.delete'), onclick: () => { dialog.close(); confirmDialog(title, message, onConfirm); } });
+    return element('button', { type: 'button', class: 'danger', text: t('common.delete'), onclick: () => {
+      dialog.addEventListener('close', () => confirmDialog(title, message, onConfirm), { once: true });
+      dialog.close();
+    } });
   }
 
   // Catalog-only changes are instant for uids the running session already
