@@ -267,7 +267,8 @@ test('context selection stays stable across updates and drives both panel and st
   try {
     open(); receive({ type: 'ready' });
     assert.equal(messages.at(-1).selectedSessionId, 'a');
-    assert.deepEqual(messages.at(-1).items.map(x => x.label), ['会话 1 · <model>', '会话 2 · <model>']);
+    assert.deepEqual(messages.at(-1).items.map(x => x.label), ['会话 1', '会话 2'], 'the option label is the bare session title');
+    assert.equal(messages.at(-1).items[0].rows[0].value, '<model>', 'the model name stays on the tile row');
     const count = messages.length, tooltip = item.tooltip;
     let tooltipWrites = 0;
     Object.defineProperty(item, 'tooltip', { get: () => tooltip, set() { tooltipWrites++; }, configurable: true });
@@ -423,15 +424,35 @@ test('sessions without observable data are hidden, cannot steal focus, and resol
     assert.equal(messages.at(-1).selectedSessionId, 'live', 'an empty session must not steal the selection even though session/load counts as focus');
     sessions = [{ sessionId: 'native', modelUid: 'swe-2-high', subagents: [], lead: { used: 1, size: 2, timestampMs: 1 } }];
     handle.refresh();
-    assert.match(messages.at(-1).items[0].label, /SWE-2 High$/, 'a native uid resolves to its observed label');
+    assert.match(messages.at(-1).items[0].label, /^会话 \d+$/, 'the option label carries no model name');
+    assert.equal(messages.at(-1).items[0].rows[0].value, 'SWE-2 High', 'a native uid resolves to its observed label on the tile row');
     sessions = [{ sessionId: 'own', modelUid: 'm', subagents: [], lead: { used: 1, size: 2, timestampMs: 1 } }];
     handle.refresh();
-    assert.match(messages.at(-1).items[0].label, /· M$/, 'own catalog entries win over native labels for the same uid');
+    assert.match(messages.at(-1).items[0].label, /^会话 \d+$/, 'the option label carries no model name');
+    assert.equal(messages.at(-1).items[0].rows[0].value, 'M', 'own catalog entries win over native labels for the same uid');
     sessions = [{ sessionId: 'empty', modelUid: 'swe-2-high', subagents: [], lead: null, turn: null }];
     handle.refresh();
     items = messages.at(-1).items;
     assert.equal(items.length, 1);
     assert.equal(items[0].sessionId, '', 'with nothing observable the panel falls back to the empty hint entry');
+  } finally { handle.dispose(); }
+});
+
+test('a monitor session title is the whole option label', async () => {
+  let open, receive;
+  const sessions = [{ sessionId: 's', modelUid: 'm', subagents: [], lead: { used: 1, size: 2, timestampMs: 1 } }];
+  const monitor = { sessions: [{ sessionId: 's', title: '审查全局规则', records: [] }] };
+  const messages = [], item = { show() {}, hide() {}, dispose() {} };
+  const panel = { visible: true, webview: { postMessage(value) { messages.push(value); }, onDidReceiveMessage(fn) { receive = fn; return { dispose() {} }; } }, onDidDispose() { return { dispose() {} }; }, dispose() {} };
+  const handle = createContextUi({ vscode: { ViewColumn: { Active: 1 }, window: { createStatusBarItem: () => item, createWebviewPanel: () => panel }, commands: { registerCommand(_, fn) { open = fn; return { dispose() {} }; } } }, context: { subscriptions: [] },
+    snapshot: () => sessions, catalog: () => ({ models: [{ uid: 'm', label: 'M' }] }), readMonitor: async () => ({ snapshot: monitor }), isEnabled: () => true });
+  try {
+    open(); receive({ type: 'ready' });
+    await tick(); handle.refresh(true);
+    const entry = messages.at(-1).items[0];
+    assert.equal(entry.label, '审查全局规则', 'the option label is the monitor title alone — no model suffix');
+    assert.ok(!entry.label.includes(' · '), 'nothing is appended to the title');
+    assert.equal(entry.rows[0].value, 'M', 'the model name still renders on the tile row');
   } finally { handle.dispose(); }
 });
 

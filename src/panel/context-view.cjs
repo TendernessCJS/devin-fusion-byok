@@ -98,7 +98,7 @@ function createContextUi({ vscode, context, snapshot, readMonitor, catalog, nati
       if (!sessionLabels.has(session.sessionId)) sessionLabels.set(session.sessionId, ++nextSessionLabel);
       const details = contextDetails(session, monitor, view, t);
       const title = details.sessionTitle || t('context.sessionN', { n: sessionLabels.get(session.sessionId) });
-      return { sessionId: session.sessionId, label: `${title} · ${details.rows[0].value}`, ...details };
+      return { sessionId: session.sessionId, label: title, ...details };
     });
     // Follow the app-focused session: a new focus event wins once, then the
     // user's manual pick holds until Devin focuses something else again.
