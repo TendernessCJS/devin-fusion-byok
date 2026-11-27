@@ -9,12 +9,17 @@ class Element {
     this.classList = { add() {} }; this.style = {}; this.value = ''; this.textContent = ''; this.className = '';
     this.checked = false; this.disabled = false; this.open = false; this.scrollTop = 0;
     this.selectionStart = 0; this.selectionEnd = 0; this.ownerDocument = null; }
-  append(...children) { for (const child of children) if (child != null) this.children.push(child); }
+  append(...children) { for (const child of children) if (child != null) this.children.push(typeof child === 'string' ? { textContent: child } : child); }
   replaceChildren(...children) { this.children = children; }
   setAttribute(key, value) { this.attributes[key] = value; }
   getAttribute(key) { return this.attributes[key]; }
-  addEventListener(name, listener) { this.listenerCounts[name] = (this.listenerCounts[name] || 0) + 1; this.listeners[name] = listener; }
-  removeEventListener(name) { delete this.listeners[name]; }
+  addEventListener(name, listener) {
+    this.listenerCounts[name] = (this.listenerCounts[name] || 0) + 1;
+    if (!this.listenerMap) this.listenerMap = {};
+    this.listenerMap[name] = [...(this.listenerMap[name] || []), listener];
+    this.listeners[name] = event => { for (const fn of this.listenerMap[name] || []) fn(event); };
+  }
+  removeEventListener(name) { if (this.listenerMap) delete this.listenerMap[name]; delete this.listeners[name]; }
   querySelectorAll() { return []; }
   querySelector() { return null; }
   close() { this.open = false; }
@@ -66,7 +71,7 @@ function panel(controlTags = {}, script = renderPanel({ nonce: 'safe' }).match(/
   };
   vm.runInNewContext(script,
     { acquireVsCodeApi: () => ({ getState: () => ({}), setState() {}, postMessage: message => posts.push(message) }), document,
-      window: { addEventListener: (name, listener) => { if (name === 'message') listeners.push(listener); } }, setTimeout: () => 0, clearTimeout() {} });
+      window: { addEventListener: (name, listener) => { if (name === 'message') listeners.push(listener); } }, setTimeout: () => 0, clearTimeout() {}, URL, URLSearchParams });
   return { byId, posts, listeners, document, receive: data => { for (const listener of listeners) listener(data); },
     activeElement: () => document.activeElement, scrollingElement: () => document.scrollingElement,
     setHasFocus: value => { focused = value; } };
@@ -945,4 +950,251 @@ test('the plugin-off switch gate locks role and native toggles; internal familie
   collect(byId('native-models'), 'button', node => node.className.includes('pill') && textOf(node).startsWith('全部'))[0].listeners.click();
   assert.ok(nativeSwitches().some(node => node.disabled === false),
     'normal families stay operable while only internals are locked');
+});
+
+const openProviderDialog = (panelApi, providerOverrides = {}) => {
+  const withProvider = state();
+  Object.assign(withProvider.providers[0], providerOverrides);
+  panelApi.receive({ data: { type: 'state', state: withProvider } });
+  const edit = collect(panelApi.byId('models'), 'button', node => node.textContent === '编辑')[0];
+  assert.ok(edit, 'the provider edit button is rendered');
+  edit.listeners.click();
+  return panelApi.byId('editor-dialog');
+};
+const previewText = dialog => textOf(collect(dialog, 'span', node => String(node.className || '').includes('url-preview'))[0]);
+const sourceSelect = dialog => collect(dialog, 'select', node => node.attributes['aria-label'] === '模型获取方式')[0];
+
+test('the provider dialog follows the models source tri-state', () => {
+  const api = panel();
+  const dialog = openProviderDialog(api, { modelsMode: 'url', modelsUrl: 'https://api.moonshot.cn/v1/models' });
+  const source = sourceSelect(dialog);
+  assert.ok(source, 'the source selector is rendered');
+  assert.equal(source.value, 'url', 'the stored mode echoes into the selector');
+  const urls = collect(dialog, 'input', node => node.attributes.type === 'url');
+  assert.equal(urls.length, 2, 'base URL and models URL inputs both render');
+  assert.equal(urls[1].value, 'https://api.moonshot.cn/v1/models', 'the stored override echoes into the field');
+  const listField = collect(dialog, 'label', node => node.className === 'field' && textOf(node).startsWith('模型列表地址'))[0];
+  assert.ok(listField, 'the models URL field exists');
+  assert.equal(listField.hidden !== true, true, 'url mode shows the address input');
+  assert.ok(previewText(dialog).includes('https://api.moonshot.cn/v1/models'), 'the preview shows the override verbatim');
+
+  source.value = 'auto';
+  source.listeners.change({});
+  assert.equal(listField.hidden, true, 'auto hides the address input it would ignore');
+  const auto = previewText(dialog);
+  assert.ok(auto.includes('https://cpa.invalid/v1/models'), 'auto derives the endpoint from the base URL');
+  assert.ok(!auto.includes('api.moonshot.cn'), 'the override leaves the preview');
+
+  source.value = 'manual';
+  source.listeners.change({});
+  assert.equal(listField.hidden, true, 'manual hides the address input');
+  const manual = previewText(dialog);
+  assert.ok(!manual.includes('/models'), 'manual never mentions a list endpoint');
+  const manualHints = collect(dialog, 'span', node => node.className === 'hint' && String(textOf(node)).includes('静态列表') && node.hidden !== true);
+  assert.ok(manualHints.length, 'manual explains the static list flow');
+});
+
+test('the provider dialog folds the model source section away from the credentials', () => {
+  const api = panel();
+  const dialog = openProviderDialog(api, { modelsMode: 'url', modelsUrl: 'https://api.moonshot.cn/v1/models' });
+  assert.equal(dialog.className, 'wide', 'the provider dialog opts into the wide layout');
+  const grids = collect(dialog, 'div', node => node.className === 'field-grid');
+  assert.equal(grids.length, 1, 'only the identity row stays gridded');
+  const titles = row => collect(row, 'label', node => node.className === 'field')
+    .map(node => textOf(collect(node, 'span', child => child.className === 'field-title')[0]));
+  assert.deepEqual(titles(grids[0]), ['名称', 'API 类型'], 'name and API type share the first row');
+
+  const form = collect(dialog, 'form')[0];
+  const fieldOf = title => collect(form, 'label', node => node.className === 'field' && textOf(node).startsWith(title))
+    .find(node => form.children.includes(node));
+  const fold = collect(form, 'details', node => String(node.className || '').includes('section'))[0];
+  assert.ok(fold, 'the model source section is rendered');
+  assert.notEqual(fold.open, true, 'the fold stays closed even in url mode');
+  const address = fieldOf('API 地址'), key = fieldOf('API 密钥');
+  assert.ok(address && key, 'address and key fields are top-level rows');
+  const order = [form.children.indexOf(address), form.children.indexOf(key), form.children.indexOf(fold)];
+  assert.ok(order[0] !== -1 && order[1] !== -1 && order[2] !== -1, 'all three are direct form children');
+  assert.ok(order[0] < order[1] && order[1] < order[2], 'address, key and the fold are adjacent in order');
+  const innerTitles = collect(fold, 'label', node => node.className === 'field')
+    .map(node => textOf(collect(node, 'span', child => child.className === 'field-title')[0]));
+  assert.deepEqual(innerTitles, ['模型获取方式', '模型列表地址', '静态模型 ID 列表'], 'the fold hosts the three source fields in order');
+
+  // The shared editor dialog must not keep the wide class for other dialogs.
+  const edit = collect(api.byId('models'), 'button', node => String(node.attributes['aria-label'] || '').startsWith('编辑模型'))[0];
+  edit.listeners.click();
+  assert.equal(api.byId('editor-dialog').className, '', 'the model dialog resets the shared width class');
+});
+
+test('the fold summary follows the selected source mode', () => {
+  const api = panel();
+  const dialog = openProviderDialog(api, {});
+  const summary = collect(dialog, 'summary')[0];
+  assert.ok(summary, 'the fold renders a summary');
+  const source = sourceSelect(dialog);
+  const expect = { auto: '模型获取 · 自动', url: '模型获取 · 指定地址', manual: '模型获取 · 静态列表' };
+  for (const [mode, label] of Object.entries(expect)) {
+    source.value = mode;
+    source.listeners.change({});
+    assert.equal(summary.textContent, label, 'summary for ' + mode);
+  }
+});
+
+test('a failed url-mode save unfolds the section without blocking the request', () => {
+  const api = panel();
+  const dialog = openProviderDialog(api, { modelsMode: 'url', modelsUrl: 'https://api.moonshot.cn/v1/models' });
+  const fold = collect(dialog, 'details', node => String(node.className || '').includes('section'))[0];
+  const source = sourceSelect(dialog);
+  const urls = collect(dialog, 'input', node => node.attributes.type === 'url');
+  const form = collect(dialog, 'form')[0];
+
+  source.value = 'url';
+  source.listeners.change({});
+  urls[1].value = '';
+  form.listeners.submit({ preventDefault() {} });
+  assert.equal(fold.open, true, 'an empty address unfolds the section so the error is visible');
+  assert.ok(api.posts.some(message => message.type === 'saveProvider'), 'the view never blocks the request itself');
+
+  const api2 = panel();
+  const dialog2 = openProviderDialog(api2, { modelsMode: 'url', modelsUrl: 'https://api.moonshot.cn/v1/models' });
+  const fold2 = collect(dialog2, 'details', node => String(node.className || '').includes('section'))[0];
+  collect(dialog2, 'form')[0].listeners.submit({ preventDefault() {} });
+  assert.notEqual(fold2.open, true, 'a valid address keeps the fold closed');
+});
+
+test('a keyless manual provider still imports from its static list', async () => {
+  const api = panel();
+  const keylessManual = state();
+  keylessManual.providers[0].modelsMode = 'manual';
+  keylessManual.providers[0].keyConfigured = false;
+  keylessManual.providers[0].staticModels = ['kimi-k3'];
+  api.receive({ data: { type: 'state', state: keylessManual } });
+  const importButton = collect(api.byId('models'), 'button', node => node.textContent === '导入模型')[0];
+  assert.ok(!/未配置 API 密钥/.test(importButton.title || ''), 'the static flow needs no key warning');
+  const before = api.posts.length;
+  importButton.listeners.click();
+  await Promise.resolve();
+  assert.deepEqual(api.posts.slice(before).map(message => message.type), ['refreshModels'],
+    'manual candidates come from the static list, so import runs without a key');
+  assert.ok(!/未配置 API 密钥/.test(textOf(api.byId('status'))), 'no key warning is shown');
+});
+
+test('a manual provider keeps the exact same toolbar as every other provider', async () => {
+  // Spec change: the static list now feeds the standard import flow, so the
+  // toolbar no longer branches on the source mode at all.
+  const api = panel();
+  const manualState = state();
+  manualState.providers[0].modelsMode = 'manual';
+  manualState.providers[0].staticModels = ['kimi-k3'];
+  api.receive({ data: { type: 'state', state: manualState } });
+  const buttons = collect(api.byId('models'), 'button').map(node => node.textContent);
+  for (const label of ['导入模型', '手动添加', '批量添加']) assert.ok(buttons.includes(label), label + ' is rendered');
+  assert.ok(!buttons.includes('从静态列表添加'), 'the separate static entry is gone');
+  const importButton = collect(api.byId('models'), 'button', node => node.textContent === '导入模型')[0];
+  assert.notEqual(importButton.hidden, true, 'the import button stays visible in manual mode');
+  const before = api.posts.length;
+  importButton.listeners.click();
+  await Promise.resolve();
+  const after = api.posts.slice(before);
+  assert.deepEqual(after.map(message => message.type), ['refreshModels'], 'clicking import only asks for candidates');
+});
+
+test('the provider dialog round-trips the static ID list only in manual mode', () => {
+  const api = panel();
+  const dialog = openProviderDialog(api, { modelsMode: 'manual', staticModels: ['kimi-k3', 'kimi-k2.6'] });
+  const area = collect(dialog, 'textarea')[0];
+  assert.equal(area.value, 'kimi-k3\nkimi-k2.6', 'the stored list prefills line by line');
+  const staticFieldNode = collect(dialog, 'label', node => node.className === 'field' && textOf(node).startsWith('静态模型 ID 列表'))[0];
+  assert.ok(staticFieldNode, 'the static list field exists');
+  assert.equal(staticFieldNode.hidden !== true, true, 'manual mode shows the textarea');
+
+  area.value = 'kimi-k3\n\nkimi-k2.5\nkimi-k3\n';
+  collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
+  const save = api.posts.find(message => message.type === 'saveProvider');
+  assert.deepEqual(JSON.parse(JSON.stringify(save.payload)).staticModels, ['kimi-k3', 'kimi-k2.5'],
+    'the posted list is trimmed, blank-dropped and deduplicated');
+
+  const autoApi = panel();
+  const autoDialog = openProviderDialog(autoApi, {});
+  const autoArea = collect(autoDialog, 'textarea')[0];
+  const autoField = collect(autoDialog, 'label', node => node.className === 'field' && textOf(node).startsWith('静态模型 ID 列表'))[0];
+  assert.equal(autoField.hidden, true, 'auto mode hides the textarea');
+  collect(autoDialog, 'form')[0].listeners.submit({ preventDefault() {} });
+  const autoSave = autoApi.posts.find(message => message.type === 'saveProvider');
+  assert.equal(JSON.parse(JSON.stringify(autoSave.payload)).staticModels, undefined, 'auto never posts the key');
+});
+
+test('the import picker keeps the imported rows checked and disabled', async () => {
+  const api = panel();
+  const withCandidates = state();
+  withCandidates.providers[0].modelsMode = 'manual';
+  withCandidates.providers[0].keyConfigured = true;
+  withCandidates.importCandidates = { providerId: 'cpa', token: 'fixture-token',
+    models: [{ id: 'saved', label: 'saved', imported: true }, { id: 'kimi-k3', label: 'kimi-k3', imported: false },
+      { id: 'kimi-k2.6', label: 'kimi-k2.6', imported: false }] };
+  api.receive({ data: { type: 'state', state: withCandidates } });
+  collect(api.byId('models'), 'button', node => node.textContent === '导入模型')[0].listeners.click();
+  const refresh = api.posts.find(message => message.type === 'refreshModels');
+  assert.ok(refresh, 'the import flow starts by asking for candidates');
+  api.receive({ data: { type: 'result', id: refresh.id, ok: true } });
+  for (let tick = 0; tick < 10; tick++) await Promise.resolve();
+  const dialog = api.byId('editor-dialog');
+  assert.equal(dialog.open, true, 'the picker opens once candidates arrive');
+  const boxes = collect(dialog, 'input', node => node.attributes.type === 'checkbox');
+  assert.equal(boxes.length, 3, 'every candidate renders a row');
+  assert.equal(boxes[0].disabled, true, 'an imported row is disabled');
+  assert.equal(boxes[0].checked, true, 'an imported row stays checked');
+  const rows = collect(dialog, 'label', node => node.className === 'row');
+  assert.ok(textOf(rows[0]).includes('已导入'), 'the imported row is labeled');
+
+  collect(dialog, 'button', node => node.textContent === '全选')[0].listeners.click();
+  // selectAll re-renders the rows, so the live checkboxes are new nodes.
+  const live = collect(dialog, 'input', node => node.attributes.type === 'checkbox');
+  assert.equal(live[1].checked, true, 'selectAll checks the first unimported row');
+  assert.equal(live[2].checked, true, 'selectAll checks the second unimported row');
+  assert.equal(live[0].disabled, true, 'the imported row is still disabled');
+  // Unselect one, then submit: only the remaining new id is posted.
+  live[2].checked = false;
+  live[2].listeners.change({ target: live[2] });
+  collect(dialog, 'form')[0].listeners.submit({ preventDefault() {} });
+  const post = api.posts.find(message => message.type === 'importModels');
+  assert.deepEqual(JSON.parse(JSON.stringify(post.payload)), { providerId: 'cpa', token: 'fixture-token', ids: ['kimi-k3'] },
+    'only the newly checked ids go with the candidate token');
+});
+
+test('the bulk add dialog parses pasted lines into a deduped addModels request', () => {
+  const { byId, posts, receive } = panel();
+  receive({ data: { type: 'state', state: state() } });
+  const bulk = collect(byId('models'), 'button', node => node.textContent === '批量添加')[0];
+  assert.ok(bulk, 'the bulk add button is rendered');
+  bulk.listeners.click();
+  const dialog = byId('editor-dialog');
+  const area = collect(dialog, 'textarea')[0];
+  assert.ok(area, 'the paste textarea is rendered');
+  area.value = 'alpha\n\nbeta\nalpha\n  gamma  \n';
+  const form = collect(dialog, 'form')[0];
+  assert.ok(form && form.listeners.submit, 'the dialog form carries the submit handler');
+  form.listeners.submit({ preventDefault() {} });
+  const post = posts.find(message => message.type === 'addModels');
+  assert.ok(post, 'the bulk request is posted');
+  assert.deepEqual(JSON.parse(JSON.stringify(post.payload)), { providerId: 'cpa', ids: ['alpha', 'beta', 'gamma'] },
+    'lines are trimmed, blanks dropped and duplicates collapsed');
+});
+
+test('the edit dialog echoes the reasoning tri-state and saving keeps it', () => {
+  const api = panel();
+  const triState = state();
+  triState.providers[0].models[0].reasoningEffort = false;
+  api.receive({ data: { type: 'state', state: triState } });
+  const edit = collect(api.byId('models'), 'button', node => String(node.attributes['aria-label'] || '').startsWith('编辑模型'))[0];
+  edit.listeners.click();
+  const dialog = api.byId('editor-dialog');
+  const reasoning = collect(dialog, 'select', node => node.attributes['aria-label'] === '推理档位支持')[0];
+  assert.ok(reasoning, 'the tri-state selector is rendered');
+  assert.equal(reasoning.value, 'no', 'a stored false reopens as unsupported, never as auto');
+  const form = collect(dialog, 'form')[0];
+  form.listeners.submit({ preventDefault() {} });
+  const post = api.posts.find(message => message.type === 'updateModels');
+  assert.ok(post, 'saving posts the update');
+  const change = post.payload.changes[0];
+  assert.equal(change.reasoningEffort, false, 'an untouched form never erases the stored tri-state');
 });

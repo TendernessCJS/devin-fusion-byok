@@ -45,7 +45,7 @@ function memory(options = {}) {
     externalChange: edit => { edit(config); },
   };
 }
-const providerPayload = (overrides = {}) => ({ id: 'cpa', name: 'Updated CPA', baseUrl: 'https://new.invalid/v1/responses', apiFormat: 'openai', apiKey: '', ...overrides });
+const providerPayload = (overrides = {}) => ({ id: 'cpa', name: 'Updated CPA', baseUrl: 'https://new.invalid/v1/responses', apiFormat: 'openai', apiKey: '', modelsMode: 'auto', ...overrides });
 function assertValidGraph(config, natives = []) {
   const catalog = buildCatalog(config, natives);
   for (const fusion of Object.values(catalog.fusions)) {
@@ -1014,6 +1014,167 @@ test('the manual effort list rejects the reserved none tier without persisting',
   assert.deepEqual(f.read().providers[0].models[0].efforts, ['high'], 'a rejected patch never reaches the disk');
   await f.manager.dispatch('updateModels', { providerId: 'p', changes: [{ id: 'm', efforts: ['low', 'high'] }], removeIds: [] });
   assert.deepEqual(f.read().providers[0].models[0].efforts, ['low', 'high'], 'a list without none still passes');
+});
+
+test('saveProvider keeps the other mode keys inert on disk instead of destroying them', async () => {
+  const f = memory();
+  await f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'url', modelsUrl: 'https://models.invalid/v1/models' }));
+  assert.equal(f.read().providers[0].modelsMode, 'url');
+  assert.equal(f.read().providers[0].modelsUrl, 'https://models.invalid/v1/models', 'a valid override is stored');
+  // url mode without an address is rejected and writes nothing.
+  const before = f.read();
+  await assert.rejects(f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'url', modelsUrl: '' })), PanelInputError);
+  await assert.rejects(f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'url' })), PanelInputError);
+  assert.deepEqual(f.read(), before, 'a missing url-mode address never reaches the disk');
+  // Invalid shapes are rejected without touching the stored config.
+  for (const bad of ['https://x.invalid/v1/models?a=1', 'https://user:pw@x.invalid/v1/models', 'ftp://x.invalid/v1/models', 'not-a-url']) {
+    await assert.rejects(f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'url', modelsUrl: bad })), PanelInputError, bad);
+  }
+  assert.deepEqual(f.read(), before, 'rejected overrides never reach the disk');
+  // A typed /models suffix survives validation: the override is a full
+  // endpoint, so the path must stay authoritative.
+  await f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'url', modelsUrl: 'https://api.moonshot.cn/v1/models' }));
+  assert.equal(f.read().providers[0].modelsUrl, 'https://api.moonshot.cn/v1/models',
+    'the /models suffix is part of the endpoint, not a paste artifact');
+  // Switching modes preserves the other mode's key: the read side gates on the
+  // mode alone, so a preserved key is inert, and switching back finds it intact.
+  await f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'auto' }));
+  assert.equal(f.read().providers[0].modelsMode, 'auto');
+  assert.equal(f.read().providers[0].modelsUrl, 'https://api.moonshot.cn/v1/models', 'auto preserves the inert address');
+  await f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'manual' }));
+  assert.equal(f.read().providers[0].modelsUrl, 'https://api.moonshot.cn/v1/models', 'manual preserves it too');
+  // Inside the owning mode, clearing still deletes the key.
+  await f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'manual', staticModels: ['kimi-k3'] }));
+  assert.deepEqual(f.read().providers[0].staticModels, ['kimi-k3']);
+  await f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'manual', staticModels: [] }));
+  assert.equal('staticModels' in f.read().providers[0], false, 'clearing inside manual deletes the key');
+  // An unknown mode is rejected outright.
+  await assert.rejects(f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'sometimes' })), PanelInputError);
+});
+
+test('refreshModels on a manual provider imports from the static list without any network', async () => {
+  const input = fixture();
+  input.providers[0].modelsMode = 'manual';
+  input.providers[0].staticModels = ['kimi-k3', 'kimi-k2.6'];
+  input.providers[0].models = [model('kimi-k3')];
+  let discoverCalls = 0;
+  const f = memory({ config: input, discover: async () => { discoverCalls++; } });
+  const preview = await f.manager.dispatch('refreshModels', { providerId: 'cpa' });
+  assert.equal(discoverCalls, 0, 'manual providers never hit the network');
+  assert.deepEqual(preview.importCandidates.models.map(m => [m.id, m.label, m.imported]),
+    [['kimi-k3', input.providers[0].name + ' · kimi-k3', true], ['kimi-k2.6', input.providers[0].name + ' · kimi-k2.6', false]],
+    'static ids become candidates labelled like discovery ones, configured ones carry the imported flag');
+  await f.manager.dispatch('importModels', { providerId: 'cpa', token: preview.importCandidates.token, ids: ['kimi-k2.6'] });
+  const added = f.read().providers[0].models.find(m => m.id === 'kimi-k2.6');
+  assert.equal(added.contextWindow, 272000);
+  assert.equal(added.maxOutputTokens, 131072);
+  assert.deepEqual(added.efforts, []);
+  assert.equal(added.label, input.providers[0].name + ' · kimi-k2.6', 'labels follow the import path convention');
+  assert.equal(added.source, 'manual', 'static imports carry the same source as manual additions');
+
+  // A failed manual refresh never leaves another provider's candidates standing.
+  const mixed = fixture();
+  mixed.providers[0].modelsMode = 'manual';
+  mixed.providers[0].staticModels = [];
+  const f3 = memory({ config: mixed, discover: async provider => { provider.models = [{ id: 'fresh', label: 'F' }]; } });
+  const goodPreview = await f3.manager.dispatch('refreshModels', { providerId: 'other' });
+  assert.ok(goodPreview.importCandidates, 'the auto provider produced candidates');
+  await assert.rejects(f3.manager.dispatch('refreshModels', { providerId: 'cpa' }), PanelInputError);
+  const after = await f3.manager.dispatch('ready');
+  assert.equal(after.importCandidates, null, 'the failed manual refresh cleared the standing candidates');
+
+  // An empty static list refuses, and editing the list expires pending candidates.
+  const empty = memory({ config: { ...input, providers: [{ ...input.providers[0], staticModels: [] }, input.providers[1]] } });
+  await assert.rejects(empty.manager.dispatch('refreshModels', { providerId: 'cpa' }), PanelInputError);
+  const f2 = memory({ config: input });
+  const stale = await f2.manager.dispatch('refreshModels', { providerId: 'cpa' });
+  await f2.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'manual', staticModels: ['kimi-k3', 'kimi-k4'] }));
+  await assert.rejects(
+    f2.manager.dispatch('importModels', { providerId: 'cpa', token: stale.importCandidates.token, ids: ['kimi-k2.6'] }),
+    PanelInputError, 'editing the static list expires the candidates it produced');
+});
+
+test('changing modelsUrl expires a pending import', async () => {
+  const f = memory({ discover: async provider => { provider.models = [{ id: 'new-import', label: 'N' }]; } });
+  const preview = await f.manager.dispatch('refreshModels', { providerId: 'cpa' });
+  const token = preview.importCandidates.token;
+  await f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'url', modelsUrl: 'https://models.invalid/v1/models' }));
+  await assert.rejects(
+    f.manager.dispatch('importModels', { providerId: 'cpa', token, ids: ['new-import'] }),
+    PanelInputError, 'the signature covers the discovery endpoint, so editing it expires the candidates');
+});
+
+test('addModels bulk-inserts deduped ids and skips existing ones atomically', async () => {
+  const input = fixture();
+  input.providers[0].models = [model('lead')];
+  const f = memory({ config: input });
+  await f.manager.dispatch('addModels', { providerId: 'cpa', ids: ['alpha', 'beta', 'alpha', 'lead'] });
+  const ids = f.read().providers[0].models.map(m => m.id);
+  assert.deepEqual(ids, ['lead', 'alpha', 'beta'], 'duplicates collapse and existing ids are skipped');
+  const added = f.read().providers[0].models[1];
+  assert.deepEqual([added.label, added.source, added.contextWindow, added.maxOutputTokens, added.enabled],
+    [input.providers[0].name + ' · alpha', 'manual', 272000, 131072, true], 'bulk rows match the manual-add shape');
+  // Over the cap or an invalid entry rejects the whole batch atomically.
+  const before = f.read();
+  await assert.rejects(f.manager.dispatch('addModels', { providerId: 'cpa', ids: Array.from({ length: 201 }, (_, i) => 'm' + i) }), PanelInputError);
+  await assert.rejects(f.manager.dispatch('addModels', { providerId: 'cpa', ids: ['good-id', 42] }), PanelInputError);
+  await assert.rejects(f.manager.dispatch('addModels', { providerId: 'cpa', ids: [] }), PanelInputError);
+  assert.deepEqual(f.read(), before, 'a rejected batch writes nothing at all');
+});
+
+test('saveProvider persists staticModels only in manual mode and validates them atomically', async () => {
+  const f = memory();
+  // The view strips blank lines before posting; at the manager layer an
+  // empty entry is invalid input, so the valid-path input covers trimming
+  // and duplication only.
+  await f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'manual', staticModels: ['kimi-k3', ' kimi-k2.6 ', 'kimi-k3', 'kimi-k2.5'] }));
+  assert.deepEqual(f.read().providers[0].staticModels, ['kimi-k3', 'kimi-k2.6', 'kimi-k2.5'],
+    'entries are trimmed and duplicates collapsed');
+  // Removing an id from the static list never removes a configured model.
+  assert.equal(f.read().providers[0].models.length, 2, 'existing models are untouched');
+  // Invalid shapes reject without touching the disk.
+  const before = f.read();
+  await assert.rejects(f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'manual', staticModels: 'kimi-k3' })), PanelInputError, 'a non-array is rejected');
+  await assert.rejects(f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'manual', staticModels: Array.from({ length: 201 }, (_, i) => 'm' + i) })), PanelInputError, 'over 200 entries is rejected');
+  await assert.rejects(f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'manual', staticModels: ['ok', ''] })), PanelInputError, 'an empty entry is rejected');
+  assert.deepEqual(f.read(), before, 'rejected static lists never reach the disk');
+  // Outside manual the key is preserved but inert; only manual itself clears it.
+  await f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'auto' }));
+  assert.deepEqual(f.read().providers[0].staticModels, ['kimi-k3', 'kimi-k2.6', 'kimi-k2.5'],
+    'auto preserves the inert static list');
+  await f.manager.dispatch('saveProvider', providerPayload({ modelsMode: 'manual', staticModels: [] }));
+  assert.equal('staticModels' in f.read().providers[0], false, 'clearing inside manual deletes the key');
+});
+
+test('the provider state projection exposes staticModels and defaults legacy configs to empty', async () => {
+  const input = fixture();
+  input.providers[0].modelsMode = 'manual';
+  input.providers[0].staticModels = ['kimi-k3', 'kimi-k2.6'];
+  const f = memory({ config: input });
+  const state = await f.manager.dispatch('ready');
+  const byId = Object.fromEntries(state.providers.map(p => [p.id, p]));
+  assert.deepEqual(byId.cpa.staticModels, ['kimi-k3', 'kimi-k2.6'], 'the static list projects verbatim');
+  assert.deepEqual(byId.other.staticModels, [], 'a legacy config without the key projects an empty list');
+});
+
+test('the provider state projection normalizes the legacy models source shape', async () => {
+  const input = fixture();
+  input.providers[0].modelsMode = 'manual';
+  input.providers[0].modelsUrl = 'https://leftover.invalid/v1/models';
+  input.providers[1].modelsUrl = 'https://models.invalid/v1/models';
+  delete input.providers[1].modelsMode;
+  const f = memory({ config: input });
+  const state = await f.manager.dispatch('ready');
+  const byId = Object.fromEntries(state.providers.map(p => [p.id, p]));
+  assert.equal(byId.cpa.modelsMode, 'manual', 'an explicit mode wins over a leftover address');
+  assert.equal(byId.cpa.modelsUrl, 'https://leftover.invalid/v1/models', 'the stored address projects verbatim even when inert');
+  assert.equal(byId.other.modelsMode, 'url', 'a legacy config with only an address reads as url mode');
+  assert.equal(byId.other.modelsUrl, 'https://models.invalid/v1/models');
+  delete input.providers[0].modelsMode;
+  delete input.providers[0].modelsUrl;
+  const plain = memory({ config: input });
+  const plainState = await plain.manager.dispatch('ready');
+  assert.equal(plainState.providers[0].modelsMode, 'auto', 'no mode and no address reads as auto');
 });
 
 test('the provider state projection round-trips the reasoningEffort tri-state', async () => {

@@ -21,6 +21,23 @@ function baseUrl(t, value) {
   url.pathname = normalizeBaseUrlPath(url.pathname);
   return url.toString().replace(/\/$/, '');
 }
+// The discovery endpoint override shares the base URL's validation except
+// for path rewriting: it is already a full endpoint, so the path the user
+// typed stays authoritative (stripping a trailing /models here would defeat
+// the override's only purpose).
+function modelsUrl(t, value) {
+  if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return null;
+  let url; try { url = new URL(text(t, value, 'manager.field.modelsUrl', 2048)); } catch { fail(t('manager.modelsUrlIncomplete')); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail(t('manager.modelsUrlParts'));
+  return url.toString().replace(/\/$/, '');
+}
+function staticModelIds(t, value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 200) fail(t('manager.staticInvalid'));
+  const ids = [];
+  for (const item of value) { const id = text(t, item, 'manager.field.modelId'); if (!ids.includes(id)) ids.push(id); }
+  return ids;
+}
 function boolean(t, value, field) { if (typeof value !== 'boolean') fail(t('manager.invalid', { label: t(field) })); return value; }
 function number(t, value, field) { if (!Number.isSafeInteger(value) || value < 1 || value > 2147483647) fail(t('manager.positiveInteger', { label: t(field) })); return value; }
 function providerAt(t, config, id) { return config.providers.find(provider => provider.id === id) || fail(t('manager.providerGone')); }
@@ -71,7 +88,8 @@ function modelPatch(t, input, previous) {
 function createManager({ read, write, discover = discoverModels, afterChange = async () => {}, selectFusion = async () => {}, nativeModels = () => [], nativeAllowedUids = () => null, refreshNativeModels = async () => {}, refreshCliCaches = null, cliCacheStatus = () => null, nativeContract = () => null, nativeCatalogStatus = () => 'empty', autoContinueStatus = () => 'unavailable', backendStatus = () => 'unknown', health = () => null, acpOwnModels = () => 0, t = translator() }) {
   let queue = Promise.resolve();
   let pendingImport;
-  const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey]);
+  const modelsModeOf = provider => provider.modelsMode || (provider.modelsUrl ? 'url' : 'auto');
+  const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey, modelsModeOf(provider), provider.modelsUrl || '', JSON.stringify(provider.staticModels || [])]);
   const state = () => {
     const config = read(), status = nativeCatalogStatus();
     const result = publicState(config, nativeModels(), autoContinueStatus(), status, cliCacheStatus(), nativeAllowedUids(), undefined, acpOwnModels());
@@ -126,21 +144,52 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         if (!['openai-responses', 'openai', 'anthropic'].includes(payload.apiFormat)) fail(t('manager.apiTypeRequired'));
         if (own(payload, 'apiKey') && (typeof payload.apiKey !== 'string' || payload.apiKey.length > 8192 || /[\r\n]/.test(payload.apiKey))) fail(t('manager.apiKeyInvalid'));
         const apiKey = payload.apiKey?.trim() || existing?.apiKey || '';
+        // The mode alone decides whether modelsUrl is read, mirroring the
+        // effort mode contract: outside 'url' it is ignored, not rewritten.
+        const mode = payload.modelsMode;
+        if (!['auto', 'url', 'manual'].includes(mode)) fail(t('manager.modelsModeInvalid'));
+        const listUrl = mode === 'url' ? modelsUrl(t, payload.modelsUrl) : null;
+        if (mode === 'url' && !listUrl) fail(t('manager.modelsUrlRequired'));
+        // Static IDs feed the manual-mode picker only; they never join a
+        // discovery request, and removing one never removes a configured model.
+        const statics = mode === 'manual' ? staticModelIds(t, payload.staticModels) : [];
         if (existing) {
           const previousName = existing.name;
-          Object.assign(existing, { name, baseUrl: url, apiFormat: payload.apiFormat, apiKey });
+          Object.assign(existing, { name, baseUrl: url, apiFormat: payload.apiFormat, apiKey, modelsMode: mode });
+          // Each key belongs to exactly one mode: the mode that owns it writes or
+          // clears it, every other mode leaves it untouched. The read side gates on
+          // the mode alone, so a preserved key is inert rather than active, and
+          // switching back finds the previous configuration still there.
+          if (mode === 'url') { if (listUrl) existing.modelsUrl = listUrl; else delete existing.modelsUrl; }
+          if (mode === 'manual') { if (statics.length) existing.staticModels = statics; else delete existing.staticModels; }
           if (name !== previousName) for (const model of existing.models) if (model.label?.startsWith(previousName + ' · ')) model.label = name + model.label.slice(previousName.length);
         } else {
           normalizeOrders(config.providers);
-          config.providers.push({ id: 'provider-' + randomUUID(), name, baseUrl: url, apiFormat: payload.apiFormat, apiKey,
-            enabled: true, order: nextOrder(config.providers), models: [] });
+          config.providers.push({ id: 'provider-' + randomUUID(), name, baseUrl: url, apiFormat: payload.apiFormat, apiKey, modelsMode: mode,
+            enabled: true, order: nextOrder(config.providers), models: [], ...(listUrl ? { modelsUrl: listUrl } : {}),
+            ...(statics.length ? { staticModels: statics } : {}) });
         }
         break;
       }
       case 'deleteProvider': providerAt(t, config, payload.id); config.providers = config.providers.filter(p => p.id !== payload.id); break;
       case 'setProviderEnabled': providerAt(t, config, payload.id).enabled = boolean(t, payload.enabled, 'manager.field.enabled'); break;
       case 'refreshModels': {
-        const original = providerAt(t, config, payload.providerId), fetched = structuredClone(original);
+        const original = providerAt(t, config, payload.providerId);
+        if (modelsModeOf(original) === 'manual') {
+          // A manual provider has no list endpoint to call: the configured static
+          // IDs become the candidates so the import picker stays one code path.
+          // Clearing first mirrors the discovery branch, so a failure never leaves
+          // another provider's candidates standing.
+          pendingImport = undefined;
+          const ids = (original.staticModels || []).filter(value => typeof value === 'string' && value);
+          if (!ids.length) fail(t('manager.staticSourceEmpty'));
+          const candidates = ids.map(id => ({ id, label: original.name + ' · ' + id, efforts: [],
+            contextWindow: 272000, maxOutputTokens: 131072, source: 'manual' }));
+          buildCatalog({ ...config, providers: [{ ...original, enabled: true, models: candidates }] }); // Same candidate validation as discovery.
+          pendingImport = { providerId: original.id, signature: signature(original), token: randomUUID(), models: candidates };
+          return state();
+        }
+        const fetched = structuredClone(original);
         pendingImport = undefined;
         await discover(fetched);
         // Read again after the network request so another window's edits survive.
@@ -187,6 +236,19 @@ function createManager({ read, write, discover = discoverModels, afterChange = a
         normalizeOrders(provider.models);
         provider.models.push(modelPatch(t, input, { id, label: id, enabled: true, efforts: [], contextWindow: 272000,
           maxOutputTokens: 131072, source: 'manual', order: nextOrder(provider.models) }));
+        break;
+      }
+      case 'addModels': {
+        const provider = providerAt(t, config, payload.providerId);
+        if (!Array.isArray(payload.ids) || !payload.ids.length || payload.ids.length > 200) fail(t('manager.modelsBulkInvalid'));
+        const ids = [];
+        for (const value of payload.ids) { const id = text(t, value, 'manager.field.modelId'); if (!ids.includes(id)) ids.push(id); }
+        normalizeOrders(provider.models);
+        for (const id of ids) {
+          if (provider.models.some(m => m.id === id)) continue;
+          provider.models.push({ id, label: provider.name + ' · ' + id, enabled: true, efforts: [],
+            contextWindow: 272000, maxOutputTokens: 131072, source: 'manual', order: nextOrder(provider.models) });
+        }
         break;
       }
       case 'setNativeModelHidden': {

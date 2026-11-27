@@ -123,6 +123,7 @@ function panelClient(createModelsView, createFusionView, createSettingsView, vsc
   function openDialog(title) {
     const dialog = byId('editor-dialog');
     if (dialog.open) dialog.close();
+    dialog.className = '';
     dialog.replaceChildren(element('h2', { id: 'dialog-title', text: title }));
     const form = element('form', { autocomplete: 'off' });
     dialog.append(form);

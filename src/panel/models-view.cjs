@@ -83,15 +83,18 @@ function createModelsView(ui) {
       oninput: event => { selection.modelSearch = event.target.value; renderModelRows(); } });
     search.value = selection.modelSearch;
     focusTargets.set('model-search', search);
-    const importButton = button(t('models.import'), () => provider.keyConfigured
-      ? run(async () => {
+    // A manual provider picks its candidates from the configured static IDs, so
+    // the import flow needs no credential to run.
+    const needsKey = !provider.keyConfigured && (provider.modelsMode || 'auto') !== 'manual';
+    const importButton = button(t('models.import'), () => needsKey
+      ? notice(t('models.importNeedsKey'), 'error')
+      : run(async () => {
         await request('refreshModels', { providerId: provider.id });
         importDialog(provider.id);
-      }, t('models.fetching'), t('models.pickToImport'))
-      : notice(t('models.importNeedsKey'), 'error'), '');
-    if (!provider.keyConfigured) importButton.title = t('models.keyMissingTitle');
+      }, t('models.fetching'), t('models.pickToImport')), '');
+    if (needsKey) importButton.title = t('models.keyMissingTitle');
     container.append(element('div', { class: 'toolbar' }, provider.models.length ? search : element('span', { class: 'spacer' }),
-      importButton, button(t('models.addManually'), () => modelDialog(provider))));
+      importButton, button(t('models.addManually'), () => modelDialog(provider)), button(t('models.addMany'), () => addManyDialog(provider.id), 'quiet')));
     const list = element('div', { id: 'model-list', class: 'list scroll', 'aria-label': t('models.listAria') });
     scrollTargets.set('model-list', list);
     container.append(list);
@@ -152,6 +155,17 @@ function createModelsView(ui) {
     }
   }
 
+  function addManyDialog(providerId) {
+    const { dialog, form } = openDialog(t('models.addManyTitle'));
+    const textarea = element('textarea', { rows: 6, spellcheck: 'false', placeholder: t('models.addManyPlaceholder') });
+    form.append(field(t('models.addManyLabel'), textarea, t('models.addManyHint')));
+    finishDialog(dialog, form, t('common.save'), () => {
+      const ids = [...new Set(textarea.value.split('\n').map(line => line.trim()).filter(Boolean))];
+      if (!ids.length) throw new Error(t('models.addManyEmpty'));
+      return request('addModels', { providerId, ids });
+    }, null, t('models.addManyDone'));
+  }
+
   function importDialog(providerId) {
     const candidates = state().importCandidates;
     if (!candidates || candidates.providerId !== providerId) throw new Error(t('models.candidatesExpired'));
@@ -203,30 +217,77 @@ function createModelsView(ui) {
       element('option', { value: 'anthropic', text: 'Anthropic Messages' }));
     apiFormat.value = provider?.apiFormat || 'openai-responses';
     const apiKey = input('', { type: 'password', autocomplete: 'new-password', placeholder: provider?.keyConfigured ? t('models.keyKeep') : '', spellcheck: 'false' });
+    const modelsUrlInput = input(provider?.modelsUrl || '', { type: 'url', placeholder: t('models.modelsUrlPlaceholder'), spellcheck: 'false' });
+    // The source mode alone decides where the model list comes from, mirroring
+    // the effort-mode contract: the address field is only read in 'url' mode,
+    // and 'manual' never requests /models at all.
+    const source = element('select', { 'aria-label': t('models.source') },
+      element('option', { value: 'auto', text: t('models.sourceAuto') }),
+      element('option', { value: 'url', text: t('models.sourceUrl') }),
+      element('option', { value: 'manual', text: t('models.sourceManual') }));
+    source.value = provider?.modelsMode || 'auto';
     const urlField = field(t('models.baseUrl'), baseUrl, t('models.baseUrlHint'));
     const urlPreview = element('span', { class: 'hint url-preview' });
     urlField.append(urlPreview);
+    const listUrlField = field(t('models.modelsUrl'), modelsUrlInput, t('models.modelsUrlHint'));
+    const manualHint = element('span', { class: 'hint', text: t('models.sourceManualHint') });
+    const sourceField = field(t('models.source'), source);
+    sourceField.append(manualHint);
+    const staticArea = element('textarea', { rows: 4, spellcheck: 'false', placeholder: t('models.staticListPlaceholder') });
+    staticArea.value = (provider?.staticModels || []).join('\n');
+    const staticField = field(t('models.staticList'), staticArea, t('models.staticListHint'));
+    // The whole model-source configuration folds away: most providers never
+    // touch it, and the chat credentials stay adjacent without the extra rows.
+    const foldSummary = element('summary', { text: '' });
+    const fold = element('details', { class: 'fold section' }, foldSummary, sourceField, listUrlField, staticField);
     const refreshPreview = () => {
+      const mode = source.value;
+      listUrlField.hidden = mode !== 'url';
+      staticField.hidden = mode !== 'manual';
+      manualHint.hidden = mode !== 'manual';
+      const modeLabel = { auto: t('models.sourceModeAuto'), url: t('models.sourceModeUrl'), manual: t('models.sourceModeManual') }[mode];
+      foldSummary.textContent = t('models.sourceSummary', { mode: modeLabel });
       let url;
       try { url = new URL(baseUrl.value.trim()); } catch { url = null; }
       urlPreview.replaceChildren();
       if (!url || !['http:', 'https:'].includes(url.protocol)) return;
       const base = url.origin + normalizeBaseUrlPath(url.pathname);
       const path = { openai: '/chat/completions', anthropic: '/messages' }[apiFormat.value] || '/responses';
-      urlPreview.append(t('models.previewRequest', { url: base + path }), element('br'), t('models.previewModels', { url: base + '/models' }));
+      urlPreview.append(t('models.previewRequest', { url: base + path }));
       // /v1 is appended only for a bare host. Saying so outright beats leaving
       // the user to reverse-engineer the rule from the two URLs above — the
-      // failure mode of getting it wrong is a silent 404.
-      if (url.pathname.replace(/\/+$/, '') === '') urlPreview.append(element('br'), t('models.previewBareHost'));
+      // failure mode of getting it wrong is a silent 404. An explicit models
+      // address makes the derivation irrelevant, so the note goes with it.
+      if (mode === 'manual') return;
+      // An empty url-mode address is rejected on save, so the preview must
+      // not promise a derived endpoint that would never be used.
+      if (mode === 'url' && !modelsUrlInput.value.trim()) return;
+      const list = mode === 'url' ? modelsUrlInput.value.trim() : base + '/models';
+      urlPreview.append(element('br'), t('models.previewModels', { url: list }));
+      if (mode !== 'url' && url.pathname.replace(/\/+$/, '') === '') urlPreview.append(element('br'), t('models.previewBareHost'));
     };
     baseUrl.addEventListener('input', refreshPreview);
     apiFormat.addEventListener('change', refreshPreview);
+    modelsUrlInput.addEventListener('input', refreshPreview);
+    source.addEventListener('change', refreshPreview);
     refreshPreview();
-    form.append(field(t('models.name'), name), urlField, field(t('models.apiType'), apiFormat), field(t('models.apiKey'), apiKey));
+    const identity = element('div', { class: 'field-grid' },
+      field(t('models.name'), name), field(t('models.apiType'), apiFormat));
+    const apiKeyField = field(t('models.apiKey'), apiKey);
+    form.append(identity, urlField, apiKeyField, fold);
+    dialog.className = 'wide';
     const remove = provider ? deleteButton(dialog, t('models.deleteProviderTitle'), t('models.deleteProviderBody', { name: provider.name }),
       () => request('deleteProvider', { id: provider.id })) : null;
+    // Invalid url-mode input is rejected by the manager; unfolding the section
+    // first keeps the error copy next to the field it refers to. The view only
+    // checks that a scheme exists — full validation stays on the write path.
+    form.addEventListener('submit', () => {
+      if (source.value === 'url' && !/^https?:\/\//i.test(modelsUrlInput.value.trim())) fold.open = true;
+    });
     finishDialog(dialog, form, t('common.save'), () => {
-      const payload = { name: name.value.trim(), baseUrl: baseUrl.value.trim(), apiFormat: apiFormat.value };
+      const payload = { name: name.value.trim(), baseUrl: baseUrl.value.trim(), apiFormat: apiFormat.value, modelsMode: source.value,
+        modelsUrl: source.value === 'url' ? modelsUrlInput.value.trim() : undefined,
+        staticModels: source.value === 'manual' ? [...new Set(staticArea.value.split('\n').map(line => line.trim()).filter(Boolean))] : undefined };
       if (provider) payload.id = provider.id;
       if (apiKey.value.trim()) payload.apiKey = apiKey.value.trim();
       return request('saveProvider', payload);

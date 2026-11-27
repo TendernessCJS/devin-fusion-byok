@@ -194,3 +194,70 @@ test('discover infers reasoning support and window fields from /models metadata'
   assert.equal(data['kept'].reasoningEffort, false, 'saved entries are never rewritten by discovery');
   assert.equal(data['kept'].contextWindow, 200000);
 });
+
+test('url mode drives the request URL and dual-sends credential headers', async () => {
+  const requests = [];
+  const request = async (url, options) => {
+    requests.push({ url: String(url), headers: { ...options.headers } });
+    return { ok: true, json: async () => ({ data: [{ id: 'm' }] }) };
+  };
+  const provider = { id: 'p', name: 'P', baseUrl: 'https://api.moonshot.cn/anthropic/v1', apiFormat: 'anthropic',
+    apiKey: 'fixture-secret', modelsMode: 'url', modelsUrl: 'https://api.moonshot.cn/v1/models', models: [] };
+  await discover(provider, { request });
+  assert.equal(requests[0].url, 'https://api.moonshot.cn/v1/models',
+    'the override is requested verbatim, without the derived page-size parameter');
+  assert.equal(requests[0].headers.Authorization, 'Bearer fixture-secret', 'the bearer header rides along');
+  assert.equal(requests[0].headers['x-api-key'], 'fixture-secret', 'the anthropic header rides along');
+  assert.equal(requests[0].headers['anthropic-version'], '2023-06-01', 'the format header stays');
+});
+
+test('a legacy config with modelsUrl but no mode still reads as url mode', async () => {
+  const requests = [];
+  const request = async (url, options) => {
+    requests.push({ url: String(url), headers: { ...options.headers } });
+    return { ok: true, json: async () => ({ data: [{ id: 'm' }] }) };
+  };
+  const provider = { id: 'p', name: 'P', baseUrl: 'https://x.invalid/v1', apiFormat: 'openai',
+    apiKey: 'fixture-secret', modelsUrl: 'https://models.invalid/v1/models', models: [] };
+  await discover(provider, { request });
+  assert.equal(requests[0].url, 'https://models.invalid/v1/models', 'the stored override still drives the endpoint');
+  assert.equal(requests[0].headers['x-api-key'], 'fixture-secret', 'legacy overrides keep the dual headers');
+});
+
+test('auto mode keeps the request URL and headers exactly as before', async () => {
+  const requests = [];
+  const request = async (url, options) => {
+    requests.push({ url: String(url), headers: { ...options.headers } });
+    return { ok: true, json: async () => ({ data: [] }) };
+  };
+  const anthropic = { id: 'p', name: 'P', baseUrl: 'https://a.invalid/v1', apiFormat: 'anthropic', apiKey: 'fixture-secret', modelsMode: 'auto', models: [] };
+  await discover(anthropic, { request });
+  assert.deepEqual(requests.at(-1).headers, { 'anthropic-version': '2023-06-01', 'x-api-key': 'fixture-secret' },
+    'anthropic discovery never grows a bearer header');
+  assert.equal(requests.at(-1).url, 'https://a.invalid/v1/models?limit=1000');
+  const openai = { id: 'p', name: 'P', baseUrl: 'https://o.invalid/v1', apiFormat: 'openai', apiKey: 'fixture-secret', models: [] };
+  await discover(openai, { request });
+  assert.deepEqual(requests.at(-1).headers, { Authorization: 'Bearer fixture-secret' },
+    'openai discovery never grows an x-api-key header');
+  assert.equal(requests.at(-1).url, 'https://o.invalid/v1/models');
+});
+
+test('an anthropic override paginates with after_id only, never with limit', async () => {
+  const requests = [];
+  const request = async (url, options) => {
+    requests.push({ url: String(url), headers: { ...options.headers } });
+    const page = requests.length === 1
+      ? { data: [{ id: 'm1' }], has_more: true, last_id: 'L1' }
+      : { data: [{ id: 'm2' }], has_more: false };
+    return { ok: true, json: async () => page };
+  };
+  const provider = { id: 'p', name: 'P', baseUrl: 'https://api.moonshot.cn/anthropic/v1', apiFormat: 'anthropic',
+    apiKey: 'fixture-secret', modelsMode: 'url', modelsUrl: 'https://api.moonshot.cn/v1/models', models: [] };
+  await discover(provider, { request });
+  assert.equal(requests[0].url, 'https://api.moonshot.cn/v1/models', 'the first page hits the address verbatim');
+  assert.equal(requests[1].url, 'https://api.moonshot.cn/v1/models?after_id=L1',
+    'a declared further page adds after_id but never the page-size parameter');
+  assert.equal(requests[1].headers['x-api-key'], 'fixture-secret', 'later pages keep the credential headers');
+  assert.equal(requests[1].headers.Authorization, 'Bearer fixture-secret');
+  assert.deepEqual(provider.models.map(m => m.id), ['m1', 'm2'], 'both pages are collected');
+});

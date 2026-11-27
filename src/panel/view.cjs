@@ -165,7 +165,8 @@ function panelStyles() {
     #usage-monitor:not(.detailed) .extra { display: none; }
     .update-notes { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 8px 0 0; }
     .warn.pending { color: var(--muted); }
-    dialog { width: min(500px, calc(100vw - 28px)); max-height: calc(100vh - 40px); overflow: auto; margin: auto; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-overlay); color: var(--vscode-foreground, #ddd); background: var(--bg); box-shadow: 0 8px 28px var(--vscode-widget-shadow, #0006); }
+    dialog { width: min(500px, calc(100vw - 28px)); max-height: calc(100vh - 40px); overflow: auto; margin: auto; container-type: inline-size; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-overlay); color: var(--vscode-foreground, #ddd); background: var(--bg); box-shadow: 0 8px 28px var(--vscode-widget-shadow, #0006); }
+    dialog.wide { width: min(600px, calc(100vw - 28px)); }
     dialog::backdrop { background: #0007; }
     dialog h2 { font-size: 16px; margin-bottom: 16px; }
     .field { display: block; margin-bottom: 12px; }
@@ -173,7 +174,10 @@ function panelStyles() {
     .field .hint { display: block; margin-top: 4px; }
     .url-preview { word-break: break-all; font-family: var(--vscode-editor-font-family, monospace); }
     .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @container (max-width: 470px) { .field-grid { grid-template-columns: 1fr; gap: 0; } }
     dialog details.fold > summary { padding: 4px 0; margin-bottom: 8px; }
+    dialog details.section { margin-top: 4px; border-top: 1px solid var(--border); }
+    dialog details.section > summary { padding: 10px 0 8px; color: inherit; }
     .dialog-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
     .dialog-error { color: var(--error); overflow-wrap: anywhere; }
     .confirm-text { white-space: pre-line; overflow-wrap: anywhere; }
@@ -185,7 +189,6 @@ function panelStyles() {
       .provider-nav { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
       .provider-nav .order-move { flex-direction: row; }
       .provider-nav .move-glyph { display: inline-block; transform: rotate(-90deg); }
-      .field-grid { grid-template-columns: 1fr; gap: 0; }
       /* A setting's text column may not be squeezed to nothing by wide controls
          (the update buttons, the proxy field): those move to the next line. */
       .setting { flex-wrap: wrap; }

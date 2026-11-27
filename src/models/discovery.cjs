@@ -37,14 +37,31 @@ function reasoningSupport(info) {
 }
 async function discover(provider, { request = directFetch } = {}) {
   const anthropic = provider.apiFormat === 'anthropic';
-  const headers = anthropic ? { 'anthropic-version': '2023-06-01', 'x-api-key': provider.apiKey } : { Authorization: 'Bearer ' + provider.apiKey };
+  const base = anthropic ? { 'anthropic-version': '2023-06-01', 'x-api-key': provider.apiKey } : { Authorization: 'Bearer ' + provider.apiKey };
+  // The override decouples the discovery endpoint from the chat endpoint
+  // (e.g. a gateway whose anthropic-style baseUrl serves no /models there).
+  // The same vendor still owns both, so one extra credential header costs
+  // nothing: gateways that only accept one style simply ignore the other.
+  // Legacy configs predate modelsMode: a stored modelsUrl reads as 'url'.
+  const mode = provider.modelsMode || (provider.modelsUrl ? 'url' : 'auto');
+  const override = mode === 'url' && typeof provider.modelsUrl === 'string' ? provider.modelsUrl.trim() : '';
+  const headers = override
+    ? { ...base, Authorization: 'Bearer ' + provider.apiKey, 'x-api-key': provider.apiKey }
+    : base;
   const listed = [];
   let after = null;
   // Anthropic's /models is paginated; OpenAI-compatible providers return a single page.
   for (let page = 0; page < 20; page++) {
-    const url = new URL(provider.baseUrl.replace(/\/$/, '') + '/models');
+    const url = new URL(override || provider.baseUrl.replace(/\/$/, '') + '/models');
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('API 地址必须以 http:// 或 https:// 开头'); // i18n-data: matched by activation/errors.cjs safeError
-    if (anthropic) { url.searchParams.set('limit', '1000'); if (after) url.searchParams.set('after_id', after); }
+    // A derived endpoint takes the anthropic page size. An explicit override is
+    // requested verbatim on its first page, so the address the user typed is what
+    // goes on the wire; after_id is only added once the response itself declares
+    // a further page, which is exactly when the parameter is meaningful.
+    if (anthropic) {
+      if (!override) url.searchParams.set('limit', '1000');
+      if (after) url.searchParams.set('after_id', after);
+    }
     const response = await request(url, { headers, redirect: 'error', signal: AbortSignal.timeout(20000) });
     if (!response.ok) throw new ModelDiscoveryError(response.status);
     const json = await response.json();

@@ -62,6 +62,17 @@ description: "改 config.json 读写、面板提交、损坏恢复或受管设�
 - 限制只到「scheme 必须 http/https、禁止内嵌凭据/查询串/片段、路径归一化」，**不阻止**向任意地址发带凭据请求；收紧前先想清它会让本地部署不可用。
 - 更新与 Devin 上游只共享显式代理策略来源，不共享全局 Agent；代理凭据只进入 CONNECT，不回显面板。旧版存储不会自动迁移：空目录建立新安装标记；无标记的非空目录在读取配置或启动宿主服务前拒绝，不自动删除或改写旧文件。
 
+## provider 模型获取方式（modelsMode / modelsUrl）
+
+- `providers[].modelsMode` 三态：`auto`（默认，baseUrl 去尾斜杠 + `/models`）、`url`（必须配 `modelsUrl`）、`manual`（完全不请求 `/models`，靠静态列表勾选或手动添加）。
+- 模式是读取端唯一的门：非当前模式的键**保留在磁盘上但不生效**；只有拥有该键的模式在保存时才写或删（在该模式内清空会删除键）。理由：静态列表是昂贵的手工输入，切模式不该销毁它。
+- 旧配置无 `modelsMode` 时按 `modelsUrl ? 'url' : 'auto'` 兼容读取；表单保存后落显式三值。
+- `url` 模式的发现请求同时带 `Authorization: Bearer` 与 `x-api-key`（发现与对话端点解耦后网关可能只认一种；不覆盖时请求头保持原样）；只影响发现请求，不影响对话端点。
+- `modelsUrl` 校验与 baseUrl 同类（http/https、无凭据/查询/片段、去尾斜杠），但**不做** `normalizeBaseUrlPath`——它是完整端点，尾部 `/models` 是路径的一部分，剥掉会让 Moonshot 这类用例退化成错误地址。
+- 覆盖地址的首屏逐字请求用户填的地址、**不**追加 `limit`；只有响应自身声明 `has_more`/`last_id` 时后续页才追加 `after_id`；派生地址行为不变（`limit=1000`）。`modelsUrlHint` 已写明密钥会发往该地址。
+- `providers[].staticModels`：`manual` 模式的静态模型 ID 源（1–200 条，去重、去空行）；保存时只有 `manual` 模式写或删它，其它模式保留但不生效。它是「可添加的模型 ID 源」——从列表删 ID 不删除已配置模型，也不参与发现请求；其内容并入 `signature()`，编辑后旧候选失效。
+- manual 供应商点「导入模型」时 `refreshModels` 直接以 `staticModels` 为候选（不发起网络请求），`importModels` 走同一条落盘路径，已配置条目以 `imported` 置灰；静态列表为空时以 `manager.staticSourceEmpty` 拒绝。
+
 ## 受管设置的写入/恢复串行边界
 
 `settings-owner.cjs` 的 env 与 preference 事务共用 `managed-settings.cjs` 的单实例串行队列：**读取当前设置与 receipt → 计算原值 → 保存 receipt → 更新 globalState → 写设置**全部在入队函数内，不能只排队最后一次写入。入队和实际执行前都复核 `live`；关闭后拒绝新项，已排队未开始的项按 epoch 取消，已经开始的项允许完成。`open()` 不能复活旧 epoch 的项。被取消时抛 `RuntimeError('cancelled')`；不要在 critical 内嵌套并等待另一个 critical。UI publish 不占排水预算。

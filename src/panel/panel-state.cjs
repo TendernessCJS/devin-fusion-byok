@@ -211,7 +211,9 @@ function publicState(config, nativeModels = [], autoContinueStatus = 'unavailabl
   return {
     enabled: config.enabled !== false,
     providers: sortByOrder(config.providers).map(provider => ({ id: provider.id, name: provider.name, baseUrl: provider.baseUrl,
-      apiFormat: provider.apiFormat, enabled: provider.enabled !== false, keyConfigured: !!provider.apiKey,
+      apiFormat: provider.apiFormat, modelsMode: provider.modelsMode || (provider.modelsUrl ? 'url' : 'auto'), modelsUrl: provider.modelsUrl || '',
+      staticModels: Array.isArray(provider.staticModels) ? provider.staticModels.filter(value => typeof value === 'string') : [],
+      enabled: provider.enabled !== false, keyConfigured: !!provider.apiKey,
       models: sortByOrder(provider.models).map(model => ({ id: model.id, label: model.label || model.id, enabled: model.enabled !== false,
         efforts: model.efforts || [], effortMode: model.effortMode || (model.efforts?.length ? 'manual' : 'auto'),
         reasoningEffort: model.reasoningEffort === true ? true : model.reasoningEffort === false ? false : null,
